@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "sequence",
+    "kind",
+    "text",
+    "tool_call_id",
+    "tool_name",
+    "arguments_json",
+    "input_tokens",
+    "output_tokens"
+  ],
+  "properties": {
+    "sequence": {
+      "type": "string",
+      "format": "uint64"
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["text_delta", "tool_call", "usage"]
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 65536
+    },
+    "tool_call_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "tool_name": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "arguments_json": {
+      "type": "string",
+      "maxLength": 262144
+    },
+    "input_tokens": {
+      "type": "string",
+      "format": "uint64"
+    },
+    "output_tokens": {
+      "type": "string",
+      "format": "uint64"
+    }
+  },
+  "additionalProperties": false
+}

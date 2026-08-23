@@ -1,0 +1,23 @@
+[package]
+name = "lenso-capability-agent-model"
+version = "0.1.0"
+description = "Portable model-completion Capability for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[dependencies]
+futures.workspace = true
+lenso-contract-runtime.workspace = true
+lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+lenso-contract-codegen.workspace = true
+
+[lints]
+workspace = true

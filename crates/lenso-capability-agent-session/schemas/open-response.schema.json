@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenSessionResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "revision", "created"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "revision": {
+      "type": "string",
+      "format": "uint64"
+    },
+    "created": {
+      "type": "boolean"
+    }
+  }
+}

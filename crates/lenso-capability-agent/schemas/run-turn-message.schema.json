@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["sequence", "text"],
+  "properties": {
+    "sequence": {
+      "type": "string",
+      "format": "uint64"
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 65536
+    }
+  },
+  "additionalProperties": false
+}

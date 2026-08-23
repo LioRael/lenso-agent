@@ -1,0 +1,22 @@
+{
+  "id": "lenso.agent.tools@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "catalog",
+      "interaction": "request",
+      "request_schema": "schemas/catalog-request.schema.json",
+      "response_schema": "schemas/catalog-response.schema.json",
+      "domain_error_schema": "schemas/catalog-error.schema.json"
+    },
+    {
+      "name": "execute",
+      "interaction": "request",
+      "request_schema": "schemas/execute-request.schema.json",
+      "response_schema": "schemas/execute-response.schema.json",
+      "domain_error_schema": "schemas/execute-error.schema.json"
+    }
+  ]
+}

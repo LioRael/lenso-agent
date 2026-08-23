@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadSessionResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "revision", "events"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "revision": {
+      "type": "string",
+      "format": "uint64"
+    },
+    "events": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["revision", "event_id", "kind", "occurred_at", "payload_json"],
+        "properties": {
+          "revision": {
+            "type": "string",
+            "format": "uint64"
+          },
+          "event_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "session_created",
+              "turn_started",
+              "model_requested",
+              "model_output",
+              "tool_requested",
+              "tool_result",
+              "turn_completed",
+              "turn_failed",
+              "turn_cancelled"
+            ]
+          },
+          "turn_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "payload_json": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 1048576
+          }
+        }
+      }
+    }
+  }
+}

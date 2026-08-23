@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "run_turn",
+      "interaction": "stream",
+      "request_schema": "schemas/run-turn-open.schema.json",
+      "response_schema": "schemas/run-turn-message.schema.json",
+      "domain_error_schema": "schemas/run-turn-error.schema.json"
+    }
+  ]
+}

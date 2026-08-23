@@ -1,0 +1,29 @@
+{
+  "id": "lenso.agent.session@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "open",
+      "interaction": "request",
+      "request_schema": "schemas/open-request.schema.json",
+      "response_schema": "schemas/open-response.schema.json",
+      "domain_error_schema": "schemas/open-error.schema.json"
+    },
+    {
+      "name": "read",
+      "interaction": "request",
+      "request_schema": "schemas/read-request.schema.json",
+      "response_schema": "schemas/read-response.schema.json",
+      "domain_error_schema": "schemas/read-error.schema.json"
+    },
+    {
+      "name": "append",
+      "interaction": "request",
+      "request_schema": "schemas/append-request.schema.json",
+      "response_schema": "schemas/append-response.schema.json",
+      "domain_error_schema": "schemas/append-error.schema.json"
+    }
+  ]
+}
