@@ -12,6 +12,7 @@ rust-version.workspace = true
 futures.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
 lenso-kernel.workspace = true

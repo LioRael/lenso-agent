@@ -7,6 +7,8 @@ contract_codegen="${LENSO_CONTRACT_CODEGEN:-lenso-contract-codegen}"
 contract_roots=(
   "${repo_root}/crates/lenso-capability-agent"
   "${repo_root}/crates/lenso-capability-agent-model"
+  "${repo_root}/crates/lenso-capability-agent-prompt"
+  "${repo_root}/crates/lenso-capability-agent-prompt-provider"
   "${repo_root}/crates/lenso-capability-agent-tools"
   "${repo_root}/crates/lenso-capability-agent-tool-provider"
   "${repo_root}/crates/lenso-capability-agent-session"

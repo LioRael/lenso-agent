@@ -711,6 +711,9 @@ dependencies = [
  "lenso-agent-model-fixture-module",
  "lenso-agent-model-openai-codex-direct-module",
  "lenso-agent-model-openai-compatible-module",
+ "lenso-agent-prompt-filesystem-module",
+ "lenso-agent-prompt-module",
+ "lenso-agent-prompt-static-module",
  "lenso-agent-session-file-module",
  "lenso-agent-tools-module",
  "lenso-agent-workspace-read-module",
@@ -740,6 +743,7 @@ dependencies = [
  "futures",
  "lenso-capability-agent",
  "lenso-capability-agent-model",
+ "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
  "lenso-capability-agent-tools",
  "lenso-kernel",
@@ -799,6 +803,47 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso-kernel",
+]
+
+[[package]]
+name = "lenso-agent-prompt-filesystem-module"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "futures",
+ "lenso-capability-agent-prompt-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
+name = "lenso-agent-prompt-module"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-capability-agent-prompt",
+ "lenso-capability-agent-prompt-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "lenso-agent-prompt-static-module"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-capability-agent-prompt-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -876,6 +921,30 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-agent-model"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-codegen 0.5.1",
+ "lenso-contract-runtime",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-prompt"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-codegen 0.5.1",
+ "lenso-contract-runtime",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-prompt-provider"
 version = "0.1.0"
 dependencies = [
  "futures",

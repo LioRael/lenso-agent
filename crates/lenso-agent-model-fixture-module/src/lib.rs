@@ -105,7 +105,19 @@ impl FixtureModel {
             .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
         let current_user = &request.messages[current_user_index].content;
         if current_user.starts_with("Answer directly:") {
-            return Ok(direct_response());
+            let plugin_prefix = request.messages.iter().any(|message| {
+                message.role == CompleteRequestMessagesItemRole::System
+                    && message
+                        .content
+                        .contains("Prefix direct answers with `Plugin: `.")
+            });
+            let filesystem_prefix = request.messages.iter().any(|message| {
+                message.role == CompleteRequestMessagesItemRole::System
+                    && message
+                        .content
+                        .contains("Prefix direct answers with `Filesystem: `.")
+            });
+            return Ok(direct_response(plugin_prefix, filesystem_prefix));
         }
         if current_user == "What did you summarize?" {
             let previous = request.messages[..current_user_index]
@@ -143,12 +155,18 @@ impl FixtureModel {
     }
 }
 
-fn direct_response() -> Vec<CompleteResponse> {
+fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<CompleteResponse> {
+    let prefix = match (filesystem_prefix, plugin_prefix) {
+        (true, true) => "Filesystem: Plugin: ",
+        (true, false) => "Filesystem: ",
+        (false, true) => "Plugin: ",
+        (false, false) => "",
+    };
     vec![
         response(
             "1",
             CompleteResponseKind::TextDelta,
-            "Direct ",
+            format!("{prefix}Direct "),
             "",
             "",
             "{}",

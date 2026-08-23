@@ -38,6 +38,19 @@ reject malformed or schema-invalid `arguments_json` as `invalid_arguments`.
 The V1 workspace provider is read-only and must reject paths that resolve
 outside its configured workspace root.
 
+## Prompt boundary
+
+`lenso.agent.prompt@1` is the Agent-facing aggregate. It fans out to zero or
+more `lenso.agent.prompt-provider@1` providers in the exact order selected by
+App Composition. Provider-local order is also preserved. Duplicate contribution
+IDs or configured size-limit violations prevent the aggregate from activating;
+runtime order never chooses a winner.
+
+Every contribution declares a stable ID, provider-owned version, `instruction`
+or `skill` kind, and bounded content. The aggregate returns one joined system
+prompt plus an ordered manifest whose SHA-256 digests identify the exact input
+without copying Prompt content into the Session log.
+
 ## Session log
 
 Session events are append-only. `expected_revision` provides optimistic

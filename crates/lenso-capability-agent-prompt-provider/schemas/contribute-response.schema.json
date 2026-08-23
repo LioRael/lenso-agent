@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["contributions"],
+  "properties": {
+    "contributions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": ["id", "version", "kind", "content"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9][a-z0-9._/-]*$" },
+          "version": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "kind": { "type": "string", "enum": ["instruction", "skill"] },
+          "content": { "type": "string", "minLength": 1, "maxLength": 65536 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

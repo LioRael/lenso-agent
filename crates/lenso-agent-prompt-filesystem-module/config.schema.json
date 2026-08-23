@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["root", "skills", "id_prefix", "max_file_bytes", "max_total_bytes"],
+  "properties": {
+    "root": { "type": "string" },
+    "skills": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "id_prefix": { "type": "string" },
+    "max_file_bytes": { "type": "integer" },
+    "max_total_bytes": { "type": "integer" }
+  },
+  "additionalProperties": false
+}

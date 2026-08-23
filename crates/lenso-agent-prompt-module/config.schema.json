@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["max_contributions", "max_total_bytes"],
+  "properties": {
+    "max_contributions": { "type": "integer" },
+    "max_total_bytes": { "type": "integer" }
+  },
+  "additionalProperties": false
+}
