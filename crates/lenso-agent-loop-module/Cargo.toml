@@ -1,0 +1,26 @@
+[package]
+name = "lenso-agent-loop-module"
+version = "0.1.0"
+description = "Agent Loop Module for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+futures.workspace = true
+lenso-agent-native-support = { path = "../lenso-agent-native-support" }
+lenso-capability-agent = { path = "../lenso-capability-agent" }
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
+lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
+lenso-kernel.workspace = true
+lenso-native-adapter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true

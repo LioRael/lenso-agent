@@ -45,3 +45,12 @@ it is `invalid_event`.
 the response `revision` is the latest durable revision observed by that read.
 Timestamps are evidence supplied by the Agent Module; event order is defined by
 revision, not wall-clock time.
+
+Supplying `session_id` to `open` means resume-only: an absent Session returns
+`not_found`. Omitting it creates a new Session. This additive Domain Error was
+introduced in Descriptor `1.1.0`; `lenso.agent.session@1` consumers preserve
+unknown Domain Error codes for forward compatibility.
+
+Agent Descriptor `1.1.0` adds optional `session_id` to `run_turn` messages so a
+consumer can persist the identity created by the Agent Loop. Older consumers
+may ignore it and older providers remain representable.

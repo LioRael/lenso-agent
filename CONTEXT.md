@@ -2,10 +2,10 @@
 
 ## Status
 
-This repository is the proposed product owner for a headless-first Agent
-Harness built as an ordinary Lenso App. The initial repository contains the V1
-architecture and portable Capability contract sources. Module implementations
-and executable App Composition follow those contracts.
+This repository is the product owner for a headless-first Agent Harness built
+as an ordinary Lenso App. The first executable slice contains portable
+Capability sources, native Module implementations, a CLI Runner, and the
+checked `headless-readonly` App Composition.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
 protocol, and optional Module packages. Portable core must never depend back on
@@ -67,13 +67,12 @@ The `headless-readonly` profile selects these keyed Module Instances:
 - `tools`
 - `workspace-read`
 - `sessions`
-- `secrets`
 
 The first useful transition asks the Agent to summarize a selected workspace
 README. A deterministic Model fixture proves the Tool call and Session facts;
-an opt-in OpenAI-compatible smoke proves the real provider path. Restarting the
-App preserves the Session. Missing credentials or durable Session storage keep
-the App from becoming ready.
+restarting the App preserves the Session. Unavailable durable Session storage
+keeps the App from becoming ready. A real provider path and secret-backed
+credentials are deferred to the next product slice.
 
 ## Deferred direction
 

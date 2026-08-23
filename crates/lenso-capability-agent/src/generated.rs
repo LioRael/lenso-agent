@@ -4,7 +4,7 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, RuntimeFailure, StreamCapability, StreamEvent};
 
 pub const CAPABILITY_ID: &str = "lenso.agent@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AGENT_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -30,6 +30,9 @@ pub struct RunTurnResponse {
     #[serde(rename = "sequence")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub sequence: Uint64,
+    #[serde(rename = "session_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     #[serde(rename = "text")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub text: String,

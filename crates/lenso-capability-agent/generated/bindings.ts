@@ -2,7 +2,7 @@
 import * as lensoContractRuntime from "@lenso/contract-runtime";
 
 export const CAPABILITY_ID = "lenso.agent@1";
-export const DESCRIPTOR_VERSION = "1.0.0";
+export const DESCRIPTOR_VERSION = "1.1.0";
 export const PORTABLE = true;
 export const CROSS_LANE_TRANSFER = false;
 
@@ -25,6 +25,7 @@ export interface RunTurnRequest {
 
 export interface RunTurnResponse {
   sequence: Uint64;
+  session_id?: string;
   text: string;
 }
 

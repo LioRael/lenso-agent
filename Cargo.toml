@@ -1,11 +1,19 @@
 [workspace]
 resolver = "2"
 members = [
+    "apps/lenso-agent-cli",
     "crates/lenso-capability-agent",
     "crates/lenso-capability-agent-model",
     "crates/lenso-capability-agent-tools",
     "crates/lenso-capability-agent-tool-provider",
     "crates/lenso-capability-agent-session",
+    "crates/lenso-agent-loop-module",
+    "crates/lenso-agent-model-fixture-module",
+    "crates/lenso-agent-native-support",
+    "crates/lenso-agent-session-file-module",
+    "crates/lenso-agent-tools-module",
+    "crates/lenso-agent-workspace-read-module",
+    "crates/lenso-agent-cli-module",
 ]
 
 [workspace.package]
@@ -17,11 +25,18 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 futures = "0.3"
+lenso-app-plan = "0.1.1"
 lenso-contract-codegen = "0.5.1"
 lenso-contract-runtime = "0.1.0"
 lenso-kernel = "0.1.6"
+lenso-native-adapter = "0.1.2"
+lenso-runner = "0.1.6"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3.23"
+time = { version = "0.3", features = ["formatting"] }
+tokio = { version = "1.48", features = ["macros", "rt", "signal"] }
+uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -34,3 +49,4 @@ module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 must_use_candidate = "allow"
+single_match_else = "allow"

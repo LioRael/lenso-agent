@@ -2,7 +2,7 @@
 import * as lensoContractRuntime from "@lenso/contract-runtime";
 
 export const CAPABILITY_ID = "lenso.agent.session@1";
-export const DESCRIPTOR_VERSION = "1.0.0";
+export const DESCRIPTOR_VERSION = "1.1.0";
 export const PORTABLE = true;
 export const CROSS_LANE_TRANSFER = false;
 
@@ -74,7 +74,7 @@ export interface ReadResponseEventsItem {
 export type AppendError = "invalid_event" | "not_found" | { readonly code: "revision_conflict"; readonly payload: AppendErrorRevisionConflictPayload } | UnknownDomainError;
 export type AppendInvocationError = { readonly kind: "domain"; readonly error: AppendError } | { readonly kind: "runtime"; readonly error: RuntimeFailure };
 export type AppendResult = { readonly ok: true; readonly value: AppendResponse } | { readonly ok: false; readonly error: AppendInvocationError };
-export type OpenError = "invalid_session_id" | UnknownDomainError;
+export type OpenError = "invalid_session_id" | "not_found" | UnknownDomainError;
 export type OpenInvocationError = { readonly kind: "domain"; readonly error: OpenError } | { readonly kind: "runtime"; readonly error: RuntimeFailure };
 export type OpenResult = { readonly ok: true; readonly value: OpenResponse } | { readonly ok: false; readonly error: OpenInvocationError };
 export type ReadError = "invalid_cursor" | "not_found" | UnknownDomainError;
@@ -92,7 +92,7 @@ export function decodeOpenRequest(wire: string): OpenRequest { return lensoContr
 export function encodeOpenResponse(value: OpenResponse): string { return lensoContractRuntime.encodePortableJson(value, "response"); }
 export function decodeOpenResponse(wire: string): OpenResponse { return lensoContractRuntime.decodePortableJson<OpenResponse>(wire); }
 export function encodeOpenError(value: OpenError): string { return lensoContractRuntime.encodePortableJson(value, "Domain Error"); }
-export function decodeOpenError(wire: string): OpenError { return lensoContractRuntime.decodeDomainError<OpenError>(wire, ["invalid_session_id"]); }
+export function decodeOpenError(wire: string): OpenError { return lensoContractRuntime.decodeDomainError<OpenError>(wire, ["invalid_session_id", "not_found"]); }
 
 export function encodeReadRequest(value: ReadRequest): string { return lensoContractRuntime.encodePortableJson(value, "request"); }
 export function decodeReadRequest(wire: string): ReadRequest { return lensoContractRuntime.decodePortableJson<ReadRequest>(wire); }
