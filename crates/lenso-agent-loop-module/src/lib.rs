@@ -22,6 +22,7 @@ use lenso_capability_agent_model::{
     CompleteRequest, CompleteRequestMessagesItem, CompleteRequestMessagesItemRole,
     CompleteRequestToolsItem, CompleteResponse, CompleteResponseKind, ModelClient, ModelEvent,
 };
+use lenso_capability_agent_prompt::{AssembleRequest, PromptClient, PromptInvocationError};
 use lenso_capability_agent_session::{
     AppendError, AppendRequest, AppendRequestEventsItem, AppendRequestEventsItemKind, OpenError,
     OpenRequest, ReadError, ReadRequest, ReadResponseEventsItem, ReadResponseEventsItemKind,
@@ -102,6 +103,7 @@ impl NativeModuleFactory for AgentLoopFactory {
 #[derive(Debug)]
 struct AgentClients {
     model: ModelClient,
+    prompt: PromptClient,
     tools: ToolsClient,
     session: SessionClient,
     tasks: ManagedTaskScope,
@@ -254,6 +256,10 @@ impl ModuleLifecycle for AgentLifecycle {
                 Ok(client) => client,
                 Err(error) => return Box::pin(futures::future::ready(Err(error))),
             },
+            prompt: match PromptClient::from_dependencies(context.dependencies()) {
+                Ok(client) => client,
+                Err(error) => return Box::pin(futures::future::ready(Err(error))),
+            },
             tools: match ToolsClient::from_dependencies(context.dependencies()) {
                 Ok(client) => client,
                 Err(error) => return Box::pin(futures::future::ready(Err(error))),
@@ -364,6 +370,24 @@ async fn execute_steps(
     mut messages: Vec<CompleteRequestMessagesItem>,
     sender: &mut mpsc::Sender<AgentChannelItem>,
 ) -> Result<(), AgentInvocationError> {
+    let prompt = clients
+        .prompt
+        .assemble_with_context(context.clone(), AssembleRequest {})
+        .await
+        .map_err(map_prompt_error)?;
+    if !prompt.content.is_empty() {
+        messages.insert(
+            0,
+            CompleteRequestMessagesItem {
+                role: CompleteRequestMessagesItemRole::System,
+                content: prompt.content,
+                tool_call_id: None,
+                tool_name: None,
+                arguments_json: None,
+            },
+        );
+    }
+    let prompt_contributions = prompt.contributions;
     let catalog = clients
         .tools
         .catalog_with_context(context.clone(), CatalogRequest {})
@@ -396,7 +420,10 @@ async fn execute_steps(
             vec![session_event(
                 AppendRequestEventsItemKind::ModelRequested,
                 Some(turn_id),
-                &serde_json::json!({"step": step}),
+                &serde_json::json!({
+                    "step": step,
+                    "prompt_contributions": prompt_contributions
+                }),
             )?],
         )
         .await?;
@@ -890,6 +917,17 @@ fn map_session_append_error(error: SessionAppendInvocationError) -> AgentInvocat
             })
         }
         SessionAppendInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+    }
+}
+
+fn map_prompt_error(error: PromptInvocationError) -> AgentInvocationError {
+    match error {
+        PromptInvocationError::Domain(error) => {
+            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                detail: format!("Prompt assembly failed: {error:?}"),
+            })
+        }
+        PromptInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
     }
 }
 

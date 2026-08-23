@@ -15,6 +15,9 @@ lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
 lenso-agent-model-fixture-module = { path = "../../crates/lenso-agent-model-fixture-module" }
 lenso-agent-model-openai-compatible-module = { path = "../../crates/lenso-agent-model-openai-compatible-module" }
 lenso-agent-model-openai-codex-direct-module = { path = "../../crates/lenso-agent-model-openai-codex-direct-module" }
+lenso-agent-prompt-filesystem-module = { path = "../../crates/lenso-agent-prompt-filesystem-module" }
+lenso-agent-prompt-module = { path = "../../crates/lenso-agent-prompt-module" }
+lenso-agent-prompt-static-module = { path = "../../crates/lenso-agent-prompt-static-module" }
 lenso-agent-session-file-module = { path = "../../crates/lenso-agent-session-file-module" }
 lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }

@@ -41,6 +41,52 @@ Status: implementation baseline for the first executable slice.
   handles and builds the catalog; no discovery or global registry.
 - **First behavior:** exposes and dispatches `workspace.read_text`.
 
+## `lenso.agent.prompt.static`
+
+- **Deletion boundary:** removes one explicitly configured set of Prompt or
+  Skill contributions; the aggregate and Agent remain runnable.
+- **Owned facts:** contribution IDs, versions, kinds, content, and local order.
+- **Provides:** `lenso.agent.prompt-provider@1` (`contribute`).
+- **Requires:** none.
+- **Configuration:** one bounded contribution list; malformed or duplicate IDs
+  reject the Module generation.
+- **Lifecycle/resources:** endpoint-only; no discovery, storage, or managed
+  work.
+- **First behavior:** contributes fixture instructions or the workspace summary
+  Skill selected by Composition.
+
+## `lenso.agent.prompt.filesystem`
+
+- **Deletion boundary:** removes loading of explicitly selected filesystem
+  Skills; static Prompt Providers and the aggregate remain unchanged.
+- **Owned facts:** configured Skill root, selected names, contribution ID
+  prefix, file/aggregate limits, containment policy, and startup snapshot.
+- **Provides:** `lenso.agent.prompt-provider@1` (`contribute`).
+- **Requires:** none.
+- **Configuration:** one root such as `~/.agents/skills`, an ordered non-empty
+  Skill-name list, ID prefix, and finite byte limits.
+- **Final authorization:** canonicalizes each selected
+  `<root>/<name>/SKILL.md`, rejects traversal and targets outside the root, and
+  validates UTF-8 plus minimal Skill frontmatter before reading it into the
+  snapshot.
+- **Lifecycle/resources:** `prepare` loads one immutable generation snapshot;
+  there is no directory watcher, script execution, or background work.
+- **First behavior:** contributes only the explicitly selected Skill documents
+  in Composition order with content-derived versions.
+
+## `lenso.agent.prompt`
+
+- **Deletion boundary:** removes deterministic Prompt aggregation and the
+  Agent-facing Prompt endpoint.
+- **Owned facts:** cross-provider ID uniqueness, explicit ordering, aggregate
+  byte/count limits, and content digests.
+- **Provides:** `lenso.agent.prompt@1` (`assemble`).
+- **Requires:** `lenso.agent.prompt-provider@1` with `many` cardinality.
+- **Configuration:** maximum contribution count and aggregate content bytes.
+- **Lifecycle/resources:** `activate` obtains only explicitly bound Provider
+  handles and snapshots their contributions; no global registry or file scan.
+- **First behavior:** returns one system prompt and its ordered audit manifest.
+
 ## `lenso.agent.session.file`
 
 - **Deletion boundary:** removes durable Session identity, events, revisions,
@@ -64,7 +110,8 @@ Status: implementation baseline for the first executable slice.
   message construction, and Session event intent.
 - **Provides:** `lenso.agent@1` (`run_turn`, stream).
 - **Requires:** exactly one `lenso.agent.model@1`, one
-  `lenso.agent.tools@1`, and one `lenso.agent.session@1`.
+  `lenso.agent.prompt@1`, one `lenso.agent.tools@1`, and one
+  `lenso.agent.session@1`.
 - **Configuration:** model name, maximum steps, maximum Tool calls, aggregate
   model output-token budget, and bounded Session-history event count.
 - **Lifecycle/resources:** `activate` materializes generated clients only from
@@ -73,7 +120,8 @@ Status: implementation baseline for the first executable slice.
   channel so a slow consumer backpressures the Loop.
 - **First behavior:** reconstructs bounded completed-turn context, accepts a
   direct answer or sequential Tool calls until a finite budget is reached,
-  persists terminal facts, and forwards Model text deltas immediately.
+  prepends the assembled Prompt, records its contribution manifest, persists
+  terminal facts, and forwards Model text deltas immediately.
 
 ## `lenso.agent.cli`
 
@@ -90,9 +138,11 @@ Status: implementation baseline for the first executable slice.
 
 ## Composition deletion proof
 
-The fixture Model and workspace Tool Provider are replaceable selections. A
+The fixture Model, Prompt Providers, and workspace Tool Provider are
+replaceable selections. A
 fixture without the workspace Provider removes that package, Instance, binding,
 and configuration, then resolves the remaining graph after rebinding the Tools
-consumer to zero providers. Removing the Agent product requires removing the
+consumer to zero providers. Removing all Prompt Providers leaves an empty but
+valid aggregate Prompt. Removing the Agent product requires removing the
 CLI consumer and all Agent-owned Instances; Kernel, Driver, and Native Adapter
 remain unchanged.

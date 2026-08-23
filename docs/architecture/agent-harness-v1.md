@@ -17,6 +17,8 @@ agent-cli
        |    `- one lenso.secrets@1 -> env-secrets
        |- one lenso.agent.tools@1 -> tool-runtime
        |    `- many lenso.agent.tool-provider@1 -> workspace-read-tools
+       |- one lenso.agent.prompt@1 -> prompt-runtime
+       |    `- many lenso.agent.prompt-provider@1 -> prompt plugins
        `- one lenso.agent.session@1 -> session-log
 ```
 
@@ -84,7 +86,8 @@ make both the workspace root and model endpoint visible before execution.
 
 ## Acceptance
 
-1. A deterministic Model fixture proves a direct streamed answer, one or more
+1. A deterministic Model fixture proves a composed Prompt behavior, direct
+   streamed answer, one or more
    sequential `workspace.read_text` calls, and finite step/Tool-call limits.
 2. OpenAI-compatible and direct ChatGPT subscription smoke tests exercise the
    same logical turn without changing the Agent Loop.
@@ -101,7 +104,7 @@ make both the workspace root and model endpoint visible before execution.
 
 ## Deferred
 
-Web UI, approval workflows, prompt and skill contributions, ordered Hooks,
+Web UI, approval workflows, dynamic Skill discovery and selection, ordered Hooks,
 automatic compaction, Trajectory UI, replay inspection, re-execution,
 subagents, scheduling, shell/write Tools, Creator Mode, Code Mode, hostile-code
 isolation, multi-lane placement, and App Generation are separate slices.

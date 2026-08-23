@@ -8,11 +8,13 @@ owns:
 
 - the V1 product context and architecture decision;
 - portable Agent, Model, Tools, Tool Provider, and Session Capability sources;
+- portable Prompt aggregate and Prompt Provider Capability sources;
 - generated Rust and TypeScript bindings derived from those sources;
 - validation commands that keep generated artifacts fresh;
 - deterministic, OpenAI-compatible, and experimental direct ChatGPT
-  subscription Model Modules, Tool Runtime,
-  workspace-read, file Session, Agent Loop, and CLI Modules; and
+  subscription Model Modules; Tool Runtime; Prompt aggregation; static
+  Prompt/Skill contributions; and workspace-read, file Session, Agent Loop,
+  and CLI Modules; and
 - three checked App Compositions plus their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
@@ -36,6 +38,71 @@ The CLI writes the generated Session ID to stderr. Resume the durable Session
 after a process restart with `--session <id>`. The Agent Loop streams text as
 the selected Model produces it, supports direct answers and bounded sequential
 Tool calls, and rebuilds a bounded completed-turn history for resumed Sessions.
+
+## Compose Prompt and Skill plugins
+
+Prompt and Skill plugins are ordinary Modules selected before boot. The
+checked fixture Composition binds `fixture-instructions` and `summary-skill`
+to the `prompt` aggregate. Their binding order is the Model-visible order.
+
+Each static plugin Instance declares one or more versioned contributions in
+the project document:
+
+```json
+{
+  "key": "rust-review",
+  "package": "lenso.agent.prompt.static",
+  "configuration": {
+    "contributions": [
+      {
+        "id": "review.rust",
+        "version": "1.0.0",
+        "kind": "skill",
+        "content": "Review Rust changes for correctness and explicit failure handling."
+      }
+    ]
+  }
+}
+```
+
+The App Composition must also explicitly bind that Instance to the `prompt`
+consumer through `lenso.agent.prompt-provider@1`, then be checked and resolved
+again. The running Kernel never discovers or hot-loads Prompt plugins. Session
+events retain contribution IDs, versions, kinds, and content digests for audit.
+
+### Load selected Skills from `~/.agents`
+
+`lenso.agent.prompt.filesystem` can snapshot explicitly named
+`~/.agents/skills/<name>/SKILL.md` files during App startup:
+
+```json
+{
+  "key": "agents-skills",
+  "package": "lenso.agent.prompt.filesystem",
+  "configuration": {
+    "root": "~/.agents/skills",
+    "skills": ["lenso-module-authoring", "lenso-app-composition"],
+    "id_prefix": "agents.skills",
+    "max_file_bytes": 65536,
+    "max_total_bytes": 131072
+  },
+  "configuration_schema": "crates/lenso-agent-prompt-filesystem-module/config.schema.json",
+  "provides": [
+    {
+      "capability_id": "lenso.agent.prompt-provider@1",
+      "descriptor_version": "1.0.0",
+      "operations": ["contribute"]
+    }
+  ],
+  "execution_class": "lenso.native-rust@1"
+}
+```
+
+Add the ordinary Cargo package input and an explicit `prompt` consumer binding,
+then check and resolve the project again. The Module does not enumerate
+unselected directories, execute referenced scripts, follow a Skill outside the
+configured root, or observe file changes after startup. A missing or malformed
+selected Skill prevents the App from becoming ready.
 
 ## Validate
 

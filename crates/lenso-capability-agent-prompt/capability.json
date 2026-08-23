@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.prompt@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "assemble",
+      "interaction": "request",
+      "request_schema": "schemas/assemble-request.schema.json",
+      "response_schema": "schemas/assemble-response.schema.json",
+      "domain_error_schema": "schemas/assemble-error.schema.json"
+    }
+  ]
+}
