@@ -4,7 +4,8 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 temporary_project="$(mktemp "${repo_root}/.lenso-removal.XXXXXX.json")"
 temporary_openai_project="$(mktemp "${repo_root}/.lenso-openai-removal.XXXXXX.json")"
-trap 'rm -f "${temporary_project}" "${temporary_openai_project}"' EXIT
+temporary_direct_project="$(mktemp "${repo_root}/.lenso-direct-removal.XXXXXX.json")"
+trap 'rm -f "${temporary_project}" "${temporary_openai_project}" "${temporary_direct_project}"' EXIT
 
 node - "${repo_root}/lenso.json" "${temporary_project}" <<'NODE'
 const fs = require("node:fs");
@@ -54,4 +55,36 @@ NODE
 
 lenso check \
   --project "${temporary_openai_project}" \
+  --execution-class lenso.native-rust@1
+
+node - \
+  "${repo_root}/lenso.openai-codex-direct.json" \
+  "${repo_root}/lenso.json" \
+  "${temporary_direct_project}" <<'NODE'
+const fs = require("node:fs");
+const [directSource, fixtureSource, target] = process.argv.slice(2);
+const project = JSON.parse(fs.readFileSync(directSource, "utf8"));
+const fixture = JSON.parse(fs.readFileSync(fixtureSource, "utf8"));
+const fixtureModel = fixture.composition.modules.find(
+  (module) => module.key === "model",
+);
+project.composition.modules = project.composition.modules.filter(
+  (module) => module.key !== "model" && module.key !== "auth",
+);
+project.composition.modules.push(fixtureModel);
+project.composition.bindings = project.composition.bindings.filter(
+  (binding) => binding.consumer !== "model",
+);
+delete project.packages["lenso.agent.model.openai-codex-direct"];
+delete project.packages["lenso.agent.auth.openai-codex"];
+project.packages["lenso.agent.model.fixture"] =
+  fixture.packages["lenso.agent.model.fixture"];
+project.contracts = project.contracts.filter(
+  (contract) => contract.capability_id !== "lenso.agent.auth.openai-codex@1",
+);
+fs.writeFileSync(target, `${JSON.stringify(project, null, 2)}\n`);
+NODE
+
+lenso check \
+  --project "${temporary_direct_project}" \
   --execution-class lenso.native-rust@1

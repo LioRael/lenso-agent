@@ -10,9 +10,11 @@ rust-version.workspace = true
 
 [dependencies]
 lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
+lenso-agent-auth-openai-codex-module = { path = "../../crates/lenso-agent-auth-openai-codex-module" }
 lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
 lenso-agent-model-fixture-module = { path = "../../crates/lenso-agent-model-fixture-module" }
 lenso-agent-model-openai-compatible-module = { path = "../../crates/lenso-agent-model-openai-compatible-module" }
+lenso-agent-model-openai-codex-direct-module = { path = "../../crates/lenso-agent-model-openai-codex-direct-module" }
 lenso-agent-session-file-module = { path = "../../crates/lenso-agent-session-file-module" }
 lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }

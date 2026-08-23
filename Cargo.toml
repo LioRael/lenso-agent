@@ -2,7 +2,9 @@
 resolver = "2"
 members = [
     "apps/lenso-agent-cli",
+    "crates/lenso-agent-auth-openai-codex-module",
     "crates/lenso-capability-agent",
+    "crates/lenso-capability-agent-auth-openai-codex",
     "crates/lenso-capability-agent-model",
     "crates/lenso-capability-agent-tools",
     "crates/lenso-capability-agent-tool-provider",
@@ -10,6 +12,7 @@ members = [
     "crates/lenso-agent-loop-module",
     "crates/lenso-agent-model-fixture-module",
     "crates/lenso-agent-model-openai-compatible-module",
+    "crates/lenso-agent-model-openai-codex-direct-module",
     "crates/lenso-agent-native-support",
     "crates/lenso-agent-session-file-module",
     "crates/lenso-agent-tools-module",
@@ -26,6 +29,9 @@ rust-version = "1.94"
 
 [workspace.dependencies]
 bytes = "1.11"
+base64 = "0.22"
+directories = "6.0"
+fs2 = "0.4"
 futures = "0.3"
 lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be02927a185ebdbb463038ba79d8c6ebbea771f1" }
 lenso-app-plan = "0.1.1"
@@ -35,12 +41,13 @@ lenso-kernel = "0.1.6"
 lenso-native-adapter = "0.1.2"
 lenso-runner = "0.1.6"
 lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be02927a185ebdbb463038ba79d8c6ebbea771f1" }
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
 tempfile = "3.23"
 time = { version = "0.3", features = ["formatting"] }
-tokio = { version = "1.48", features = ["macros", "rt", "signal"] }
+tokio = { version = "1.48", features = ["io-util", "macros", "net", "rt", "signal", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.rust]

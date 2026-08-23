@@ -5,7 +5,8 @@
 This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, a CLI Runner, and the
-checked `headless-readonly` and `openai-readonly` App Compositions.
+checked `headless-readonly`, `openai-readonly`, and experimental
+`openai-codex-direct` App Compositions.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
 protocol, and optional Module packages. The OpenAI-compatible profile pins the
@@ -83,6 +84,14 @@ external `lenso.secrets.env` package. It maps Chat Completions request/Tool
 shapes and incremental SSE events behind the same Model Capability. Missing
 credentials keep the App from becoming ready; credentials, provider bodies,
 and sensitive values never enter Plans, Session events, or diagnostics.
+
+The experimental `openai-codex-direct` profile keeps the Lenso Agent Loop and
+replaces only its Model provider. `lenso.agent.auth.openai-codex` owns browser
+PKCE OAuth, headless device OAuth, refresh, and private credential storage in
+`~/.lenso/agent/auth.json`; the direct Model Module uses its private Auth
+Capability to call the Codex Responses backend. Tokens never enter the App
+Plan, Session log, or diagnostic output. This integration does not shell out
+to or read credentials from the Codex CLI.
 
 ## Deferred direction
 

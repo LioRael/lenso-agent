@@ -69,10 +69,11 @@ fn openai_model_streams_tool_call_and_resumes_through_real_http() {
         "workspace.read_text"
     );
     assert_eq!(
-        requests[1]["messages"][0]["tool_calls"][0]["function"]["name"],
+        requests[1]["messages"][1]["tool_calls"][0]["function"]["name"],
         "workspace.read_text"
     );
-    assert_eq!(requests[1]["messages"][1]["role"], "tool");
+    assert_eq!(requests[1]["messages"][0]["role"], "user");
+    assert_eq!(requests[1]["messages"][2]["role"], "tool");
 }
 
 #[test]

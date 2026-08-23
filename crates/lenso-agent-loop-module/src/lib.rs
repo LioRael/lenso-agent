@@ -246,7 +246,7 @@ async fn run_turn(
             model: config.model.clone(),
             messages: vec![CompleteRequestMessagesItem {
                 role: CompleteRequestMessagesItemRole::User,
-                content: request.input,
+                content: request.input.clone(),
                 tool_call_id: None,
                 tool_name: None,
                 arguments_json: None,
@@ -311,6 +311,13 @@ async fn run_turn(
         CompleteRequest {
             model: config.model.clone(),
             messages: vec![
+                CompleteRequestMessagesItem {
+                    role: CompleteRequestMessagesItemRole::User,
+                    content: request.input,
+                    tool_call_id: None,
+                    tool_name: None,
+                    arguments_json: None,
+                },
                 CompleteRequestMessagesItem {
                     role: CompleteRequestMessagesItemRole::Assistant,
                     content: String::new(),
