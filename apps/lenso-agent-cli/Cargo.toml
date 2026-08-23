@@ -12,6 +12,7 @@ rust-version.workspace = true
 lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
 lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
 lenso-agent-model-fixture-module = { path = "../../crates/lenso-agent-model-fixture-module" }
+lenso-agent-model-openai-compatible-module = { path = "../../crates/lenso-agent-model-openai-compatible-module" }
 lenso-agent-session-file-module = { path = "../../crates/lenso-agent-session-file-module" }
 lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
@@ -20,6 +21,7 @@ lenso-app-plan.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 lenso-runner.workspace = true
+lenso-secrets-env-module.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

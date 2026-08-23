@@ -9,6 +9,7 @@ members = [
     "crates/lenso-capability-agent-session",
     "crates/lenso-agent-loop-module",
     "crates/lenso-agent-model-fixture-module",
+    "crates/lenso-agent-model-openai-compatible-module",
     "crates/lenso-agent-native-support",
     "crates/lenso-agent-session-file-module",
     "crates/lenso-agent-tools-module",
@@ -24,13 +25,17 @@ repository = "https://github.com/LioRael/lenso-agent-harness"
 rust-version = "1.94"
 
 [workspace.dependencies]
+bytes = "1.11"
 futures = "0.3"
+lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be02927a185ebdbb463038ba79d8c6ebbea771f1" }
 lenso-app-plan = "0.1.1"
 lenso-contract-codegen = "0.5.1"
 lenso-contract-runtime = "0.1.0"
 lenso-kernel = "0.1.6"
 lenso-native-adapter = "0.1.2"
 lenso-runner = "0.1.6"
+lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be02927a185ebdbb463038ba79d8c6ebbea771f1" }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.23"

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base_url", "model", "api_key_ref"],
+  "properties": {
+    "base_url": { "type": "string" },
+    "model": { "type": "string" },
+    "api_key_ref": { "type": "string" }
+  }
+}

@@ -3,6 +3,7 @@ use std::{env, fs, path::PathBuf, process::ExitCode, time::Duration};
 use lenso_agent_cli_module::CliModuleFactory;
 use lenso_agent_loop_module::AgentLoopFactory;
 use lenso_agent_model_fixture_module::FixtureModelFactory;
+use lenso_agent_model_openai_compatible_module::OpenAiCompatibleModelFactory;
 use lenso_agent_session_file_module::FileSessionFactory;
 use lenso_agent_tools_module::ToolsFactory;
 use lenso_agent_workspace_read_module::WorkspaceReadFactory;
@@ -13,6 +14,7 @@ use lenso_kernel::{
 };
 use lenso_native_adapter::NativeModuleRegistry;
 use lenso_runner::TokioDriver;
+use lenso_secrets_env_module::EnvSecretsFactory;
 
 #[derive(Debug)]
 struct Args {
@@ -45,9 +47,11 @@ async fn run() -> Result<(), String> {
         .with_factory(CliModuleFactory)
         .with_factory(AgentLoopFactory)
         .with_factory(FixtureModelFactory)
+        .with_factory(OpenAiCompatibleModelFactory)
         .with_factory(ToolsFactory)
         .with_factory(WorkspaceReadFactory)
-        .with_factory(FileSessionFactory);
+        .with_factory(FileSessionFactory)
+        .with_factory(EnvSecretsFactory::new());
     let app = Kernel::start(
         plan,
         TokioDriver::new(),

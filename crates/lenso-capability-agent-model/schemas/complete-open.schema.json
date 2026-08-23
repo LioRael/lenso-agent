@@ -26,6 +26,14 @@
           "tool_call_id": {
             "type": "string",
             "maxLength": 128
+          },
+          "tool_name": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "arguments_json": {
+            "type": "string",
+            "maxLength": 262144
           }
         },
         "additionalProperties": false

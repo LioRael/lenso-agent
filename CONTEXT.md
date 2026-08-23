@@ -5,18 +5,21 @@
 This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, a CLI Runner, and the
-checked `headless-readonly` App Composition.
+checked `headless-readonly` and `openai-readonly` App Compositions.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
-protocol, and optional Module packages. Portable core must never depend back on
-this repository.
+protocol, and optional Module packages. The OpenAI-compatible profile pins the
+external Secrets package by Git revision until that package is published.
+Portable core must never depend back on this repository.
 
 ## Product outcome
 
-A local developer starts one explicitly composed Agent, submits a turn, sees a
-streamed answer, allows the Agent to use only selected Tool providers, and can
-resume the durable Session after restart. Model, Tool, Session, and UI choices
-remain replaceable through App Composition without changing the Agent Loop.
+A local developer starts one explicitly composed Agent, submits a turn,
+consumes a streamed Model result, allows the Agent to use only selected Tool
+providers, and can resume the durable Session after restart. Model, Tool,
+Session, and UI choices remain replaceable through App Composition without
+changing the Agent Loop. End-to-end incremental Agent output remains a later
+Agent Loop slice.
 
 ## Canonical ownership
 
@@ -59,7 +62,8 @@ remain replaceable through App Composition without changing the Agent Loop.
 
 ## First executable slice
 
-The `headless-readonly` profile selects these keyed Module Instances:
+The deterministic `headless-readonly` profile selects these keyed Module
+Instances:
 
 - `cli`
 - `agent`
@@ -71,8 +75,14 @@ The `headless-readonly` profile selects these keyed Module Instances:
 The first useful transition asks the Agent to summarize a selected workspace
 README. A deterministic Model fixture proves the Tool call and Session facts;
 restarting the App preserves the Session. Unavailable durable Session storage
-keeps the App from becoming ready. A real provider path and secret-backed
-credentials are deferred to the next product slice.
+keeps the App from becoming ready.
+
+The `openai-readonly` profile replaces the fixture `model` Instance with
+`lenso.agent.model.openai-compatible` and adds a `secrets` Instance from the
+external `lenso.secrets.env` package. It maps Chat Completions request/Tool
+shapes and incremental SSE events behind the same Model Capability. Missing
+credentials keep the App from becoming ready; credentials, provider bodies,
+and sensitive values never enter Plans, Session events, or diagnostics.
 
 ## Deferred direction
 

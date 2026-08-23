@@ -1,0 +1,12 @@
+{
+  "id": "lenso.secrets@1",
+  "version": "1.0.0",
+  "portable": false,
+  "operations": [{
+    "name": "resolve",
+    "interaction": "request",
+    "request_schema": "schemas/resolve-request.schema.json",
+    "response_schema": "schemas/resolve-response.schema.json",
+    "domain_error_schema": "schemas/resolve-error.schema.json"
+  }]
+}

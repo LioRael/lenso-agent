@@ -2,7 +2,7 @@
 import * as lensoContractRuntime from "@lenso/contract-runtime";
 
 export const CAPABILITY_ID = "lenso.agent.model@1";
-export const DESCRIPTOR_VERSION = "1.0.0";
+export const DESCRIPTOR_VERSION = "1.1.0";
 export const PORTABLE = true;
 export const CROSS_LANE_TRANSFER = false;
 
@@ -27,9 +27,11 @@ export interface CompleteRequest {
 }
 
 export interface CompleteRequestMessagesItem {
+  arguments_json?: string;
   content: string;
   role: "system" | "user" | "assistant" | "tool";
   tool_call_id?: string;
+  tool_name?: string;
 }
 
 export interface CompleteRequestToolsItem {

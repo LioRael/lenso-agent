@@ -10,9 +10,9 @@ owns:
 - portable Agent, Model, Tools, Tool Provider, and Session Capability sources;
 - generated Rust and TypeScript bindings derived from those sources; and
 - validation commands that keep generated artifacts fresh;
-- deterministic Model, Tool Runtime, workspace-read, file Session, Agent Loop,
-  and CLI Modules; and
-- one checked App Composition plus its canonical Resolved App Plan.
+- deterministic and OpenAI-compatible Model Modules, Tool Runtime,
+  workspace-read, file Session, Agent Loop, and CLI Modules; and
+- two checked App Compositions plus their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
@@ -46,5 +46,27 @@ pnpm typecheck
 ```
 
 The fixture Model deliberately proves replacement and orchestration boundaries;
-it is not presented as a production model provider. A real model package can
-replace the `model` Instance without changing the Agent Loop or Kernel.
+it is not presented as a production model provider.
+
+## Run an OpenAI-compatible provider
+
+The second Composition replaces only the `model` Instance and adds an explicit
+Env Secrets Module. The API key remains outside the project document and
+Resolved App Plan:
+
+```sh
+export OPENAI_API_KEY="..."
+lenso check --project lenso.openai.json \
+  --execution-class lenso.native-rust@1
+lenso resolve --project lenso.openai.json \
+  --execution-class lenso.native-rust@1 \
+  --output composition/openai-readonly/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan composition/openai-readonly/resolved-plan.json \
+  --prompt "Use workspace.read_text to read README.md, then summarize it."
+```
+
+`lenso.openai.json` defaults to OpenAI's base URL and `gpt-4o-mini`. An App
+author can select another Chat Completions-compatible base URL and model, then
+resolve and review a new Plan. Loopback HTTP is accepted only for tests; remote
+providers require HTTPS.

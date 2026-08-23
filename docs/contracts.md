@@ -21,6 +21,11 @@ For `complete`, fields not selected by `kind` retain their schema defaults:
 - `tool_call` uses `tool_call_id`, `tool_name`, and `arguments_json`.
 - `usage` uses `input_tokens` and `output_tokens`.
 
+Model Descriptor `1.1.0` adds optional `tool_name` and `arguments_json` fields
+to input messages. This preserves the complete assistant Tool call when an
+Agent sends a Tool result in a later completion request. The change is
+additive within the existing Capability major.
+
 ## Tool boundary
 
 `lenso.agent.tools@1` is the application-facing aggregate catalog. It fans out
