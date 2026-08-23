@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base_url", "model", "reasoning_effort", "max_event_bytes"],
+  "properties": {
+    "base_url": { "type": "string" },
+    "model": { "type": "string" },
+    "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high", "xhigh"] },
+    "max_event_bytes": { "type": "integer" }
+  }
+}

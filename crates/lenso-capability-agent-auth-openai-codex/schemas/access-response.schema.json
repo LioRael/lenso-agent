@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["access_token", "account_id", "expires_at"],
+  "properties": {
+    "access_token": {
+      "type": "string",
+      "x-lenso-sensitive": true
+    },
+    "account_id": {
+      "type": "string",
+      "x-lenso-sensitive": true
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "uint64"
+    }
+  },
+  "additionalProperties": false
+}

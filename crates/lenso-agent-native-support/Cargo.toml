@@ -1,0 +1,16 @@
+[package]
+name = "lenso-agent-native-support"
+version = "0.1.0"
+description = "Native technical support for Lenso Agent Harness Modules."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+futures.workspace = true
+lenso-kernel.workspace = true
+
+[lints]
+workspace = true

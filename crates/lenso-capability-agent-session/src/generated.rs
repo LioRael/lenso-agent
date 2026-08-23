@@ -4,7 +4,7 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -116,6 +116,7 @@ pub struct OpenResponse {
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpenError {
     InvalidSessionId,
+    NotFound,
     Unknown(UnknownDomainError),
 }
 
@@ -337,6 +338,7 @@ impl serde::Serialize for OpenError {
         use serde::ser::SerializeMap;
         match self {
             Self::InvalidSessionId => serializer.serialize_str("invalid_session_id"),
+            Self::NotFound => serializer.serialize_str("not_found"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
                 map.serialize_entry("code", &value.code)?;
@@ -361,6 +363,7 @@ impl<'de> serde::Deserialize<'de> for OpenError {
         match value {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_session_id" => Ok(Self::InvalidSessionId),
+                "not_found" => Ok(Self::NotFound),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {

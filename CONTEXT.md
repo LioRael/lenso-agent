@@ -2,21 +2,25 @@
 
 ## Status
 
-This repository is the proposed product owner for a headless-first Agent
-Harness built as an ordinary Lenso App. The initial repository contains the V1
-architecture and portable Capability contract sources. Module implementations
-and executable App Composition follow those contracts.
+This repository is the product owner for a headless-first Agent Harness built
+as an ordinary Lenso App. The first executable slice contains portable
+Capability sources, native Module implementations, a CLI Runner, and the
+checked `headless-readonly`, `openai-readonly`, and experimental
+`openai-codex-direct` App Compositions.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
-protocol, and optional Module packages. Portable core must never depend back on
-this repository.
+protocol, and optional Module packages. The OpenAI-compatible profile pins the
+external Secrets package by Git revision until that package is published.
+Portable core must never depend back on this repository.
 
 ## Product outcome
 
-A local developer starts one explicitly composed Agent, submits a turn, sees a
-streamed answer, allows the Agent to use only selected Tool providers, and can
-resume the durable Session after restart. Model, Tool, Session, and UI choices
-remain replaceable through App Composition without changing the Agent Loop.
+A local developer starts one explicitly composed Agent, submits a turn,
+consumes a streamed Model result, allows the Agent to use only selected Tool
+providers, and can resume the durable Session after restart. Model, Tool,
+Session, and UI choices remain replaceable through App Composition without
+changing the Agent Loop. End-to-end incremental Agent output remains a later
+Agent Loop slice.
 
 ## Canonical ownership
 
@@ -59,7 +63,8 @@ remain replaceable through App Composition without changing the Agent Loop.
 
 ## First executable slice
 
-The `headless-readonly` profile selects these keyed Module Instances:
+The deterministic `headless-readonly` profile selects these keyed Module
+Instances:
 
 - `cli`
 - `agent`
@@ -67,13 +72,26 @@ The `headless-readonly` profile selects these keyed Module Instances:
 - `tools`
 - `workspace-read`
 - `sessions`
-- `secrets`
 
 The first useful transition asks the Agent to summarize a selected workspace
 README. A deterministic Model fixture proves the Tool call and Session facts;
-an opt-in OpenAI-compatible smoke proves the real provider path. Restarting the
-App preserves the Session. Missing credentials or durable Session storage keep
-the App from becoming ready.
+restarting the App preserves the Session. Unavailable durable Session storage
+keeps the App from becoming ready.
+
+The `openai-readonly` profile replaces the fixture `model` Instance with
+`lenso.agent.model.openai-compatible` and adds a `secrets` Instance from the
+external `lenso.secrets.env` package. It maps Chat Completions request/Tool
+shapes and incremental SSE events behind the same Model Capability. Missing
+credentials keep the App from becoming ready; credentials, provider bodies,
+and sensitive values never enter Plans, Session events, or diagnostics.
+
+The experimental `openai-codex-direct` profile keeps the Lenso Agent Loop and
+replaces only its Model provider. `lenso.agent.auth.openai-codex` owns browser
+PKCE OAuth, headless device OAuth, refresh, and private credential storage in
+`~/.lenso/agent/auth.json`; the direct Model Module uses its private Auth
+Capability to call the Codex Responses backend. Tokens never enter the App
+Plan, Session log, or diagnostic output. This integration does not shell out
+to or read credentials from the Codex CLI.
 
 ## Deferred direction
 

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issuer", "profile", "refresh_margin_seconds"],
+  "properties": {
+    "issuer": { "type": "string" },
+    "profile": { "type": "string" },
+    "credential_file": { "type": "string" },
+    "refresh_margin_seconds": { "type": "integer" }
+  }
+}

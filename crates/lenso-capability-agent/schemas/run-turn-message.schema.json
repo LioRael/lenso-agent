@@ -10,6 +10,11 @@
     "text": {
       "type": "string",
       "maxLength": 65536
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
     }
   },
   "additionalProperties": false

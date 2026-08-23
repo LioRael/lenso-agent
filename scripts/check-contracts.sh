@@ -4,16 +4,17 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 contract_codegen="${LENSO_CONTRACT_CODEGEN:-lenso-contract-codegen}"
 
-contracts=(
-  lenso-capability-agent
-  lenso-capability-agent-model
-  lenso-capability-agent-tools
-  lenso-capability-agent-tool-provider
-  lenso-capability-agent-session
+contract_roots=(
+  "${repo_root}/crates/lenso-capability-agent"
+  "${repo_root}/crates/lenso-capability-agent-auth-openai-codex"
+  "${repo_root}/crates/lenso-capability-agent-model"
+  "${repo_root}/crates/lenso-capability-agent-tools"
+  "${repo_root}/crates/lenso-capability-agent-tool-provider"
+  "${repo_root}/crates/lenso-capability-agent-session"
+  "${repo_root}/contracts/vendor/lenso-secrets"
 )
 
-for contract in "${contracts[@]}"; do
-  contract_root="${repo_root}/crates/${contract}"
+for contract_root in "${contract_roots[@]}"; do
   "${contract_codegen}" check \
     "${contract_root}/capability.json" \
     "${contract_root}/src/generated.rs" \

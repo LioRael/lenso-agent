@@ -21,6 +21,11 @@ For `complete`, fields not selected by `kind` retain their schema defaults:
 - `tool_call` uses `tool_call_id`, `tool_name`, and `arguments_json`.
 - `usage` uses `input_tokens` and `output_tokens`.
 
+Model Descriptor `1.1.0` adds optional `tool_name` and `arguments_json` fields
+to input messages. This preserves the complete assistant Tool call when an
+Agent sends a Tool result in a later completion request. The change is
+additive within the existing Capability major.
+
 ## Tool boundary
 
 `lenso.agent.tools@1` is the application-facing aggregate catalog. It fans out
@@ -45,3 +50,12 @@ it is `invalid_event`.
 the response `revision` is the latest durable revision observed by that read.
 Timestamps are evidence supplied by the Agent Module; event order is defined by
 revision, not wall-clock time.
+
+Supplying `session_id` to `open` means resume-only: an absent Session returns
+`not_found`. Omitting it creates a new Session. This additive Domain Error was
+introduced in Descriptor `1.1.0`; `lenso.agent.session@1` consumers preserve
+unknown Domain Error codes for forward compatibility.
+
+Agent Descriptor `1.1.0` adds optional `session_id` to `run_turn` messages so a
+consumer can persist the identity created by the Agent Loop. Older consumers
+may ignore it and older providers remain representable.
