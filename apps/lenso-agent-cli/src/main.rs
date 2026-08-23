@@ -1,5 +1,6 @@
 use std::{
     env, fs,
+    io::{self, Write},
     path::PathBuf,
     process::{Command, ExitCode},
     time::Duration,
@@ -124,10 +125,16 @@ async fn invoke(handle: NativeStreamHandle<Agent>, args: Args) -> Result<(), Str
             StreamEvent::Message(message) => {
                 session_id = message.session_id.or(session_id);
                 print!("{}", message.text);
+                io::stdout()
+                    .flush()
+                    .map_err(|error| format!("failed to flush Agent output: {error}"))?;
             }
             StreamEvent::PeerHalfClosed => {}
             StreamEvent::Terminal(Ok(())) => {
                 println!();
+                io::stdout()
+                    .flush()
+                    .map_err(|error| format!("failed to flush Agent output: {error}"))?;
                 if let Some(session_id) = session_id {
                     eprintln!("session: {session_id}");
                 }

@@ -19,8 +19,9 @@ A local developer starts one explicitly composed Agent, submits a turn,
 consumes a streamed Model result, allows the Agent to use only selected Tool
 providers, and can resume the durable Session after restart. Model, Tool,
 Session, and UI choices remain replaceable through App Composition without
-changing the Agent Loop. End-to-end incremental Agent output remains a later
-Agent Loop slice.
+changing the Agent Loop. The Loop supports direct answers or bounded sequential
+Tool steps, streams text incrementally, and reconstructs a bounded
+completed-turn history from the Session log.
 
 ## Canonical ownership
 
@@ -75,8 +76,9 @@ Instances:
 
 The first useful transition asks the Agent to summarize a selected workspace
 README. A deterministic Model fixture proves the Tool call and Session facts;
-restarting the App preserves the Session. Unavailable durable Session storage
-keeps the App from becoming ready.
+it also proves direct answers, sequential Tool calls, budget failures, and
+completed-turn context after restart. Unavailable durable Session storage keeps
+the App from becoming ready.
 
 The `openai-readonly` profile replaces the fixture `model` Instance with
 `lenso.agent.model.openai-compatible` and adds a `secrets` Instance from the

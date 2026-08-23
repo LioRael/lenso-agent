@@ -11,8 +11,8 @@ Status: implementation baseline for the first executable slice.
 - **Requires:** none.
 - **Configuration:** exact fixture model name.
 - **Lifecycle/resources:** endpoint-only; no durable state or managed work.
-- **First behavior:** requests `workspace.read_text` once, then summarizes the
-  returned README content.
+- **First behavior:** deterministically proves direct answers, one or two
+  sequential `workspace.read_text` calls, and resumed-turn context.
 
 ## `lenso.agent.workspace-read`
 
@@ -65,14 +65,15 @@ Status: implementation baseline for the first executable slice.
 - **Provides:** `lenso.agent@1` (`run_turn`, stream).
 - **Requires:** exactly one `lenso.agent.model@1`, one
   `lenso.agent.tools@1`, and one `lenso.agent.session@1`.
-- **Configuration:** model name, maximum steps, maximum Tool calls, model output
-  limit, and per-dependency deadline.
+- **Configuration:** model name, maximum steps, maximum Tool calls, aggregate
+  model output-token budget, and bounded Session-history event count.
 - **Lifecycle/resources:** `activate` materializes generated clients only from
-  `ModuleDependencies`; each generation owns its client set and active-Turn
-  state.
-- **First behavior:** persists a Turn, asks the Model for a Tool call, executes
-  it, asks the Model for the final answer, persists completion, and emits the
-  answer stream.
+  `ModuleDependencies`; each generation owns its client set, active-Turn state,
+  and Driver-managed turn tasks. Each Agent stream uses a one-item internal
+  channel so a slow consumer backpressures the Loop.
+- **First behavior:** reconstructs bounded completed-turn context, accepts a
+  direct answer or sequential Tool calls until a finite budget is reached,
+  persists terminal facts, and forwards Model text deltas immediately.
 
 ## `lenso.agent.cli`
 
