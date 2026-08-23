@@ -1,9 +1,19 @@
 //! Agent Loop Module.
 
-use std::{cell::Cell, cell::RefCell, rc::Rc};
+use std::{
+    any::Any,
+    cell::{Cell, RefCell},
+    collections::BTreeMap,
+    fmt,
+    rc::Rc,
+};
 
-use futures::future::LocalBoxFuture;
-use lenso_agent_native_support::FiniteOutputStream;
+use futures::{
+    SinkExt, StreamExt,
+    channel::mpsc,
+    future::{LocalBoxFuture, ready},
+    lock::Mutex,
+};
 use lenso_capability_agent::{
     AgentEndpoint, AgentInvocationError, AgentProvider, CAPABILITY_ID, RunTurnError,
     RunTurnRequest, RunTurnResponse,
@@ -14,14 +24,17 @@ use lenso_capability_agent_model::{
 };
 use lenso_capability_agent_session::{
     AppendError, AppendRequest, AppendRequestEventsItem, AppendRequestEventsItemKind, OpenError,
-    OpenRequest, SessionAppendInvocationError, SessionClient, SessionOpenInvocationError,
+    OpenRequest, ReadError, ReadRequest, ReadResponseEventsItem, ReadResponseEventsItemKind,
+    SessionAppendInvocationError, SessionClient, SessionOpenInvocationError,
+    SessionReadInvocationError,
 };
 use lenso_capability_agent_tools::{
     CatalogRequest, ExecuteRequest, ToolsClient, ToolsExecuteInvocationError,
 };
 use lenso_kernel::{
-    ActivateContext, InvocationContext, ModuleFuture, ModuleLifecycle, NativeStreamEndpoint,
-    NativeStreamSession, RuntimeFailure, StreamEvent,
+    ActivateContext, CancellationToken, InvocationContext, ManagedTaskScope, ModuleFuture,
+    ModuleLifecycle, NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
+    StreamEvent,
 };
 use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -38,6 +51,7 @@ struct AgentConfig {
     max_steps: u32,
     max_tool_calls: u32,
     max_output_tokens: i64,
+    max_history_events: i64,
 }
 
 /// Native factory for one Agent Loop generation.
@@ -64,10 +78,12 @@ impl NativeModuleFactory for AgentLoopFactory {
             .map_err(|error| invalid_plan(format!("invalid Agent Loop configuration: {error}")))?;
         if config.model.is_empty()
             || config.max_steps == 0
-            || config.max_tool_calls == 0
+            || config.max_steps > 64
+            || config.max_tool_calls > 64
             || config.max_output_tokens <= 0
+            || !(1..=1000).contains(&config.max_history_events)
         {
-            return Err(invalid_plan("Agent Loop limits and model must be non-zero"));
+            return Err(invalid_plan("Agent Loop model or limits are invalid"));
         }
         let clients = Rc::new(RefCell::new(None));
         let active = Rc::new(Cell::new(false));
@@ -88,6 +104,7 @@ struct AgentClients {
     model: ModelClient,
     tools: ToolsClient,
     session: SessionClient,
+    tasks: ManagedTaskScope,
 }
 
 #[derive(Clone, Debug)]
@@ -123,14 +140,27 @@ impl AgentProvider for AgentLoop {
         };
         let config = self.config.clone();
         let active = self.active.clone();
-        Box::pin(async move {
+        let cancellation = context.cancellation();
+        let (sender, receiver) = mpsc::channel(1);
+        let tasks = clients.tasks.clone();
+        let task = tasks.spawn_local(Box::pin(async move {
             let _turn = ActiveTurn(active);
-            let messages = run_turn(&clients, &config, context, request).await?;
-            Ok(
-                Box::new(FiniteOutputStream::successful(CAPABILITY_ID, messages))
+            produce_turn(clients, config, context, request, sender).await;
+        }));
+        match task {
+            Ok(_) => Box::pin(ready(Ok(
+                Box::new(AgentTurnStream::new(receiver, cancellation))
                     as Box<dyn NativeStreamSession>,
-            )
-        })
+            ))),
+            Err(error) => {
+                self.active.set(false);
+                Box::pin(ready(Err(AgentInvocationError::Runtime(
+                    RuntimeFailure::ModuleFailure {
+                        detail: format!("Agent turn task failed to start: {error:?}"),
+                    },
+                ))))
+            }
+        }
     }
 }
 
@@ -140,6 +170,75 @@ struct ActiveTurn(Rc<Cell<bool>>);
 impl Drop for ActiveTurn {
     fn drop(&mut self) {
         self.0.set(false);
+    }
+}
+
+type AgentChannelItem = Result<NativeStreamItem, RuntimeFailure>;
+
+struct AgentTurnStream {
+    receiver: Rc<Mutex<mpsc::Receiver<AgentChannelItem>>>,
+    cancellation: CancellationToken,
+    cancelled: Rc<Cell<bool>>,
+    send_closed: Rc<Cell<bool>>,
+}
+
+impl fmt::Debug for AgentTurnStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AgentTurnStream")
+            .field("cancelled", &self.cancelled.get())
+            .field("send_closed", &self.send_closed.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentTurnStream {
+    fn new(receiver: mpsc::Receiver<AgentChannelItem>, cancellation: CancellationToken) -> Self {
+        Self {
+            receiver: Rc::new(Mutex::new(receiver)),
+            cancellation,
+            cancelled: Rc::new(Cell::new(false)),
+            send_closed: Rc::new(Cell::new(false)),
+        }
+    }
+}
+
+impl NativeStreamSession for AgentTurnStream {
+    fn send(&self, _message: Box<dyn Any>) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        Box::pin(ready(Err(RuntimeFailure::ProtocolViolation {
+            capability: CAPABILITY_ID,
+        })))
+    }
+
+    fn receive(&self) -> LocalBoxFuture<'static, Result<NativeStreamItem, RuntimeFailure>> {
+        let receiver = self.receiver.clone();
+        let cancelled = self.cancelled.clone();
+        Box::pin(async move {
+            if cancelled.get() {
+                return Err(RuntimeFailure::AdmissionClosed);
+            }
+            receiver.lock().await.next().await.unwrap_or_else(|| {
+                Err(RuntimeFailure::ModuleFailure {
+                    detail: "Agent turn ended without a terminal event".to_owned(),
+                })
+            })
+        })
+    }
+
+    fn close_send(&self) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        let result = if self.send_closed.replace(true) {
+            Err(RuntimeFailure::ProtocolViolation {
+                capability: CAPABILITY_ID,
+            })
+        } else {
+            Ok(())
+        };
+        Box::pin(ready(result))
+    }
+
+    fn cancel(&self) {
+        self.cancellation.cancel();
+        self.cancelled.set(true);
     }
 }
 
@@ -163,24 +262,46 @@ impl ModuleLifecycle for AgentLifecycle {
                 Ok(client) => client,
                 Err(error) => return Box::pin(futures::future::ready(Err(error))),
             },
+            tasks: context.tasks().clone(),
         };
         self.clients.replace(Some(Rc::new(clients)));
         Box::pin(futures::future::ready(Ok(())))
     }
 }
 
-#[allow(clippy::too_many_lines)]
+async fn produce_turn(
+    clients: Rc<AgentClients>,
+    config: AgentConfig,
+    context: InvocationContext,
+    request: RunTurnRequest,
+    mut sender: mpsc::Sender<AgentChannelItem>,
+) {
+    match run_turn(&clients, &config, &context, request, &mut sender).await {
+        Ok(()) => {
+            let _ = sender.send(Ok(NativeStreamItem::PeerHalfClosed)).await;
+            let _ = sender.send(Ok(NativeStreamItem::Terminal(Ok(())))).await;
+        }
+        Err(AgentInvocationError::Domain(error)) => {
+            let _ = sender.send(Ok(NativeStreamItem::PeerHalfClosed)).await;
+            let _ = sender
+                .send(Ok(NativeStreamItem::Terminal(Err(
+                    Box::new(error) as Box<dyn Any>
+                ))))
+                .await;
+        }
+        Err(AgentInvocationError::Runtime(error)) => {
+            let _ = sender.send(Err(error)).await;
+        }
+    }
+}
+
 async fn run_turn(
     clients: &AgentClients,
     config: &AgentConfig,
-    context: InvocationContext,
+    context: &InvocationContext,
     request: RunTurnRequest,
-) -> Result<Vec<RunTurnResponse>, AgentInvocationError> {
-    if config.max_steps < 2 {
-        return Err(AgentInvocationError::Domain(
-            RunTurnError::StepLimitExceeded,
-        ));
-    }
+    sender: &mut mpsc::Sender<AgentChannelItem>,
+) -> Result<(), AgentInvocationError> {
     let opened = clients
         .session
         .open_with_context(
@@ -192,6 +313,11 @@ async fn run_turn(
         .await
         .map_err(map_session_open_error)?;
     let session_id = opened.session_id;
+    let mut messages = if opened.created {
+        Vec::new()
+    } else {
+        read_history(clients, context, &session_id, &opened.revision, config).await?
+    };
     let turn_id = uuid::Uuid::new_v4().to_string();
     let mut revision = opened.revision;
     let mut initial_events = Vec::new();
@@ -207,8 +333,37 @@ async fn run_turn(
         Some(&turn_id),
         &serde_json::json!({"input": request.input}),
     )?);
-    revision = append_events(clients, &context, &session_id, revision, initial_events).await?;
+    revision = append_events(clients, context, &session_id, revision, initial_events).await?;
+    messages.push(user_message(request.input));
 
+    let result = execute_steps(
+        clients,
+        config,
+        context,
+        &session_id,
+        &turn_id,
+        &mut revision,
+        messages,
+        sender,
+    )
+    .await;
+    if let Err(error) = &result {
+        record_turn_failure(clients, context, &session_id, &turn_id, revision, error).await;
+    }
+    result
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+async fn execute_steps(
+    clients: &AgentClients,
+    config: &AgentConfig,
+    context: &InvocationContext,
+    session_id: &str,
+    turn_id: &str,
+    revision: &mut String,
+    mut messages: Vec<CompleteRequestMessagesItem>,
+    sender: &mut mpsc::Sender<AgentChannelItem>,
+) -> Result<(), AgentInvocationError> {
     let catalog = clients
         .tools
         .catalog_with_context(context.clone(), CatalogRequest {})
@@ -227,159 +382,185 @@ async fn run_turn(
             input_schema_json: tool.input_schema_json,
         })
         .collect::<Vec<_>>();
-    revision = append_events(
-        clients,
-        &context,
-        &session_id,
-        revision,
-        vec![session_event(
-            AppendRequestEventsItemKind::ModelRequested,
-            Some(&turn_id),
-            &serde_json::json!({"step": 1}),
-        )?],
-    )
-    .await?;
-    let first = collect_model(
-        clients,
-        &context,
-        CompleteRequest {
-            model: config.model.clone(),
-            messages: vec![CompleteRequestMessagesItem {
-                role: CompleteRequestMessagesItemRole::User,
-                content: request.input.clone(),
+    let mut tool_call_count = 0_u32;
+    let mut sequence = 0_u64;
+    let mut remaining_output_tokens = config.max_output_tokens;
+    let mut turn_output = String::new();
+
+    for step in 1..=config.max_steps {
+        *revision = append_events(
+            clients,
+            context,
+            session_id,
+            revision.clone(),
+            vec![session_event(
+                AppendRequestEventsItemKind::ModelRequested,
+                Some(turn_id),
+                &serde_json::json!({"step": step}),
+            )?],
+        )
+        .await?;
+        let completion = stream_model(
+            clients,
+            context,
+            CompleteRequest {
+                model: config.model.clone(),
+                messages: messages.clone(),
+                tools: tools.clone(),
+                temperature: 0.0,
+                max_output_tokens: remaining_output_tokens,
+            },
+            session_id,
+            &mut sequence,
+            sender,
+        )
+        .await?;
+        if let Some(output_tokens) = completion.output_tokens {
+            let used = i64::try_from(output_tokens).unwrap_or(i64::MAX);
+            remaining_output_tokens = remaining_output_tokens.saturating_sub(used);
+        }
+        turn_output.push_str(&completion.text);
+        if completion.tool_calls.is_empty() {
+            if completion.text.is_empty() {
+                return Err(AgentInvocationError::Runtime(
+                    RuntimeFailure::ModuleFailure {
+                        detail: "Model completed without text or a Tool call".to_owned(),
+                    },
+                ));
+            }
+            *revision = append_events(
+                clients,
+                context,
+                session_id,
+                revision.clone(),
+                vec![
+                    session_event(
+                        AppendRequestEventsItemKind::ModelOutput,
+                        Some(turn_id),
+                        &serde_json::json!({"text": completion.text}),
+                    )?,
+                    session_event(
+                        AppendRequestEventsItemKind::TurnCompleted,
+                        Some(turn_id),
+                        &serde_json::json!({"output": turn_output}),
+                    )?,
+                ],
+            )
+            .await?;
+            return Ok(());
+        }
+        if !completion.text.is_empty() {
+            *revision = append_events(
+                clients,
+                context,
+                session_id,
+                revision.clone(),
+                vec![session_event(
+                    AppendRequestEventsItemKind::ModelOutput,
+                    Some(turn_id),
+                    &serde_json::json!({"step": step, "text": completion.text}),
+                )?],
+            )
+            .await?;
+            messages.push(CompleteRequestMessagesItem {
+                role: CompleteRequestMessagesItemRole::Assistant,
+                content: completion.text.clone(),
                 tool_call_id: None,
                 tool_name: None,
                 arguments_json: None,
-            }],
-            tools: tools.clone(),
-            temperature: 0.0,
-            max_output_tokens: config.max_output_tokens,
-        },
-    )
-    .await?;
-    let tool_call = first
-        .iter()
-        .find(|message| message.kind == CompleteResponseKind::ToolCall)
-        .ok_or_else(|| {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
-                detail: "fixture Model did not request a Tool".to_owned(),
-            })
-        })?;
-    if config.max_tool_calls < 1 {
-        return Err(AgentInvocationError::Domain(
-            RunTurnError::ToolCallLimitExceeded,
-        ));
+            });
+        }
+        if step == config.max_steps {
+            return Err(AgentInvocationError::Domain(
+                RunTurnError::StepLimitExceeded,
+            ));
+        }
+        let requested = u32::try_from(completion.tool_calls.len()).unwrap_or(u32::MAX);
+        if tool_call_count.saturating_add(requested) > config.max_tool_calls {
+            return Err(AgentInvocationError::Domain(
+                RunTurnError::ToolCallLimitExceeded,
+            ));
+        }
+        if remaining_output_tokens <= 0 {
+            return Err(AgentInvocationError::Domain(
+                RunTurnError::ContextLimitExceeded,
+            ));
+        }
+        tool_call_count = tool_call_count.saturating_add(requested);
+        for tool_call in completion.tool_calls {
+            *revision = append_events(
+                clients,
+                context,
+                session_id,
+                revision.clone(),
+                vec![session_event(
+                    AppendRequestEventsItemKind::ToolRequested,
+                    Some(turn_id),
+                    &serde_json::json!({
+                        "call_id": tool_call.tool_call_id,
+                        "name": tool_call.tool_name,
+                        "arguments_json": tool_call.arguments_json
+                    }),
+                )?],
+            )
+            .await?;
+            let tool_result = clients
+                .tools
+                .execute_with_context(
+                    context.clone(),
+                    ExecuteRequest {
+                        name: tool_call.tool_name.clone(),
+                        arguments_json: tool_call.arguments_json.clone(),
+                    },
+                )
+                .await
+                .map_err(map_tools_error)?;
+            *revision = append_events(
+                clients,
+                context,
+                session_id,
+                revision.clone(),
+                vec![session_event(
+                    AppendRequestEventsItemKind::ToolResult,
+                    Some(turn_id),
+                    &serde_json::json!({
+                        "call_id": tool_call.tool_call_id,
+                        "name": tool_call.tool_name,
+                        "metadata_json": tool_result.metadata_json
+                    }),
+                )?],
+            )
+            .await?;
+            messages.push(assistant_tool_message(&tool_call));
+            messages.push(CompleteRequestMessagesItem {
+                role: CompleteRequestMessagesItemRole::Tool,
+                content: tool_result.content,
+                tool_call_id: Some(tool_call.tool_call_id),
+                tool_name: None,
+                arguments_json: None,
+            });
+        }
     }
-    revision = append_events(
-        clients,
-        &context,
-        &session_id,
-        revision,
-        vec![session_event(
-            AppendRequestEventsItemKind::ToolRequested,
-            Some(&turn_id),
-            &serde_json::json!({"name": tool_call.tool_name, "arguments_json": tool_call.arguments_json}),
-        )?],
-    )
-    .await?;
-    let tool_result = clients
-        .tools
-        .execute_with_context(
-            context.clone(),
-            ExecuteRequest {
-                name: tool_call.tool_name.clone(),
-                arguments_json: tool_call.arguments_json.clone(),
-            },
-        )
-        .await
-        .map_err(map_tools_error)?;
-    revision = append_events(
-        clients,
-        &context,
-        &session_id,
-        revision,
-        vec![session_event(
-            AppendRequestEventsItemKind::ToolResult,
-            Some(&turn_id),
-            &serde_json::json!({"name": tool_call.tool_name, "metadata_json": tool_result.metadata_json}),
-        )?],
-    )
-    .await?;
-    let final_messages = collect_model(
-        clients,
-        &context,
-        CompleteRequest {
-            model: config.model.clone(),
-            messages: vec![
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::User,
-                    content: request.input,
-                    tool_call_id: None,
-                    tool_name: None,
-                    arguments_json: None,
-                },
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::Assistant,
-                    content: String::new(),
-                    tool_call_id: Some(tool_call.tool_call_id.clone()),
-                    tool_name: Some(tool_call.tool_name.clone()),
-                    arguments_json: Some(tool_call.arguments_json.clone()),
-                },
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::Tool,
-                    content: tool_result.content,
-                    tool_call_id: Some(tool_call.tool_call_id.clone()),
-                    tool_name: None,
-                    arguments_json: None,
-                },
-            ],
-            tools,
-            temperature: 0.0,
-            max_output_tokens: config.max_output_tokens,
-        },
-    )
-    .await?;
-    let responses = final_messages
-        .into_iter()
-        .filter(|message| message.kind == CompleteResponseKind::TextDelta)
-        .enumerate()
-        .map(|(index, message)| RunTurnResponse {
-            sequence: (index + 1).to_string(),
-            session_id: Some(session_id.clone()),
-            text: message.text,
-        })
-        .collect::<Vec<_>>();
-    let output = responses
-        .iter()
-        .map(|response| response.text.as_str())
-        .collect::<String>();
-    let _revision = append_events(
-        clients,
-        &context,
-        &session_id,
-        revision,
-        vec![
-            session_event(
-                AppendRequestEventsItemKind::ModelOutput,
-                Some(&turn_id),
-                &serde_json::json!({"text": output}),
-            )?,
-            session_event(
-                AppendRequestEventsItemKind::TurnCompleted,
-                Some(&turn_id),
-                &serde_json::json!({"output": output}),
-            )?,
-        ],
-    )
-    .await?;
-    Ok(responses)
+    Err(AgentInvocationError::Domain(
+        RunTurnError::StepLimitExceeded,
+    ))
 }
 
-async fn collect_model(
+#[derive(Debug)]
+struct ModelStep {
+    text: String,
+    tool_calls: Vec<CompleteResponse>,
+    output_tokens: Option<u64>,
+}
+
+async fn stream_model(
     clients: &AgentClients,
     context: &InvocationContext,
     request: CompleteRequest,
-) -> Result<Vec<CompleteResponse>, AgentInvocationError> {
+    session_id: &str,
+    sequence: &mut u64,
+    sender: &mut mpsc::Sender<AgentChannelItem>,
+) -> Result<ModelStep, AgentInvocationError> {
     let stream = clients
         .model
         .complete_with_context(context.clone(), request)
@@ -393,16 +574,44 @@ async fn collect_model(
         .close_send()
         .await
         .map_err(AgentInvocationError::Runtime)?;
-    let mut messages = Vec::new();
+    let mut completion = ModelStep {
+        text: String::new(),
+        tool_calls: Vec::new(),
+        output_tokens: None,
+    };
     loop {
         match stream
             .receive()
             .await
             .map_err(AgentInvocationError::Runtime)?
         {
-            ModelEvent::Message(message) => messages.push(message),
+            ModelEvent::Message(message) => match message.kind {
+                CompleteResponseKind::TextDelta => {
+                    completion.text.push_str(&message.text);
+                    *sequence = sequence.saturating_add(1);
+                    send_agent_message(
+                        sender,
+                        RunTurnResponse {
+                            sequence: sequence.to_string(),
+                            session_id: Some(session_id.to_owned()),
+                            text: message.text,
+                        },
+                        context.request_id(),
+                    )
+                    .await?;
+                }
+                CompleteResponseKind::ToolCall => completion.tool_calls.push(message),
+                CompleteResponseKind::Usage => {
+                    completion.output_tokens =
+                        Some(message.output_tokens.parse().map_err(|_| {
+                            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                                detail: "Model emitted invalid output token usage".to_owned(),
+                            })
+                        })?);
+                }
+            },
             StreamEvent::PeerHalfClosed => {}
-            StreamEvent::Terminal(Ok(())) => return Ok(messages),
+            StreamEvent::Terminal(Ok(())) => return Ok(completion),
             StreamEvent::Terminal(Err(error)) => {
                 return Err(AgentInvocationError::Runtime(
                     RuntimeFailure::ModuleFailure {
@@ -411,6 +620,192 @@ async fn collect_model(
                 ));
             }
         }
+    }
+}
+
+async fn send_agent_message(
+    sender: &mut mpsc::Sender<AgentChannelItem>,
+    message: RunTurnResponse,
+    request_id: u64,
+) -> Result<(), AgentInvocationError> {
+    sender
+        .send(Ok(NativeStreamItem::Message(
+            Box::new(message) as Box<dyn Any>
+        )))
+        .await
+        .map_err(|_| AgentInvocationError::Runtime(RuntimeFailure::Cancelled { request_id }))
+}
+
+async fn read_history(
+    clients: &AgentClients,
+    context: &InvocationContext,
+    session_id: &str,
+    current_revision: &str,
+    config: &AgentConfig,
+) -> Result<Vec<CompleteRequestMessagesItem>, AgentInvocationError> {
+    let current_revision = current_revision.parse::<u64>().map_err(|_| {
+        AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            detail: "Session returned an invalid revision".to_owned(),
+        })
+    })?;
+    if current_revision == 0 {
+        return Ok(Vec::new());
+    }
+    let history_limit = u64::try_from(config.max_history_events).map_err(|_| {
+        AgentInvocationError::Runtime(RuntimeFailure::Internal {
+            detail: "Agent history limit conversion failed".to_owned(),
+        })
+    })?;
+    let history = clients
+        .session
+        .read_with_context(
+            context.clone(),
+            ReadRequest {
+                session_id: session_id.to_owned(),
+                after_revision: current_revision.saturating_sub(history_limit).to_string(),
+                limit: config.max_history_events,
+            },
+        )
+        .await
+        .map_err(map_session_read_error)?;
+    reconstruct_history(&history.events)
+}
+
+#[derive(Default)]
+struct HistoricalTurn {
+    input: Option<String>,
+    output: Option<String>,
+}
+
+fn reconstruct_history(
+    events: &[ReadResponseEventsItem],
+) -> Result<Vec<CompleteRequestMessagesItem>, AgentInvocationError> {
+    let mut turns = BTreeMap::<String, HistoricalTurn>::new();
+    let mut turn_order = Vec::new();
+    for event in events {
+        let Some(turn_id) = event.turn_id.as_ref() else {
+            continue;
+        };
+        match event.kind {
+            ReadResponseEventsItemKind::TurnStarted => {
+                if !turns.contains_key(turn_id) {
+                    turn_order.push(turn_id.clone());
+                }
+                turns.entry(turn_id.clone()).or_default().input =
+                    Some(history_payload_text(event, "input")?);
+            }
+            ReadResponseEventsItemKind::TurnCompleted => {
+                turns.entry(turn_id.clone()).or_default().output =
+                    Some(history_payload_text(event, "output")?);
+            }
+            _ => {}
+        }
+    }
+    let mut messages = Vec::new();
+    for turn_id in turn_order {
+        let Some(turn) = turns.remove(&turn_id) else {
+            continue;
+        };
+        if let (Some(input), Some(output)) = (turn.input, turn.output) {
+            messages.push(user_message(input));
+            messages.push(CompleteRequestMessagesItem {
+                role: CompleteRequestMessagesItemRole::Assistant,
+                content: output,
+                tool_call_id: None,
+                tool_name: None,
+                arguments_json: None,
+            });
+        }
+    }
+    Ok(messages)
+}
+
+fn history_payload_text(
+    event: &ReadResponseEventsItem,
+    field: &str,
+) -> Result<String, AgentInvocationError> {
+    serde_json::from_str::<serde_json::Value>(&event.payload_json)
+        .ok()
+        .and_then(|payload| payload.get(field)?.as_str().map(ToOwned::to_owned))
+        .ok_or_else(|| {
+            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                detail: "Session history contains an invalid Agent event".to_owned(),
+            })
+        })
+}
+
+fn user_message(content: String) -> CompleteRequestMessagesItem {
+    CompleteRequestMessagesItem {
+        role: CompleteRequestMessagesItemRole::User,
+        content,
+        tool_call_id: None,
+        tool_name: None,
+        arguments_json: None,
+    }
+}
+
+fn assistant_tool_message(tool_call: &CompleteResponse) -> CompleteRequestMessagesItem {
+    CompleteRequestMessagesItem {
+        role: CompleteRequestMessagesItemRole::Assistant,
+        content: String::new(),
+        tool_call_id: Some(tool_call.tool_call_id.clone()),
+        tool_name: Some(tool_call.tool_name.clone()),
+        arguments_json: Some(tool_call.arguments_json.clone()),
+    }
+}
+
+async fn record_turn_failure(
+    clients: &AgentClients,
+    context: &InvocationContext,
+    session_id: &str,
+    turn_id: &str,
+    revision: String,
+    error: &AgentInvocationError,
+) {
+    let cancelled = context.is_cancelled();
+    let kind = if cancelled {
+        AppendRequestEventsItemKind::TurnCancelled
+    } else {
+        AppendRequestEventsItemKind::TurnFailed
+    };
+    let Ok(event) = session_event(
+        kind,
+        Some(turn_id),
+        &serde_json::json!({"error": turn_error_code(error, cancelled)}),
+    ) else {
+        return;
+    };
+    let request = AppendRequest {
+        session_id: session_id.to_owned(),
+        expected_revision: revision,
+        events: vec![event],
+    };
+    if cancelled {
+        let _ = clients.session.append(request).await;
+    } else {
+        let _ = clients
+            .session
+            .append_with_context(context.clone(), request)
+            .await;
+    }
+}
+
+fn turn_error_code(error: &AgentInvocationError, cancelled: bool) -> &'static str {
+    if cancelled {
+        return "cancelled";
+    }
+    match error {
+        AgentInvocationError::Domain(RunTurnError::ConcurrentTurn) => "concurrent_turn",
+        AgentInvocationError::Domain(RunTurnError::ContextLimitExceeded) => {
+            "context_limit_exceeded"
+        }
+        AgentInvocationError::Domain(RunTurnError::InvalidSession) => "invalid_session",
+        AgentInvocationError::Domain(RunTurnError::StepLimitExceeded) => "step_limit_exceeded",
+        AgentInvocationError::Domain(RunTurnError::ToolCallLimitExceeded) => {
+            "tool_call_limit_exceeded"
+        }
+        AgentInvocationError::Domain(RunTurnError::Unknown(_)) => "unknown_domain_error",
+        AgentInvocationError::Runtime(_) => "runtime_failure",
     }
 }
 
@@ -470,6 +865,20 @@ fn map_session_open_error(error: SessionOpenInvocationError) -> AgentInvocationE
     }
 }
 
+fn map_session_read_error(error: SessionReadInvocationError) -> AgentInvocationError {
+    match error {
+        SessionReadInvocationError::Domain(ReadError::InvalidCursor | ReadError::NotFound) => {
+            AgentInvocationError::Domain(RunTurnError::InvalidSession)
+        }
+        SessionReadInvocationError::Domain(error) => {
+            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                detail: format!("Session read failed: {error:?}"),
+            })
+        }
+        SessionReadInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+    }
+}
+
 fn map_session_append_error(error: SessionAppendInvocationError) -> AgentInvocationError {
     match error {
         SessionAppendInvocationError::Domain(AppendError::RevisionConflict { .. }) => {
@@ -498,5 +907,56 @@ fn map_tools_error(error: ToolsExecuteInvocationError) -> AgentInvocationError {
 fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
     RuntimeFailure::InvalidResolvedPlan {
         detail: detail.into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn history_event(
+        revision: &str,
+        kind: ReadResponseEventsItemKind,
+        payload_json: &str,
+    ) -> ReadResponseEventsItem {
+        ReadResponseEventsItem {
+            revision: revision.to_owned(),
+            event_id: format!("event-{revision}"),
+            kind,
+            turn_id: Some("turn-1".to_owned()),
+            occurred_at: "2026-08-24T00:00:00Z".to_owned(),
+            payload_json: payload_json.to_owned(),
+        }
+    }
+
+    #[test]
+    fn completed_turns_reconstruct_as_model_history() {
+        let messages = reconstruct_history(&[
+            history_event(
+                "1",
+                ReadResponseEventsItemKind::TurnStarted,
+                r#"{"input":"hello"}"#,
+            ),
+            history_event(
+                "2",
+                ReadResponseEventsItemKind::TurnCompleted,
+                r#"{"output":"world"}"#,
+            ),
+        ])
+        .unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, CompleteRequestMessagesItemRole::User);
+        assert_eq!(messages[0].content, "hello");
+        assert_eq!(messages[1].role, CompleteRequestMessagesItemRole::Assistant);
+        assert_eq!(messages[1].content, "world");
+    }
+
+    #[test]
+    fn stream_cancellation_propagates_to_the_invocation() {
+        let (_sender, receiver) = mpsc::channel::<AgentChannelItem>(1);
+        let cancellation = CancellationToken::new();
+        let stream = AgentTurnStream::new(receiver, cancellation.clone());
+        stream.cancel();
+        assert!(cancellation.is_cancelled());
     }
 }

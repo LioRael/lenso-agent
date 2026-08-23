@@ -33,7 +33,9 @@ cargo run -p lenso-agent-cli -- \
 ```
 
 The CLI writes the generated Session ID to stderr. Resume the durable Session
-after a process restart with `--session <id>`.
+after a process restart with `--session <id>`. The Agent Loop streams text as
+the selected Model produces it, supports direct answers and bounded sequential
+Tool calls, and rebuilds a bounded completed-turn history for resumed Sessions.
 
 ## Validate
 

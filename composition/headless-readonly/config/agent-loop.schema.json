@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["model", "max_steps", "max_tool_calls", "max_output_tokens"],
+  "required": ["model", "max_steps", "max_tool_calls", "max_output_tokens", "max_history_events"],
   "properties": {
     "model": { "type": "string" },
     "max_steps": { "type": "integer" },
     "max_tool_calls": { "type": "integer" },
-    "max_output_tokens": { "type": "integer" }
+    "max_output_tokens": { "type": "integer" },
+    "max_history_events": { "type": "integer" }
   }
 }

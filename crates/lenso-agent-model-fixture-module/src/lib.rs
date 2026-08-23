@@ -98,11 +98,31 @@ impl FixtureModel {
                 CompleteError::UnsupportedModel,
             ));
         }
-        let tool_result = request
+        let current_user_index = request
             .messages
             .iter()
-            .rev()
-            .find(|message| message.role == CompleteRequestMessagesItemRole::Tool);
+            .rposition(|message| message.role == CompleteRequestMessagesItemRole::User)
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+        let current_user = &request.messages[current_user_index].content;
+        if current_user.starts_with("Answer directly:") {
+            return Ok(direct_response());
+        }
+        if current_user == "What did you summarize?" {
+            let previous = request.messages[..current_user_index]
+                .iter()
+                .rev()
+                .find(|message| message.role == CompleteRequestMessagesItemRole::Assistant)
+                .map_or("Nothing yet.", |message| message.content.as_str());
+            return Ok(previous_response(previous));
+        }
+        let tool_results = request.messages[current_user_index + 1..]
+            .iter()
+            .filter(|message| message.role == CompleteRequestMessagesItemRole::Tool)
+            .collect::<Vec<_>>();
+        if current_user == "Read README.md twice." && tool_results.len() < 2 {
+            return Ok(tool_request(tool_results.len() + 1));
+        }
+        let tool_result = tool_results.last().copied();
         if let Some(tool_result) = tool_result {
             let first_line = tool_result
                 .content
@@ -110,28 +130,7 @@ impl FixtureModel {
                 .find(|line| !line.trim().is_empty())
                 .unwrap_or("The README is empty.")
                 .trim();
-            return Ok(vec![
-                response(
-                    "1",
-                    CompleteResponseKind::TextDelta,
-                    format!("README summary: {first_line}"),
-                    "",
-                    "",
-                    "{}",
-                    "0",
-                    "0",
-                ),
-                response(
-                    "2",
-                    CompleteResponseKind::Usage,
-                    "",
-                    "",
-                    "",
-                    "{}",
-                    "32",
-                    "12",
-                ),
-            ]);
+            return Ok(summary_response(first_line));
         }
         let has_workspace_tool = request
             .tools
@@ -140,29 +139,109 @@ impl FixtureModel {
         if !has_workspace_tool {
             return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
         }
-        Ok(vec![
-            response(
-                "1",
-                CompleteResponseKind::ToolCall,
-                "",
-                "call-readme-1",
-                "workspace.read_text",
-                r#"{"path":"README.md"}"#,
-                "0",
-                "0",
-            ),
-            response(
-                "2",
-                CompleteResponseKind::Usage,
-                "",
-                "",
-                "",
-                "{}",
-                "24",
-                "8",
-            ),
-        ])
+        Ok(tool_request(1))
     }
+}
+
+fn direct_response() -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            "Direct ",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::TextDelta,
+            "answer.",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response("3", CompleteResponseKind::Usage, "", "", "", "{}", "8", "2"),
+    ]
+}
+
+fn previous_response(previous: &str) -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            format!("Previous answer: {previous}"),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "16",
+            "8",
+        ),
+    ]
+}
+
+fn tool_request(index: usize) -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::ToolCall,
+            "",
+            &format!("call-readme-{index}"),
+            "workspace.read_text",
+            r#"{"path":"README.md"}"#,
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "24",
+            "8",
+        ),
+    ]
+}
+
+fn summary_response(first_line: &str) -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            format!("README summary: {first_line}"),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "32",
+            "12",
+        ),
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]

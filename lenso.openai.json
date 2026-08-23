@@ -15,9 +15,10 @@
         "package": "lenso.agent.loop",
         "configuration": {
           "model": "gpt-4o-mini",
-          "max_steps": 2,
-          "max_tool_calls": 1,
-          "max_output_tokens": 1024
+          "max_steps": 8,
+          "max_tool_calls": 4,
+          "max_output_tokens": 1024,
+          "max_history_events": 200
         },
         "configuration_schema": "composition/headless-readonly/config/agent-loop.schema.json",
         "provides": [

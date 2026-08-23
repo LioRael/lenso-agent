@@ -225,6 +225,7 @@ fn chat_request(request: &CompleteRequest) -> Result<serde_json::Value, Complete
         "model": request.model,
         "messages": messages,
         "tools": tools,
+        "parallel_tool_calls": false,
         "temperature": request.temperature,
         "max_tokens": request.max_output_tokens,
         "stream": true,
@@ -681,6 +682,7 @@ mod tests {
             "workspace.read_text"
         );
         assert_eq!(body["messages"][1]["tool_call_id"], "call-1");
+        assert_eq!(body["parallel_tool_calls"], false);
     }
 
     #[test]

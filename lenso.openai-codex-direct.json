@@ -15,9 +15,10 @@
         "package": "lenso.agent.loop",
         "configuration": {
           "model": "gpt-5.6-luna",
-          "max_steps": 2,
-          "max_tool_calls": 1,
-          "max_output_tokens": 4096
+          "max_steps": 8,
+          "max_tool_calls": 4,
+          "max_output_tokens": 4096,
+          "max_history_events": 200
         },
         "configuration_schema": "composition/headless-readonly/config/agent-loop.schema.json",
         "provides": [

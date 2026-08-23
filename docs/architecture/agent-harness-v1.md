@@ -84,11 +84,12 @@ make both the workspace root and model endpoint visible before execution.
 
 ## Acceptance
 
-1. A deterministic Model fixture requests `read_text_file` and returns a
-   streamed README summary.
-2. An opt-in OpenAI-compatible smoke exercises the same logical turn through
-   the Bun Adapter.
-3. Restarting the App preserves the Session and its next revision.
+1. A deterministic Model fixture proves a direct streamed answer, one or more
+   sequential `workspace.read_text` calls, and finite step/Tool-call limits.
+2. OpenAI-compatible and direct ChatGPT subscription smoke tests exercise the
+   same logical turn without changing the Agent Loop.
+3. Restarting the App preserves the Session, its next revision, and bounded
+   completed-turn conversational context.
 4. Rebinding Model or Tool Provider Instances changes behavior without changing
    Agent Loop code.
 5. Missing credentials or Session storage prevents readiness.

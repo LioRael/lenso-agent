@@ -738,7 +738,6 @@ name = "lenso-agent-loop-module"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-agent-native-support",
  "lenso-capability-agent",
  "lenso-capability-agent-model",
  "lenso-capability-agent-session",

@@ -10,7 +10,6 @@ rust-version.workspace = true
 
 [dependencies]
 futures.workspace = true
-lenso-agent-native-support = { path = "../lenso-agent-native-support" }
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
