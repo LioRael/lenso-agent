@@ -19,6 +19,7 @@ use lenso_agent_prompt_filesystem_module::FilesystemPromptFactory;
 use lenso_agent_prompt_module::PromptFactory;
 use lenso_agent_prompt_static_module::StaticPromptFactory;
 use lenso_agent_session_file_module::FileSessionFactory;
+use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
 use lenso_agent_tools_module::ToolsFactory;
 use lenso_agent_workspace_read_module::WorkspaceReadFactory;
 use lenso_app_plan::ResolvedAppPlan;
@@ -83,6 +84,7 @@ async fn run() -> Result<(), String> {
         .with_factory(FilesystemPromptFactory)
         .with_factory(PromptFactory)
         .with_factory(StaticPromptFactory)
+        .with_factory(FilesystemSkillsFactory)
         .with_factory(ToolsFactory)
         .with_factory(WorkspaceReadFactory)
         .with_factory(FileSessionFactory)

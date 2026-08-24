@@ -89,6 +89,44 @@ fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::Path
     path
 }
 
+fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::PathBuf {
+    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
+        .expect("decode canonical Plan");
+    let modules = plan["module_instances"].as_array_mut().unwrap();
+    let mut provider = modules
+        .iter()
+        .find(|module| module["instance_key"] == "workspace-read")
+        .unwrap()
+        .clone();
+    provider["instance_key"] = "skills".into();
+    provider["package_id"] = "lenso.agent.skills.filesystem".into();
+    provider["package_revision"] = "0.1.0".into();
+    provider["configuration"] = serde_json::json!({
+        "max_catalog_bytes": 8192,
+        "max_file_bytes": 8192,
+        "max_skills": 16,
+        "max_total_bytes": 32768,
+        "root": skill_root,
+    })
+    .to_string()
+    .into();
+    modules.push(provider);
+
+    let bindings = plan["capability_bindings"].as_array_mut().unwrap();
+    let mut binding = bindings
+        .iter()
+        .find(|binding| binding["provider_instance"] == "workspace-read")
+        .unwrap()
+        .clone();
+    binding["provider_instance"] = "skills".into();
+    binding["provider_order"] = 1.into();
+    bindings.push(binding);
+
+    let path = root.join("plan-with-on-demand-skills.json");
+    fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    path
+}
+
 fn write_filesystem_skill(root: &Path) {
     let directory = root.join("test-skill");
     fs::create_dir_all(&directory).unwrap();
@@ -97,6 +135,29 @@ fn write_filesystem_skill(root: &Path) {
         "---\nname: test-skill\ndescription: fixture\n---\n\nPrefix direct answers with `Filesystem: `.\n",
     )
     .unwrap();
+}
+
+fn write_on_demand_skills(root: &Path) {
+    for (name, description, body) in [
+        (
+            "rust-review",
+            "Review Rust changes with project conventions.",
+            "RUST REVIEW INSTRUCTION: check ownership and error boundaries.",
+        ),
+        (
+            "unused-secret",
+            "A Skill that must remain unopened.",
+            "UNSELECTED SKILL CONTENT MUST NOT REACH THE MODEL",
+        ),
+    ] {
+        let directory = root.join(name);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"),
+        )
+        .unwrap();
+    }
 }
 
 #[test]
@@ -292,6 +353,78 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
             .count(),
         2
     );
+}
+
+#[test]
+fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let skill_root = temporary.path().join("skills");
+    write_on_demand_skills(&skill_root);
+    let plan = plan_with_on_demand_skills(temporary.path(), &skill_root);
+    let output = run(temporary.path(), &plan, "Use a Skill to review Rust.", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Skill applied: Rust review used the selected instructions.\n"
+    );
+
+    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let events = state["events"].as_array().unwrap();
+    let requests = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0]["name"], "skills.list");
+    assert_eq!(requests[1]["name"], "skills.read");
+
+    let results = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_result")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 2);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(results[0]["metadata_json"].as_str().unwrap())
+            .unwrap()["skill_count"],
+        2
+    );
+    let read_metadata =
+        serde_json::from_str::<serde_json::Value>(results[1]["metadata_json"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(read_metadata["name"], "rust-review");
+    assert!(results[1].to_string().contains("sha256:"));
+}
+
+#[test]
+fn missing_on_demand_skill_root_rejects_startup() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let missing = temporary.path().join("missing-skills");
+    let plan = plan_with_on_demand_skills(temporary.path(), &missing);
+    let output = run(temporary.path(), &plan, "Answer directly: hello", None);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("App startup failed"));
+    assert!(stderr.contains("filesystem Skills root"));
 }
 
 #[test]

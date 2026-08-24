@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "root",
+    "max_skills",
+    "max_file_bytes",
+    "max_total_bytes",
+    "max_catalog_bytes"
+  ],
+  "properties": {
+    "root": { "type": "string" },
+    "max_skills": { "type": "integer" },
+    "max_file_bytes": { "type": "integer" },
+    "max_total_bytes": { "type": "integer" },
+    "max_catalog_bytes": { "type": "integer" }
+  }
+}

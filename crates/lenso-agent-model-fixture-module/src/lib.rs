@@ -131,6 +131,33 @@ impl FixtureModel {
             .iter()
             .filter(|message| message.role == CompleteRequestMessagesItemRole::Tool)
             .collect::<Vec<_>>();
+        if current_user == "Use a Skill to review Rust." {
+            let has_skill_tools = ["skills.list", "skills.read"]
+                .iter()
+                .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+            if !has_skill_tools {
+                return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            }
+            if tool_results.iter().any(|result| {
+                result
+                    .content
+                    .contains("UNSELECTED SKILL CONTENT MUST NOT REACH THE MODEL")
+            }) {
+                return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            }
+            return match tool_results.as_slice() {
+                [] => Ok(named_tool_request("call-skills-list", "skills.list", "{}")),
+                [catalog] if catalog.content.contains("rust-review") => Ok(named_tool_request(
+                    "call-skills-read",
+                    "skills.read",
+                    r#"{"name":"rust-review"}"#,
+                )),
+                [_, skill] if skill.content.contains("RUST REVIEW INSTRUCTION") => {
+                    Ok(skill_applied_response())
+                }
+                _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+            };
+        }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
         }
@@ -213,14 +240,26 @@ fn previous_response(previous: &str) -> Vec<CompleteResponse> {
 }
 
 fn tool_request(index: usize) -> Vec<CompleteResponse> {
+    named_tool_request(
+        &format!("call-readme-{index}"),
+        "workspace.read_text",
+        r#"{"path":"README.md"}"#,
+    )
+}
+
+fn named_tool_request(
+    call_id: &str,
+    tool_name: &str,
+    arguments_json: &str,
+) -> Vec<CompleteResponse> {
     vec![
         response(
             "1",
             CompleteResponseKind::ToolCall,
             "",
-            &format!("call-readme-{index}"),
-            "workspace.read_text",
-            r#"{"path":"README.md"}"#,
+            call_id,
+            tool_name,
+            arguments_json,
             "0",
             "0",
         ),
@@ -233,6 +272,31 @@ fn tool_request(index: usize) -> Vec<CompleteResponse> {
             "{}",
             "24",
             "8",
+        ),
+    ]
+}
+
+fn skill_applied_response() -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            "Skill applied: Rust review used the selected instructions.",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "28",
+            "10",
         ),
     ]
 }
