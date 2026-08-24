@@ -36,6 +36,16 @@ const MODEL_DESCRIPTOR: &[u8] =
 #[cfg(test)]
 const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../composition/headless-readonly/config/model.schema.json");
+#[cfg(test)]
+const CODEX_MODEL_CONFIGURATION_SCHEMA: &[u8] = include_bytes!(
+    "../../../crates/lenso-agent-model-openai-codex-direct-module/config.schema.json"
+);
+#[cfg(test)]
+const CODEX_AUTH_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-auth-openai-codex-module/config.schema.json");
+#[cfg(test)]
+const CODEX_AUTH_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-auth-openai-codex/capability.json");
 
 #[derive(Debug)]
 pub enum PluginCommand {
@@ -451,6 +461,7 @@ pub(crate) fn generation_composition(
     let mut preserved_base_bindings = base_plan.capability_bindings().to_vec();
     let mut plugin_bindings = Vec::new();
     let mut displaced_instances = BTreeSet::new();
+    let mut reconfigured_instances = BTreeSet::new();
     let target = host_target();
     for instance in &authority.lock.value().instances {
         let manifest = authority
@@ -478,6 +489,7 @@ pub(crate) fn generation_composition(
             ResolvedAttachment::ReplaceOne {
                 binding,
                 displaced_provider_instance,
+                base_configuration_replacements,
             } => {
                 if !displaced_instances.insert(displaced_provider_instance.clone()) {
                     return Err(format!(
@@ -490,10 +502,40 @@ pub(crate) fn generation_composition(
                     candidate.consumer_instance() != displaced_provider_instance
                         && candidate.provider_instance() != displaced_provider_instance
                 });
+                for replacement in base_configuration_replacements {
+                    if !reconfigured_instances.insert(replacement.instance_key.clone()) {
+                        return Err(format!(
+                            "more than one Plugin replacement configures Instance `{}`",
+                            replacement.instance_key
+                        ));
+                    }
+                    let candidate = base_instances
+                        .iter_mut()
+                        .find(|candidate| candidate.instance_key() == replacement.instance_key)
+                        .ok_or_else(|| {
+                            format!(
+                                "Plugin replacement configuration target `{}` is absent",
+                                replacement.instance_key
+                            )
+                        })?;
+                    if candidate.package_id() != replacement.allowed_package
+                        || candidate.configuration() != replacement.expected_configuration
+                    {
+                        return Err(format!(
+                            "Plugin replacement cannot configure base Instance `{}`",
+                            replacement.instance_key
+                        ));
+                    }
+                    *candidate = candidate
+                        .clone()
+                        .with_configuration(replacement.replacement_configuration);
+                }
                 plugin_bindings.push(binding);
             }
+            ResolvedAttachment::IntraPluginOnly => {}
         }
     }
+    plugin_bindings.extend(intra_plugin_bindings(authority)?);
     let mut bindings = preserved_base_bindings.clone();
     bindings.extend(plugin_bindings);
     Ok(GenerationComposition {
@@ -501,6 +543,33 @@ pub(crate) fn generation_composition(
         bindings,
         preserved_base_bindings,
     })
+}
+
+fn intra_plugin_bindings(
+    authority: &GenerationPluginAuthority,
+) -> Result<Vec<CapabilityBinding>, String> {
+    let mut bindings = Vec::new();
+    for (plugin_id, manifest) in &authority.manifests {
+        for template in &manifest.value().binding_templates {
+            let consumer = authority.lock.value().instances.iter().find(|instance| {
+                instance.plugin_id == *plugin_id
+                    && instance.contribution_id == template.consumer_contribution_id
+            });
+            let provider = authority.lock.value().instances.iter().find(|instance| {
+                instance.plugin_id == *plugin_id
+                    && instance.contribution_id == template.provider_contribution_id
+            });
+            if let (Some(consumer), Some(provider)) = (consumer, provider) {
+                bindings.push(PluginProfileCatalog::binding_for_template(
+                    manifest.value(),
+                    template,
+                    &consumer.instance_key,
+                    &provider.instance_key,
+                )?);
+            }
+        }
+    }
+    Ok(bindings)
 }
 
 fn validate_active_set(
@@ -636,19 +705,11 @@ fn validate_supported_manifest(
     manifest: &PluginManifest,
     profiles: &PluginProfileCatalog,
 ) -> Result<(), ControlPlaneError> {
-    if !manifest.data_contributions.is_empty()
-        || !manifest.permission_requests.is_empty()
-        || !manifest.binding_templates.is_empty()
-    {
-        return rejected(
-            "this Host rejects Plugin Data mounts, permission requests, and binding templates",
-        );
+    if !manifest.data_contributions.is_empty() || !manifest.permission_requests.is_empty() {
+        return rejected("this Host rejects Plugin Data mounts and permission requests");
     }
     let target = host_target();
-    for contribution in &manifest.module_contributions {
-        profiles.validate_contribution(contribution, &target)?;
-    }
-    Ok(())
+    profiles.validate_manifest_topology(manifest, &target)
 }
 
 fn validate_selection(
@@ -725,6 +786,25 @@ fn validate_selection(
             .is_none_or(|artifact| !artifact.targets.contains(&target))
     }) {
         return rejected("selected Plugin Artifact does not support this Host target");
+    }
+    for contribution in manifest
+        .module_contributions
+        .iter()
+        .filter(|contribution| module_contribution_ids.contains(&contribution.id))
+    {
+        for requirement in &contribution.requires {
+            let provider_is_selected = manifest.binding_templates.iter().any(|template| {
+                template.consumer_contribution_id == contribution.id
+                    && template.capability_id == requirement.capability_id
+                    && module_contribution_ids.contains(&template.provider_contribution_id)
+            });
+            if !provider_is_selected {
+                return rejected(format!(
+                    "selected Plugin contribution `{}` is missing provider `{}`",
+                    contribution.id, requirement.capability_id
+                ));
+            }
+        }
     }
     Ok(SelectedContent {
         module_contribution_ids: module_contribution_ids.into_iter().collect(),
@@ -981,11 +1061,21 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_agent_auth_openai_codex_module::{
+        OpenAiCodexAuthFactory, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
+    };
     use lenso_agent_model_fixture_module::{
         FixtureModelFactory, MODEL_ID as FIXTURE_MODEL_ID, PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
     };
+    use lenso_agent_model_openai_codex_direct_module::{
+        OpenAiCodexDirectModelFactory, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
+    };
     use lenso_agent_text_tools_module::FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY;
     use lenso_app_plan::{CapabilityOperationKind, ResolvedAppPlan};
+    use lenso_capability_agent_auth_openai_codex::{
+        ACCESS_OPERATION as CODEX_AUTH_ACCESS_OPERATION, CAPABILITY_ID as CODEX_AUTH_CAPABILITY_ID,
+        DESCRIPTOR_VERSION as CODEX_AUTH_DESCRIPTOR_VERSION,
+    };
     use lenso_capability_agent_model::{
         CAPABILITY_ID as MODEL_CAPABILITY_ID, COMPLETE_OPERATION as MODEL_COMPLETE_OPERATION,
         DESCRIPTOR_VERSION as MODEL_DESCRIPTOR_VERSION,
@@ -998,13 +1088,14 @@ mod tests {
     };
     use lenso_native_adapter::NativeModuleFactory;
     use lenso_plugin_control_plane::{
-        ArtifactDeclaration, ArtifactKind, CapabilityDeclaration, ImplementationVariant,
-        ModuleContribution, PermissionRequest, PluginFeature, ProductMetadataDeclaration,
-        SupportChannel, TrustLevel, sha256_digest,
+        ArtifactDeclaration, ArtifactKind, BindingTemplate, CapabilityDeclaration,
+        CapabilityRequirement, ImplementationVariant, ModuleContribution, PermissionRequest,
+        PluginFeature, ProductMetadataDeclaration, RequirementCardinality, SupportChannel,
+        TrustLevel, sha256_digest,
     };
 
     use crate::plugin_profiles::{
-        NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, NATIVE_TOOL_PROFILE,
+        NATIVE_AUTH_PROFILE, NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, NATIVE_TOOL_PROFILE,
     };
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
@@ -1212,6 +1303,161 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_codex_plugin_closes_model_auth_and_agent_configuration_atomically() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        write_codex_bundle(bundle.path());
+        install(root.path(), bundle.path(), "review-ticket-92", Vec::new()).unwrap();
+
+        let authority = load_generation_authority(root.path()).unwrap();
+        assert_eq!(authority.lock.value().instances.len(), 2);
+        let model_key = authority
+            .lock
+            .value()
+            .instances
+            .iter()
+            .find(|instance| instance.contribution_id == "codex-model")
+            .unwrap()
+            .instance_key
+            .clone();
+        let auth_key = authority
+            .lock
+            .value()
+            .instances
+            .iter()
+            .find(|instance| instance.contribution_id == "codex-auth")
+            .unwrap()
+            .instance_key
+            .clone();
+
+        let mut incompatible_base: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+        let agent = incompatible_base["module_instances"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|instance| instance["instance_key"] == "agent")
+            .unwrap();
+        let mut configuration: serde_json::Value =
+            serde_json::from_str(agent["configuration"].as_str().unwrap()).unwrap();
+        configuration["max_steps"] = 9.into();
+        agent["configuration"] = configuration.to_string().into();
+        let incompatible_base: ResolvedAppPlan = serde_json::from_value(incompatible_base).unwrap();
+        incompatible_base.validate().unwrap();
+        let error = generation_composition(&authority, &incompatible_base).unwrap_err();
+        assert!(error.contains("cannot configure base Instance `agent`"));
+
+        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        assert!(generation.plan.module_instance("model").is_none());
+        assert_eq!(
+            generation
+                .plan
+                .module_instance("agent")
+                .unwrap()
+                .configuration(),
+            r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#
+        );
+        assert_eq!(
+            generation
+                .plan
+                .module_instance(&model_key)
+                .unwrap()
+                .package_id(),
+            CODEX_MODEL_PACKAGE_ID
+        );
+        assert_eq!(
+            generation
+                .plan
+                .module_instance(&model_key)
+                .unwrap()
+                .configuration(),
+            r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#
+        );
+        assert_eq!(
+            generation
+                .plan
+                .module_instance(&auth_key)
+                .unwrap()
+                .package_id(),
+            CODEX_AUTH_PACKAGE_ID
+        );
+        assert_eq!(
+            generation
+                .plan
+                .module_instance(&auth_key)
+                .unwrap()
+                .configuration(),
+            r#"{"issuer":"https://auth.openai.com","profile":"default","refresh_margin_seconds":60}"#
+        );
+        assert!(generation.plan.capability_bindings().iter().any(|binding| {
+            binding.consumer_instance() == "agent"
+                && binding.provider_instance() == model_key
+                && binding.capability_id() == MODEL_CAPABILITY_ID
+        }));
+        assert!(generation.plan.capability_bindings().iter().any(|binding| {
+            binding.consumer_instance() == model_key
+                && binding.provider_instance() == auth_key
+                && binding.capability_id() == CODEX_AUTH_CAPABILITY_ID
+        }));
+        assert_eq!(generation.artifact_set.value().instances.len(), 2);
+
+        remove(root.path(), "example.codex-direct").unwrap();
+        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        assert_eq!(generation.plan, approved);
+    }
+
+    #[test]
+    fn codex_plugin_rejects_an_incomplete_or_incompatible_dependency_template() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        write_codex_bundle(bundle.path());
+        let manifest_path = bundle.path().join(MANIFEST_FILE);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["binding_templates"] = serde_json::json!([]);
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let error =
+            install(root.path(), bundle.path(), "review-ticket-93", Vec::new()).unwrap_err();
+        assert!(error.contains("must be consumed exactly once"));
+
+        write_codex_bundle(bundle.path());
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["binding_templates"][0]["provider_contribution_id"] = "codex-model".into();
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let error =
+            install(root.path(), bundle.path(), "review-ticket-94", Vec::new()).unwrap_err();
+        assert!(error.contains("is incompatible"));
+
+        write_codex_bundle(bundle.path());
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["features"] = serde_json::json!([{
+            "id": "auth",
+            "module_contribution_ids": ["codex-auth"],
+            "data_contribution_ids": [],
+            "artifact_ids": [],
+            "permission_request_ids": [],
+            "product_metadata_ids": []
+        }]);
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let error =
+            install(root.path(), bundle.path(), "review-ticket-95", Vec::new()).unwrap_err();
+        assert!(error.contains("is missing provider"));
+
+        write_codex_bundle(bundle.path());
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["module_contributions"] =
+            serde_json::json!([manifest["module_contributions"][0].clone()]);
+        manifest["binding_templates"] = serde_json::json!([]);
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let error =
+            install(root.path(), bundle.path(), "review-ticket-96", Vec::new()).unwrap_err();
+        assert!(error.contains("must be consumed exactly once"));
+    }
+
+    #[test]
     fn undeclared_bundle_file_and_tampered_active_authority_fail_closed() {
         let root = tempfile::tempdir().unwrap();
         let bundle = tempfile::tempdir().unwrap();
@@ -1340,6 +1586,90 @@ mod tests {
             permission_requests: Vec::new(),
             features: Vec::new(),
             binding_templates: Vec::new(),
+            product_metadata: Vec::new(),
+        };
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_codex_bundle(root: &Path) {
+        let manifest = PluginManifest {
+            schema_version: 1,
+            plugin_id: "example.codex-direct".to_owned(),
+            release_version: "1.0.0".to_owned(),
+            artifacts: Vec::new(),
+            module_contributions: vec![
+                ModuleContribution {
+                    id: "codex-auth".to_owned(),
+                    package_id: CODEX_AUTH_PACKAGE_ID.to_owned(),
+                    configuration_schema_digest: sha256_digest(CODEX_AUTH_CONFIGURATION_SCHEMA),
+                    provides: vec![CapabilityDeclaration {
+                        capability_id: CODEX_AUTH_CAPABILITY_ID.to_owned(),
+                        descriptor_version: CODEX_AUTH_DESCRIPTOR_VERSION.to_owned(),
+                        descriptor_digest: sha256_digest(CODEX_AUTH_DESCRIPTOR),
+                        request_operations: vec![CODEX_AUTH_ACCESS_OPERATION.to_owned()],
+                        operation_kinds: BTreeMap::new(),
+                    }],
+                    requires: Vec::new(),
+                    implementations: vec![ImplementationVariant {
+                        id: "native".to_owned(),
+                        artifact: None,
+                        built_in_factory: Some(OpenAiCodexAuthFactory.factory_identity()),
+                        entrypoint: "default".to_owned(),
+                        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+                        targets: vec![host_target()],
+                        profiles: vec![NATIVE_AUTH_PROFILE.to_owned()],
+                        support_channel: SupportChannel::Experimental,
+                        trust: TrustLevel::Trusted,
+                    }],
+                    permission_request_ids: Vec::new(),
+                    state: None,
+                },
+                ModuleContribution {
+                    id: "codex-model".to_owned(),
+                    package_id: CODEX_MODEL_PACKAGE_ID.to_owned(),
+                    configuration_schema_digest: sha256_digest(CODEX_MODEL_CONFIGURATION_SCHEMA),
+                    provides: vec![CapabilityDeclaration {
+                        capability_id: MODEL_CAPABILITY_ID.to_owned(),
+                        descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
+                        descriptor_digest: sha256_digest(MODEL_DESCRIPTOR),
+                        request_operations: vec![MODEL_COMPLETE_OPERATION.to_owned()],
+                        operation_kinds: BTreeMap::from([(
+                            MODEL_COMPLETE_OPERATION.to_owned(),
+                            CapabilityOperationKind::Stream,
+                        )]),
+                    }],
+                    requires: vec![CapabilityRequirement {
+                        capability_id: CODEX_AUTH_CAPABILITY_ID.to_owned(),
+                        descriptor_version: CODEX_AUTH_DESCRIPTOR_VERSION.to_owned(),
+                        cardinality: RequirementCardinality::One,
+                    }],
+                    implementations: vec![ImplementationVariant {
+                        id: "native".to_owned(),
+                        artifact: None,
+                        built_in_factory: Some(OpenAiCodexDirectModelFactory.factory_identity()),
+                        entrypoint: "default".to_owned(),
+                        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+                        targets: vec![host_target()],
+                        profiles: vec![NATIVE_MODEL_PROFILE.to_owned()],
+                        support_channel: SupportChannel::Experimental,
+                        trust: TrustLevel::Trusted,
+                    }],
+                    permission_request_ids: Vec::new(),
+                    state: None,
+                },
+            ],
+            data_contributions: Vec::new(),
+            permission_requests: Vec::new(),
+            features: Vec::new(),
+            binding_templates: vec![BindingTemplate {
+                consumer_contribution_id: "codex-model".to_owned(),
+                provider_contribution_id: "codex-auth".to_owned(),
+                capability_id: CODEX_AUTH_CAPABILITY_ID.to_owned(),
+            }],
             product_metadata: Vec::new(),
         };
         fs::write(

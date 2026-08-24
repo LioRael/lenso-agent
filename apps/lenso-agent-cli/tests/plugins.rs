@@ -11,6 +11,10 @@ fn fixture_model_bundle_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/model-fixture")
 }
 
+fn codex_direct_bundle_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/codex-direct")
+}
+
 #[test]
 fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
     let workspace = tempfile::tempdir().unwrap();
@@ -163,6 +167,53 @@ fn reviewed_fixture_model_plugin_replaces_the_base_provider_and_runs() {
     let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
         .args(["plugins", "remove", "--plugin", "example.fixture-model"])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+}
+
+#[test]
+fn reviewed_codex_direct_plugin_installs_and_fails_closed_without_login() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(codex_direct_bundle_path())
+        .args(["--evidence", "review-ticket-92"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&install.stdout).contains("installed: example.codex-direct@1.0.0")
+    );
+
+    let isolated_home = workspace.path().join("home");
+    fs::create_dir(&isolated_home).unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("HOME", &isolated_home)
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Answer directly: hello"])
+        .output()
+        .unwrap();
+    assert!(!run.status.success());
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("direct Codex authentication failed"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("access_token"));
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "remove", "--plugin", "example.codex-direct"])
         .output()
         .unwrap();
     assert!(remove.status.success());

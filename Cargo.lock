@@ -1061,6 +1061,7 @@ dependencies = [
  "lenso-agent-workspace-read-module",
  "lenso-app-plan",
  "lenso-capability-agent",
+ "lenso-capability-agent-auth-openai-codex",
  "lenso-capability-agent-model",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",

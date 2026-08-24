@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-24
 - Refines: ADR 0008
+- Refined by: ADR 0010
 
 ## Context
 
@@ -53,8 +54,8 @@ next Generation is the exact approved base Plan again.
 - Stream interaction kind is part of the executable profile match rather than
   inferred by the Harness.
 - The profile deliberately rejects OpenAI-compatible and direct Codex base
-  Plans. Those providers need separate profiles that close compatible Agent
-  model configuration and credential policy.
+  Plans. ADR 0010 adds a separate Codex Direct profile that closes compatible
+  Agent model configuration and credential policy.
 - This is neither runtime hot replacement nor general Plugin-authored binding
   selection. `optional`, arbitrary `one`, upgrades, overlap, and rollback remain
   deferred product slices.
