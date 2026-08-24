@@ -1,0 +1,58 @@
+{
+  "composition": {
+    "modules": [
+      {
+        "key": "native-process",
+        "package": "lenso.agent.process.native",
+        "configuration": {
+          "root": ".",
+          "allowed_programs": [
+            "cargo",
+            "git",
+            "rg"
+          ],
+          "environment_allowlist": [
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL"
+          ],
+          "max_timeout_ms": 600000,
+          "max_output_bytes": 262144,
+          "max_argument_bytes": 131072
+        },
+        "configuration_schema": "crates/lenso-agent-process-native-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.process@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "run"
+            ],
+            "admission": {
+              "queue_capacity": 1,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      }
+    ],
+    "bindings": []
+  },
+  "packages": {
+    "lenso.agent.process.native": {
+      "name": "lenso.agent.process.native",
+      "package_name": "lenso-agent-process-native-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    }
+  },
+  "contracts": []
+}

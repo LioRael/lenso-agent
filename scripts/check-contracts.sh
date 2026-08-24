@@ -14,7 +14,6 @@ contract_roots=(
   "${repo_root}/crates/lenso-capability-agent-tools"
   "${repo_root}/crates/lenso-capability-agent-tool-provider"
   "${repo_root}/crates/lenso-capability-agent-session"
-  "${repo_root}/contracts/vendor/lenso-secrets"
 )
 
 for contract_root in "${contract_roots[@]}"; do

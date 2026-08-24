@@ -6,6 +6,7 @@ contract_codegen="${LENSO_CONTRACT_CODEGEN:-lenso-contract-codegen}"
 
 contract_roots=(
   "${repo_root}/crates/lenso-capability-agent"
+  "${repo_root}/crates/lenso-capability-agent-auth-openai-codex"
   "${repo_root}/crates/lenso-capability-agent-model"
   "${repo_root}/crates/lenso-capability-agent-prompt"
   "${repo_root}/crates/lenso-capability-agent-prompt-provider"
@@ -13,7 +14,6 @@ contract_roots=(
   "${repo_root}/crates/lenso-capability-agent-tools"
   "${repo_root}/crates/lenso-capability-agent-tool-provider"
   "${repo_root}/crates/lenso-capability-agent-session"
-  "${repo_root}/contracts/vendor/lenso-secrets"
 )
 
 for contract_root in "${contract_roots[@]}"; do

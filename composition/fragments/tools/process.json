@@ -1,0 +1,61 @@
+{
+  "composition": {
+    "modules": [
+      {
+        "key": "process-tools",
+        "package": "lenso.agent.process-tools",
+        "configuration": {
+          "default_timeout_ms": 120000
+        },
+        "configuration_schema": "crates/lenso-agent-process-tools-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "execute"
+            ],
+            "admission": {
+              "queue_capacity": 2,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "requires": [
+          {
+            "capability_id": "lenso.agent.process@1",
+            "descriptor_version": "1.0.0",
+            "cardinality": "one"
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      }
+    ],
+    "bindings": [
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "process-tools"
+      },
+      {
+        "consumer": "process-tools",
+        "capability_id": "lenso.agent.process@1",
+        "descriptor_version": "1.0.0",
+        "provider": "native-process"
+      }
+    ]
+  },
+  "packages": {
+    "lenso.agent.process-tools": {
+      "name": "lenso.agent.process-tools",
+      "package_name": "lenso-agent-process-tools-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    }
+  },
+  "cargo_contracts": ["lenso-capability-agent-process"]
+}

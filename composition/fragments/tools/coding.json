@@ -1,0 +1,50 @@
+{
+  "composition": {
+    "modules": [
+      {
+        "key": "workspace-edit",
+        "package": "lenso.agent.workspace-edit",
+        "configuration": {
+          "root": ".",
+          "max_file_bytes": 1048576,
+          "max_edit_bytes": 131072
+        },
+        "configuration_schema": "crates/lenso-agent-workspace-edit-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "execute"
+            ],
+            "admission": {
+              "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      }
+    ],
+    "bindings": [
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "workspace-edit"
+      }
+    ]
+  },
+  "packages": {
+    "lenso.agent.workspace-edit": {
+      "name": "lenso.agent.workspace-edit",
+      "package_name": "lenso-agent-workspace-edit-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    }
+  },
+  "contracts": []
+}

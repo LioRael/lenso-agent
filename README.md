@@ -24,6 +24,45 @@ The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
 before boot.
 
+## Compose an App variant
+
+App authors assemble named variants from ordinary Project fragments in
+[`composition/recipes.json`](composition/recipes.json):
+
+```json
+"openai-codex-direct-local-coding": {
+  "fragments": [
+    "composition/fragments/core/runtime.json",
+    "composition/fragments/models/codex-direct.json",
+    "composition/fragments/prompt/default.json",
+    "composition/fragments/prompt/summary.json",
+    "composition/fragments/tools/workspace-read.json",
+    "composition/fragments/tools/coding.json",
+    "composition/fragments/tools/process.json",
+    "composition/fragments/process/local.json"
+  ],
+  "output": "composition/openai-codex-direct-local-coding/resolved-plan.json"
+}
+```
+
+Each fragment owns one cohesive selection of ordinary Module Instances,
+bindings, packages, and contracts. Resolve every canonical Plan with:
+
+```sh
+lenso compose resolve --recipe composition/recipes.json \
+  --execution-class lenso.native-rust@1
+```
+
+Use `lenso compose list` to inspect the available variants and
+`lenso compose check` to validate them without writing Plans. For one variant,
+add `--variant <variant-name>`.
+
+Fragments are an authoring convenience only. `lenso-authoring` expands them
+into one exact ordinary Project in memory before the existing validation and
+resolution path. The tracked `composition/*/resolved-plan.json` artifacts remain
+the exact review and runtime authority; do not edit them by hand. This workflow
+requires a `lenso` build that exposes `lenso compose`; published 0.2.34 does not.
+
 ## Runtime baseline
 
 The host currently uses released `lenso-app-plan 0.1.2` and
@@ -172,10 +211,8 @@ permission to replace a `one` binding.
 From the repository root:
 
 ```sh
-lenso check --project lenso.json --execution-class lenso.native-rust@1
-lenso resolve --project lenso.json \
-  --execution-class lenso.native-rust@1 \
-  --output composition/headless-readonly/resolved-plan.json
+lenso compose resolve --recipe composition/recipes.json \
+  --variant headless-readonly --execution-class lenso.native-rust@1
 cargo run -p lenso-agent-cli -- \
   --prompt "Summarize this workspace README."
 ```
@@ -288,18 +325,15 @@ The opt-in ChatGPT Subscription composition enables this catalog without
 changing the base direct profile:
 
 ```sh
-lenso check --project lenso.openai-codex-direct-skills.json \
-  --execution-class lenso.native-rust@1
-lenso resolve --project lenso.openai-codex-direct-skills.json \
-  --execution-class lenso.native-rust@1 \
-  --output composition/openai-codex-direct-skills/resolved-plan.json
+lenso compose resolve --recipe composition/recipes.json \
+  --variant openai-codex-direct-skills --execution-class lenso.native-rust@1
 cargo run -p lenso-agent-cli -- \
   --plan composition/openai-codex-direct-skills/resolved-plan.json \
   --prompt "Use the most relevant available Skill and one relevant resource to review this repository."
 ```
 
 This profile requires `~/.agents/skills` to exist. The base
-`lenso.openai-codex-direct.json` remains portable and does not inspect that
+The `openai-codex-direct` variant remains portable and does not inspect that
 directory.
 
 ## Tool profiles
@@ -332,18 +366,15 @@ The deterministic coding Composition proves create, unique exact edit, and
 read-back without changing the readonly Composition:
 
 ```sh
-lenso check --project lenso.coding.json --execution-class lenso.native-rust@1
-lenso resolve --project lenso.coding.json \
-  --execution-class lenso.native-rust@1 \
-  --output composition/headless-coding/resolved-plan.json
+lenso compose resolve --recipe composition/recipes.json \
+  --variant headless-coding --execution-class lenso.native-rust@1
 cargo run -p lenso-agent-cli -- \
   --plan composition/headless-coding/resolved-plan.json \
   --prompt "Create and edit a workspace note."
 ```
 
 For ChatGPT Subscription, use
-`lenso.openai-codex-direct-coding.json` and
-`composition/openai-codex-direct-coding/resolved-plan.json`. This profile is
+the `openai-codex-direct-coding` variant and its matching Resolved Plan. This profile is
 explicitly mutating: run it only with a reviewed workspace root. Tool arguments
 are retained in the durable Session trajectory, so do not use mutation Tools
 for credentials or other secret content.
@@ -354,18 +385,15 @@ The deterministic local-coding Composition proves edit, `cargo check`, and
 read-back through separate workspace and process providers:
 
 ```sh
-lenso check --project lenso.local-coding.json \
-  --execution-class lenso.native-rust@1
-lenso resolve --project lenso.local-coding.json \
-  --execution-class lenso.native-rust@1 \
-  --output composition/headless-local-coding/resolved-plan.json
+lenso compose resolve --recipe composition/recipes.json \
+  --variant headless-local-coding --execution-class lenso.native-rust@1
 cargo run -p lenso-agent-cli -- \
   --plan composition/headless-local-coding/resolved-plan.json \
   --prompt "Edit and validate the workspace project."
 ```
 
 For ChatGPT Subscription, use
-`lenso.openai-codex-direct-local-coding.json` and its matching resolved Plan.
+the `openai-codex-direct-local-coding` variant and its matching Resolved Plan.
 That ChatGPT profile allows `cargo`, `git`, and `rg`, but it is deliberately not
 a hostile-code sandbox: Cargo build scripts, tests, Git configuration, and
 allowed programs can execute code or perform effects available to the host
@@ -380,7 +408,8 @@ secrets.
 cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets
 cargo test --locked --workspace
-pnpm typecheck
+lenso compose check --recipe composition/recipes.json \
+  --execution-class lenso.native-rust@1
 ./scripts/check-contracts.sh
 ./scripts/check-removal.sh
 ```
@@ -396,17 +425,14 @@ Resolved App Plan:
 
 ```sh
 export OPENAI_API_KEY="..."
-lenso check --project lenso.openai.json \
-  --execution-class lenso.native-rust@1
-lenso resolve --project lenso.openai.json \
-  --execution-class lenso.native-rust@1 \
-  --output composition/openai-readonly/resolved-plan.json
+lenso compose resolve --recipe composition/recipes.json \
+  --variant openai-readonly --execution-class lenso.native-rust@1
 cargo run -p lenso-agent-cli -- \
   --plan composition/openai-readonly/resolved-plan.json \
   --prompt "Use workspace.read_text to read README.md, then summarize it."
 ```
 
-`lenso.openai.json` defaults to OpenAI's base URL and `gpt-4o-mini`. An App
+The `openai-readonly` variant defaults to OpenAI's base URL and `gpt-4o-mini`. An App
 author can select another Chat Completions-compatible base URL and model, then
 resolve and review a new Plan. Loopback HTTP is accepted only for tests; remote
 providers require HTTPS.
@@ -436,11 +462,8 @@ The subscription Composition defaults to `gpt-5.6-luna` with medium reasoning.
 Resolve and run the subscription Composition with:
 
 ```sh
-lenso check --project lenso.openai-codex-direct.json \
-  --execution-class lenso.native-rust@1
-lenso resolve --project lenso.openai-codex-direct.json \
-  --execution-class lenso.native-rust@1 \
-  --output composition/openai-codex-direct/resolved-plan.json
+lenso compose resolve --recipe composition/recipes.json \
+  --variant openai-codex-direct --execution-class lenso.native-rust@1
 cargo run -p lenso-agent-cli -- \
   --plan composition/openai-codex-direct/resolved-plan.json \
   --prompt "Summarize this repository."
