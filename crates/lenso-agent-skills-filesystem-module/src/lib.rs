@@ -24,13 +24,9 @@ use lenso_kernel::{
     InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
     RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use sha2::{Digest, Sha256};
 
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.skills.filesystem";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Lists metadata for the snapshotted Skills.
 pub const LIST_TOOL: &str = "skills.list";
 /// Reads one full snapshotted Skill document.
@@ -59,44 +55,34 @@ struct SkillsConfig {
     max_resource_manifest_bytes: usize,
 }
 
-/// Native factory for an explicitly selected filesystem Skill catalog.
-#[derive(Clone, Debug, Default)]
-pub struct FilesystemSkillsFactory;
-
-impl NativeModuleFactory for FilesystemSkillsFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates an explicitly selected filesystem Skill catalog.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false},{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","operations":["contribute"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported filesystem Skills entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported filesystem Skills entrypoint"));
-        }
-        let config =
-            serde_json::from_str::<SkillsConfig>(context.configuration()).map_err(|error| {
-                invalid_plan(format!("invalid filesystem Skills configuration: {error}"))
-            })?;
-        validate_config(&config)?;
-        let state = Rc::new(RefCell::new(None));
-        let provider = FilesystemSkillsProvider {
-            state: state.clone(),
-        };
-        let tool_endpoint =
-            Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
-        let prompt_endpoint =
-            Rc::new(PromptProviderEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::with_lifecycle(
-            vec![tool_endpoint, prompt_endpoint],
-            FilesystemSkillsLifecycle { config, state },
-        ))
-    }
+    let config =
+        serde_json::from_str::<SkillsConfig>(context.configuration()).map_err(|error| {
+            invalid_plan(format!("invalid filesystem Skills configuration: {error}"))
+        })?;
+    validate_config(&config)?;
+    let state = Rc::new(RefCell::new(None));
+    let provider = FilesystemSkillsProvider {
+        state: state.clone(),
+    };
+    let tool_endpoint =
+        Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
+    let prompt_endpoint =
+        Rc::new(PromptProviderEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::with_lifecycle(
+        vec![tool_endpoint, prompt_endpoint],
+        FilesystemSkillsLifecycle { config, state },
+    ))
 }
 
 #[derive(Clone, Debug)]

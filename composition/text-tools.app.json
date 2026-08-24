@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "manifest": "../Cargo.toml",
+  "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.text-tools": "lenso-agent-text-tools-module"
   },

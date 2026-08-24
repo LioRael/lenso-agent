@@ -1630,14 +1630,14 @@ fn control_error(error: ControlPlaneError) -> String {
 mod tests {
     use super::*;
     use lenso_agent_auth_openai_codex_module::{
-        OpenAiCodexAuthFactory, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
+        FACTORY_IDENTITY as CODEX_AUTH_FACTORY_IDENTITY, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
     };
     use lenso_agent_model_fixture_module::{
         FACTORY_IDENTITY as FIXTURE_MODEL_FACTORY_IDENTITY, MODEL_ID as FIXTURE_MODEL_ID,
         PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
     };
     use lenso_agent_model_openai_codex_direct_module::{
-        OpenAiCodexDirectModelFactory, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
+        FACTORY_IDENTITY as CODEX_MODEL_FACTORY_IDENTITY, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
     };
     use lenso_agent_text_tools_module::FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY;
     use lenso_app_plan::{CapabilityOperationKind, ResolvedAppPlan};
@@ -1655,7 +1655,6 @@ mod tests {
         DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
         EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
     };
-    use lenso_native_adapter::NativeModuleFactory;
     use lenso_plugin_control_plane::{
         ArtifactDeclaration, ArtifactKind, BindingTemplate, CapabilityDeclaration,
         CapabilityRequirement, ImplementationVariant, ModuleContribution, PermissionRequest,
@@ -2186,7 +2185,7 @@ mod tests {
                     implementations: vec![ImplementationVariant {
                         id: "native".to_owned(),
                         artifact: None,
-                        built_in_factory: Some(OpenAiCodexAuthFactory.factory_identity()),
+                        built_in_factory: Some(CODEX_AUTH_FACTORY_IDENTITY.to_owned()),
                         entrypoint: "default".to_owned(),
                         execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                         targets: vec![host_target()],
@@ -2219,7 +2218,7 @@ mod tests {
                     implementations: vec![ImplementationVariant {
                         id: "native".to_owned(),
                         artifact: None,
-                        built_in_factory: Some(OpenAiCodexDirectModelFactory.factory_identity()),
+                        built_in_factory: Some(CODEX_MODEL_FACTORY_IDENTITY.to_owned()),
                         entrypoint: "default".to_owned(),
                         execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                         targets: vec![host_target()],

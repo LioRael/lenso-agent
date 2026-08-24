@@ -31,14 +31,15 @@ interaction kind without a duplicated string annotation. The migration keeps
 the existing stream Descriptor, open/message/error Schemas, generated clients
 and providers, and plugin digest byte-identical.
 
-The complete `headless-readonly` variant is now authored by
-`composition/headless-readonly.app.json`. Its eight Module packages derive
-package identity, configuration Schema, Capability endpoints and requirements,
+All eight executable variants are now authored by source-derived
+`composition/*.app.json` definitions. Their Module packages derive package
+identity, configuration Schema, Capability endpoints and requirements,
 execution policy, factory, and link-time registration into Cargo artifacts.
-The definition selects only nine keyed Instances and configuration values; the
-CLI discovers those artifacts without executing Module code, derives eight
-bindings, and emits the existing canonical Plan byte-for-byte. Seven variants
-remain on fragments until their additional Modules derive equivalent facts.
+Each definition selects only keyed Instances and configuration values; the CLI
+builds the declared Host package, discovers both workspace and external Module
+artifacts without executing Module code, derives bindings, and emits the
+existing canonical Plan byte-for-byte. Legacy Composition fragments have no
+remaining authority and are removed.
 
 The current host baseline selects released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.8`. It pins `lenso-runner` and `lenso-native-adapter` to

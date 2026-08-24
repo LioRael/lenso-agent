@@ -5,25 +5,36 @@
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
-    "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
+    "lenso.agent.model.openai-codex-direct": "lenso-agent-model-openai-codex-direct-module",
     "lenso.agent.prompt": "lenso-agent-prompt-module",
     "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
-    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module"
+    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
+    "lenso.agent.auth.openai-codex": "lenso-agent-auth-openai-codex-module"
   },
   "app": {
-    "name": "headless-readonly",
+    "name": "openai-codex-direct-coding",
     "modules": [
       {
         "key": "agent",
         "package": "lenso.agent.loop",
         "configuration": {
-          "model": "fixture/readme-summary-v1",
+          "max_history_events": 200,
+          "max_output_tokens": 4096,
           "max_steps": 8,
           "max_tool_calls": 4,
-          "max_output_tokens": 1024,
-          "max_history_events": 200
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "key": "auth",
+        "package": "lenso.agent.auth.openai-codex",
+        "configuration": {
+          "issuer": "https://auth.openai.com",
+          "profile": "default",
+          "refresh_margin_seconds": 60
         }
       },
       {
@@ -32,24 +43,27 @@
         "configuration": {}
       },
       {
-        "key": "fixture-instructions",
+        "key": "default-instructions",
         "package": "lenso.agent.prompt.static",
         "configuration": {
           "contributions": [
             {
-              "id": "fixture.behavior",
-              "version": "1.0.0",
+              "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App.",
+              "id": "harness.default",
               "kind": "instruction",
-              "content": "Prefix direct answers with `Plugin: `."
+              "version": "1.0.0"
             }
           ]
         }
       },
       {
         "key": "model",
-        "package": "lenso.agent.model.fixture",
+        "package": "lenso.agent.model.openai-codex-direct",
         "configuration": {
-          "model": "fixture/readme-summary-v1"
+          "base_url": "https://chatgpt.com/backend-api",
+          "max_event_bytes": 1048576,
+          "model": "gpt-5.6-luna",
+          "reasoning_effort": "medium"
         }
       },
       {
@@ -73,10 +87,10 @@
         "configuration": {
           "contributions": [
             {
+              "content": "When summarizing a workspace file, ground the answer in the Tool result.",
               "id": "workspace.summary",
-              "version": "1.0.0",
               "kind": "skill",
-              "content": "When summarizing a workspace file, ground the answer in the Tool result."
+              "version": "1.0.0"
             }
           ]
         }
@@ -87,15 +101,24 @@
         "configuration": {}
       },
       {
+        "key": "workspace-edit",
+        "package": "lenso.agent.workspace-edit",
+        "configuration": {
+          "max_edit_bytes": 131072,
+          "max_file_bytes": 1048576,
+          "root": "."
+        }
+      },
+      {
         "key": "workspace-read",
         "package": "lenso.agent.workspace-read",
         "configuration": {
-          "root": ".",
-          "max_output_bytes": 1048576,
           "max_list_entries": 1000,
-          "max_search_entries": 10000,
+          "max_output_bytes": 1048576,
           "max_search_bytes": 16777216,
-          "max_search_matches": 1000
+          "max_search_entries": 10000,
+          "max_search_matches": 1000,
+          "root": "."
         }
       }
     ],

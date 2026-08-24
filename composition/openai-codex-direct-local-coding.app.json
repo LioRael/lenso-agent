@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "manifest": "../Cargo.toml",
+  "host_package": "lenso-agent-cli",
+  "packages": {
+    "lenso.agent.cli": "lenso-agent-cli-module",
+    "lenso.agent.loop": "lenso-agent-loop-module",
+    "lenso.agent.model.openai-codex-direct": "lenso-agent-model-openai-codex-direct-module",
+    "lenso.agent.prompt": "lenso-agent-prompt-module",
+    "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
+    "lenso.agent.session.file": "lenso-agent-session-file-module",
+    "lenso.agent.tools": "lenso-agent-tools-module",
+    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
+    "lenso.agent.process-tools": "lenso-agent-process-tools-module",
+    "lenso.agent.process.native": "lenso-agent-process-native-module",
+    "lenso.agent.auth.openai-codex": "lenso-agent-auth-openai-codex-module"
+  },
+  "app": {
+    "name": "openai-codex-direct-local-coding",
+    "modules": [
+      {
+        "key": "agent",
+        "package": "lenso.agent.loop",
+        "configuration": {
+          "max_history_events": 200,
+          "max_output_tokens": 4096,
+          "max_steps": 8,
+          "max_tool_calls": 4,
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "key": "auth",
+        "package": "lenso.agent.auth.openai-codex",
+        "configuration": {
+          "issuer": "https://auth.openai.com",
+          "profile": "default",
+          "refresh_margin_seconds": 60
+        }
+      },
+      {
+        "key": "cli",
+        "package": "lenso.agent.cli",
+        "configuration": {}
+      },
+      {
+        "key": "default-instructions",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App.",
+              "id": "harness.default",
+              "kind": "instruction",
+              "version": "1.0.0"
+            }
+          ]
+        }
+      },
+      {
+        "key": "model",
+        "package": "lenso.agent.model.openai-codex-direct",
+        "configuration": {
+          "base_url": "https://chatgpt.com/backend-api",
+          "max_event_bytes": 1048576,
+          "model": "gpt-5.6-luna",
+          "reasoning_effort": "medium"
+        }
+      },
+      {
+        "key": "native-process",
+        "package": "lenso.agent.process.native",
+        "configuration": {
+          "allowed_programs": [
+            "cargo",
+            "git",
+            "rg"
+          ],
+          "environment_allowlist": [
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL"
+          ],
+          "max_argument_bytes": 131072,
+          "max_output_bytes": 262144,
+          "max_timeout_ms": 600000,
+          "root": "."
+        }
+      },
+      {
+        "key": "process-tools",
+        "package": "lenso.agent.process-tools",
+        "configuration": {
+          "default_timeout_ms": 120000
+        }
+      },
+      {
+        "key": "prompt",
+        "package": "lenso.agent.prompt",
+        "configuration": {
+          "max_contributions": 16,
+          "max_total_bytes": 65536
+        }
+      },
+      {
+        "key": "sessions",
+        "package": "lenso.agent.session.file",
+        "configuration": {
+          "directory": ".lenso/sessions"
+        }
+      },
+      {
+        "key": "summary-skill",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "content": "When summarizing a workspace file, ground the answer in the Tool result.",
+              "id": "workspace.summary",
+              "kind": "skill",
+              "version": "1.0.0"
+            }
+          ]
+        }
+      },
+      {
+        "key": "tools",
+        "package": "lenso.agent.tools",
+        "configuration": {}
+      },
+      {
+        "key": "workspace-edit",
+        "package": "lenso.agent.workspace-edit",
+        "configuration": {
+          "max_edit_bytes": 131072,
+          "max_file_bytes": 1048576,
+          "root": "."
+        }
+      },
+      {
+        "key": "workspace-read",
+        "package": "lenso.agent.workspace-read",
+        "configuration": {
+          "max_list_entries": 1000,
+          "max_output_bytes": 1048576,
+          "max_search_bytes": 16777216,
+          "max_search_entries": 10000,
+          "max_search_matches": 1000,
+          "root": "."
+        }
+      }
+    ],
+    "decisions": [],
+    "execution_lanes": [
+      {
+        "id": "main"
+      }
+    ]
+  }
+}

@@ -25,12 +25,8 @@ use lenso_kernel::{
     ActivateContext, DeactivateContext, InvocationContext, ModuleFuture, ModuleLifecycle,
     NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.model.openai-codex-direct";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 
@@ -85,42 +81,32 @@ impl DirectModelConfig {
     }
 }
 
-/// Native factory for one direct `OpenAI` Codex Model generation.
-#[derive(Clone, Debug, Default)]
-pub struct OpenAiCodexDirectModelFactory;
-
-impl NativeModuleFactory for OpenAiCodexDirectModelFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates one direct `OpenAI` Codex Model generation.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","operations":["complete"],"operation_kinds":{"complete":"stream"},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.auth.openai-codex@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported direct Codex Model entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported direct Codex Model entrypoint"));
-        }
-        let config = serde_json::from_str::<DirectModelConfig>(context.configuration())
-            .map_err(|error| {
-                invalid_plan(format!("invalid direct Codex Model configuration: {error}"))
-            })?
-            .validate()?;
-        let auth = Rc::new(RefCell::new(None));
-        let endpoint = Rc::new(ModelEndpoint::new(DirectModel {
-            config,
-            client: reqwest::Client::new(),
-            auth: auth.clone(),
-        })) as Rc<dyn NativeStreamEndpoint>;
-        Ok(NativeModuleInstance::with_stream_endpoints(
-            vec![endpoint],
-            DirectModelLifecycle { auth },
-        ))
-    }
+    let config = serde_json::from_str::<DirectModelConfig>(context.configuration())
+        .map_err(|error| {
+            invalid_plan(format!("invalid direct Codex Model configuration: {error}"))
+        })?
+        .validate()?;
+    let auth = Rc::new(RefCell::new(None));
+    let endpoint = Rc::new(ModelEndpoint::new(DirectModel {
+        config,
+        client: reqwest::Client::new(),
+        auth: auth.clone(),
+    })) as Rc<dyn NativeStreamEndpoint>;
+    Ok(NativeModuleInstance::with_stream_endpoints(
+        vec![endpoint],
+        DirectModelLifecycle { auth },
+    ))
 }
 
 #[derive(Debug)]

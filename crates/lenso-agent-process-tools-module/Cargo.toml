@@ -8,6 +8,9 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.lenso]
+package-id = "lenso.agent.process-tools"
+
 [dependencies]
 futures.workspace = true
 lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }

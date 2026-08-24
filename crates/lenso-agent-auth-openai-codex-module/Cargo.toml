@@ -8,6 +8,9 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.lenso]
+package-id = "lenso.agent.auth.openai-codex"
+
 [dependencies]
 base64.workspace = true
 directories.workspace = true

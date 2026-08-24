@@ -11,21 +11,21 @@ use std::{
 };
 
 use futures::future::LocalBoxFuture;
-use lenso_agent_auth_openai_codex_module::OpenAiCodexAuthFactory;
+use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
 use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;
 use lenso_agent_model_fixture_module as _;
-use lenso_agent_model_openai_codex_direct_module::OpenAiCodexDirectModelFactory;
-use lenso_agent_model_openai_compatible_module::OpenAiCompatibleModelFactory;
-use lenso_agent_process_native_module::NativeProcessFactory;
-use lenso_agent_process_tools_module::ProcessToolsFactory;
-use lenso_agent_prompt_filesystem_module::FilesystemPromptFactory;
+use lenso_agent_model_openai_codex_direct_module as _;
+use lenso_agent_model_openai_compatible_module as _;
+use lenso_agent_process_native_module as _;
+use lenso_agent_process_tools_module as _;
+use lenso_agent_prompt_filesystem_module as _;
 use lenso_agent_prompt_module as _;
 use lenso_agent_prompt_static_module as _;
 use lenso_agent_session_file_module as _;
-use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
+use lenso_agent_skills_filesystem_module as _;
 use lenso_agent_tools_module as _;
-use lenso_agent_workspace_edit_module::WorkspaceEditFactory;
+use lenso_agent_workspace_edit_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::Agent;
@@ -41,7 +41,7 @@ use lenso_plugin_control_plane::{
     ResolvedGeneration, RolloutPolicy, resolve_generation, sha256_digest,
 };
 use lenso_runner::TokioDriver;
-use lenso_secrets_env_module::EnvSecretsFactory;
+use lenso_secrets_env_module as _;
 
 use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, harness_plugin_profiles};
 
@@ -615,23 +615,7 @@ fn maintenance_transition(
 }
 
 fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
-    let mut registry = NativeModuleRegistry::new();
-    macro_rules! register {
-        ($factory:expr) => {{
-            let factory = $factory;
-            registry = registry.with_factory(factory);
-        }};
-    }
-    register!(OpenAiCodexAuthFactory);
-    register!(OpenAiCompatibleModelFactory);
-    register!(OpenAiCodexDirectModelFactory);
-    register!(FilesystemPromptFactory);
-    register!(NativeProcessFactory);
-    register!(ProcessToolsFactory);
-    register!(FilesystemSkillsFactory);
-    register!(WorkspaceEditFactory);
-    register!(EnvSecretsFactory::new());
-    registry = registry.with_linked_factories();
+    let registry = NativeModuleRegistry::new().with_linked_factories();
     let mut built_in_modules = registry
         .factories()
         .map(|factory| BuiltInModule {
