@@ -94,4 +94,21 @@ mod tests {
         .unwrap();
         assert!(matches!(invalid, Err(agent::ToolError::InvalidArguments)));
     }
+
+    #[test]
+    fn generated_module_descriptor_is_package_owned_and_complete() {
+        let descriptor: serde_json::Value =
+            serde_json::from_str(MODULE_DESCRIPTOR_JSON).expect("descriptor must be valid JSON");
+        assert_eq!(descriptor["package_id"], "lenso.agent.text-tools");
+        assert_eq!(descriptor["package_revision"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            descriptor["provided_capabilities"][0]["capability_id"],
+            "lenso.agent.tool-provider@1"
+        );
+        assert_eq!(
+            descriptor["provided_capabilities"][0]["operations"],
+            serde_json::json!(["catalog", "execute"])
+        );
+        assert_eq!(descriptor["required_capabilities"], serde_json::json!([]));
+    }
 }

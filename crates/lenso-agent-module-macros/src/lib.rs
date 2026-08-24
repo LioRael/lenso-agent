@@ -68,6 +68,10 @@ fn expand_tool(
     let instantiate = format_ident!("__lenso_instantiate_{function_name}");
     let name = &attributes.name;
     let description = &attributes.description;
+    let module_descriptor = LitStr::new(
+        r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+        proc_macro2::Span::call_site(),
+    );
     let invoke = if function.sig.asyncness.is_some() {
         quote!(#function_name(arguments).await)
     } else {
@@ -128,7 +132,7 @@ fn expand_tool(
             }
         }
 
-        #[lenso_native_adapter::module]
+        #[lenso_native_adapter::module(descriptor = #module_descriptor)]
         fn #instantiate(
             context: ::lenso_native_adapter::NativeModuleFactoryContext<'_>,
         ) -> Result<

@@ -24,6 +24,26 @@ The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
 before boot.
 
+## Source-derived Module proof
+
+[`composition/text-tools.app.json`](composition/text-tools.app.json) is the
+first compact App Definition. It selects the `lenso.agent.text-tools` package
+and one Instance key without repeating Capability IDs, operations, bindings,
+execution class, or lifecycle policy:
+
+```sh
+lenso app check --definition composition/text-tools.app.json
+lenso app resolve --definition composition/text-tools.app.json \
+  --output .lenso/text-tools/resolved-plan.json
+```
+
+The `agent::tool` source macro derives the Module Descriptor and embeds it in
+the selected Cargo artifact. The CLI reads that artifact without executing
+Module code, derives the App Composition, and emits an immutable Plan. This is
+the first vertical proof, not yet a replacement for the complete Harness
+variants below; their fragments remain until each selected Module derives an
+equivalent package descriptor.
+
 ## Compose an App variant
 
 App authors assemble named variants from ordinary Project fragments in
@@ -83,10 +103,10 @@ published 0.2.34 does not.
 
 ## Runtime baseline
 
-The host currently uses released `lenso-app-plan 0.1.2` and
-`lenso-kernel 0.1.7`. `lenso-runner` and `lenso-native-adapter` are locked to
+The host currently uses released `lenso-app-plan 0.1.3` and
+`lenso-kernel 0.1.8`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`a42c7f7e160513968aaef33af087d76cff8adc99`, which closes the generic dynamic
+`235708023d4d468d1f10665483cb6e43ba2941cc`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.

@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "manifest": "../Cargo.toml",
+  "packages": {
+    "lenso.agent.text-tools": "lenso-agent-text-tools-module"
+  },
+  "app": {
+    "name": "text-tools-descriptor-proof",
+    "modules": [
+      {
+        "key": "text-tools",
+        "package": "lenso.agent.text-tools",
+        "configuration": {}
+      }
+    ],
+    "decisions": [],
+    "execution_lanes": [
+      {
+        "id": "main"
+      }
+    ]
+  }
+}
