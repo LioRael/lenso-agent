@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-24
 - Supersedes: ADR 0006 executable-Plugin deferral
+- Refined by: ADR 0008
 
 ## Context
 

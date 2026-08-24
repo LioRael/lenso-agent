@@ -6,22 +6,14 @@ use std::{
 };
 
 use fs2::FileExt;
-use lenso_agent_text_tools_module::{
-    FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as TEXT_TOOLS_PACKAGE_ID,
-};
 use lenso_app_plan::{CapabilityBinding, ResolvedAppPlan};
-use lenso_capability_agent_tool_provider::{
-    CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
-    CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
-    DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
-    EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
-};
 use lenso_plugin_control_plane::{
     AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedInstance, LockedPlugin,
-    ModuleContribution, PluginBundle, PluginManifest, PluginSetLock, PluginStore, SupportChannel,
-    TrustLevel, sha256_digest,
+    PluginBundle, PluginManifest, PluginSetLock, PluginStore,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::plugin_profiles::{PluginProfileCatalog, harness_plugin_profiles};
 
 const APP_ID: &str = "lenso.agent.harness";
 const ACTIVE_SET_FILE: &str = "active-set.json";
@@ -33,10 +25,9 @@ const MAX_BUNDLE_FILES: usize = 4_096;
 const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH: usize = 32;
 const MAX_EVIDENCE_BYTES: usize = 4_096;
-const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
-const NATIVE_TOOL_PROFILE: &str = "agent-tool-provider-v1";
-const TOOL_AGGREGATOR_INSTANCE: &str = "tools";
+#[cfg(test)]
 const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"type":"object"}"#;
+#[cfg(test)]
 const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-tool-provider/capability.json");
 
@@ -239,6 +230,7 @@ struct SelectedContent {
 #[derive(Debug)]
 struct LocalReviewPolicy<'a> {
     evidence: &'a str,
+    profiles: &'a PluginProfileCatalog,
 }
 
 impl AdmissionPolicy for LocalReviewPolicy<'_> {
@@ -253,7 +245,7 @@ impl AdmissionPolicy for LocalReviewPolicy<'_> {
         if provenance != LOCAL_REVIEW_PROVENANCE {
             return rejected("Plugin Bundle provenance is not local review");
         }
-        validate_supported_manifest(manifest)?;
+        validate_supported_manifest(manifest, self.profiles)?;
         let evidence = self.evidence.trim();
         if evidence.is_empty() || evidence.len() > MAX_EVIDENCE_BYTES {
             return rejected("review evidence must be non-empty and bounded");
@@ -272,14 +264,15 @@ fn install(
     evidence: &str,
     mut features: Vec<String>,
 ) -> Result<InstallOutcome, String> {
+    let profiles = harness_plugin_profiles()?;
     prepare_root(root)?;
     let lock_file = exclusive_lock(root)?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
-    let mut active = validate_active_set(load_active_set(root)?, &store)?.into_value();
+    let mut active = validate_active_set(load_active_set(root)?, &store, &profiles)?.into_value();
     let bundle = load_bundle(bundle_root)?;
     let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
         .map_err(control_error)?;
-    validate_supported_manifest(manifest.value()).map_err(control_error)?;
+    validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
     let feature_count = features.len();
     features.sort();
     features.dedup();
@@ -303,7 +296,10 @@ fn install(
     let receipt = store
         .admit(
             &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
-            &LocalReviewPolicy { evidence },
+            &LocalReviewPolicy {
+                evidence,
+                profiles: &profiles,
+            },
         )
         .map_err(control_error)?;
     let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
@@ -346,7 +342,7 @@ fn install(
     active
         .releases
         .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-    let active_document = validate_active_set(active, &store)?;
+    let active_document = validate_active_set(active, &store, &profiles)?;
     write_active_set(root, &active_document)?;
     drop(lock_file);
     let lock = CanonicalDocument::from_value(
@@ -364,10 +360,11 @@ fn install(
 }
 
 fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
+    let profiles = harness_plugin_profiles()?;
     prepare_root(root)?;
     let lock_file = exclusive_lock(root)?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
-    let mut active = validate_active_set(load_active_set(root)?, &store)?.into_value();
+    let mut active = validate_active_set(load_active_set(root)?, &store, &profiles)?.into_value();
     if !active
         .lock
         .plugins
@@ -387,7 +384,7 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     active
         .releases
         .retain(|release| release.plugin_id != plugin_id);
-    let active = validate_active_set(active, &store)?;
+    let active = validate_active_set(active, &store, &profiles)?;
     write_active_set(root, &active)?;
     drop(lock_file);
     let lock =
@@ -397,10 +394,11 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
 }
 
 pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginAuthority, String> {
+    let profiles = harness_plugin_profiles()?;
     prepare_root(root)?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let active = load_active_set(root)?;
-    let active = validate_active_set(active, &store)?;
+    let active = validate_active_set(active, &store, &profiles)?;
     let lock =
         CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
             .map_err(control_error)?;
@@ -427,37 +425,47 @@ pub(crate) fn generation_bindings(
     authority: &GenerationPluginAuthority,
     base_plan: &ResolvedAppPlan,
 ) -> Result<Vec<CapabilityBinding>, String> {
+    let profiles = harness_plugin_profiles()?;
     if authority.lock.value().instances.is_empty() {
         return Ok(base_plan.capability_bindings().to_vec());
     }
-    let aggregator = base_plan
-        .module_instance(TOOL_AGGREGATOR_INSTANCE)
-        .ok_or_else(|| "active Tool Plugins require the `tools` aggregator Instance".to_owned())?;
-    if !aggregator
-        .required_capabilities()
-        .iter()
-        .any(|requirement| {
-            requirement.capability_id() == TOOL_PROVIDER_CAPABILITY_ID
-                && requirement.descriptor_version() == TOOL_PROVIDER_DESCRIPTOR_VERSION
-        })
-    {
-        return Err("the `tools` Instance does not accept Tool Provider Plugins".to_owned());
-    }
     let mut bindings = base_plan.capability_bindings().to_vec();
-    bindings.extend(authority.lock.value().instances.iter().map(|instance| {
-        CapabilityBinding::new(
-            TOOL_AGGREGATOR_INSTANCE,
-            TOOL_PROVIDER_CAPABILITY_ID,
-            TOOL_PROVIDER_DESCRIPTOR_VERSION,
+    let target = host_target();
+    for instance in &authority.lock.value().instances {
+        let manifest = authority
+            .manifests
+            .get(&instance.plugin_id)
+            .ok_or_else(|| {
+                format!(
+                    "Plugin Instance `{}` has no active Manifest",
+                    instance.instance_key
+                )
+            })?;
+        let contribution = manifest
+            .value()
+            .module_contributions
+            .iter()
+            .find(|contribution| contribution.id == instance.contribution_id)
+            .ok_or_else(|| {
+                format!(
+                    "Plugin Instance `{}` has no Module contribution",
+                    instance.instance_key
+                )
+            })?;
+        bindings.push(profiles.binding_for(
+            contribution,
+            &target,
             &instance.instance_key,
-        )
-    }));
+            base_plan,
+        )?);
+    }
     Ok(bindings)
 }
 
 fn validate_active_set(
     active: ActivePluginSet,
     store: &PluginStore,
+    profiles: &PluginProfileCatalog,
 ) -> Result<CanonicalDocument<ActivePluginSet>, String> {
     if active.schema_version != 1 || active.lock.schema_version != 1 || active.lock.app_id != APP_ID
     {
@@ -494,7 +502,7 @@ fn validate_active_set(
             .ok_or_else(|| format!("Plugin `{}` has no active Release", locked.plugin_id))?;
         let manifest = CanonicalDocument::from_value("lenso-plugin.json", release.manifest.clone())
             .map_err(control_error)?;
-        validate_supported_manifest(manifest.value()).map_err(control_error)?;
+        validate_supported_manifest(manifest.value(), profiles).map_err(control_error)?;
         if manifest.digest() != locked.manifest_digest
             || manifest.value().plugin_id != locked.plugin_id
             || manifest.value().release_version != locked.release_version
@@ -582,7 +590,10 @@ fn validate_receipt_closure(
     Ok(())
 }
 
-fn validate_supported_manifest(manifest: &PluginManifest) -> Result<(), ControlPlaneError> {
+fn validate_supported_manifest(
+    manifest: &PluginManifest,
+    profiles: &PluginProfileCatalog,
+) -> Result<(), ControlPlaneError> {
     if !manifest.data_contributions.is_empty()
         || !manifest.permission_requests.is_empty()
         || !manifest.binding_templates.is_empty()
@@ -591,53 +602,9 @@ fn validate_supported_manifest(manifest: &PluginManifest) -> Result<(), ControlP
             "this Host rejects Plugin Data mounts, permission requests, and binding templates",
         );
     }
-    for contribution in &manifest.module_contributions {
-        validate_tool_contribution(contribution)?;
-    }
-    Ok(())
-}
-
-fn validate_tool_contribution(contribution: &ModuleContribution) -> Result<(), ControlPlaneError> {
     let target = host_target();
-    let exact_endpoint = if let [provided] = contribution.provides.as_slice() {
-        provided.capability_id == TOOL_PROVIDER_CAPABILITY_ID
-            && provided.descriptor_version == TOOL_PROVIDER_DESCRIPTOR_VERSION
-            && provided.descriptor_digest == sha256_digest(TOOL_PROVIDER_DESCRIPTOR)
-            && provided.request_operations
-                == [
-                    TOOL_PROVIDER_CATALOG_OPERATION,
-                    TOOL_PROVIDER_EXECUTE_OPERATION,
-                ]
-    } else {
-        false
-    };
-    if !exact_endpoint
-        || contribution.package_id != TEXT_TOOLS_PACKAGE_ID
-        || contribution.configuration_schema_digest != sha256_digest(EMPTY_CONFIGURATION_SCHEMA)
-        || !contribution.requires.is_empty()
-        || !contribution.permission_request_ids.is_empty()
-        || contribution.state.is_some()
-        || contribution.implementations.is_empty()
-        || !contribution
-            .implementations
-            .iter()
-            .any(|implementation| implementation.targets.contains(&target))
-        || contribution.implementations.iter().any(|implementation| {
-            implementation.artifact.is_some()
-                || implementation.built_in_factory.as_deref() != Some(TEXT_TOOLS_FACTORY_IDENTITY)
-                || implementation.entrypoint != "default"
-                || implementation.execution_class != NATIVE_EXECUTION_CLASS
-                || !implementation
-                    .profiles
-                    .iter()
-                    .any(|profile| profile == NATIVE_TOOL_PROFILE)
-                || implementation.support_channel != SupportChannel::Stable
-                || implementation.trust != TrustLevel::Trusted
-        })
-    {
-        return rejected(
-            "executable Plugins must be stateless, permission-free native Tool Providers",
-        );
+    for contribution in &manifest.module_contributions {
+        profiles.validate_contribution(contribution, &target)?;
     }
     Ok(())
 }
@@ -958,12 +925,21 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_agent_text_tools_module::FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY;
     use lenso_app_plan::ResolvedAppPlan;
+    use lenso_capability_agent_tool_provider::{
+        CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
+        CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
+        DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
+        EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
+    };
     use lenso_plugin_control_plane::{
         ArtifactDeclaration, ArtifactKind, CapabilityDeclaration, ImplementationVariant,
         ModuleContribution, PermissionRequest, PluginFeature, ProductMetadataDeclaration,
-        sha256_digest,
+        SupportChannel, TrustLevel, sha256_digest,
     };
+
+    use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, NATIVE_TOOL_PROFILE};
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
 
@@ -1035,7 +1011,7 @@ mod tests {
         fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
         let error = install(root.path(), bundle.path(), "review", Vec::new()).unwrap_err();
-        assert!(error.contains("stateless, permission-free native Tool Providers"));
+        assert!(error.contains("does not match a registered Plugin profile"));
         assert!(!root.path().join(ACTIVE_SET_FILE).exists());
     }
 
@@ -1049,6 +1025,19 @@ mod tests {
         let authority = load_generation_authority(root.path()).unwrap();
         assert_eq!(authority.lock.value().instances.len(), 1);
         let instance_key = authority.lock.value().instances[0].instance_key.clone();
+        let mut one_plan_value: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+        let tools = one_plan_value["module_instances"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|instance| instance["instance_key"] == "tools")
+            .unwrap();
+        tools["required_capabilities"][0]["cardinality"] = "one".into();
+        let one_plan: ResolvedAppPlan = serde_json::from_value(one_plan_value).unwrap();
+        one_plan.validate().unwrap();
+        let error = generation_bindings(&authority, &one_plan).unwrap_err();
+        assert!(error.contains("as a many Capability"));
+
         let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
         assert_eq!(
             generation
@@ -1063,7 +1052,7 @@ mod tests {
             .capability_bindings()
             .iter()
             .find(|binding| {
-                binding.consumer_instance() == TOOL_AGGREGATOR_INSTANCE
+                binding.consumer_instance() == "tools"
                     && binding.provider_instance() == instance_key
             })
             .unwrap();

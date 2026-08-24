@@ -44,6 +44,10 @@ boot. No contract opts into cross-lane transfer in V1.
 - The Host control plane owns Plugin Store authority, Host Build and Execution
   Policy documents, Generation resolution, Ready Gate, routing leases, and
   Generation resource drain.
+- The Host Plugin Profile Catalog owns the finite executable contribution
+  allowlist and product attachment recipes. It projects the same registrations
+  into admission, Host policy, startup revalidation, and Generation bindings;
+  Plugins cannot add entries or binding templates.
 - Passive Plugin activation owns one atomic active-set document closing the
   exact Plugin lock, embedded Manifests, selected Features and Product
   Metadata, and immutable local-review Admission Receipts.
@@ -129,6 +133,9 @@ make both the workspace root and model endpoint visible before execution.
 11. Installing the reviewed native text Tool Bundle adds one Plugin-owned
     Instance and derived `tools` binding; the Agent invokes `text.uppercase`.
     Removing the Plugin deletes that Tool from the next Generation.
+12. Catalog tests prove deterministic multi-profile registration, reject
+    duplicate profile/factory authority, and require an exact `many`
+    Capability attachment before deriving a binding.
 
 ## Deferred
 
@@ -136,6 +143,6 @@ Web UI, approval workflows, marketplace Skill installation, live Skill
 watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
-placement, additional executable Plugin profiles, Plugin upgrade, Generation
-provenance in Session, durable fencing, and overlap/rollback replacement are
-separate slices.
+placement, additional production Catalog entries, `one` or `optional` binding
+replacement, Plugin upgrade, Generation provenance in Session, durable fencing,
+and overlap/rollback replacement are separate slices.

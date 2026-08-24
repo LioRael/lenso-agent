@@ -35,15 +35,14 @@ use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, BuiltInModule,
     CanonicalDocument, ClassPolicy, ControlPlaneError, GenerationLease, GenerationRuntime,
     GenerationSupervisor, HostBuildManifest, HostExecutionPolicy, ReplacementMode, ResolutionInput,
-    ResolvedGeneration, RolloutPolicy, SupportChannel, TrustLevel, resolve_generation,
-    sha256_digest,
+    ResolvedGeneration, RolloutPolicy, resolve_generation, sha256_digest,
 };
 use lenso_runner::TokioDriver;
 use lenso_secrets_env_module::EnvSecretsFactory;
 
+use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, harness_plugin_profiles};
+
 const APP_ID: &str = "lenso.agent.harness";
-const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
-const NATIVE_TOOL_PROFILE: &str = "agent-tool-provider-v1";
 const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 
@@ -264,6 +263,12 @@ pub(crate) fn resolve_initial_generation(
         )
     })?;
     let (_, built_in_modules) = native_host_build();
+    let plugin_profiles = harness_plugin_profiles()?;
+    let native_profiles = plugin_profiles.profiles_for_execution_class(NATIVE_EXECUTION_CLASS);
+    let native_support_channels =
+        plugin_profiles.support_channels_for_execution_class(NATIVE_EXECUTION_CLASS);
+    let native_trust_levels =
+        plugin_profiles.trust_levels_for_execution_class(NATIVE_EXECUTION_CLASS);
     let host_build = CanonicalDocument::from_value(
         "lenso-host-build.json",
         HostBuildManifest {
@@ -276,7 +281,7 @@ pub(crate) fn resolve_initial_generation(
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                 adapter_build_identity: "lenso-native-adapter@runtime-25812bc".to_owned(),
                 targets: vec![target.clone()],
-                profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
+                profiles: native_profiles.clone(),
             }],
         },
     )
@@ -290,9 +295,9 @@ pub(crate) fn resolve_initial_generation(
             target,
             classes: vec![ClassPolicy {
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-                support_channels: vec![SupportChannel::Stable],
-                trust_levels: vec![TrustLevel::Trusted],
-                profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
+                support_channels: native_support_channels,
+                trust_levels: native_trust_levels,
+                profiles: native_profiles,
             }],
             preference: vec![NATIVE_EXECUTION_CLASS.to_owned()],
             instance_overrides: Vec::new(),

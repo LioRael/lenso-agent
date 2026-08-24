@@ -6,6 +6,7 @@ use std::{
 };
 
 mod generation;
+mod plugin_profiles;
 mod plugins;
 
 use lenso_agent_auth_openai_codex_module::{
