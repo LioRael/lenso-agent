@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use fs2::FileExt;
 use lenso_app_plan::{CapabilityBinding, ModuleInstancePlan, ResolvedAppPlan};
 use lenso_plugin_control_plane::{
     AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedInstance, LockedPlugin,
@@ -13,12 +12,14 @@ use lenso_plugin_control_plane::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::plugin_profiles::{PluginProfileCatalog, ResolvedAttachment, harness_plugin_profiles};
+use crate::{
+    authority::AuthorityCoordinator,
+    plugin_profiles::{PluginProfileCatalog, ResolvedAttachment, harness_plugin_profiles},
+};
 
 const APP_ID: &str = "lenso.agent.harness";
 const ACTIVE_SET_FILE: &str = "active-set.json";
 const ACTIVE_SET_DIRECTORY: &str = "active-sets";
-const LOCK_FILE: &str = "active-set.lock";
 const MANIFEST_FILE: &str = "lenso-plugin.json";
 const LOCAL_REVIEW_PROVENANCE: &str = "local-review";
 const LOCAL_REVIEW_POLICY: &str = "lenso.agent.local-review@1";
@@ -500,8 +501,8 @@ fn install(
     mut features: Vec<String>,
 ) -> Result<InstallOutcome, String> {
     let profiles = harness_plugin_profiles()?;
-    prepare_root(root)?;
-    let lock_file = exclusive_lock(root)?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let mut active = validate_active_set(load_active_set(root)?, &store, &profiles)?.into_value();
     let bundle = load_bundle(bundle_root)?;
@@ -580,7 +581,6 @@ fn install(
         .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
     let active_document = validate_active_set(active, &store, &profiles)?;
     write_active_set(root, &active_document)?;
-    drop(lock_file);
     let lock = CanonicalDocument::from_value(
         "lenso-plugins.lock.json",
         active_document.value().lock.clone(),
@@ -597,8 +597,8 @@ fn install(
 
 fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     let profiles = harness_plugin_profiles()?;
-    prepare_root(root)?;
-    let lock_file = exclusive_lock(root)?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let mut active = validate_active_set(load_active_set(root)?, &store, &profiles)?.into_value();
     if !active
@@ -622,7 +622,6 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
         .retain(|release| release.plugin_id != plugin_id);
     let active = validate_active_set(active, &store, &profiles)?;
     write_active_set(root, &active)?;
-    drop(lock_file);
     let lock =
         CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
             .map_err(control_error)?;
@@ -638,8 +637,8 @@ async fn upgrade(
     plan_path: &Path,
 ) -> Result<UpgradeOutcome, String> {
     let profiles = harness_plugin_profiles()?;
-    prepare_root(root)?;
-    let lock_file = exclusive_lock(root)?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
     let bundle = load_bundle(bundle_root)?;
@@ -707,7 +706,6 @@ async fn upgrade(
     record_active_set(root, &current)?;
     record_active_set(root, &candidate)?;
     write_active_set(root, &candidate)?;
-    drop(lock_file);
     Ok(UpgradeOutcome {
         plugin_id: manifest.value().plugin_id.clone(),
         release_version: manifest.value().release_version.clone(),
@@ -773,8 +771,8 @@ fn replacement_active_set(
 
 async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOutcome, String> {
     let profiles = harness_plugin_profiles()?;
-    prepare_root(root)?;
-    let lock_file = exclusive_lock(root)?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
     if current.digest() == to {
@@ -798,7 +796,6 @@ async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOut
     record_active_set(root, &current)?;
     record_active_set(root, &target)?;
     write_active_set(root, &target)?;
-    drop(lock_file);
     Ok(RollbackOutcome {
         previous_active_set: current.digest().to_owned(),
         active_set: target.digest().to_owned(),
@@ -807,8 +804,13 @@ async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOut
 }
 
 pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginAuthority, String> {
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.snapshot()?;
+    load_generation_authority_unfenced(root)
+}
+
+fn load_generation_authority_unfenced(root: &Path) -> Result<GenerationPluginAuthority, String> {
     let profiles = harness_plugin_profiles()?;
-    prepare_root(root)?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let active = load_active_set(root)?;
     let active = validate_active_set(active, &store, &profiles)?;
@@ -1355,34 +1357,6 @@ fn collect_bundle_paths(
     Ok(())
 }
 
-fn prepare_root(root: &Path) -> Result<(), String> {
-    fs::create_dir_all(root)
-        .map_err(|error| format!("failed to create Plugin authority root: {error}"))?;
-    let metadata = fs::symlink_metadata(root)
-        .map_err(|error| format!("failed to inspect Plugin authority root: {error}"))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("Plugin authority root is not a regular directory".to_owned());
-    }
-    Ok(())
-}
-
-fn exclusive_lock(root: &Path) -> Result<File, String> {
-    let path = root.join(LOCK_FILE);
-    if fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
-        return Err("Plugin authority lock is a symlink".to_owned());
-    }
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|error| format!("failed to open Plugin authority lock: {error}"))?;
-    file.lock_exclusive()
-        .map_err(|error| format!("failed to lock Plugin authority: {error}"))?;
-    Ok(file)
-}
-
 fn load_active_set(root: &Path) -> Result<ActivePluginSet, String> {
     let path = root.join(ACTIVE_SET_FILE);
     let metadata = match fs::symlink_metadata(&path) {
@@ -1434,6 +1408,8 @@ fn active_set_by_digest(
     digest: &str,
 ) -> Result<(CanonicalDocument<ActivePluginSet>, bool), String> {
     let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::open_existing(root)?;
+    let _fence = coordinator.snapshot()?;
     let store = open_existing_store(root)?;
     let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
     if current.digest() == digest {
@@ -1450,6 +1426,8 @@ fn active_set_history(
     root: &Path,
 ) -> Result<(String, BTreeMap<String, CanonicalDocument<ActivePluginSet>>), String> {
     let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::open_existing(root)?;
+    let _fence = coordinator.snapshot()?;
     let store = open_existing_store(root)?;
     let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
     let current_digest = current.digest().to_owned();

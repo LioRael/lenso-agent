@@ -39,8 +39,11 @@ guarded by an exact active-Manifest compare-and-swap, resolves current and
 candidate Generations against the reviewed base Plan, and uses the Runtime
 maintenance Ready Gate before atomically committing. Canonical Active Sets are
 retained by digest for explicit manual rollback through the same gate. The
-transition process shuts the preview Generation down after validation; it is
-not live hot loading or durable cross-process fencing.
+Host-owned `AuthorityCoordinator` now gives startup and validated inspection a
+shared snapshot fence and gives install, remove, upgrade, and rollback an
+exclusive transition fence. The transition process shuts the preview
+Generation down after validation; it is not live hot loading or distributed
+coordination.
 
 The CLI provides read-only provenance inspection across retained Active Sets,
 Generation Specs, and Session Turns. The File Session Module validates and
@@ -213,8 +216,8 @@ ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, automatic rollback,
-Generation provenance retention policy and garbage collection, durable
-cross-process fencing, and overlap replacement require their own product
+Generation provenance retention policy and garbage collection, distributed
+coordination, and overlap replacement require their own product
 slices. Replacement
 must stage a new Resolved App Plan and App Generation above the Kernel rather
 than mutate the running graph.
