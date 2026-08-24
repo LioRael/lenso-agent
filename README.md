@@ -61,8 +61,8 @@ Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
-automatic rollback, durable cross-process fencing, Generation provenance
-retention and garbage collection, and product acceptance of the preview Wasm
+automatic rollback, distributed coordination, Generation provenance retention
+and garbage collection, and product acceptance of the preview Wasm
 Component, QuickJS, and native-dylib Adapters remain deferred.
 
 ## Install, upgrade, roll back, and remove a reviewed Plugin release
@@ -156,12 +156,16 @@ only after an explicit Manifest CAS and a Runtime maintenance Ready Gate. It
 retains canonical authorities by digest under `.lenso/plugins/active-sets`;
 `plugins rollback` applies the same Ready-before-commit rule to an exact
 retained digest. These commands are offline transitions, not running-Kernel hot
-loading, and do not fence a concurrently starting App process. The read-only
+loading. A Host-owned cross-process authority fence lets startup and validated
+inspection snapshot either the complete old authority or the complete committed
+authority, while install, remove, upgrade, and rollback retain exclusive
+ownership from their first authority read through atomic commit. The read-only
 history and inspection commands validate every selected canonical record and
 its closure; Session provenance reports each Turn's Spec as available, missing,
-or invalid without rendering the stored input. Adding another Catalog entry
-is a Host code and review change, not runtime discovery or general permission to
-replace a `one` binding.
+or invalid without rendering the stored input. The local filesystem fence is
+not a distributed lease or network-filesystem portability claim. Adding another
+Catalog entry is a Host code and review change, not runtime discovery or general
+permission to replace a `one` binding.
 
 ## Run the deterministic slice
 

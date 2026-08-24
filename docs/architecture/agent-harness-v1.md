@@ -149,6 +149,9 @@ make both the workspace root and model endpoint visible before execution.
 14. Read-only inspection tests recover retained rollback handles, close Plugin
     authority, inspect Generation fields, trace resumed Session Turns across
     Generations, and classify corrupted Specs without exposing Turn input.
+15. A real child process holding an exclusive Plugin authority transition fence
+    blocks App startup until release; direct process exit releases the OS-owned
+    fence and leaves later snapshots available.
 
 ## Deferred
 
@@ -157,5 +160,5 @@ watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding
-replacement, durable fencing, automatic rollback, history retention/garbage
+replacement, distributed coordination, automatic rollback, history retention/garbage
 collection, and overlap replacement are separate slices.

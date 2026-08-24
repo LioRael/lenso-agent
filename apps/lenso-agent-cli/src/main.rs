@@ -5,6 +5,7 @@ use std::{
     process::{Command, ExitCode},
 };
 
+mod authority;
 mod generation;
 mod plugin_profiles;
 mod plugins;

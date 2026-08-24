@@ -38,8 +38,9 @@ resolves and starts the committed authority again.
   they have no activation authority.
 - Active Set records live under `.lenso/plugins/active-sets`.
 - Kernel still receives one immutable Plan and knows nothing about replacement.
-- Overlap, automatic rollback, hot loading, durable cross-process fencing,
-  history retention policy, and garbage collection remain deferred.
+- ADR 0014 closes local cross-process startup/transition fencing. Overlap,
+  automatic rollback, hot loading, distributed coordination, history retention
+  policy, and garbage collection remain deferred.
 
 ## Rejected alternatives
 

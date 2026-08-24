@@ -44,8 +44,9 @@ resources after the Turn lease is released.
   dependencies but are absent from the Host Execution Policy and Adapter
   catalog.
 - ADR 0011 records Generation provenance in Session events, ADR 0012 admits
-  manual rollback, and ADR 0013 provides inspection. Overlap replacement,
-  durable cross-process fencing, and retention require later acceptance slices.
+  manual rollback, ADR 0013 provides inspection, and ADR 0014 fences local Host
+  authority across processes. Overlap replacement, distributed coordination,
+  and retention require later acceptance slices.
 
 ## Rejected alternatives
 

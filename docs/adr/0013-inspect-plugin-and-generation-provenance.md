@@ -42,8 +42,9 @@ Profile Catalog. Directory names are not trusted as proof of authority.
   record without starting the App.
 - Inspection never writes, repairs, deletes, activates, rolls back, or acquires
   a Generation lease.
-- Retention policy, garbage collection, automatic repair, cross-process
-  fencing, overlap, and automatic rollback remain separate slices.
+- ADR 0014 closes local cross-process authority fencing. Retention policy,
+  garbage collection, automatic repair, distributed coordination, overlap, and
+  automatic rollback remain separate slices.
 
 ## Rejected alternatives
 
