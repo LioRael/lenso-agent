@@ -127,6 +127,154 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one subprocess scenario preserves the authority digests across upgrade and rollback"
+)]
+fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() {
+    let workspace = tempfile::tempdir().unwrap();
+    let release_one = tempfile::tempdir().unwrap();
+    let release_two = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    let manifest_one = write_tool_bundle_release(release_one.path(), "1.0.0");
+    let manifest_two = write_tool_bundle_release(release_two.path(), "2.0.0");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(release_one.path())
+        .args(["--evidence", "review-ticket-upgrade-1"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let active_before = fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap();
+
+    let failed_cas = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "upgrade", "--bundle"])
+        .arg(release_two.path())
+        .args([
+            "--evidence",
+            "review-ticket-upgrade-2",
+            "--expected-manifest",
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "--plan",
+        ])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(!failed_cas.status.success());
+    assert!(String::from_utf8_lossy(&failed_cas.stderr).contains("compare-and-swap failed"));
+    assert_eq!(
+        fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+        active_before
+    );
+
+    let invalid_plan = workspace.path().join("invalid-plan.json");
+    fs::write(&invalid_plan, b"{}\n").unwrap();
+    let failed_ready = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "upgrade", "--bundle"])
+        .arg(release_two.path())
+        .args([
+            "--evidence",
+            "review-ticket-upgrade-2",
+            "--expected-manifest",
+            &manifest_one,
+            "--plan",
+        ])
+        .arg(&invalid_plan)
+        .output()
+        .unwrap();
+    assert!(!failed_ready.status.success());
+    assert!(String::from_utf8_lossy(&failed_ready.stderr).contains("resolved Plan"));
+    assert_eq!(
+        fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+        active_before
+    );
+
+    let upgrade = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "upgrade", "--bundle"])
+        .arg(release_two.path())
+        .args([
+            "--evidence",
+            "review-ticket-upgrade-2",
+            "--expected-manifest",
+            &manifest_one,
+            "--plan",
+        ])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        upgrade.status.success(),
+        "{}",
+        String::from_utf8_lossy(&upgrade.stderr)
+    );
+    let upgrade_stdout = String::from_utf8(upgrade.stdout).unwrap();
+    assert!(upgrade_stdout.contains("upgraded: example.text-tools@2.0.0"));
+    assert!(upgrade_stdout.contains(&format!("manifest: {manifest_two}")));
+    let previous = output_value(&upgrade_stdout, "previous-active-set: ");
+    let upgraded = output_value(&upgrade_stdout, "active-set: ");
+    assert_ne!(previous, upgraded);
+    assert!(upgrade_stdout.contains("generation: sha256:"));
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&status.stdout).contains("example.text-tools@2.0.0"));
+
+    let rollback = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "rollback", "--to", previous, "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        rollback.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rollback.stderr)
+    );
+    let rollback_stdout = String::from_utf8(rollback.stdout).unwrap();
+    assert!(rollback_stdout.contains(&format!("rolled-back-to: {previous}")));
+    assert!(rollback_stdout.contains(&format!("previous-active-set: {upgraded}")));
+    assert_eq!(
+        fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+        active_before
+    );
+
+    let upgraded_record = workspace
+        .path()
+        .join(".lenso/plugins/active-sets")
+        .join(format!(
+            "{}.json",
+            upgraded.strip_prefix("sha256:").unwrap()
+        ));
+    fs::write(&upgraded_record, b"{}\n").unwrap();
+    let tampered_rollback = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "rollback", "--to", upgraded, "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(!tampered_rollback.status.success());
+    assert!(
+        String::from_utf8_lossy(&tampered_rollback.stderr).contains("Plugin control plane failed")
+    );
+    assert_eq!(
+        fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+        active_before
+    );
+}
+
+#[test]
 fn reviewed_fixture_model_plugin_replaces_the_base_provider_and_runs() {
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
@@ -266,12 +414,16 @@ fn write_passive_bundle(root: &Path) {
 }
 
 fn write_tool_bundle(root: &Path) {
+    write_tool_bundle_release(root, "1.0.0");
+}
+
+fn write_tool_bundle_release(root: &Path, release_version: &str) -> String {
     let target = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
     let empty_configuration_schema = br#"{"additionalProperties":false,"type":"object"}"#;
     let manifest = serde_json::json!({
         "schema_version": 1,
         "plugin_id": "example.text-tools",
-        "release_version": "1.0.0",
+        "release_version": release_version,
         "artifacts": [],
         "module_contributions": [{
             "id": "text-tools",
@@ -304,9 +456,14 @@ fn write_tool_bundle(root: &Path) {
         "binding_templates": [],
         "product_metadata": []
     });
-    fs::write(
-        root.join("lenso-plugin.json"),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
+    let bytes = serde_json::to_vec(&manifest).unwrap();
+    fs::write(root.join("lenso-plugin.json"), &bytes).unwrap();
+    sha256_digest(&bytes)
+}
+
+fn output_value<'a>(stdout: &'a str, prefix: &str) -> &'a str {
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .unwrap_or_else(|| panic!("missing `{prefix}` in output: {stdout}"))
 }
