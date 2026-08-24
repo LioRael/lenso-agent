@@ -61,11 +61,11 @@ Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
-rollback, durable cross-process fencing, Generation provenance
-inspection/retention, and product acceptance of the preview Wasm Component,
+automatic rollback, durable cross-process fencing, Generation provenance
+inspection/retention and garbage collection, and product acceptance of the preview Wasm Component,
 QuickJS, and native-dylib Adapters remain deferred.
 
-## Install and remove a reviewed Plugin release
+## Install, upgrade, roll back, and remove a reviewed Plugin release
 
 A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
 declared by that Manifest. Admission rejects undeclared files, symlinks, digest
@@ -83,6 +83,18 @@ cargo run -p lenso-agent-cli -- plugins status
 cargo run -p lenso-agent-cli -- plugins install \
   --bundle examples/plugins/text-tools \
   --evidence "review-ticket-77"
+
+# Use the manifest digest printed by install as the CAS guard.
+cargo run -p lenso-agent-cli -- plugins upgrade \
+  --bundle examples/plugins/text-tools-v2 \
+  --evidence "review-ticket-78" \
+  --expected-manifest sha256:<current-manifest-digest> \
+  --plan composition/headless-readonly/resolved-plan.json
+
+# Use the previous-active-set digest printed by upgrade.
+cargo run -p lenso-agent-cli -- plugins rollback \
+  --to sha256:<previous-active-set-digest> \
+  --plan composition/headless-readonly/resolved-plan.json
 
 cargo run -p lenso-agent-cli -- \
   --prompt "Use text.uppercase to uppercase Lenso plugin."
@@ -128,8 +140,12 @@ Bundle additionally closes exact Model and Auth contribution profiles, one
 `model -> auth` requirement/template, `gpt-5.6-luna` with medium reasoning, and
 the compatible base Agent configuration. Removing any replacement Plugin
 atomically removes its Release, Instances, and derived bindings and restores
-the exact base Plan. Reinstalling the same Plugin ID from a different immutable
-Manifest remains an explicit future upgrade flow. Adding another Catalog entry
+the exact base Plan. `plugins upgrade` admits a different immutable Manifest
+only after an explicit Manifest CAS and a Runtime maintenance Ready Gate. It
+retains canonical authorities by digest under `.lenso/plugins/active-sets`;
+`plugins rollback` applies the same Ready-before-commit rule to an exact
+retained digest. These commands are offline transitions, not running-Kernel hot
+loading, and do not fence a concurrently starting App process. Adding another Catalog entry
 is a Host code and review change, not runtime discovery or general permission to
 replace a `one` binding.
 

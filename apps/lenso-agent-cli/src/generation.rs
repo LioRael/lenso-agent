@@ -337,6 +337,14 @@ pub(crate) fn resolve_initial_generation(
     plan_bytes: &[u8],
     store_root: &Path,
 ) -> Result<ResolvedGeneration, String> {
+    let authority = crate::plugins::load_generation_authority(store_root)?;
+    resolve_generation_with_authority(plan_bytes, &authority)
+}
+
+fn resolve_generation_with_authority(
+    plan_bytes: &[u8],
+    authority: &crate::plugins::GenerationPluginAuthority,
+) -> Result<ResolvedGeneration, String> {
     let plan = serde_json::from_slice::<ResolvedAppPlan>(plan_bytes)
         .map_err(|error| format!("resolved Plan is invalid JSON: {error}"))?;
     plan.validate()
@@ -399,8 +407,7 @@ pub(crate) fn resolve_initial_generation(
         },
     )
     .map_err(control_error)?;
-    let authority = crate::plugins::load_generation_authority(store_root)?;
-    let composition = crate::plugins::generation_composition(&authority, &plan)?;
+    let composition = crate::plugins::generation_composition(authority, &plan)?;
     let generation = resolve_generation(&ResolutionInput {
         lock: &authority.lock,
         manifests: &authority.manifests,
@@ -413,6 +420,50 @@ pub(crate) fn resolve_initial_generation(
     })
     .map_err(control_error)?;
     close_over_base_binding_order(generation, &composition.preserved_base_bindings)
+}
+
+pub(crate) async fn ready_check_maintenance_transition(
+    plan_bytes: &[u8],
+    current_authority: crate::plugins::GenerationPluginAuthority,
+    candidate_authority: crate::plugins::GenerationPluginAuthority,
+    store_root: &Path,
+) -> Result<String, String> {
+    let current = resolve_generation_with_authority(plan_bytes, &current_authority)?;
+    let candidate = resolve_generation_with_authority(plan_bytes, &candidate_authority)?;
+    if current.spec.digest() == candidate.spec.digest() {
+        return Err("candidate Plugin authority resolves to the current Generation".to_owned());
+    }
+    let routes = GenerationRoutes::default();
+    let runtime = HarnessGenerationRuntime {
+        routes: routes.clone(),
+    };
+    let mut supervisor = GenerationSupervisor::new(APP_ID, runtime);
+    let ready_result = async {
+        let initial = initial_transition(&current).map_err(control_error)?;
+        supervisor
+            .transition(&initial, &current)
+            .await
+            .map_err(control_error)?;
+        let maintenance = maintenance_transition(&current, &candidate).map_err(control_error)?;
+        supervisor
+            .transition(&maintenance, &candidate)
+            .await
+            .map_err(control_error)?;
+        Ok::<(), String>(())
+    }
+    .await;
+    let cleanup_result = routes.shutdown_all().await;
+    match (ready_result, cleanup_result) {
+        (Ok(()), Ok(())) => {}
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => return Err(error),
+        (Err(error), Err(cleanup)) => {
+            return Err(format!(
+                "{error}; Generation cleanup also failed: {cleanup}"
+            ));
+        }
+    }
+    record_generation_spec(store_root, &candidate.spec)?;
+    Ok(candidate.spec.digest().to_owned())
 }
 
 fn close_over_base_binding_order(
@@ -530,6 +581,29 @@ fn initial_transition(
             from_generation_spec_digest: None,
             to_generation_spec_digest: generation.spec.digest().to_owned(),
             replacement_mode: ReplacementMode::Initial,
+            state_compatibility_receipt_digests: Vec::new(),
+            rollout_policy: RolloutPolicy {
+                ready_timeout_nanos: READY_TIMEOUT_NANOS.to_string(),
+                drain_timeout_nanos: DRAIN_TIMEOUT_NANOS.to_string(),
+                rollback_window_nanos: "0".to_owned(),
+                automatic_rollback_on_generation_failure: false,
+            },
+        },
+    )
+}
+
+fn maintenance_transition(
+    current: &ResolvedGeneration,
+    candidate: &ResolvedGeneration,
+) -> Result<CanonicalDocument<AppGenerationTransitionSpec>, ControlPlaneError> {
+    CanonicalDocument::from_value(
+        "lenso-generation-transition.json",
+        AppGenerationTransitionSpec {
+            schema_version: 1,
+            app_id: APP_ID.to_owned(),
+            from_generation_spec_digest: Some(current.spec.digest().to_owned()),
+            to_generation_spec_digest: candidate.spec.digest().to_owned(),
+            replacement_mode: ReplacementMode::Maintenance,
             state_compatibility_receipt_digests: Vec::new(),
             rollout_policy: RolloutPolicy {
                 ready_timeout_nanos: READY_TIMEOUT_NANOS.to_string(),

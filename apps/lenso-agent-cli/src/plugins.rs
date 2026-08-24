@@ -17,6 +17,7 @@ use crate::plugin_profiles::{PluginProfileCatalog, ResolvedAttachment, harness_p
 
 const APP_ID: &str = "lenso.agent.harness";
 const ACTIVE_SET_FILE: &str = "active-set.json";
+const ACTIVE_SET_DIRECTORY: &str = "active-sets";
 const LOCK_FILE: &str = "active-set.lock";
 const MANIFEST_FILE: &str = "lenso-plugin.json";
 const LOCAL_REVIEW_PROVENANCE: &str = "local-review";
@@ -59,6 +60,19 @@ pub enum PluginCommand {
         plugin_id: String,
         root: PathBuf,
     },
+    Upgrade {
+        bundle: PathBuf,
+        evidence: String,
+        features: Vec<String>,
+        expected_manifest: String,
+        plan: PathBuf,
+        root: PathBuf,
+    },
+    Rollback {
+        to: String,
+        plan: PathBuf,
+        root: PathBuf,
+    },
     Status {
         root: PathBuf,
     },
@@ -71,12 +85,14 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
     match command.as_str() {
         "install" => parse_install(&arguments[1..]),
         "remove" => parse_remove(&arguments[1..]),
+        "upgrade" => parse_upgrade(&arguments[1..]),
+        "rollback" => parse_rollback(&arguments[1..]),
         "status" => parse_status(&arguments[1..]),
         _ => Err(usage()),
     }
 }
 
-pub fn run(command: PluginCommand) -> Result<(), String> {
+pub async fn run(command: PluginCommand) -> Result<(), String> {
     match command {
         PluginCommand::Install {
             bundle,
@@ -113,6 +129,43 @@ pub fn run(command: PluginCommand) -> Result<(), String> {
             let digest = remove(&root, &plugin_id)?;
             println!("removed: {plugin_id}");
             println!("plugin-set: {digest}");
+            Ok(())
+        }
+        PluginCommand::Upgrade {
+            bundle,
+            evidence,
+            features,
+            expected_manifest,
+            plan,
+            root,
+        } => {
+            let outcome = upgrade(
+                &root,
+                &bundle,
+                &evidence,
+                features,
+                &expected_manifest,
+                &plan,
+            )
+            .await?;
+            println!(
+                "upgraded: {}@{}",
+                outcome.plugin_id, outcome.release_version
+            );
+            println!("manifest: {}", outcome.manifest_digest);
+            println!(
+                "previous-active-set: {}",
+                outcome.previous_active_set_digest
+            );
+            println!("active-set: {}", outcome.active_set_digest);
+            println!("generation: {}", outcome.generation_spec_digest);
+            Ok(())
+        }
+        PluginCommand::Rollback { to, plan, root } => {
+            let outcome = rollback(&root, &to, &plan).await?;
+            println!("rolled-back-to: {}", outcome.active_set);
+            println!("previous-active-set: {}", outcome.previous_active_set);
+            println!("generation: {}", outcome.generation_spec);
             Ok(())
         }
     }
@@ -173,8 +226,59 @@ fn parse_remove(arguments: &[String]) -> Result<PluginCommand, String> {
     })
 }
 
+fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut bundle = None;
+    let mut evidence = None;
+    let mut features = Vec::new();
+    let mut expected_manifest = None;
+    let mut plan = None;
+    let mut root = default_root();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--bundle" => bundle = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            "--evidence" => evidence = Some(arguments.next().ok_or_else(usage)?.clone()),
+            "--feature" => features.push(arguments.next().ok_or_else(usage)?.clone()),
+            "--expected-manifest" => {
+                expected_manifest = Some(arguments.next().ok_or_else(usage)?.clone());
+            }
+            "--plan" => plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Upgrade {
+        bundle: bundle.ok_or_else(usage)?,
+        evidence: evidence.ok_or_else(usage)?,
+        features,
+        expected_manifest: expected_manifest.ok_or_else(usage)?,
+        plan: plan.ok_or_else(usage)?,
+        root,
+    })
+}
+
+fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut to = None;
+    let mut plan = None;
+    let mut root = default_root();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--to" => to = Some(arguments.next().ok_or_else(usage)?.clone()),
+            "--plan" => plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Rollback {
+        to: to.ok_or_else(usage)?,
+        plan: plan.ok_or_else(usage)?,
+        root,
+    })
+}
+
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> --evidence <review> --expected-manifest <sha256:digest> --plan <path> [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> --plan <path> [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -183,7 +287,7 @@ fn default_root() -> PathBuf {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ActivePluginSet {
+pub(crate) struct ActivePluginSet {
     schema_version: u32,
     lock: PluginSetLock,
     releases: Vec<ActiveRelease>,
@@ -236,6 +340,23 @@ struct InstallOutcome {
     manifest_digest: String,
     receipt_digest: String,
     plugin_set_digest: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct UpgradeOutcome {
+    plugin_id: String,
+    release_version: String,
+    manifest_digest: String,
+    previous_active_set_digest: String,
+    active_set_digest: String,
+    generation_spec_digest: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct RollbackOutcome {
+    previous_active_set: String,
+    active_set: String,
+    generation_spec: String,
 }
 
 #[derive(Debug)]
@@ -417,12 +538,206 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     Ok(lock.digest().to_owned())
 }
 
+async fn upgrade(
+    root: &Path,
+    bundle_root: &Path,
+    evidence: &str,
+    mut features: Vec<String>,
+    expected_manifest: &str,
+    plan_path: &Path,
+) -> Result<UpgradeOutcome, String> {
+    let profiles = harness_plugin_profiles()?;
+    prepare_root(root)?;
+    let lock_file = exclusive_lock(root)?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let bundle = load_bundle(bundle_root)?;
+    let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+        .map_err(control_error)?;
+    validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
+    let existing = current
+        .value()
+        .lock
+        .plugins
+        .iter()
+        .find(|plugin| plugin.plugin_id == manifest.value().plugin_id)
+        .ok_or_else(|| {
+            format!(
+                "Plugin `{}` is not active; install its first Release instead",
+                manifest.value().plugin_id
+            )
+        })?;
+    if existing.manifest_digest != expected_manifest {
+        return Err(format!(
+            "Plugin `{}` Manifest compare-and-swap failed: expected `{expected_manifest}`, active `{}`",
+            existing.plugin_id, existing.manifest_digest
+        ));
+    }
+    if existing.manifest_digest == manifest.digest() {
+        return Err(format!(
+            "Plugin `{}` candidate is already active",
+            existing.plugin_id
+        ));
+    }
+    let feature_count = features.len();
+    features.sort();
+    features.dedup();
+    if features.len() != feature_count {
+        return Err("selected Plugin Features contain a duplicate".to_owned());
+    }
+    let receipt = store
+        .admit(
+            &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
+            &LocalReviewPolicy {
+                evidence,
+                profiles: &profiles,
+            },
+        )
+        .map_err(control_error)?;
+    let candidate = replacement_active_set(
+        &current,
+        &manifest,
+        receipt.digest(),
+        features,
+        &store,
+        &profiles,
+    )?;
+    let plan = fs::read(plan_path)
+        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
+    let current_authority = generation_authority_from_active(root, current.value().clone())?;
+    let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
+    let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
+        &plan,
+        current_authority,
+        candidate_authority,
+        root,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)?;
+    drop(lock_file);
+    Ok(UpgradeOutcome {
+        plugin_id: manifest.value().plugin_id.clone(),
+        release_version: manifest.value().release_version.clone(),
+        manifest_digest: manifest.digest().to_owned(),
+        previous_active_set_digest: current.digest().to_owned(),
+        active_set_digest: candidate.digest().to_owned(),
+        generation_spec_digest,
+    })
+}
+
+fn replacement_active_set(
+    current: &CanonicalDocument<ActivePluginSet>,
+    manifest: &CanonicalDocument<PluginManifest>,
+    receipt_digest: &str,
+    features: Vec<String>,
+    store: &PluginStore,
+    profiles: &PluginProfileCatalog,
+) -> Result<CanonicalDocument<ActivePluginSet>, String> {
+    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let mut candidate = current.value().clone();
+    let locked = LockedPlugin {
+        plugin_id: manifest.value().plugin_id.clone(),
+        release_version: manifest.value().release_version.clone(),
+        manifest_digest: manifest.digest().to_owned(),
+        selected_features: features,
+        product_metadata_digests: selected.product_metadata_digests,
+    };
+    candidate
+        .lock
+        .plugins
+        .retain(|plugin| plugin.plugin_id != locked.plugin_id);
+    candidate.lock.plugins.push(locked);
+    candidate
+        .lock
+        .plugins
+        .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    candidate
+        .lock
+        .instances
+        .retain(|instance| instance.plugin_id != manifest.value().plugin_id);
+    candidate.lock.instances.extend(locked_instances(
+        manifest.value(),
+        &selected.module_contribution_ids,
+        profiles,
+    )?);
+    candidate
+        .lock
+        .instances
+        .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+    candidate
+        .releases
+        .retain(|release| release.plugin_id != manifest.value().plugin_id);
+    candidate.releases.push(ActiveRelease {
+        plugin_id: manifest.value().plugin_id.clone(),
+        manifest: manifest.value().clone(),
+        admission_receipt_digest: receipt_digest.to_owned(),
+    });
+    candidate
+        .releases
+        .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    validate_active_set(candidate, store, profiles)
+}
+
+async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOutcome, String> {
+    let profiles = harness_plugin_profiles()?;
+    prepare_root(root)?;
+    let lock_file = exclusive_lock(root)?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    if current.digest() == to {
+        return Err(format!("active Plugin Set `{to}` is already current"));
+    }
+    let target = validate_active_set(load_active_set_record(root, to)?, &store, &profiles)?;
+    if target.digest() != to {
+        return Err("rollback Plugin Set does not match its requested digest".to_owned());
+    }
+    let plan = fs::read(plan_path)
+        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
+    let current_authority = generation_authority_from_active(root, current.value().clone())?;
+    let target_authority = generation_authority_from_active(root, target.value().clone())?;
+    let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
+        &plan,
+        current_authority,
+        target_authority,
+        root,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &target)?;
+    write_active_set(root, &target)?;
+    drop(lock_file);
+    Ok(RollbackOutcome {
+        previous_active_set: current.digest().to_owned(),
+        active_set: target.digest().to_owned(),
+        generation_spec: generation_spec_digest,
+    })
+}
+
 pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginAuthority, String> {
     let profiles = harness_plugin_profiles()?;
     prepare_root(root)?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let active = load_active_set(root)?;
     let active = validate_active_set(active, &store, &profiles)?;
+    generation_authority_from_document(store, &active)
+}
+
+fn generation_authority_from_active(
+    root: &Path,
+    active: ActivePluginSet,
+) -> Result<GenerationPluginAuthority, String> {
+    let profiles = harness_plugin_profiles()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let active = validate_active_set(active, &store, &profiles)?;
+    generation_authority_from_document(store, &active)
+}
+
+fn generation_authority_from_document(
+    store: PluginStore,
+    active: &CanonicalDocument<ActivePluginSet>,
+) -> Result<GenerationPluginAuthority, String> {
     let lock =
         CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
             .map_err(control_error)?;
@@ -994,6 +1309,84 @@ fn load_active_set(root: &Path) -> Result<ActivePluginSet, String> {
     CanonicalDocument::<ActivePluginSet>::parse("active-set.json", &bytes)
         .map(CanonicalDocument::into_value)
         .map_err(control_error)
+}
+
+fn active_set_record_path(root: &Path, digest: &str) -> Result<PathBuf, String> {
+    let digest = digest
+        .strip_prefix("sha256:")
+        .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| "Active Set digest is not canonical SHA-256".to_owned())?;
+    Ok(root
+        .join(ACTIVE_SET_DIRECTORY)
+        .join(format!("{digest}.json")))
+}
+
+fn load_active_set_record(root: &Path, digest: &str) -> Result<ActivePluginSet, String> {
+    let path = active_set_record_path(root, digest)?;
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("failed to inspect rollback Plugin Set: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("rollback Plugin Set is not a regular file".to_owned());
+    }
+    let bytes =
+        fs::read(&path).map_err(|error| format!("failed to read rollback Plugin Set: {error}"))?;
+    let active = CanonicalDocument::<ActivePluginSet>::parse("active-set.json", &bytes)
+        .map_err(control_error)?;
+    if active.digest() != digest {
+        return Err("rollback Plugin Set record does not match its digest".to_owned());
+    }
+    Ok(active.into_value())
+}
+
+fn record_active_set(
+    root: &Path,
+    active: &CanonicalDocument<ActivePluginSet>,
+) -> Result<(), String> {
+    let directory = root.join(ACTIVE_SET_DIRECTORY);
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("failed to create Active Set history: {error}"))?;
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|error| format!("failed to inspect Active Set history: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("Active Set history is not a regular directory".to_owned());
+    }
+    let destination = active_set_record_path(root, active.digest())?;
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("Active Set history record is not a regular file".to_owned());
+            }
+            let existing = fs::read(&destination)
+                .map_err(|error| format!("failed to read Active Set history: {error}"))?;
+            if existing != active.bytes() {
+                return Err("Active Set history record does not match its digest".to_owned());
+            }
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("failed to inspect Active Set history: {error}")),
+    }
+    let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| format!("failed to create Active Set history: {error}"))?;
+        file.write_all(active.bytes())
+            .map_err(|error| format!("failed to write Active Set history: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("failed to sync Active Set history: {error}"))?;
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("failed to commit Active Set history: {error}"))?;
+        File::open(&directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("failed to sync Active Set history directory: {error}"))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
 }
 
 fn write_active_set(

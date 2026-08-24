@@ -53,7 +53,7 @@ async fn run() -> Result<(), String> {
     let args = match parse_args()? {
         CliCommand::Run(args) => args,
         CliCommand::Auth(command) => return run_auth(&command).await,
-        CliCommand::Plugins(command) => return plugins::run(command),
+        CliCommand::Plugins(command) => return plugins::run(command).await,
     };
     let bytes = fs::read(&args.plan)
         .map_err(|error| format!("failed to read {}: {error}", args.plan.display()))?;

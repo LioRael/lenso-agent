@@ -34,6 +34,14 @@ root Invocation Context and the Agent Loop records it in `turn_started` Session
 events. Resumed Sessions can therefore cross Generations without losing which
 immutable graph owned each Turn.
 
+The Host also owns one offline Plugin Release transition. Upgrade admission is
+guarded by an exact active-Manifest compare-and-swap, resolves current and
+candidate Generations against the reviewed base Plan, and uses the Runtime
+maintenance Ready Gate before atomically committing. Canonical Active Sets are
+retained by digest for explicit manual rollback through the same gate. The
+transition process shuts the preview Generation down after validation; it is
+not live hot loading or durable cross-process fencing.
+
 The Catalog currently contains one exact native Tool Provider append-to-`many`
 entry, one restricted fixture Model Provider replace-`one` entry, and one
 experimental Codex Direct replacement set. The Codex set closes exact Model and
@@ -197,8 +205,8 @@ installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
-replacement, publisher-selected provider configuration, Plugin upgrade,
-Generation provenance inspection/retention, durable cross-process fencing, and
-overlap/rollback replacement require their own product slices. Replacement
+replacement, publisher-selected provider configuration, automatic rollback,
+Generation provenance inspection and retention policy, durable cross-process
+fencing, and overlap replacement require their own product slices. Replacement
 must stage a new Resolved App Plan and App Generation above the Kernel rather
 than mutate the running graph.

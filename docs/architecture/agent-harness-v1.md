@@ -51,6 +51,9 @@ boot. No contract opts into cross-lane transfer in V1.
 - Passive Plugin activation owns one atomic active-set document closing the
   exact Plugin lock, embedded Manifests, selected Features and Product
   Metadata, and immutable local-review Admission Receipts.
+- Offline Plugin Release transition owns Manifest CAS, current/candidate
+  Generation resolution, maintenance Ready Gate, content-addressed Active Set
+  history, and atomic candidate or manual-rollback commit.
 
 ## First turn
 
@@ -136,6 +139,10 @@ make both the workspace root and model endpoint visible before execution.
 12. Catalog tests prove deterministic multi-profile registration, reject
     duplicate profile/factory authority, and require an exact `many`
     Capability attachment before deriving a binding.
+13. An upgrade test proves failed CAS leaves authority unchanged, a reviewed
+    candidate passes a real maintenance Ready Gate before commit, manual
+    rollback restores byte-identical authority, and tampered history fails
+    closed.
 
 ## Deferred
 
@@ -144,5 +151,5 @@ watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding
-replacement, Plugin upgrade, Generation provenance in Session, durable fencing,
-and overlap/rollback replacement are separate slices.
+replacement, durable fencing, automatic rollback, history retention/garbage
+collection, and overlap replacement are separate slices.
