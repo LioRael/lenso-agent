@@ -52,12 +52,14 @@ support/trust policy, canonical configuration, and one bounded attachment rule.
 The Catalog admits the linked `lenso.agent.text-tools@0.1.0` factory as a
 stateless, permission-free append-to-`many` Tool Provider. It also admits one
 restricted `lenso.agent.model.fixture@0.1.0` profile that replaces the fixture
-base Plan's exact `model` provider for the `agent` consumer. Data mounts,
-permission requests, and Plugin-authored binding templates fail admission.
-General provider/configuration replacement, overlap replacement, rollback,
-durable cross-process fencing, Generation provenance in Session events, and
-product acceptance of the preview Wasm Component, QuickJS, and native-dylib
-Adapters remain deferred.
+base Plan's exact `model` provider for the `agent` consumer. The experimental
+Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
+binding, and the coupled Agent model configuration. Data mounts, permission
+requests, arbitrary binding templates, and incomplete Feature selections fail
+admission. General provider/configuration selection, overlap replacement,
+rollback, durable cross-process fencing, Generation provenance in Session
+events, and product acceptance of the preview Wasm Component, QuickJS, and
+native-dylib Adapters remain deferred.
 
 ## Install and remove a reviewed Plugin release
 
@@ -93,6 +95,18 @@ cargo run -p lenso-agent-cli -- \
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.fixture-model
+
+cargo run -p lenso-agent-cli -- auth login
+
+cargo run -p lenso-agent-cli -- plugins install \
+  --bundle examples/plugins/codex-direct \
+  --evidence "review-ticket-92"
+
+cargo run -p lenso-agent-cli -- \
+  --prompt "Summarize this repository."
+
+cargo run -p lenso-agent-cli -- plugins remove \
+  --plugin example.codex-direct
 ```
 
 Admission stores immutable objects and its receipt under
@@ -105,12 +119,15 @@ Provider attachment to the existing `tools` aggregator only when that consumer
 declares the exact Capability with `many` cardinality. Its Model profile
 requires `one` cardinality, the exact base `agent -> model` edge, and the
 allowlisted fixture package; it removes the displaced Instance and all of that
-Instance's bindings before resolving the next Generation. Removing either
-Plugin atomically removes its Release, Instances, and derived bindings;
-removing the Model Plugin restores the exact base Plan. Reinstalling the same
-Plugin ID from a different immutable Manifest remains an explicit future
-upgrade flow. Adding another Catalog entry is a Host code and review change,
-not runtime discovery or general permission to replace a `one` binding.
+Instance's bindings before resolving the next Generation. The Codex Direct
+Bundle additionally closes exact Model and Auth contribution profiles, one
+`model -> auth` requirement/template, `gpt-5.6-luna` with medium reasoning, and
+the compatible base Agent configuration. Removing any replacement Plugin
+atomically removes its Release, Instances, and derived bindings and restores
+the exact base Plan. Reinstalling the same Plugin ID from a different immutable
+Manifest remains an explicit future upgrade flow. Adding another Catalog entry
+is a Host code and review change, not runtime discovery or general permission to
+replace a `one` binding.
 
 ## Run the deterministic slice
 
@@ -391,4 +408,7 @@ cargo run -p lenso-agent-cli -- \
 This profile directly provides `lenso.agent.model@1`, while Lenso continues to
 own the Agent Loop, Tool Runtime, and Session log. Its private Auth Module owns
 OAuth refresh credentials outside the repository and App Plan. The integration
-does not depend on the Codex CLI.
+does not depend on the Codex CLI. The same Model/Auth pair can be installed over
+the fixture Plan through `examples/plugins/codex-direct`; the Profile Catalog,
+not the publisher Manifest, owns its exact configurations and base Agent
+configuration replacement.

@@ -29,12 +29,15 @@ control plane to admit and lock reviewed passive releases plus executable
 contributions registered in a product-owned Plugin Profile Catalog, resolve and
 stage one initial App Generation, and pin each Turn with a Generation lease.
 The Catalog currently contains one exact native Tool Provider append-to-`many`
-entry and one restricted fixture Model Provider replace-`one` entry. Model
-replacement requires the exact base edge and allowlisted displaced package;
-removal restores the base Plan for the next Generation. The non-native Adapter
-crates remain unselected. Package presence or Catalog extensibility is not a
-claim that arbitrary executable Plugins, permissions, general provider
-replacement, Generation provenance, or non-native execution classes are ready.
+entry, one restricted fixture Model Provider replace-`one` entry, and one
+experimental Codex Direct replacement set. The Codex set closes exact Model and
+Auth contributions, their intra-Plugin `one` binding, and the compatible base
+Agent model configuration. Replacement requires the exact base edge and
+allowlisted displaced package; removal restores the base Plan for the next
+Generation. The non-native Adapter crates remain unselected. Package presence
+or Catalog extensibility is not a claim that arbitrary executable Plugins,
+permissions, general provider replacement, Generation provenance, or
+non-native execution classes are ready.
 
 ## Product outcome
 
@@ -186,8 +189,8 @@ installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
-replacement, provider configuration selection, Plugin upgrade, Session
-Generation provenance, durable
+replacement, publisher-selected provider configuration, Plugin upgrade,
+Session Generation provenance, durable
 cross-process fencing, and overlap/rollback replacement require their own
 product slices. Replacement must stage a new Resolved App Plan and App
 Generation above the Kernel rather than mutate the running graph.
