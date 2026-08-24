@@ -10,6 +10,11 @@ fn coding_plan_path() -> std::path::PathBuf {
         .join("../../composition/headless-coding/resolved-plan.json")
 }
 
+fn local_coding_plan_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../composition/headless-local-coding/resolved-plan.json")
+}
+
 fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
     command
@@ -518,6 +523,76 @@ fn opt_in_coding_profile_creates_edits_then_reads_back_one_file() {
     assert_eq!(mutation_results[0]["operation"], "created");
     assert_eq!(mutation_results[1]["operation"], "edited");
     assert_eq!(mutation_results[1]["sha256"].as_str().unwrap().len(), 64);
+}
+
+#[test]
+fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::create_dir(temporary.path().join("src")).unwrap();
+    fs::write(
+        temporary.path().join("Cargo.toml"),
+        "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("src/lib.rs"),
+        "pub fn value() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    let output = run(
+        temporary.path(),
+        &local_coding_plan_path(),
+        "Edit and validate the workspace project.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Local coding result: cargo check passed.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temporary.path().join("src/lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 2 }\n"
+    );
+
+    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let events = state["events"].as_array().unwrap();
+    let requests = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["workspace.edit_text", "process.exec", "workspace.read_text"]
+    );
+    let process_result = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_result")
+        .nth(1)
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(process_result["payload_json"].as_str().unwrap()).unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(payload["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["program"], "cargo");
+    assert_eq!(metadata["exit_code"], "0");
 }
 
 #[test]

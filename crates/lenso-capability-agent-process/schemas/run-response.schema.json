@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["exit_code", "stdout", "stderr", "duration_ms"],
+  "properties": {
+    "exit_code": { "type": "string", "format": "int64" },
+    "stdout": { "type": "string", "maxLength": 1048576 },
+    "stderr": { "type": "string", "maxLength": 1048576 },
+    "duration_ms": { "type": "string", "format": "uint64" }
+  },
+  "additionalProperties": false
+}

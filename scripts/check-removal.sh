@@ -8,7 +8,8 @@ temporary_direct_project="$(mktemp "${repo_root}/.lenso-direct-removal.XXXXXX.js
 temporary_prompt_project="$(mktemp "${repo_root}/.lenso-prompt-removal.XXXXXX.json")"
 temporary_skills_project="$(mktemp "${repo_root}/.lenso-skills-removal.XXXXXX.json")"
 temporary_workspace_edit_project="$(mktemp "${repo_root}/.lenso-workspace-edit-removal.XXXXXX.json")"
-trap 'rm -f "${temporary_project}" "${temporary_openai_project}" "${temporary_direct_project}" "${temporary_prompt_project}" "${temporary_skills_project}" "${temporary_workspace_edit_project}"' EXIT
+temporary_process_project="$(mktemp "${repo_root}/.lenso-process-removal.XXXXXX.json")"
+trap 'rm -f "${temporary_project}" "${temporary_openai_project}" "${temporary_direct_project}" "${temporary_prompt_project}" "${temporary_skills_project}" "${temporary_workspace_edit_project}" "${temporary_process_project}"' EXIT
 
 node - "${repo_root}/lenso.json" "${temporary_project}" <<'NODE'
 const fs = require("node:fs");
@@ -148,4 +149,29 @@ NODE
 
 lenso check \
   --project "${temporary_workspace_edit_project}" \
+  --execution-class lenso.native-rust@1
+
+node - \
+  "${repo_root}/lenso.local-coding.json" \
+  "${temporary_process_project}" <<'NODE'
+const fs = require("node:fs");
+const [source, target] = process.argv.slice(2);
+const project = JSON.parse(fs.readFileSync(source, "utf8"));
+const removed = new Set(["process-tools", "native-process"]);
+project.composition.modules = project.composition.modules.filter(
+  (module) => !removed.has(module.key),
+);
+project.composition.bindings = project.composition.bindings.filter(
+  (binding) => !removed.has(binding.consumer) && !removed.has(binding.provider),
+);
+delete project.packages["lenso.agent.process-tools"];
+delete project.packages["lenso.agent.process.native"];
+project.contracts = project.contracts.filter(
+  (contract) => contract.capability_id !== "lenso.agent.process@1",
+);
+fs.writeFileSync(target, `${JSON.stringify(project, null, 2)}\n`);
+NODE
+
+lenso check \
+  --project "${temporary_process_project}" \
   --execution-class lenso.native-rust@1

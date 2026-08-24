@@ -1,0 +1,290 @@
+//! Tool projection for one explicitly bound process provider.
+
+use std::{cell::RefCell, rc::Rc};
+
+use lenso_capability_agent_process::{
+    CatalogRequest as ProcessCatalogRequest, ProcessClient, ProcessRunInvocationError, RunError,
+    RunRequest,
+};
+use lenso_capability_agent_tool_provider::{
+    CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
+    ExecuteErrorExecutionFailedPayload, ExecuteRequest, ExecuteResponse,
+    ExecuteResponseContentType, ToolProviderEndpoint, ToolProviderProvider,
+};
+use lenso_kernel::{
+    ActivateContext, DeactivateContext, InvocationContext, ModuleFuture, ModuleLifecycle,
+    NativeRequestEndpoint, RuntimeFailure,
+};
+use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+
+/// Runtime package identity selected by App Composition.
+pub const PACKAGE_ID: &str = "lenso.agent.process-tools";
+/// Exact linked package version.
+pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Stable structured process Tool name.
+pub const EXEC_TOOL: &str = "process.exec";
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessToolsConfig {
+    default_timeout_ms: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExecArguments {
+    program: String,
+    #[serde(rename = "arguments")]
+    args: Vec<String>,
+    #[serde(default = "default_cwd")]
+    cwd: String,
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Debug)]
+struct ProcessToolsState {
+    client: Rc<ProcessClient>,
+    catalog: CatalogResponse,
+}
+
+/// Native factory for the Agent-facing process Tool projection.
+#[derive(Clone, Debug, Default)]
+pub struct ProcessToolsFactory;
+
+impl NativeModuleFactory for ProcessToolsFactory {
+    fn package_id(&self) -> &'static str {
+        PACKAGE_ID
+    }
+
+    fn package_version(&self) -> &'static str {
+        PACKAGE_VERSION
+    }
+
+    fn instantiate(
+        &self,
+        context: NativeModuleFactoryContext<'_>,
+    ) -> Result<NativeModuleInstance, RuntimeFailure> {
+        if context.entrypoint() != "default" {
+            return Err(invalid_plan("unsupported process-tools entrypoint"));
+        }
+        let config = serde_json::from_str::<ProcessToolsConfig>(context.configuration()).map_err(
+            |error| invalid_plan(format!("invalid process-tools configuration: {error}")),
+        )?;
+        if config.default_timeout_ms == 0 || config.default_timeout_ms > 3_600_000 {
+            return Err(invalid_plan(
+                "default_timeout_ms must be between 1 and 3600000",
+            ));
+        }
+        let state = Rc::new(RefCell::new(None));
+        let provider = ProcessToolsProvider {
+            config,
+            state: state.clone(),
+        };
+        let endpoint =
+            Rc::new(ToolProviderEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
+        Ok(NativeModuleInstance::with_lifecycle(
+            vec![endpoint],
+            ProcessToolsLifecycle { state },
+        ))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ProcessToolsProvider {
+    config: ProcessToolsConfig,
+    state: Rc<RefCell<Option<ProcessToolsState>>>,
+}
+
+impl ToolProviderProvider for ProcessToolsProvider {
+    fn catalog(
+        &self,
+        _context: InvocationContext,
+        _request: CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<lenso_capability_agent_tool_provider::ToolProviderCatalog>
+    {
+        let result = self
+            .state
+            .borrow()
+            .as_ref()
+            .map(|state| state.catalog.clone())
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: lenso_capability_agent_tool_provider::CAPABILITY_ID,
+            });
+        Box::pin(futures::future::ready(result.map(Ok)))
+    }
+
+    fn execute(
+        &self,
+        context: InvocationContext,
+        request: ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<lenso_capability_agent_tool_provider::ToolProviderExecute>
+    {
+        if request.name != EXEC_TOOL {
+            return Box::pin(futures::future::ready(Ok(Err(ExecuteError::NotFound))));
+        }
+        let Ok(arguments) = serde_json::from_str::<ExecArguments>(&request.arguments_json) else {
+            return Box::pin(futures::future::ready(Ok(Err(
+                ExecuteError::InvalidArguments,
+            ))));
+        };
+        let client = self
+            .state
+            .borrow()
+            .as_ref()
+            .map(|state| state.client.clone());
+        let Some(client) = client else {
+            return Box::pin(futures::future::ready(Err(RuntimeFailure::Unavailable {
+                capability: lenso_capability_agent_process::CAPABILITY_ID,
+            })));
+        };
+        let timeout_ms = arguments
+            .timeout_ms
+            .unwrap_or(self.config.default_timeout_ms);
+        Box::pin(async move {
+            match client
+                .run_with_context(
+                    context,
+                    RunRequest {
+                        program: arguments.program.clone(),
+                        arguments: arguments.args,
+                        cwd: arguments.cwd,
+                        timeout_ms: timeout_ms.to_string(),
+                    },
+                )
+                .await
+            {
+                Ok(response) => {
+                    let output = format_process_output(
+                        &response.exit_code,
+                        &response.stdout,
+                        &response.stderr,
+                    );
+                    if output.len() > 1_048_576 {
+                        return Ok(Err(ExecuteError::OutputLimitExceeded));
+                    }
+                    Ok(Ok(ExecuteResponse {
+                        content: output,
+                        content_type: ExecuteResponseContentType::Text,
+                        metadata_json: serde_json::json!({
+                            "program": arguments.program,
+                            "exit_code": response.exit_code,
+                            "duration_ms": response.duration_ms,
+                        })
+                        .to_string(),
+                    }))
+                }
+                Err(ProcessRunInvocationError::Domain(error)) => Ok(Err(map_process_error(error))),
+                Err(ProcessRunInvocationError::Runtime(error)) => Err(error),
+            }
+        })
+    }
+}
+
+#[derive(Debug)]
+struct ProcessToolsLifecycle {
+    state: Rc<RefCell<Option<ProcessToolsState>>>,
+}
+
+impl ModuleLifecycle for ProcessToolsLifecycle {
+    fn activate(&self, context: ActivateContext) -> ModuleFuture {
+        let client = match ProcessClient::from_dependencies(context.dependencies()) {
+            Ok(client) => Rc::new(client),
+            Err(error) => return Box::pin(futures::future::ready(Err(error))),
+        };
+        let state = self.state.clone();
+        Box::pin(async move {
+            let process_catalog =
+                client
+                    .catalog(ProcessCatalogRequest {})
+                    .await
+                    .map_err(|error| RuntimeFailure::ModuleFailure {
+                        detail: format!("process catalog is unavailable: {error:?}"),
+                    })?;
+            let program_names = process_catalog
+                .programs
+                .into_iter()
+                .map(|program| program.name)
+                .collect::<Vec<_>>();
+            if program_names.is_empty() {
+                return Err(invalid_plan("process catalog cannot be empty"));
+            }
+            let input_schema_json = serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "program": { "type": "string", "enum": program_names },
+                    "arguments": {
+                        "type": "array",
+                        "maxItems": 128,
+                        "items": { "type": "string" }
+                    },
+                    "cwd": { "type": "string", "description": "Workspace-relative working directory; defaults to the workspace root." },
+                    "timeout_ms": { "type": "integer", "minimum": 1 }
+                },
+                "required": ["program", "arguments"]
+            })
+            .to_string();
+            state.replace(Some(ProcessToolsState {
+                client,
+                catalog: CatalogResponse {
+                    tools: vec![CatalogResponseToolsItem {
+                        name: EXEC_TOOL.to_owned(),
+                        description: "Run one explicitly allowed executable without shell parsing. The command can still execute trusted project code and is not a sandbox.".to_owned(),
+                        input_schema_json,
+                    }],
+                },
+            }));
+            Ok(())
+        })
+    }
+
+    fn deactivate(&self, _context: DeactivateContext) -> ModuleFuture {
+        self.state.replace(None);
+        Box::pin(futures::future::ready(Ok(())))
+    }
+}
+
+fn default_cwd() -> String {
+    ".".to_owned()
+}
+
+fn format_process_output(exit_code: &str, stdout: &str, stderr: &str) -> String {
+    format!("exit_code: {exit_code}\nstdout:\n{stdout}\nstderr:\n{stderr}")
+}
+
+fn map_process_error(error: RunError) -> ExecuteError {
+    let (reason_code, message) = match error {
+        RunError::InvalidRequest => ("invalid_request", "Process request exceeded policy limits"),
+        RunError::ProgramNotAllowed => ("program_not_allowed", "Program is not allowed"),
+        RunError::InvalidWorkingDirectory => (
+            "invalid_working_directory",
+            "Working directory is outside the workspace or unavailable",
+        ),
+        RunError::Timeout => ("timeout", "Process exceeded its configured timeout"),
+        RunError::OutputLimitExceeded => (
+            "output_limit_exceeded",
+            "Process exceeded its combined output limit",
+        ),
+        RunError::Terminated => ("terminated", "Process terminated without an exit code"),
+        RunError::Unknown(unknown) => {
+            return execution_failed(&unknown.code, "Process provider returned an unknown error");
+        }
+    };
+    execution_failed(reason_code, message)
+}
+
+fn execution_failed(reason_code: &str, message: &str) -> ExecuteError {
+    ExecuteError::ExecutionFailed {
+        payload: ExecuteErrorExecutionFailedPayload {
+            reason_code: reason_code.to_owned(),
+            message: message.to_owned(),
+            details_json: "{}".to_owned(),
+        },
+    }
+}
+
+fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
+    RuntimeFailure::InvalidResolvedPlan {
+        detail: detail.into(),
+    }
+}

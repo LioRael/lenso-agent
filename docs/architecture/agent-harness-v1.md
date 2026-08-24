@@ -16,7 +16,8 @@ agent-cli
        |- one lenso.agent.model@1 -> openai-compatible-model
        |    `- one lenso.secrets@1 -> env-secrets
        |- one lenso.agent.tools@1 -> tool-runtime
-       |    `- many lenso.agent.tool-provider@1 -> selected workspace providers
+       |    `- many lenso.agent.tool-provider@1 -> selected Tool providers
+       |         `- process-tools -> one lenso.agent.process@1 -> native-process
        |- one lenso.agent.prompt@1 -> prompt-runtime
        |    `- many lenso.agent.prompt-provider@1 -> prompt plugins
        `- one lenso.agent.session@1 -> session-log
@@ -80,8 +81,11 @@ The App author selects all trusted packages and explicitly configures the
 remote model endpoint and allowed workspace root. Workspace Tool Providers
 normalize paths, reject symlink/root escapes and bounded-size violations, and
 own their final access decisions. The opt-in mutation Provider adds only
-create-absent and unique exact-edit semantics. The Agent Loop cannot bypass the
-Tool Runtime or acquire undeclared Tool handles.
+create-absent and unique exact-edit semantics. The higher-authority local
+process Provider owns final executable, cwd, environment, timeout, argument,
+output, and process-lifecycle decisions; the Process Tool Module only projects
+that bound Capability to the Model. The Agent Loop cannot bypass the Tool
+Runtime or acquire undeclared handles.
 
 Model credentials resolve through `lenso.secrets@1`. They never enter model
 messages, Session payloads, errors, configuration, or diagnostics. Because
@@ -109,11 +113,15 @@ make both the workspace root and model endpoint visible before execution.
    failure event.
 9. The opt-in coding fixture proves atomic create, unique exact edit, and
    read-back; removing the mutation Provider restores the readonly graph.
+10. The local-coding fixture proves edit, structured `cargo check`, and
+    read-back. Provider tests prove nonzero exit capture, policy rejection,
+    timeout, output overflow, cancellation, descendant cleanup, and root loss.
+    Removing both Process Modules restores the coding graph.
 
 ## Deferred
 
 Web UI, approval workflows, marketplace Skill installation, live Skill
 watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
-shell/process execution, Creator Mode, hostile-code isolation, multi-lane
+shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, and App Generation are separate slices.

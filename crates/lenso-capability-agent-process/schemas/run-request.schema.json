@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["program", "arguments", "cwd", "timeout_ms"],
+  "properties": {
+    "program": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "arguments": {
+      "type": "array",
+      "maxItems": 128,
+      "items": { "type": "string", "maxLength": 16384 }
+    },
+    "cwd": { "type": "string", "maxLength": 4096 },
+    "timeout_ms": { "type": "string", "format": "uint64" }
+  },
+  "additionalProperties": false
+}

@@ -8,7 +8,8 @@ Capability sources, native Module implementations, composable Prompt/Skill
 contributions, a CLI Runner, and the
 checked `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
 `openai-codex-direct`, opt-in `openai-codex-direct-skills`, and opt-in
-`openai-codex-direct-coding` App Compositions.
+`openai-codex-direct-coding` App Compositions, plus the higher-authority
+`headless-local-coding` and `openai-codex-direct-local-coding` Compositions.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
 protocol, and optional Module packages. The OpenAI-compatible profile pins the
@@ -46,6 +47,10 @@ completed-turn history from the Session log.
   cancellation, limits, and provider-error translation.
 - **Tool Provider Modules** own their Tool definitions, resource policy, final
   authorization, execution, and Domain Errors.
+- **Process Provider Modules** own the authoritative executable catalog,
+  workspace-rooted cwd policy, environment projection, subprocess lifecycle,
+  output and timeout bounds, and process-group cleanup. The Process Tool
+  Provider owns only the Agent-facing projection.
 - **CLI Module** owns terminal input, streamed rendering, local cancellation,
   and Session selection.
 - **App Composition** owns exact Module Instances, configuration, bindings,
@@ -76,9 +81,10 @@ completed-turn history from the Session log.
 - Default Tool access is read-only and rooted in an explicitly selected
   workspace. Workspace mutation exists only in explicitly selected coding
   Compositions.
-- The initial coding profile has create-only and unique exact-edit Tools, but no
-  generic overwrite, delete, shell/process execution, approval workflow,
-  subagents, automatic compaction, or runtime code replacement.
+- The coding profile has create-only and unique exact-edit Tools. Process
+  execution exists only in the higher-authority local-coding profile, with no
+  shell-string parsing, generic overwrite/delete, approval workflow, subagents,
+  automatic compaction, runtime code replacement, or hostile-code isolation.
 
 ## First executable slice
 
@@ -135,9 +141,20 @@ the independent `lenso.agent.workspace-edit` Tool Provider. It atomically
 creates absent UTF-8 files and performs one unique exact replacement in an
 existing UTF-8 file. Existing readonly Compositions remain unchanged.
 
+The opt-in `headless-local-coding` and
+`openai-codex-direct-local-coding` Compositions add
+`lenso.agent.process-tools` and `lenso.agent.process.native`. The Tool projection
+requires exactly one private `lenso.agent.process@1` provider. That provider
+resolves only Composition-allowed executable basenames, preserves shim names,
+rechecks executable identity, contains cwd below the workspace, clears and
+selectively projects environment variables, bounds arguments/time/output, and
+kills the whole Unix process group on timeout, cancellation, output overflow,
+or dropped invocation.
+
 ## Deferred direction
 
-Web UI, approval policy, marketplace Skill installation, live Skill watching,
+Web UI, approval policy, hostile-code sandboxing, marketplace Skill
+installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, and App Generation
 require their own product slices.

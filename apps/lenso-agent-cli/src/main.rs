@@ -15,6 +15,8 @@ use lenso_agent_loop_module::AgentLoopFactory;
 use lenso_agent_model_fixture_module::FixtureModelFactory;
 use lenso_agent_model_openai_codex_direct_module::OpenAiCodexDirectModelFactory;
 use lenso_agent_model_openai_compatible_module::OpenAiCompatibleModelFactory;
+use lenso_agent_process_native_module::NativeProcessFactory;
+use lenso_agent_process_tools_module::ProcessToolsFactory;
 use lenso_agent_prompt_filesystem_module::FilesystemPromptFactory;
 use lenso_agent_prompt_module::PromptFactory;
 use lenso_agent_prompt_static_module::StaticPromptFactory;
@@ -85,6 +87,8 @@ async fn run() -> Result<(), String> {
         .with_factory(FilesystemPromptFactory)
         .with_factory(PromptFactory)
         .with_factory(StaticPromptFactory)
+        .with_factory(NativeProcessFactory)
+        .with_factory(ProcessToolsFactory)
         .with_factory(FilesystemSkillsFactory)
         .with_factory(ToolsFactory)
         .with_factory(WorkspaceEditFactory)
