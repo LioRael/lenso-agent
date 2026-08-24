@@ -41,7 +41,7 @@ fs2 = "0.4"
 futures = "0.3"
 lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be02927a185ebdbb463038ba79d8c6ebbea771f1" }
 lenso-app-plan = "0.1.1"
-lenso-contract-codegen = "0.5.1"
+lenso-contract-codegen = "0.5.2"
 lenso-contract-runtime = "0.1.0"
 lenso-kernel = "0.1.6"
 lenso-native-adapter = "0.1.2"

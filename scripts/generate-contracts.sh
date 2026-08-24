@@ -18,6 +18,6 @@ contract_roots=(
 for contract_root in "${contract_roots[@]}"; do
   "${contract_codegen}" generate \
     "${contract_root}/capability.json" \
-    "${contract_root}/src/generated.rs" \
-    "${contract_root}/generated/bindings.ts"
+    --rust \
+    "${contract_root}/src/generated.rs"
 done

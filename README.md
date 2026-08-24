@@ -9,7 +9,8 @@ owns:
 - the V1 product context and architecture decision;
 - portable Agent, Model, Tools, Tool Provider, and Session Capability sources;
 - portable Prompt aggregate and Prompt Provider Capability sources;
-- generated Rust and TypeScript bindings derived from those sources;
+- generated Rust bindings derived from those sources, with Bun projections
+  distributed by `@lenso/bun`;
 - validation commands that keep generated artifacts fresh;
 - deterministic, OpenAI-compatible, and experimental direct ChatGPT
   subscription Model Modules; Tool Runtime; Prompt aggregation; static
