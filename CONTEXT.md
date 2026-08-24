@@ -28,6 +28,12 @@ request/stream operation kinds into the Plan. The CLI now uses the generic
 control plane to admit and lock reviewed passive releases plus executable
 contributions registered in a product-owned Plugin Profile Catalog, resolve and
 stage one initial App Generation, and pin each Turn with a Generation lease.
+Before the Ready Gate, the Host content-addresses the canonical Generation Spec
+under `.lenso/plugins/generations`; the Turn lease injects that digest into the
+root Invocation Context and the Agent Loop records it in `turn_started` Session
+events. Resumed Sessions can therefore cross Generations without losing which
+immutable graph owned each Turn.
+
 The Catalog currently contains one exact native Tool Provider append-to-`many`
 entry, one restricted fixture Model Provider replace-`one` entry, and one
 experimental Codex Direct replacement set. The Codex set closes exact Model and
@@ -36,7 +42,7 @@ Agent model configuration. Replacement requires the exact base edge and
 allowlisted displaced package; removal restores the base Plan for the next
 Generation. The non-native Adapter crates remain unselected. Package presence
 or Catalog extensibility is not a claim that arbitrary executable Plugins,
-permissions, general provider replacement, Generation provenance, or
+permissions, general provider replacement, provenance inspection/retention, or
 non-native execution classes are ready.
 
 ## Product outcome
@@ -80,7 +86,8 @@ completed-turn history from the Session log.
   execution classes, and admission limits.
 - **Agent Host control plane** owns the content-addressed Plugin Store, exact
   Host Build Manifest, Host Execution Policy, immutable App Generation
-  resolution, Ready Gate, Turn routing lease, and Generation resource drain.
+  resolution and Spec records, Ready Gate, Turn routing lease, and Generation
+  resource drain.
 - **Kernel** remains product-neutral and owns only its accepted portable runtime
   mechanisms.
 
@@ -89,7 +96,8 @@ completed-turn history from the Session log.
 - The Kernel receives one immutable Resolved App Plan. The Harness never asks a
   running Kernel to discover, install, rebind, or hot-load a plugin.
 - Every Agent Turn is admitted through a lease for one exact active App
-  Generation. Dropping the lease is required before Generation resource drain.
+  Generation. Its `turn_started` Session event records that Generation Spec
+  digest. Dropping the lease is required before Generation resource drain.
 - User-facing Agent plugins are ordinary packages containing one or more
   Modules that provide declared Agent Capabilities.
 - Passive Plugin Bundle admission never authorizes executable contributions.
@@ -190,7 +198,7 @@ ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, Plugin upgrade,
-Session Generation provenance, durable
-cross-process fencing, and overlap/rollback replacement require their own
-product slices. Replacement must stage a new Resolved App Plan and App
-Generation above the Kernel rather than mutate the running graph.
+Generation provenance inspection/retention, durable cross-process fencing, and
+overlap/rollback replacement require their own product slices. Replacement
+must stage a new Resolved App Plan and App Generation above the Kernel rather
+than mutate the running graph.

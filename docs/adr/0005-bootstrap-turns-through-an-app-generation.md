@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-24
 - Relates to: Lenso ADR 0065
+- Refined by: ADR 0011
 
 ## Context
 
@@ -42,8 +43,9 @@ resources after the Turn lease is released.
 - Wasm Component, QuickJS, and native-dylib packages are transitive preview
   dependencies but are absent from the Host Execution Policy and Adapter
   catalog.
-- Overlap replacement, rollback, durable cross-process fencing, and recording
-  Generation provenance in Session events require later acceptance slices.
+- ADR 0011 records Generation provenance in Session events. Overlap
+  replacement, rollback, durable cross-process fencing, provenance inspection,
+  and retention require later acceptance slices.
 
 ## Rejected alternatives
 

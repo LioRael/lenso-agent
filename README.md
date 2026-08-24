@@ -42,7 +42,11 @@ the validated base Plan plus an empty Plugin lock into one exact initial App
 Generation. The already-resolved base Plan, including explicit Provider order,
 remains authoritative in the Generation spec. Each Agent Turn holds a
 Generation lease until its stream reaches a terminal outcome; host shutdown
-then drains all Generation-owned resources.
+then drains all Generation-owned resources. Before the Ready Gate, the Host
+stores the canonical Generation Spec by digest under
+`.lenso/plugins/generations`. The lease injects that digest into the root Agent
+Invocation Context, and each `turn_started` Session event records it without
+making provenance a user-supplied request field.
 
 The Host can admit reviewed passive Plugin releases plus executable profiles
 registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
@@ -57,9 +61,9 @@ Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
-rollback, durable cross-process fencing, Generation provenance in Session
-events, and product acceptance of the preview Wasm Component, QuickJS, and
-native-dylib Adapters remain deferred.
+rollback, durable cross-process fencing, Generation provenance
+inspection/retention, and product acceptance of the preview Wasm Component,
+QuickJS, and native-dylib Adapters remain deferred.
 
 ## Install and remove a reviewed Plugin release
 
@@ -146,6 +150,9 @@ The CLI writes the generated Session ID to stderr. Resume the durable Session
 after a process restart with `--session <id>`. The Agent Loop streams text as
 the selected Model produces it, supports direct answers and bounded sequential
 Tool calls, and rebuilds a bounded completed-turn history for resumed Sessions.
+Every Turn records the leased `generation_spec_digest`; changing the active
+Plugin Set before resuming produces a new digest while preserving the earlier
+content-addressed Generation Spec and Session events.
 
 ## Compose Prompt and Skill plugins
 

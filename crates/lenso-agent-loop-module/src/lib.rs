@@ -44,6 +44,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub const PACKAGE_ID: &str = "lenso.agent.loop";
 /// Exact linked package version.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Host-issued Invocation Context key for the leased App Generation identity.
+pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -308,6 +310,7 @@ async fn run_turn(
     request: RunTurnRequest,
     sender: &mut mpsc::Sender<AgentChannelItem>,
 ) -> Result<(), AgentInvocationError> {
+    let generation_spec_digest = generation_spec_digest(context)?;
     let opened = clients
         .session
         .open_with_context(
@@ -337,7 +340,10 @@ async fn run_turn(
     initial_events.push(session_event(
         AppendRequestEventsItemKind::TurnStarted,
         Some(&turn_id),
-        &serde_json::json!({"input": request.input}),
+        &serde_json::json!({
+            "generation_spec_digest": generation_spec_digest,
+            "input": request.input
+        }),
     )?);
     revision = append_events(clients, context, &session_id, revision, initial_events).await?;
     messages.push(user_message(request.input));
@@ -357,6 +363,26 @@ async fn run_turn(
         record_turn_failure(clients, context, &session_id, &turn_id, revision, error).await;
     }
     result
+}
+
+fn generation_spec_digest(context: &InvocationContext) -> Result<&str, AgentInvocationError> {
+    let digest = context
+        .extension(GENERATION_SPEC_DIGEST_EXTENSION)
+        .and_then(|value| std::str::from_utf8(value).ok())
+        .filter(|value| {
+            value.strip_prefix("sha256:").is_some_and(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+        })
+        .ok_or_else(|| {
+            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                detail: "Agent Turn is missing canonical Generation provenance".to_owned(),
+            })
+        })?;
+    Ok(digest)
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -996,5 +1022,25 @@ mod tests {
         let stream = AgentTurnStream::new(receiver, cancellation.clone());
         stream.cancel();
         assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn generation_provenance_requires_one_canonical_host_extension() {
+        let missing = InvocationContext::new(1, None, CancellationToken::new());
+        assert!(generation_spec_digest(&missing).is_err());
+
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let present = InvocationContext::new(2, None, CancellationToken::new())
+            .with_extension(GENERATION_SPEC_DIGEST_EXTENSION, digest.as_bytes().to_vec())
+            .unwrap();
+        assert_eq!(generation_spec_digest(&present).unwrap(), digest);
+
+        let uppercase = InvocationContext::new(3, None, CancellationToken::new())
+            .with_extension(
+                GENERATION_SPEC_DIGEST_EXTENSION,
+                format!("sha256:{}", "A".repeat(64)).into_bytes(),
+            )
+            .unwrap();
+        assert!(generation_spec_digest(&uppercase).is_err());
     }
 }
