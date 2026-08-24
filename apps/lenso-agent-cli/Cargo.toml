@@ -18,6 +18,8 @@ lenso-agent-model-openai-codex-direct-module = { path = "../../crates/lenso-agen
 lenso-agent-prompt-filesystem-module = { path = "../../crates/lenso-agent-prompt-filesystem-module" }
 lenso-agent-prompt-module = { path = "../../crates/lenso-agent-prompt-module" }
 lenso-agent-prompt-static-module = { path = "../../crates/lenso-agent-prompt-static-module" }
+lenso-agent-process-native-module = { path = "../../crates/lenso-agent-process-native-module" }
+lenso-agent-process-tools-module = { path = "../../crates/lenso-agent-process-tools-module" }
 lenso-agent-session-file-module = { path = "../../crates/lenso-agent-session-file-module" }
 lenso-agent-skills-filesystem-module = { path = "../../crates/lenso-agent-skills-filesystem-module" }
 lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }

@@ -39,6 +39,17 @@ reject malformed or schema-invalid `arguments_json` as `invalid_arguments`.
 The V1 workspace provider is read-only and must reject paths that resolve
 outside its configured workspace root.
 
+## Process boundary
+
+`lenso.agent.process@1` is a private native request Capability between the
+Agent-facing Process Tool projection and one explicitly bound process Provider.
+`catalog` returns the provider-authorized program names. `run` accepts one
+program name, an argument array, workspace-relative cwd, and timeout, then
+returns exit code plus bounded stdout/stderr. Nonzero exit is a successful
+process observation; policy rejection, timeout, output overflow, and signal
+termination are Domain Errors. Caller cancellation remains Kernel
+`RuntimeFailure::Cancelled` and triggers process-group cleanup.
+
 ## Prompt boundary
 
 `lenso.agent.prompt@1` is the Agent-facing aggregate. It fans out to zero or

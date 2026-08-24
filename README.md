@@ -7,17 +7,18 @@ The project now includes its first executable `headless-readonly` slice. It
 owns:
 
 - the V1 product context and architecture decision;
-- portable Agent, Model, Tools, Tool Provider, and Session Capability sources;
+- portable Agent, Model, Tools, Tool Provider, and Session Capability sources,
+  plus the private structured Process Capability;
 - portable Prompt aggregate and Prompt Provider Capability sources;
 - generated Rust bindings derived from those sources, with Bun projections
   distributed by `@lenso/bun`;
 - validation commands that keep generated artifacts fresh;
 - deterministic, OpenAI-compatible, and experimental direct ChatGPT
   subscription Model Modules; Tool Runtime; Prompt aggregation; static
-  Prompt/Skill contributions; workspace-read, opt-in workspace-edit, and
-  progressive-disclosure filesystem Skills; file Session; Agent Loop; and CLI
-  Modules; and
-- six checked App Compositions plus their canonical Resolved App Plans.
+  Prompt/Skill contributions; workspace-read, opt-in workspace-edit, structured
+  process execution, and progressive-disclosure filesystem Skills; file
+  Session; Agent Loop; and CLI Modules; and
+- eight checked App Compositions plus their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
@@ -165,16 +166,19 @@ and explicit bindings:
   `workspace.search`, `workspace.read_text`, and the filesystem Skills
   provider;
 - `coding` adds the separate create-only/exact-edit workspace mutation Provider;
-  process execution remains a later independently removable Provider; and
+- `local-coding` adds independently removable structured process Tools and a
+  native process Provider to `coding`; and
 - `automation` selects explicit domain Providers and does not receive raw
   workspace or process access by default.
 
 The existing readonly Compositions still expose no generic shell, write, edit,
 delete, browser, or network Tool. The two opt-in coding Compositions add only
-`workspace.write_text` and `workspace.edit_text`; they do not add overwrite,
-delete, shell, process, browser, or network authority. Removing a Provider and
-its bindings removes its entire Tool surface without changing the Agent Loop or
-Kernel. See [ADR-0004](docs/adr/0004-use-minimal-composed-tool-profiles-and-progressive-skills.md).
+`workspace.write_text` and `workspace.edit_text`. The two higher-authority
+local-coding Compositions additionally expose `process.exec` with an explicit
+program catalog, workspace-relative cwd, cleared-and-allowlisted environment,
+timeout, argument, and combined-output limits. Removing Providers and bindings
+removes those Tool surfaces without changing the Agent Loop or Kernel. See
+[ADR-0004](docs/adr/0004-use-minimal-composed-tool-profiles-and-progressive-skills.md).
 
 ## Run the opt-in coding slice
 
@@ -197,6 +201,32 @@ For ChatGPT Subscription, use
 explicitly mutating: run it only with a reviewed workspace root. Tool arguments
 are retained in the durable Session trajectory, so do not use mutation Tools
 for credentials or other secret content.
+
+## Run the opt-in local coding slice
+
+The deterministic local-coding Composition proves edit, `cargo check`, and
+read-back through separate workspace and process providers:
+
+```sh
+lenso check --project lenso.local-coding.json \
+  --execution-class lenso.native-rust@1
+lenso resolve --project lenso.local-coding.json \
+  --execution-class lenso.native-rust@1 \
+  --output composition/headless-local-coding/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan composition/headless-local-coding/resolved-plan.json \
+  --prompt "Edit and validate the workspace project."
+```
+
+For ChatGPT Subscription, use
+`lenso.openai-codex-direct-local-coding.json` and its matching resolved Plan.
+That ChatGPT profile allows `cargo`, `git`, and `rg`, but it is deliberately not
+a hostile-code sandbox: Cargo build scripts, tests, Git configuration, and
+allowed programs can execute code or perform effects available to the host
+user. Use it only with reviewed code and a reviewed workspace. There is no
+shell-string parsing, but that alone is not a security boundary. Command
+arguments and output are durable Session trajectory facts and must not contain
+secrets.
 
 ## Validate
 

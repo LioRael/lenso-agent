@@ -144,6 +144,9 @@ impl FixtureModel {
         if current_user == "Create and edit a workspace note." {
             return workspace_mutation_response(request, &tool_results);
         }
+        if current_user == "Edit and validate the workspace project." {
+            return local_coding_response(request, &tool_results);
+        }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
         }
@@ -399,6 +402,64 @@ fn mutation_response() -> Vec<CompleteResponse> {
             "",
             "{}",
             "32",
+            "12",
+        ),
+    ]
+}
+
+fn local_coding_response(
+    request: &CompleteRequest,
+    tool_results: &[&CompleteRequestMessagesItem],
+) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+    let has_coding_tools = ["workspace.edit_text", "process.exec", "workspace.read_text"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    if !has_coding_tools {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-local-coding-edit",
+            "workspace.edit_text",
+            r#"{"path":"src/lib.rs","old_text":"pub fn value() -> u32 { 1 }","new_text":"pub fn value() -> u32 { 2 }"}"#,
+        )),
+        [edited] if edited.content == "edited src/lib.rs" => Ok(named_tool_request(
+            "call-local-coding-check",
+            "process.exec",
+            r#"{"program":"cargo","arguments":["check","--quiet"]}"#,
+        )),
+        [_, checked] if checked.content.starts_with("exit_code: 0\n") => Ok(named_tool_request(
+            "call-local-coding-read",
+            "workspace.read_text",
+            r#"{"path":"src/lib.rs"}"#,
+        )),
+        [_, _, document] if document.content.contains("pub fn value() -> u32 { 2 }") => {
+            Ok(local_coding_final_response())
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn local_coding_final_response() -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            "Local coding result: cargo check passed.",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "48",
             "12",
         ),
     ]

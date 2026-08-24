@@ -26,7 +26,9 @@ The initial profile vocabulary is:
 - `readonly`: rooted observation Providers, including bounded workspace
   listing, literal text search, file reads, and Skill documents/resources;
 - `coding`: `readonly` plus the separately removable create-only/exact-edit
-  workspace mutation Provider; process execution remains a later Provider; and
+  workspace mutation Provider;
+- `local-coding`: `coding` plus a Process Tool projection and exactly one
+  explicitly configured Process Capability Provider; and
 - `automation`: explicitly selected typed domain Providers, without raw
   workspace or process authority by default.
 
@@ -34,6 +36,13 @@ The Agent Loop and Tool Runtime remain profile-agnostic. The immutable Resolved
 App Plan is the authority for the selected Tool surface. `tools.search` is
 deferred until real Compositions contain enough Tools to justify dynamic Tool
 schema discovery.
+
+`process.exec` is structured as program, argument array, relative cwd, and
+timeout rather than a shell command string. The native Process Provider owns
+the allowed-program catalog and final host authorization; the Tool projection
+cannot add programs. This avoids shell parsing but does not claim hostile-code
+isolation: an allowed compiler, package manager, test runner, or VCS can still
+execute project or configured code with the host user's authority.
 
 The filesystem Skills Module provides both
 `lenso.agent.prompt-provider@1` and `lenso.agent.tool-provider@1`. During
@@ -61,3 +70,6 @@ and local absolute paths are excluded.
   Tool Provider.
 - Removing the filesystem Skills Module removes both its Prompt catalog and all
   `skills.*` Tools without a Kernel or Agent Loop branch.
+- Removing both Process Modules and their private Capability binding restores
+  the coding graph without a Kernel, Runtime Driver, or Execution Adapter
+  branch.

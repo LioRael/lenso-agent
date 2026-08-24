@@ -280,6 +280,66 @@
           }
         ],
         "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "process-tools",
+        "package": "lenso.agent.process-tools",
+        "configuration": {
+          "default_timeout_ms": 120000
+        },
+        "configuration_schema": "crates/lenso-agent-process-tools-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": ["catalog", "execute"],
+            "admission": {
+              "queue_capacity": 2,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "requires": [
+          {
+            "capability_id": "lenso.agent.process@1",
+            "descriptor_version": "1.0.0",
+            "cardinality": "one"
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "native-process",
+        "package": "lenso.agent.process.native",
+        "configuration": {
+          "root": ".",
+          "allowed_programs": ["cargo"],
+          "environment_allowlist": [
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL"
+          ],
+          "max_timeout_ms": 600000,
+          "max_output_bytes": 262144,
+          "max_argument_bytes": 131072
+        },
+        "configuration_schema": "crates/lenso-agent-process-native-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.process@1",
+            "descriptor_version": "1.0.0",
+            "operations": ["catalog", "run"],
+            "admission": {
+              "queue_capacity": 1,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
       }
     ],
     "bindings": [
@@ -336,6 +396,18 @@
         "capability_id": "lenso.agent.tool-provider@1",
         "descriptor_version": "1.0.0",
         "provider": "workspace-edit"
+      },
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "process-tools"
+      },
+      {
+        "consumer": "process-tools",
+        "capability_id": "lenso.agent.process@1",
+        "descriptor_version": "1.0.0",
+        "provider": "native-process"
       }
     ],
     "execution_lanes": [
@@ -416,6 +488,22 @@
       "version": "0.1.0",
       "manifest": "Cargo.toml",
       "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.process-tools": {
+      "name": "lenso.agent.process-tools",
+      "package_name": "lenso-agent-process-tools-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.process.native": {
+      "name": "lenso.agent.process.native",
+      "package_name": "lenso-agent-process-native-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
     }
   },
   "contracts": [
@@ -460,6 +548,12 @@
       "descriptor_version": "1.1.0",
       "descriptor": "crates/lenso-capability-agent-session/capability.json",
       "rust": "crates/lenso-capability-agent-session/src/generated.rs"
+    },
+    {
+      "capability_id": "lenso.agent.process@1",
+      "descriptor_version": "1.0.0",
+      "descriptor": "crates/lenso-capability-agent-process/capability.json",
+      "rust": "crates/lenso-capability-agent-process/src/generated.rs"
     }
   ],
   "profiles": {}

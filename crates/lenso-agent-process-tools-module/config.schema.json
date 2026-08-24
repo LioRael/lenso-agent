@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default_timeout_ms"],
+  "properties": {
+    "default_timeout_ms": { "type": "integer" }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "lenso.agent.process@1",
+  "version": "1.0.0",
+  "portable": false,
+  "operations": [
+    {
+      "name": "catalog",
+      "interaction": "request",
+      "request_schema": "schemas/catalog-request.schema.json",
+      "response_schema": "schemas/catalog-response.schema.json",
+      "domain_error_schema": "schemas/catalog-error.schema.json"
+    },
+    {
+      "name": "run",
+      "interaction": "request",
+      "request_schema": "schemas/run-request.schema.json",
+      "response_schema": "schemas/run-response.schema.json",
+      "domain_error_schema": "schemas/run-error.schema.json"
+    }
+  ]
+}
