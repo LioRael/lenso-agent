@@ -138,6 +138,9 @@ impl FixtureModel {
         if current_user == "Use a Skill resource to review Rust." {
             return resource_skill_response(request, &tool_results);
         }
+        if current_user == "Navigate the workspace to find the navigation target." {
+            return workspace_navigation_response(request, &tool_results);
+        }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
         }
@@ -264,13 +267,78 @@ fn readonly_skill_tool_profile(request: &CompleteRequest) -> bool {
     request.tools.iter().all(|tool| {
         matches!(
             tool.name.as_str(),
-            "workspace.read_text"
+            "workspace.list"
+                | "workspace.search"
+                | "workspace.read_text"
                 | "skills.list"
                 | "skills.read"
                 | "skills.list_resources"
                 | "skills.read_resource"
         )
     })
+}
+
+fn workspace_navigation_response(
+    request: &CompleteRequest,
+    tool_results: &[&CompleteRequestMessagesItem],
+) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+    let has_workspace_tools = ["workspace.list", "workspace.search", "workspace.read_text"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    if !has_workspace_tools {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-workspace-list",
+            "workspace.list",
+            "{}",
+        )),
+        [listing] if listing.content.contains("docs") => Ok(named_tool_request(
+            "call-workspace-search",
+            "workspace.search",
+            r#"{"query":"NAVIGATION_TARGET"}"#,
+        )),
+        [_, search] if search.content.contains("docs/guide.md") => Ok(named_tool_request(
+            "call-workspace-read",
+            "workspace.read_text",
+            r#"{"path":"docs/guide.md"}"#,
+        )),
+        [_, _, document] if document.content.contains("NAVIGATION_TARGET") => {
+            let first_line = document
+                .content
+                .lines()
+                .next()
+                .unwrap_or("The target is empty.");
+            Ok(navigation_response(first_line))
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn navigation_response(first_line: &str) -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            format!("Navigation result: {first_line}"),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "32",
+            "12",
+        ),
+    ]
 }
 
 fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<CompleteResponse> {

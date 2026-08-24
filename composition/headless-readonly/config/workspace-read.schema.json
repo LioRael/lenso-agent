@@ -2,9 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["root", "max_output_bytes"],
+  "required": [
+    "root",
+    "max_output_bytes",
+    "max_list_entries",
+    "max_search_entries",
+    "max_search_bytes",
+    "max_search_matches"
+  ],
   "properties": {
     "root": { "type": "string" },
-    "max_output_bytes": { "type": "integer" }
+    "max_output_bytes": { "type": "integer" },
+    "max_list_entries": { "type": "integer" },
+    "max_search_entries": { "type": "integer" },
+    "max_search_bytes": { "type": "integer" },
+    "max_search_matches": { "type": "integer" }
   }
 }

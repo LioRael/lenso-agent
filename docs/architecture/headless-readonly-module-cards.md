@@ -11,23 +11,26 @@ Status: implementation baseline for the first executable slice.
 - **Requires:** none.
 - **Configuration:** exact fixture model name.
 - **Lifecycle/resources:** endpoint-only; no durable state or managed work.
-- **First behavior:** deterministically proves direct answers, one or two
-  sequential `workspace.read_text` calls, and resumed-turn context.
+- **First behavior:** deterministically proves direct answers, sequential
+  workspace navigation/read calls, and resumed-turn context.
 
 ## `lenso.agent.workspace-read`
 
 - **Deletion boundary:** removes read-only workspace Tool definitions and file
   access.
-- **Owned facts:** workspace root, allowed Tool names, path containment policy,
-  file and response limits.
+- **Owned facts:** workspace root, allowed Tool names, path containment and
+  hidden-entry policy, traversal/search budgets, and response limits.
 - **Provides:** `lenso.agent.tool-provider@1` (`catalog`, `execute`).
 - **Requires:** none.
-- **Configuration:** canonical workspace root and maximum output bytes.
-- **Final authorization:** resolves and canonicalizes every requested path,
-  rejects traversal/symlink escape, directories, and oversized output.
+- **Configuration:** canonical workspace root; maximum list/search entries,
+  scanned bytes, search matches, and output bytes.
+- **Final authorization:** validates every requested path component, rejects
+  traversal and every encountered symlink or special entry, omits hidden
+  entries, and skips non-UTF-8 search inputs.
 - **Lifecycle/resources:** `prepare` verifies that the root exists and is a
   directory; no background work.
-- **First behavior:** reads `README.md` as UTF-8 text.
+- **First behavior:** lists one directory, recursively performs a bounded
+  case-sensitive literal search, and reads one UTF-8 text file.
 
 ## `lenso.agent.tools`
 
@@ -39,7 +42,8 @@ Status: implementation baseline for the first executable slice.
 - **Configuration:** empty.
 - **Lifecycle/resources:** `activate` obtains only explicitly bound Provider
   handles and builds the catalog; no discovery or global registry.
-- **First behavior:** exposes and dispatches `workspace.read_text`.
+- **First behavior:** exposes and dispatches `workspace.list`,
+  `workspace.search`, and `workspace.read_text`.
 
 ## `lenso.agent.prompt.static`
 
