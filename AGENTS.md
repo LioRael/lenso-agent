@@ -16,7 +16,8 @@ contracts.
   process or `node:vm` execution is a security sandbox. Untrusted code requires
   a reviewed Wasm or isolated-process Adapter.
 - Capability Descriptors and package-local Schemas are the source of truth.
-  Never hand-edit generated Rust or TypeScript bindings.
+  Native Capability crates own only generated Rust bindings; the supported Bun
+  SDK owns generated TypeScript bindings. Never hand-edit either projection.
 - Use `/Users/leosouthey/Projects/framework/.lenso-tools/bin/lenso-cargo` for
   local Cargo commands. Public documentation must use portable `cargo`
   commands without local absolute paths.
