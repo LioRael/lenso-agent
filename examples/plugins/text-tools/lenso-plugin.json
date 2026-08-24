@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "plugin_id": "example.text-tools",
+  "release_version": "1.0.0",
+  "artifacts": [],
+  "module_contributions": [
+    {
+      "id": "text-tools",
+      "package_id": "lenso.agent.text-tools",
+      "configuration_schema_digest": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
+      "provides": [
+        {
+          "capability_id": "lenso.agent.tool-provider@1",
+          "descriptor_version": "1.0.0",
+          "descriptor_digest": "sha256:b726d7dd7bffaf07e48e0a55013f8d1b55d29d613f22b4e41e693fafd76c6fb4",
+          "request_operations": ["catalog", "execute"]
+        }
+      ],
+      "requires": [],
+      "implementations": [
+        {
+          "id": "native",
+          "artifact": null,
+          "built_in_factory": "lenso.agent.text-tools@0.1.0",
+          "entrypoint": "default",
+          "execution_class": "lenso.native-rust@1",
+          "targets": [
+            "aarch64-linux",
+            "aarch64-macos",
+            "x86_64-linux",
+            "x86_64-macos"
+          ],
+          "profiles": ["agent-tool-provider-v1"],
+          "support_channel": "stable",
+          "trust": "trusted"
+        }
+      ],
+      "permission_request_ids": [],
+      "state": null
+    }
+  ],
+  "data_contributions": [],
+  "permission_requests": [],
+  "features": [],
+  "binding_templates": [],
+  "product_metadata": []
+}

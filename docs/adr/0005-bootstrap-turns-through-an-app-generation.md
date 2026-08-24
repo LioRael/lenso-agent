@@ -37,8 +37,8 @@ resources after the Turn lease is released.
 - Kernel remains unaware of Plugin identity, stores, policy, and Generations.
 - The current Compositions behave identically after deterministic control-plane
   resolution.
-- The Store may contain reviewed passive artifact/metadata releases, while
-  executable contributions remain rejected by Host admission policy.
+- The initial passive-only admission policy is superseded by ADR 0007's one
+  exact native Tool Provider profile.
 - Wasm Component, QuickJS, and native-dylib packages are transitive preview
   dependencies but are absent from the Host Execution Policy and Adapter
   catalog.

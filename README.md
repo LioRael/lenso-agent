@@ -29,7 +29,7 @@ before boot.
 The host currently uses released `lenso-app-plan 0.1.2` and
 `lenso-kernel 0.1.7`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`b442dfbbb66d5a4480b28b2fa1e855f69718d1e8`, which contains the generic dynamic
+`25812bcbaf3b488d1a03f1864eb0130b53cadd93`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime.
 
@@ -43,20 +43,21 @@ remains authoritative in the Generation spec. Each Agent Turn holds a
 Generation lease until its stream reaches a terminal outcome; host shutdown
 then drains all Generation-owned resources.
 
-The Host can admit reviewed passive Plugin releases containing target-scoped
-artifacts and Product Metadata. It still selects only `lenso.native-rust@1` for
-executable Modules: releases containing Module, Data mount, permission, or
-binding contributions fail admission. Overlap replacement, rollback, durable
+The Host can admit reviewed passive Plugin releases and one narrow executable
+native Tool Provider profile. Executable contributions must select the exact
+linked `lenso.agent.text-tools@0.1.0` factory, expose only
+`lenso.agent.tool-provider@1`, and remain stateless and permission-free. Data
+mounts, permission requests, and binding templates fail admission. Overlap replacement, rollback, durable
 cross-process fencing, Generation provenance in Session events, and product
 acceptance of the preview Wasm Component, QuickJS, and native-dylib Adapters
 remain deferred.
 
-## Install a reviewed passive Plugin release
+## Install and remove a reviewed Plugin release
 
 A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
 declared by that Manifest. Admission rejects undeclared files, symlinks, digest
-or size mismatches, unsupported selected targets, executable contributions, and
-unbounded review evidence.
+or size mismatches, unsupported selected targets, unregistered executable
+factories, privileged or stateful contributions, and unbounded review evidence.
 
 ```sh
 cargo run -p lenso-agent-cli -- plugins install \
@@ -65,15 +66,28 @@ cargo run -p lenso-agent-cli -- plugins install \
   --evidence "review-ticket-42"
 
 cargo run -p lenso-agent-cli -- plugins status
+
+cargo run -p lenso-agent-cli -- plugins install \
+  --bundle examples/plugins/text-tools \
+  --evidence "review-ticket-77"
+
+cargo run -p lenso-agent-cli -- \
+  --prompt "Use text.uppercase to uppercase Lenso plugin."
+
+cargo run -p lenso-agent-cli -- plugins remove \
+  --plugin example.text-tools
 ```
 
 Admission stores immutable objects and its receipt under
 `.lenso/plugins/store`. Activation atomically writes
 `.lenso/plugins/active-set.json`, which embeds the exact `PluginSetLock`,
 Manifest authorities, and Admission Receipt digests. The next App start
-digest-verifies that closure and includes selected passive artifacts in its
-initial Generation. Reinstalling the same Plugin ID from a different immutable
-Manifest is rejected; upgrade and uninstall transitions remain future commands.
+digest-verifies that closure and includes selected artifacts and executable
+Instances in its initial Generation. The Harness owns one explicit attachment
+rule from approved Tool Provider Plugin Instances to the existing `tools`
+aggregator. Removing a Plugin atomically removes its Release, Instances, and
+derived bindings from the next Generation. Reinstalling the same Plugin ID from
+a different immutable Manifest remains an explicit future upgrade flow.
 
 ## Run the deterministic slice
 

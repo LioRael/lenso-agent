@@ -126,6 +126,9 @@ make both the workspace root and model endpoint visible before execution.
     read-back. Provider tests prove nonzero exit capture, policy rejection,
     timeout, output overflow, cancellation, descendant cleanup, and root loss.
     Removing both Process Modules restores the coding graph.
+11. Installing the reviewed native text Tool Bundle adds one Plugin-owned
+    Instance and derived `tools` binding; the Agent invokes `text.uppercase`.
+    Removing the Plugin deletes that Tool from the next Generation.
 
 ## Deferred
 
@@ -133,6 +136,6 @@ Web UI, approval workflows, marketplace Skill installation, live Skill
 watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
-placement, executable Plugin admission, Plugin upgrade/uninstall, Generation
+placement, additional executable Plugin profiles, Plugin upgrade, Generation
 provenance in Session, durable fencing, and overlap/rollback replacement are
 separate slices.

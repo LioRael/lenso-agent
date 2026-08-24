@@ -6,9 +6,20 @@ use std::{
 };
 
 use fs2::FileExt;
+use lenso_agent_text_tools_module::{
+    FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as TEXT_TOOLS_PACKAGE_ID,
+};
+use lenso_app_plan::{CapabilityBinding, ResolvedAppPlan};
+use lenso_capability_agent_tool_provider::{
+    CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
+    CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
+    DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
+    EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
+};
 use lenso_plugin_control_plane::{
-    AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedPlugin, PluginBundle,
-    PluginManifest, PluginSetLock, PluginStore,
+    AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedInstance, LockedPlugin,
+    ModuleContribution, PluginBundle, PluginManifest, PluginSetLock, PluginStore, SupportChannel,
+    TrustLevel, sha256_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +33,12 @@ const MAX_BUNDLE_FILES: usize = 4_096;
 const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH: usize = 32;
 const MAX_EVIDENCE_BYTES: usize = 4_096;
+const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
+const NATIVE_TOOL_PROFILE: &str = "agent-tool-provider-v1";
+const TOOL_AGGREGATOR_INSTANCE: &str = "tools";
+const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"type":"object"}"#;
+const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-tool-provider/capability.json");
 
 #[derive(Debug)]
 pub enum PluginCommand {
@@ -29,6 +46,10 @@ pub enum PluginCommand {
         bundle: PathBuf,
         evidence: String,
         features: Vec<String>,
+        root: PathBuf,
+    },
+    Remove {
+        plugin_id: String,
         root: PathBuf,
     },
     Status {
@@ -42,6 +63,7 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
     };
     match command.as_str() {
         "install" => parse_install(&arguments[1..]),
+        "remove" => parse_remove(&arguments[1..]),
         "status" => parse_status(&arguments[1..]),
         _ => Err(usage()),
     }
@@ -78,6 +100,12 @@ pub fn run(command: PluginCommand) -> Result<(), String> {
                 }
             }
             println!("plugin-set: {}", authority.lock.digest());
+            Ok(())
+        }
+        PluginCommand::Remove { plugin_id, root } => {
+            let digest = remove(&root, &plugin_id)?;
+            println!("removed: {plugin_id}");
+            println!("plugin-set: {digest}");
             Ok(())
         }
     }
@@ -121,8 +149,25 @@ fn parse_status(arguments: &[String]) -> Result<PluginCommand, String> {
     Ok(PluginCommand::Status { root })
 }
 
+fn parse_remove(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut plugin_id = None;
+    let mut root = default_root();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--plugin" => plugin_id = Some(arguments.next().ok_or_else(usage)?.clone()),
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?.as_str()),
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Remove {
+        plugin_id: plugin_id.ok_or_else(usage)?,
+        root,
+    })
+}
+
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|status [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -185,6 +230,12 @@ struct LoadedBundle {
     files: BTreeMap<String, Vec<u8>>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct SelectedContent {
+    module_contribution_ids: Vec<String>,
+    product_metadata_digests: Vec<String>,
+}
+
 #[derive(Debug)]
 struct LocalReviewPolicy<'a> {
     evidence: &'a str,
@@ -202,7 +253,7 @@ impl AdmissionPolicy for LocalReviewPolicy<'_> {
         if provenance != LOCAL_REVIEW_PROVENANCE {
             return rejected("Plugin Bundle provenance is not local review");
         }
-        validate_passive_manifest(manifest)?;
+        validate_supported_manifest(manifest)?;
         let evidence = self.evidence.trim();
         if evidence.is_empty() || evidence.len() > MAX_EVIDENCE_BYTES {
             return rejected("review evidence must be non-empty and bounded");
@@ -223,11 +274,12 @@ fn install(
 ) -> Result<InstallOutcome, String> {
     prepare_root(root)?;
     let lock_file = exclusive_lock(root)?;
-    let mut active = load_active_set(root)?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let mut active = validate_active_set(load_active_set(root)?, &store)?.into_value();
     let bundle = load_bundle(bundle_root)?;
     let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
         .map_err(control_error)?;
-    validate_passive_manifest(manifest.value()).map_err(control_error)?;
+    validate_supported_manifest(manifest.value()).map_err(control_error)?;
     let feature_count = features.len();
     features.sort();
     features.dedup();
@@ -248,21 +300,19 @@ fn install(
         ));
     }
 
-    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let receipt = store
         .admit(
             &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
             &LocalReviewPolicy { evidence },
         )
         .map_err(control_error)?;
-    let product_metadata_digests =
-        validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
     let locked = LockedPlugin {
         plugin_id: manifest.value().plugin_id.clone(),
         release_version: manifest.value().release_version.clone(),
         manifest_digest: manifest.digest().to_owned(),
         selected_features: features,
-        product_metadata_digests,
+        product_metadata_digests: selected.product_metadata_digests,
     };
     active
         .lock
@@ -273,6 +323,18 @@ fn install(
         .lock
         .plugins
         .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    active
+        .lock
+        .instances
+        .retain(|instance| instance.plugin_id != manifest.value().plugin_id);
+    active.lock.instances.extend(locked_instances(
+        manifest.value(),
+        &selected.module_contribution_ids,
+    ));
+    active
+        .lock
+        .instances
+        .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
     active
         .releases
         .retain(|release| release.plugin_id != manifest.value().plugin_id);
@@ -299,6 +361,39 @@ fn install(
         receipt_digest: receipt.digest().to_owned(),
         plugin_set_digest: lock.digest().to_owned(),
     })
+}
+
+fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
+    prepare_root(root)?;
+    let lock_file = exclusive_lock(root)?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let mut active = validate_active_set(load_active_set(root)?, &store)?.into_value();
+    if !active
+        .lock
+        .plugins
+        .iter()
+        .any(|plugin| plugin.plugin_id == plugin_id)
+    {
+        return Err(format!("Plugin `{plugin_id}` is not active"));
+    }
+    active
+        .lock
+        .plugins
+        .retain(|plugin| plugin.plugin_id != plugin_id);
+    active
+        .lock
+        .instances
+        .retain(|instance| instance.plugin_id != plugin_id);
+    active
+        .releases
+        .retain(|release| release.plugin_id != plugin_id);
+    let active = validate_active_set(active, &store)?;
+    write_active_set(root, &active)?;
+    drop(lock_file);
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
+            .map_err(control_error)?;
+    Ok(lock.digest().to_owned())
 }
 
 pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginAuthority, String> {
@@ -328,6 +423,38 @@ pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginA
     })
 }
 
+pub(crate) fn generation_bindings(
+    authority: &GenerationPluginAuthority,
+    base_plan: &ResolvedAppPlan,
+) -> Result<Vec<CapabilityBinding>, String> {
+    if authority.lock.value().instances.is_empty() {
+        return Ok(base_plan.capability_bindings().to_vec());
+    }
+    let aggregator = base_plan
+        .module_instance(TOOL_AGGREGATOR_INSTANCE)
+        .ok_or_else(|| "active Tool Plugins require the `tools` aggregator Instance".to_owned())?;
+    if !aggregator
+        .required_capabilities()
+        .iter()
+        .any(|requirement| {
+            requirement.capability_id() == TOOL_PROVIDER_CAPABILITY_ID
+                && requirement.descriptor_version() == TOOL_PROVIDER_DESCRIPTOR_VERSION
+        })
+    {
+        return Err("the `tools` Instance does not accept Tool Provider Plugins".to_owned());
+    }
+    let mut bindings = base_plan.capability_bindings().to_vec();
+    bindings.extend(authority.lock.value().instances.iter().map(|instance| {
+        CapabilityBinding::new(
+            TOOL_AGGREGATOR_INSTANCE,
+            TOOL_PROVIDER_CAPABILITY_ID,
+            TOOL_PROVIDER_DESCRIPTOR_VERSION,
+            &instance.instance_key,
+        )
+    }));
+    Ok(bindings)
+}
+
 fn validate_active_set(
     active: ActivePluginSet,
     store: &PluginStore,
@@ -336,11 +463,8 @@ fn validate_active_set(
     {
         return Err("active Plugin Set schema or App identity is invalid".to_owned());
     }
-    if !active.lock.instances.is_empty()
-        || !active.lock.data_mounts.is_empty()
-        || !active.lock.approved_grants.is_empty()
-    {
-        return Err("this Host accepts only passive Plugin releases".to_owned());
+    if !active.lock.data_mounts.is_empty() || !active.lock.approved_grants.is_empty() {
+        return Err("this Host does not accept Plugin Data mounts or permission grants".to_owned());
     }
     ensure_sorted_unique(
         active.lock.plugins.iter().map(|plugin| &plugin.plugin_id),
@@ -350,9 +474,18 @@ fn validate_active_set(
         active.releases.iter().map(|release| &release.plugin_id),
         "active Release",
     )?;
+    ensure_sorted_unique(
+        active
+            .lock
+            .instances
+            .iter()
+            .map(|instance| &instance.instance_key),
+        "locked Plugin Instance",
+    )?;
     if active.lock.plugins.len() != active.releases.len() {
         return Err("active Releases do not exactly close the Plugin lock".to_owned());
     }
+    let mut expected_instances = Vec::new();
     for locked in &active.lock.plugins {
         let release = active
             .releases
@@ -361,7 +494,7 @@ fn validate_active_set(
             .ok_or_else(|| format!("Plugin `{}` has no active Release", locked.plugin_id))?;
         let manifest = CanonicalDocument::from_value("lenso-plugin.json", release.manifest.clone())
             .map_err(control_error)?;
-        validate_passive_manifest(manifest.value()).map_err(control_error)?;
+        validate_supported_manifest(manifest.value()).map_err(control_error)?;
         if manifest.digest() != locked.manifest_digest
             || manifest.value().plugin_id != locked.plugin_id
             || manifest.value().release_version != locked.release_version
@@ -371,74 +504,139 @@ fn validate_active_set(
                 locked.plugin_id
             ));
         }
-        let selected_metadata = validate_selection(manifest.value(), &locked.selected_features)
+        let selected = validate_selection(manifest.value(), &locked.selected_features)
             .map_err(control_error)?;
-        if selected_metadata != locked.product_metadata_digests {
+        if selected.product_metadata_digests != locked.product_metadata_digests {
             return Err(format!(
                 "Plugin `{}` Product Metadata selection is not exact",
                 locked.plugin_id
             ));
         }
-        let receipt = store
-            .admission_receipt(&release.admission_receipt_digest)
-            .map_err(control_error)?;
-        if receipt.value().policy_identity != LOCAL_REVIEW_POLICY
-            || receipt.value().provenance != LOCAL_REVIEW_PROVENANCE
-            || receipt.value().plugin_id != locked.plugin_id
-            || receipt.value().release_version != locked.release_version
-            || receipt.value().manifest_digest != locked.manifest_digest
-        {
-            return Err(format!(
-                "Plugin `{}` Admission Receipt does not close its lock",
-                locked.plugin_id
-            ));
-        }
-        let artifact_digests = manifest
-            .value()
-            .artifacts
-            .iter()
-            .map(|artifact| artifact.digest.clone())
-            .collect::<BTreeSet<_>>();
-        let metadata_digests = manifest
-            .value()
-            .product_metadata
-            .iter()
-            .map(|metadata| metadata.digest.clone())
-            .collect::<BTreeSet<_>>();
-        if receipt
-            .value()
-            .artifact_digests
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>()
-            != artifact_digests
-            || receipt
-                .value()
-                .product_metadata_digests
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                != metadata_digests
-            || receipt.value().decision_evidence.trim().is_empty()
-            || receipt.value().decision_evidence.len() > MAX_EVIDENCE_BYTES
-        {
-            return Err(format!(
-                "Plugin `{}` Admission Receipt does not close its artifacts or review evidence",
-                locked.plugin_id
-            ));
-        }
+        expected_instances.extend(locked_instances(
+            manifest.value(),
+            &selected.module_contribution_ids,
+        ));
+        validate_receipt_closure(locked, release, manifest.value(), store)?;
+    }
+    expected_instances.sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+    if active.lock.instances != expected_instances {
+        return Err(
+            "active Plugin Instances do not exactly close selected contributions".to_owned(),
+        );
     }
     CanonicalDocument::from_value("active-set.json", active).map_err(control_error)
 }
 
-fn validate_passive_manifest(manifest: &PluginManifest) -> Result<(), ControlPlaneError> {
-    if !manifest.module_contributions.is_empty()
-        || !manifest.data_contributions.is_empty()
+fn validate_receipt_closure(
+    locked: &LockedPlugin,
+    release: &ActiveRelease,
+    manifest: &PluginManifest,
+    store: &PluginStore,
+) -> Result<(), String> {
+    let receipt = store
+        .admission_receipt(&release.admission_receipt_digest)
+        .map_err(control_error)?;
+    if receipt.value().policy_identity != LOCAL_REVIEW_POLICY
+        || receipt.value().provenance != LOCAL_REVIEW_PROVENANCE
+        || receipt.value().plugin_id != locked.plugin_id
+        || receipt.value().release_version != locked.release_version
+        || receipt.value().manifest_digest != locked.manifest_digest
+    {
+        return Err(format!(
+            "Plugin `{}` Admission Receipt does not close its lock",
+            locked.plugin_id
+        ));
+    }
+    let artifact_digests = manifest
+        .artifacts
+        .iter()
+        .map(|artifact| artifact.digest.clone())
+        .collect::<BTreeSet<_>>();
+    let metadata_digests = manifest
+        .product_metadata
+        .iter()
+        .map(|metadata| metadata.digest.clone())
+        .collect::<BTreeSet<_>>();
+    if receipt
+        .value()
+        .artifact_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        != artifact_digests
+        || receipt
+            .value()
+            .product_metadata_digests
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            != metadata_digests
+        || receipt.value().decision_evidence.trim().is_empty()
+        || receipt.value().decision_evidence.len() > MAX_EVIDENCE_BYTES
+    {
+        return Err(format!(
+            "Plugin `{}` Admission Receipt does not close its artifacts or review evidence",
+            locked.plugin_id
+        ));
+    }
+    Ok(())
+}
+
+fn validate_supported_manifest(manifest: &PluginManifest) -> Result<(), ControlPlaneError> {
+    if !manifest.data_contributions.is_empty()
         || !manifest.permission_requests.is_empty()
         || !manifest.binding_templates.is_empty()
     {
         return rejected(
-            "this Host admits only passive artifact and Product Metadata Plugin releases",
+            "this Host rejects Plugin Data mounts, permission requests, and binding templates",
+        );
+    }
+    for contribution in &manifest.module_contributions {
+        validate_tool_contribution(contribution)?;
+    }
+    Ok(())
+}
+
+fn validate_tool_contribution(contribution: &ModuleContribution) -> Result<(), ControlPlaneError> {
+    let target = host_target();
+    let exact_endpoint = if let [provided] = contribution.provides.as_slice() {
+        provided.capability_id == TOOL_PROVIDER_CAPABILITY_ID
+            && provided.descriptor_version == TOOL_PROVIDER_DESCRIPTOR_VERSION
+            && provided.descriptor_digest == sha256_digest(TOOL_PROVIDER_DESCRIPTOR)
+            && provided.request_operations
+                == [
+                    TOOL_PROVIDER_CATALOG_OPERATION,
+                    TOOL_PROVIDER_EXECUTE_OPERATION,
+                ]
+    } else {
+        false
+    };
+    if !exact_endpoint
+        || contribution.package_id != TEXT_TOOLS_PACKAGE_ID
+        || contribution.configuration_schema_digest != sha256_digest(EMPTY_CONFIGURATION_SCHEMA)
+        || !contribution.requires.is_empty()
+        || !contribution.permission_request_ids.is_empty()
+        || contribution.state.is_some()
+        || contribution.implementations.is_empty()
+        || !contribution
+            .implementations
+            .iter()
+            .any(|implementation| implementation.targets.contains(&target))
+        || contribution.implementations.iter().any(|implementation| {
+            implementation.artifact.is_some()
+                || implementation.built_in_factory.as_deref() != Some(TEXT_TOOLS_FACTORY_IDENTITY)
+                || implementation.entrypoint != "default"
+                || implementation.execution_class != NATIVE_EXECUTION_CLASS
+                || !implementation
+                    .profiles
+                    .iter()
+                    .any(|profile| profile == NATIVE_TOOL_PROFILE)
+                || implementation.support_channel != SupportChannel::Stable
+                || implementation.trust != TrustLevel::Trusted
+        })
+    {
+        return rejected(
+            "executable Plugins must be stateless, permission-free native Tool Providers",
         );
     }
     Ok(())
@@ -447,7 +645,7 @@ fn validate_passive_manifest(manifest: &PluginManifest) -> Result<(), ControlPla
 fn validate_selection(
     manifest: &PluginManifest,
     features: &[String],
-) -> Result<Vec<String>, ControlPlaneError> {
+) -> Result<SelectedContent, ControlPlaneError> {
     if features.windows(2).any(|pair| pair[0] >= pair[1]) {
         return rejected("selected Plugin Features must be sorted and unique");
     }
@@ -464,6 +662,17 @@ fn validate_selection(
         .features
         .iter()
         .flat_map(|feature| feature.artifact_ids.iter())
+        .collect::<BTreeSet<_>>();
+    let featured_modules = manifest
+        .features
+        .iter()
+        .flat_map(|feature| feature.module_contribution_ids.iter())
+        .collect::<BTreeSet<_>>();
+    let mut module_contribution_ids = manifest
+        .module_contributions
+        .iter()
+        .filter(|contribution| !featured_modules.contains(&contribution.id))
+        .map(|contribution| contribution.id.clone())
         .collect::<BTreeSet<_>>();
     let mut selected_artifacts = manifest
         .artifacts
@@ -487,6 +696,7 @@ fn validate_selection(
         .iter()
         .filter(|feature| selected.contains(&feature.id))
     {
+        module_contribution_ids.extend(feature.module_contribution_ids.iter().cloned());
         selected_artifacts.extend(feature.artifact_ids.iter());
         for metadata_id in &feature.product_metadata_ids {
             let metadata = manifest
@@ -507,7 +717,31 @@ fn validate_selection(
     }) {
         return rejected("selected Plugin Artifact does not support this Host target");
     }
-    Ok(metadata_digests.into_iter().collect())
+    Ok(SelectedContent {
+        module_contribution_ids: module_contribution_ids.into_iter().collect(),
+        product_metadata_digests: metadata_digests.into_iter().collect(),
+    })
+}
+
+fn locked_instances(
+    manifest: &PluginManifest,
+    selected_contributions: &[String],
+) -> Vec<LockedInstance> {
+    selected_contributions
+        .iter()
+        .map(|contribution_id| LockedInstance {
+            plugin_id: manifest.plugin_id.clone(),
+            contribution_id: contribution_id.clone(),
+            instance_key: format!(
+                "plugin:{}:{}:{contribution_id}",
+                manifest.plugin_id.len(),
+                manifest.plugin_id
+            ),
+            implementation_variant: None,
+            configuration: "{}".to_owned(),
+            execution_lane: "main".to_owned(),
+        })
+        .collect()
 }
 
 pub(crate) fn host_target() -> String {
@@ -726,8 +960,9 @@ mod tests {
     use super::*;
     use lenso_app_plan::ResolvedAppPlan;
     use lenso_plugin_control_plane::{
-        ArtifactDeclaration, ArtifactKind, PermissionRequest, PluginFeature,
-        ProductMetadataDeclaration, sha256_digest,
+        ArtifactDeclaration, ArtifactKind, CapabilityDeclaration, ImplementationVariant,
+        ModuleContribution, PermissionRequest, PluginFeature, ProductMetadataDeclaration,
+        sha256_digest,
     };
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
@@ -783,8 +1018,63 @@ mod tests {
             b"{\"kind\":\"fixture\"}",
         );
         let error = install(root.path(), bundle.path(), "review", Vec::new()).unwrap_err();
-        assert!(error.contains("only passive artifact"));
+        assert!(error.contains("permission requests"));
         assert!(!root.path().join(ACTIVE_SET_FILE).exists());
+    }
+
+    #[test]
+    fn unregistered_native_tool_factory_is_rejected_before_activation() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        write_tool_bundle(bundle.path());
+        let manifest_path = bundle.path().join(MANIFEST_FILE);
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["module_contributions"][0]["implementations"][0]["built_in_factory"] =
+            "unregistered@1".into();
+        fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+
+        let error = install(root.path(), bundle.path(), "review", Vec::new()).unwrap_err();
+        assert!(error.contains("stateless, permission-free native Tool Providers"));
+        assert!(!root.path().join(ACTIVE_SET_FILE).exists());
+    }
+
+    #[test]
+    fn reviewed_native_tool_plugin_is_composed_and_removed_exactly() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        write_tool_bundle(bundle.path());
+        install(root.path(), bundle.path(), "review-ticket-77", Vec::new()).unwrap();
+
+        let authority = load_generation_authority(root.path()).unwrap();
+        assert_eq!(authority.lock.value().instances.len(), 1);
+        let instance_key = authority.lock.value().instances[0].instance_key.clone();
+        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        assert_eq!(
+            generation
+                .plan
+                .module_instance(&instance_key)
+                .unwrap()
+                .package_id(),
+            "lenso.agent.text-tools"
+        );
+        let binding = generation
+            .plan
+            .capability_bindings()
+            .iter()
+            .find(|binding| {
+                binding.consumer_instance() == TOOL_AGGREGATOR_INSTANCE
+                    && binding.provider_instance() == instance_key
+            })
+            .unwrap();
+        assert_eq!(binding.provider_order(), 1);
+        assert_eq!(generation.artifact_set.value().instances.len(), 1);
+
+        remove(root.path(), "example.text-tools").unwrap();
+        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        assert_eq!(generation.plan, approved);
+        assert!(generation.artifact_set.value().instances.is_empty());
     }
 
     #[test]
@@ -817,6 +1107,8 @@ mod tests {
         fs::write(active_path, serde_json::to_vec(&active).unwrap()).unwrap();
         let error = load_generation_authority(root.path()).unwrap_err();
         assert!(error.contains("does not close its lock"));
+        let error = remove(root.path(), "example.passive").unwrap_err();
+        assert!(error.contains("does not close its lock"));
     }
 
     fn write_passive_bundle(root: &Path) -> CanonicalDocument<PluginManifest> {
@@ -825,6 +1117,53 @@ mod tests {
         let manifest = passive_manifest(artifact, metadata);
         write_bundle(root, &manifest, artifact, metadata);
         CanonicalDocument::from_value("lenso-plugin.json", manifest).unwrap()
+    }
+
+    fn write_tool_bundle(root: &Path) {
+        let manifest = PluginManifest {
+            schema_version: 1,
+            plugin_id: "example.text-tools".to_owned(),
+            release_version: "1.0.0".to_owned(),
+            artifacts: Vec::new(),
+            module_contributions: vec![ModuleContribution {
+                id: "text-tools".to_owned(),
+                package_id: "lenso.agent.text-tools".to_owned(),
+                configuration_schema_digest: sha256_digest(EMPTY_CONFIGURATION_SCHEMA),
+                provides: vec![CapabilityDeclaration {
+                    capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+                    descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                    descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+                    request_operations: vec![
+                        TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                        TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+                    ],
+                }],
+                requires: Vec::new(),
+                implementations: vec![ImplementationVariant {
+                    id: "native".to_owned(),
+                    artifact: None,
+                    built_in_factory: Some(TEXT_TOOLS_FACTORY_IDENTITY.to_owned()),
+                    entrypoint: "default".to_owned(),
+                    execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+                    targets: vec![host_target()],
+                    profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
+                    support_channel: SupportChannel::Stable,
+                    trust: TrustLevel::Trusted,
+                }],
+                permission_request_ids: Vec::new(),
+                state: None,
+            }],
+            data_contributions: Vec::new(),
+            permission_requests: Vec::new(),
+            features: Vec::new(),
+            binding_templates: Vec::new(),
+            product_metadata: Vec::new(),
+        };
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
     }
 
     fn write_bundle(root: &Path, manifest: &PluginManifest, artifact: &[u8], metadata: &[u8]) {
