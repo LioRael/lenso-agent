@@ -43,14 +43,17 @@ remains authoritative in the Generation spec. Each Agent Turn holds a
 Generation lease until its stream reaches a terminal outcome; host shutdown
 then drains all Generation-owned resources.
 
-The Host can admit reviewed passive Plugin releases and one narrow executable
-native Tool Provider profile. Executable contributions must select the exact
-linked `lenso.agent.text-tools@0.1.0` factory, expose only
-`lenso.agent.tool-provider@1`, and remain stateless and permission-free. Data
-mounts, permission requests, and binding templates fail admission. Overlap replacement, rollback, durable
-cross-process fencing, Generation provenance in Session events, and product
-acceptance of the preview Wasm Component, QuickJS, and native-dylib Adapters
-remain deferred.
+The Host can admit reviewed passive Plugin releases plus executable profiles
+registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
+entry closes the exact package, factory, entrypoint, configuration Schema,
+Capability Descriptor and Operations, execution class, target, support/trust
+policy, and one bounded attachment rule. The first production entry admits only
+the linked `lenso.agent.text-tools@0.1.0` factory as a stateless,
+permission-free `lenso.agent.tool-provider@1` provider. Data mounts, permission
+requests, and Plugin-authored binding templates fail admission. Overlap
+replacement, rollback, durable cross-process fencing, Generation provenance in
+Session events, and product acceptance of the preview Wasm Component, QuickJS,
+and native-dylib Adapters remain deferred.
 
 ## Install and remove a reviewed Plugin release
 
@@ -83,11 +86,14 @@ Admission stores immutable objects and its receipt under
 `.lenso/plugins/active-set.json`, which embeds the exact `PluginSetLock`,
 Manifest authorities, and Admission Receipt digests. The next App start
 digest-verifies that closure and includes selected artifacts and executable
-Instances in its initial Generation. The Harness owns one explicit attachment
-rule from approved Tool Provider Plugin Instances to the existing `tools`
-aggregator. Removing a Plugin atomically removes its Release, Instances, and
-derived bindings from the next Generation. Reinstalling the same Plugin ID from
-a different immutable Manifest remains an explicit future upgrade flow.
+Instances in its initial Generation. The Catalog derives the registered Tool
+Provider attachment to the existing `tools` aggregator only when that consumer
+declares the exact Capability with `many` cardinality. Removing a Plugin
+atomically removes its Release, Instances, and derived bindings from the next
+Generation. Reinstalling the same Plugin ID from a different immutable Manifest
+remains an explicit future upgrade flow. Adding another Catalog entry is a Host
+code and review change, not runtime discovery or permission to replace a `one`
+binding.
 
 ## Run the deterministic slice
 
