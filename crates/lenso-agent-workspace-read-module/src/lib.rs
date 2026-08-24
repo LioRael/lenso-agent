@@ -10,17 +10,13 @@ use lenso_kernel::{
     InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
     RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use std::{
     fs,
     path::{Component, Path, PathBuf},
     rc::Rc,
 };
 
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.workspace-read";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Stable Tool name for listing one workspace directory.
 pub const LIST_TOOL: &str = "workspace.list";
 /// Stable Tool name for bounded literal search.
@@ -39,39 +35,27 @@ struct WorkspaceConfig {
     max_search_matches: usize,
 }
 
-/// Native factory for the workspace-rooted read-only Tool Provider.
-#[derive(Clone, Debug, Default)]
-pub struct WorkspaceReadFactory;
-
-impl NativeModuleFactory for WorkspaceReadFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates the workspace-rooted read-only Tool Provider.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported workspace-read entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported workspace-read entrypoint"));
-        }
-        let config =
-            serde_json::from_str::<WorkspaceConfig>(context.configuration()).map_err(|error| {
-                invalid_plan(format!("invalid workspace-read configuration: {error}"))
-            })?;
-        validate_config(&config)?;
-        let provider = WorkspaceProvider { config };
-        let endpoint =
-            Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::with_lifecycle(
-            vec![endpoint],
-            WorkspaceLifecycle { provider },
-        ))
-    }
+    let config = serde_json::from_str::<WorkspaceConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid workspace-read configuration: {error}")))?;
+    validate_config(&config)?;
+    let provider = WorkspaceProvider { config };
+    let endpoint =
+        Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::with_lifecycle(
+        vec![endpoint],
+        WorkspaceLifecycle { provider },
+    ))
 }
 
 fn validate_config(config: &WorkspaceConfig) -> Result<(), RuntimeFailure> {

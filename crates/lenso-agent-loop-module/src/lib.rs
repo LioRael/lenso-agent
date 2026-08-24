@@ -37,13 +37,9 @@ use lenso_kernel::{
     ModuleLifecycle, NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
     StreamEvent,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.loop";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Host-issued Invocation Context key for the leased App Generation identity.
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 
@@ -105,49 +101,39 @@ struct AgentConfig {
     max_history_events: i64,
 }
 
-/// Native factory for one Agent Loop generation.
-#[derive(Clone, Debug, Default)]
-pub struct AgentLoopFactory;
-
-impl NativeModuleFactory for AgentLoopFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates one Agent Loop generation.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent@1","descriptor_version":"1.1.0","operations":["run_turn"],"operation_kinds":{"run_turn":"stream"},"default_admission":{"queue_capacity":0,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","cardinality":"one"},{"capability_id":"lenso.agent.prompt@1","descriptor_version":"1.0.0","cardinality":"one"},{"capability_id":"lenso.agent.tools@1","descriptor_version":"1.0.0","cardinality":"one"},{"capability_id":"lenso.agent.session@1","descriptor_version":"1.1.0","cardinality":"one"}]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported Agent Loop entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
+    let config = serde_json::from_str::<AgentConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid Agent Loop configuration: {error}")))?;
+    if config.model.is_empty()
+        || config.max_steps == 0
+        || config.max_steps > 64
+        || config.max_tool_calls > 64
+        || config.max_output_tokens <= 0
+        || !(1..=1000).contains(&config.max_history_events)
+    {
+        return Err(invalid_plan("Agent Loop model or limits are invalid"));
     }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported Agent Loop entrypoint"));
-        }
-        let config = serde_json::from_str::<AgentConfig>(context.configuration())
-            .map_err(|error| invalid_plan(format!("invalid Agent Loop configuration: {error}")))?;
-        if config.model.is_empty()
-            || config.max_steps == 0
-            || config.max_steps > 64
-            || config.max_tool_calls > 64
-            || config.max_output_tokens <= 0
-            || !(1..=1000).contains(&config.max_history_events)
-        {
-            return Err(invalid_plan("Agent Loop model or limits are invalid"));
-        }
-        let clients = Rc::new(RefCell::new(None));
-        let active = Rc::new(Cell::new(false));
-        let endpoint = Rc::new(AgentEndpoint::new(AgentLoop {
-            config,
-            clients: clients.clone(),
-            active,
-        })) as Rc<dyn NativeStreamEndpoint>;
-        Ok(NativeModuleInstance::with_stream_endpoints(
-            vec![endpoint],
-            AgentLifecycle { clients },
-        ))
-    }
+    let clients = Rc::new(RefCell::new(None));
+    let active = Rc::new(Cell::new(false));
+    let endpoint = Rc::new(AgentEndpoint::new(AgentLoop {
+        config,
+        clients: clients.clone(),
+        active,
+    })) as Rc<dyn NativeStreamEndpoint>;
+    Ok(NativeModuleInstance::with_stream_endpoints(
+        vec![endpoint],
+        AgentLifecycle { clients },
+    ))
 }
 
 #[derive(Debug)]

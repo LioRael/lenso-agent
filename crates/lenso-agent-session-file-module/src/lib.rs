@@ -19,12 +19,7 @@ use lenso_kernel::{
     InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
     RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
-
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.session.file";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 
 /// One validated `turn_started` event projected from the private file store.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,43 +136,31 @@ struct FileSessionConfig {
     directory: PathBuf,
 }
 
-/// Native factory for a durable file-backed Session store.
-#[derive(Clone, Debug, Default)]
-pub struct FileSessionFactory;
-
-impl NativeModuleFactory for FileSessionFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates a durable file-backed Session store.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.session@1","descriptor_version":"1.1.0","operations":["append","open","read"],"operation_kinds":{},"default_admission":{"queue_capacity":8,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported file Session entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
+    let config = serde_json::from_str::<FileSessionConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid file Session configuration: {error}")))?;
+    if config.directory.as_os_str().is_empty() {
+        return Err(invalid_plan("Session directory must not be empty"));
     }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported file Session entrypoint"));
-        }
-        let config = serde_json::from_str::<FileSessionConfig>(context.configuration()).map_err(
-            |error| invalid_plan(format!("invalid file Session configuration: {error}")),
-        )?;
-        if config.directory.as_os_str().is_empty() {
-            return Err(invalid_plan("Session directory must not be empty"));
-        }
-        let provider = FileSessionProvider {
-            directory: config.directory,
-            operation_lock: Rc::new(RefCell::new(())),
-        };
-        let endpoint =
-            Rc::new(SessionEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::with_lifecycle(
-            vec![endpoint],
-            FileSessionLifecycle { provider },
-        ))
-    }
+    let provider = FileSessionProvider {
+        directory: config.directory,
+        operation_lock: Rc::new(RefCell::new(())),
+    };
+    let endpoint = Rc::new(SessionEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::with_lifecycle(
+        vec![endpoint],
+        FileSessionLifecycle { provider },
+    ))
 }
 
 #[derive(Clone, Debug)]

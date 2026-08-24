@@ -75,7 +75,7 @@
         "configuration": {
           "directory": ".lenso/sessions"
         },
-        "configuration_schema": "composition/headless-readonly/config/session-file.schema.json",
+        "configuration_schema": "crates/lenso-agent-session-file-module/config.schema.json",
         "provides": [
           {
             "capability_id": "lenso.agent.session@1",

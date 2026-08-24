@@ -12,7 +12,7 @@
           "max_search_bytes": 16777216,
           "max_search_matches": 1000
         },
-        "configuration_schema": "composition/headless-readonly/config/workspace-read.schema.json",
+        "configuration_schema": "crates/lenso-agent-workspace-read-module/config.schema.json",
         "provides": [
           {
             "capability_id": "lenso.agent.tool-provider@1",

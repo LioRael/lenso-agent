@@ -12,45 +12,28 @@ use lenso_kernel::{
     ActivateContext, InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint,
     NativeRequestHandle, RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.tools";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Native factory for deterministic Tool aggregation and dispatch.
-#[derive(Clone, Debug, Default)]
-pub struct ToolsFactory;
-
-impl NativeModuleFactory for ToolsFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates deterministic Tool aggregation and dispatch.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tools@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","cardinality":"many"}]}"#
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" || context.configuration() != "{}" {
+        return Err(RuntimeFailure::InvalidResolvedPlan {
+            detail: "Tools Module requires entrypoint `default` and empty configuration".to_owned(),
+        });
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" || context.configuration() != "{}" {
-            return Err(RuntimeFailure::InvalidResolvedPlan {
-                detail: "Tools Module requires entrypoint `default` and empty configuration"
-                    .to_owned(),
-            });
-        }
-        let state = Rc::new(RefCell::new(None));
-        let endpoint = Rc::new(ToolsEndpoint::new(AggregateTools {
-            state: state.clone(),
-        })) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::with_lifecycle(
-            vec![endpoint],
-            ToolsLifecycle { state },
-        ))
-    }
+    let state = Rc::new(RefCell::new(None));
+    let endpoint = Rc::new(ToolsEndpoint::new(AggregateTools {
+        state: state.clone(),
+    })) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::with_lifecycle(
+        vec![endpoint],
+        ToolsLifecycle { state },
+    ))
 }
 
 #[derive(Debug)]

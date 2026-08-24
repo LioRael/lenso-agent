@@ -8,6 +8,9 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.lenso]
+package-id = "lenso.agent.cli"
+
 [dependencies]
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true

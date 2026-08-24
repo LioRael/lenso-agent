@@ -8,6 +8,9 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.lenso]
+package-id = "lenso.agent.prompt.static"
+
 [dependencies]
 futures.workspace = true
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }

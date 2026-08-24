@@ -8,12 +8,7 @@ use lenso_capability_agent_prompt_provider::{
     ContributeResponseContributionsItemKind, PromptProviderEndpoint, PromptProviderProvider,
 };
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
-
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.prompt.static";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -37,34 +32,23 @@ enum StaticContributionKind {
     Skill,
 }
 
-/// Native factory for one explicitly configured Prompt plugin Instance.
-#[derive(Clone, Debug, Default)]
-pub struct StaticPromptFactory;
-
-impl NativeModuleFactory for StaticPromptFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates one explicitly configured Prompt contribution Instance.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","operations":["contribute"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported static Prompt entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported static Prompt entrypoint"));
-        }
-        let config = serde_json::from_str::<StaticPromptConfig>(context.configuration()).map_err(
-            |error| invalid_plan(format!("invalid static Prompt configuration: {error}")),
-        )?;
-        let contributions = validate_and_convert(config)?;
-        let endpoint = Rc::new(PromptProviderEndpoint::new(StaticPrompt { contributions }))
-            as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::new(vec![endpoint]))
-    }
+    let config = serde_json::from_str::<StaticPromptConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid static Prompt configuration: {error}")))?;
+    let contributions = validate_and_convert(config)?;
+    let endpoint = Rc::new(PromptProviderEndpoint::new(StaticPrompt { contributions }))
+        as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::new(vec![endpoint]))
 }
 
 #[derive(Clone, Debug)]

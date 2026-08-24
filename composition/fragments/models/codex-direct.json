@@ -11,7 +11,7 @@
           "max_output_tokens": 4096,
           "max_history_events": 200
         },
-        "configuration_schema": "composition/headless-readonly/config/agent-loop.schema.json",
+        "configuration_schema": "crates/lenso-agent-loop-module/config.schema.json",
         "provides": [
           {
             "capability_id": "lenso.agent@1",

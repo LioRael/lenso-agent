@@ -11,13 +11,8 @@ use lenso_kernel::{
     ActivateContext, InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint,
     RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use sha2::{Digest, Sha256};
-
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.prompt";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,42 +21,32 @@ struct PromptConfig {
     max_total_bytes: usize,
 }
 
-/// Native factory for deterministic Prompt aggregation.
-#[derive(Clone, Debug, Default)]
-pub struct PromptFactory;
-
-impl NativeModuleFactory for PromptFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates deterministic Prompt aggregation.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.prompt@1","descriptor_version":"1.0.0","operations":["assemble"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","cardinality":"many"}]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported Prompt aggregate entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
+    let config = serde_json::from_str::<PromptConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid Prompt configuration: {error}")))?;
+    if !(1..=256).contains(&config.max_contributions)
+        || !(1..=262_144).contains(&config.max_total_bytes)
+    {
+        return Err(invalid_plan("Prompt aggregate limits are invalid"));
     }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported Prompt aggregate entrypoint"));
-        }
-        let config = serde_json::from_str::<PromptConfig>(context.configuration())
-            .map_err(|error| invalid_plan(format!("invalid Prompt configuration: {error}")))?;
-        if !(1..=256).contains(&config.max_contributions)
-            || !(1..=262_144).contains(&config.max_total_bytes)
-        {
-            return Err(invalid_plan("Prompt aggregate limits are invalid"));
-        }
-        let state = Rc::new(RefCell::new(None));
-        let endpoint = Rc::new(PromptEndpoint::new(AggregatePrompt {
-            state: state.clone(),
-        })) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::with_lifecycle(
-            vec![endpoint],
-            PromptLifecycle { config, state },
-        ))
-    }
+    let state = Rc::new(RefCell::new(None));
+    let endpoint = Rc::new(PromptEndpoint::new(AggregatePrompt {
+        state: state.clone(),
+    })) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::with_lifecycle(
+        vec![endpoint],
+        PromptLifecycle { config, state },
+    ))
 }
 
 #[derive(Clone, Debug)]

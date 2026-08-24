@@ -5,7 +5,8 @@ use lenso_agent_auth_openai_codex_module::{
 };
 use lenso_agent_loop_module::PACKAGE_ID as AGENT_LOOP_PACKAGE_ID;
 use lenso_agent_model_fixture_module::{
-    FixtureModelFactory, MODEL_ID as FIXTURE_MODEL_ID, PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
+    FACTORY_IDENTITY as FIXTURE_MODEL_FACTORY_IDENTITY, MODEL_ID as FIXTURE_MODEL_ID,
+    PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
 };
 use lenso_agent_model_openai_codex_direct_module::{
     OpenAiCodexDirectModelFactory, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
@@ -48,7 +49,7 @@ const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
 const MODEL_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-model/capability.json");
 const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
-    include_bytes!("../../../composition/headless-readonly/config/model.schema.json");
+    include_bytes!("../../../crates/lenso-agent-model-fixture-module/config.schema.json");
 const CODEX_MODEL_CONFIGURATION_SCHEMA: &[u8] = include_bytes!(
     "../../../crates/lenso-agent-model-openai-codex-direct-module/config.schema.json"
 );
@@ -548,7 +549,7 @@ fn fixture_model_profile() -> ExecutablePluginProfile {
         registration_id: "native-fixture-model-v1".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package_id: FIXTURE_MODEL_PACKAGE_ID.to_owned(),
-        factory_identity: FixtureModelFactory.factory_identity(),
+        factory_identity: FIXTURE_MODEL_FACTORY_IDENTITY.to_owned(),
         configuration_schema_digest: sha256_digest(FIXTURE_MODEL_CONFIGURATION_SCHEMA),
         configuration: format!(r#"{{"model":"{FIXTURE_MODEL_ID}"}}"#),
         provides: vec![CapabilityProfile {
