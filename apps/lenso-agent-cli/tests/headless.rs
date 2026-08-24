@@ -369,6 +369,82 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
 }
 
 #[test]
+fn generation_gc_plan_reports_reachability_without_deleting() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# GC Fixture\n").unwrap();
+    let first = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: hello",
+        None,
+    );
+    assert!(first.status.success());
+    assert!(install_text_tools_plugin(temporary.path()).status.success());
+    let second = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: hello",
+        None,
+    );
+    assert!(second.status.success());
+    let digests = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .map(|entry| {
+            let session: serde_json::Value =
+                serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
+            turn_generation_digests(&session).pop().unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(digests.len(), 2);
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["plugins", "remove", "--plugin", "example.text-tools"])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+    let empty_sessions = temporary.path().join("empty-sessions");
+    fs::create_dir(&empty_sessions).unwrap();
+    let plan = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "generations",
+            "gc-plan",
+            "--sessions",
+            empty_sessions.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan.stderr)
+    );
+    let stdout = String::from_utf8(plan.stdout).unwrap();
+    assert!(stdout.contains("summary: protected=1 candidates=1"));
+    let records_before = fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
+        .unwrap()
+        .count();
+
+    let plan_with_sessions = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["generations", "gc-plan"])
+        .output()
+        .unwrap();
+    assert!(plan_with_sessions.status.success());
+    assert!(
+        String::from_utf8_lossy(&plan_with_sessions.stdout)
+            .contains("summary: protected=2 candidates=0")
+    );
+    assert_eq!(
+        fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
+            .unwrap()
+            .count(),
+        records_before
+    );
+}
+
+#[test]
 fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Generation Fixture\n").unwrap();
@@ -395,6 +471,14 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
         .unwrap();
     assert!(inspect.status.success());
     assert!(String::from_utf8_lossy(&inspect.stdout).contains("spec=invalid"));
+
+    let gc_plan = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["generations", "gc-plan"])
+        .output()
+        .unwrap();
+    assert!(!gc_plan.status.success());
+    assert!(String::from_utf8_lossy(&gc_plan.stderr).contains("Generation Spec validation failed"));
 
     let second = run(
         temporary.path(),

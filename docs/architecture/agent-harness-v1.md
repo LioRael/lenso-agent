@@ -152,6 +152,9 @@ make both the workspace root and model endpoint visible before execution.
 15. A real child process holding an exclusive Plugin authority transition fence
     blocks App startup until release; direct process exit releases the OS-owned
     fence and leaves later snapshots available.
+16. A read-only GC plan validates all Generation Specs and Session Turn
+    provenance, protects current or retained Plugin Set and Session references,
+    and reports unreferenced Generation candidates without deleting them.
 
 ## Deferred
 
@@ -160,5 +163,6 @@ watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding
-replacement, distributed coordination, automatic rollback, history retention/garbage
-collection, and overlap replacement are separate slices.
+replacement, distributed coordination, automatic rollback, Generation deletion,
+Plugin Store collection, retention windows, and overlap replacement are
+separate slices.

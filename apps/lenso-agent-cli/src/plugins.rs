@@ -1477,6 +1477,18 @@ fn active_set_history(
     Ok((current_digest, history))
 }
 
+pub(crate) fn retained_plugin_set_digests(root: &Path) -> Result<BTreeSet<String>, String> {
+    let (_, history) = active_set_history(root)?;
+    history
+        .into_values()
+        .map(|active| {
+            CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
+                .map(|lock| lock.digest().to_owned())
+                .map_err(control_error)
+        })
+        .collect()
+}
+
 fn open_existing_store(root: &Path) -> Result<PluginStore, String> {
     for directory in [
         root.to_path_buf(),

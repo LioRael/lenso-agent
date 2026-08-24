@@ -61,8 +61,8 @@ Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
-automatic rollback, distributed coordination, Generation provenance retention
-and garbage collection, and product acceptance of the preview Wasm
+automatic rollback, distributed coordination, Generation deletion and Plugin
+Store garbage collection, and product acceptance of the preview Wasm
 Component, QuickJS, and native-dylib Adapters remain deferred.
 
 ## Install, upgrade, roll back, and remove a reviewed Plugin release
@@ -103,6 +103,8 @@ cargo run -p lenso-agent-cli -- plugins inspect \
 
 cargo run -p lenso-agent-cli -- generations inspect \
   --digest sha256:<generation-spec-digest>
+
+cargo run -p lenso-agent-cli -- generations gc-plan
 
 cargo run -p lenso-agent-cli -- sessions provenance \
   --session <session-id>
