@@ -7,13 +7,25 @@
     "max_skills",
     "max_file_bytes",
     "max_total_bytes",
-    "max_catalog_bytes"
+    "max_catalog_bytes",
+    "catalog_contribution_id",
+    "max_prompt_catalog_bytes",
+    "max_resource_entries",
+    "max_resource_file_bytes",
+    "max_resource_total_bytes",
+    "max_resource_manifest_bytes"
   ],
   "properties": {
     "root": { "type": "string" },
     "max_skills": { "type": "integer" },
     "max_file_bytes": { "type": "integer" },
     "max_total_bytes": { "type": "integer" },
-    "max_catalog_bytes": { "type": "integer" }
+    "max_catalog_bytes": { "type": "integer" },
+    "catalog_contribution_id": { "type": "string" },
+    "max_prompt_catalog_bytes": { "type": "integer" },
+    "max_resource_entries": { "type": "integer" },
+    "max_resource_file_bytes": { "type": "integer" },
+    "max_resource_total_bytes": { "type": "integer" },
+    "max_resource_manifest_bytes": { "type": "integer" }
   }
 }

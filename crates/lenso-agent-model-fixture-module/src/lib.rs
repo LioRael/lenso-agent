@@ -5,8 +5,9 @@ use std::rc::Rc;
 use futures::future::{LocalBoxFuture, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
-    CAPABILITY_ID, CompleteError, CompleteRequest, CompleteRequestMessagesItemRole,
-    CompleteResponse, CompleteResponseKind, ModelEndpoint, ModelInvocationError, ModelProvider,
+    CAPABILITY_ID, CompleteError, CompleteRequest, CompleteRequestMessagesItem,
+    CompleteRequestMessagesItemRole, CompleteResponse, CompleteResponseKind, ModelEndpoint,
+    ModelInvocationError, ModelProvider,
 };
 use lenso_kernel::{InvocationContext, NativeStreamEndpoint, NativeStreamSession, RuntimeFailure};
 use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
@@ -132,31 +133,10 @@ impl FixtureModel {
             .filter(|message| message.role == CompleteRequestMessagesItemRole::Tool)
             .collect::<Vec<_>>();
         if current_user == "Use a Skill to review Rust." {
-            let has_skill_tools = ["skills.list", "skills.read"]
-                .iter()
-                .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
-            if !has_skill_tools {
-                return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
-            }
-            if tool_results.iter().any(|result| {
-                result
-                    .content
-                    .contains("UNSELECTED SKILL CONTENT MUST NOT REACH THE MODEL")
-            }) {
-                return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
-            }
-            return match tool_results.as_slice() {
-                [] => Ok(named_tool_request("call-skills-list", "skills.list", "{}")),
-                [catalog] if catalog.content.contains("rust-review") => Ok(named_tool_request(
-                    "call-skills-read",
-                    "skills.read",
-                    r#"{"name":"rust-review"}"#,
-                )),
-                [_, skill] if skill.content.contains("RUST REVIEW INSTRUCTION") => {
-                    Ok(skill_applied_response())
-                }
-                _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
-            };
+            return skill_response(request, &tool_results);
+        }
+        if current_user == "Use a Skill resource to review Rust." {
+            return resource_skill_response(request, &tool_results);
         }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
@@ -180,6 +160,117 @@ impl FixtureModel {
         }
         Ok(tool_request(1))
     }
+}
+
+fn skill_response(
+    request: &CompleteRequest,
+    tool_results: &[&CompleteRequestMessagesItem],
+) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+    let has_skill_tools = ["skills.list", "skills.read"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    let skill_catalog_in_prompt = request.messages.iter().any(|message| {
+        message.role == CompleteRequestMessagesItemRole::System
+            && message.content.contains("`rust-review`")
+            && message
+                .content
+                .contains("Review Rust changes with project conventions.")
+            && !message.content.contains("RUST REVIEW INSTRUCTION")
+            && !message
+                .content
+                .contains("UNSELECTED SKILL CONTENT MUST NOT REACH THE MODEL")
+    });
+    let leaked_unselected_skill = tool_results.iter().any(|result| {
+        result
+            .content
+            .contains("UNSELECTED SKILL CONTENT MUST NOT REACH THE MODEL")
+    });
+    if !has_skill_tools
+        || !readonly_skill_tool_profile(request)
+        || !skill_catalog_in_prompt
+        || leaked_unselected_skill
+    {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-skills-read",
+            "skills.read",
+            r#"{"name":"rust-review"}"#,
+        )),
+        [skill] if skill.content.contains("RUST REVIEW INSTRUCTION") => {
+            Ok(skill_applied_response())
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn resource_skill_response(
+    request: &CompleteRequest,
+    tool_results: &[&CompleteRequestMessagesItem],
+) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+    let has_skill_tools = [
+        "skills.list",
+        "skills.read",
+        "skills.list_resources",
+        "skills.read_resource",
+    ]
+    .iter()
+    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    if !has_skill_tools
+        || !readonly_skill_tool_profile(request)
+        || !request.messages.iter().any(|message| {
+            message.role == CompleteRequestMessagesItemRole::System
+                && message.content.contains("`rust-review`")
+                && !message.content.contains("RUST REVIEW INSTRUCTION")
+        })
+        || tool_results.iter().any(|result| {
+            result
+                .content
+                .contains("UNREAD RESOURCE CONTENT MUST NOT REACH THE MODEL")
+        })
+    {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-resources-read-skill",
+            "skills.read",
+            r#"{"name":"rust-review"}"#,
+        )),
+        [skill] if skill.content.contains("references/checklist.md") => Ok(named_tool_request(
+            "call-resources-list",
+            "skills.list_resources",
+            r#"{"name":"rust-review"}"#,
+        )),
+        [_, manifest]
+            if manifest.content.contains("references/checklist.md")
+                && !manifest.content.contains("RESOURCE CHECKLIST CONTENT") =>
+        {
+            Ok(named_tool_request(
+                "call-resource-read",
+                "skills.read_resource",
+                r#"{"name":"rust-review","path":"references/checklist.md"}"#,
+            ))
+        }
+        [_, _, resource] if resource.content.contains("RESOURCE CHECKLIST CONTENT") => {
+            Ok(resource_applied_response())
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn readonly_skill_tool_profile(request: &CompleteRequest) -> bool {
+    request.tools.iter().all(|tool| {
+        matches!(
+            tool.name.as_str(),
+            "workspace.read_text"
+                | "skills.list"
+                | "skills.read"
+                | "skills.list_resources"
+                | "skills.read_resource"
+        )
+    })
 }
 
 fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<CompleteResponse> {
@@ -297,6 +388,31 @@ fn skill_applied_response() -> Vec<CompleteResponse> {
             "{}",
             "28",
             "10",
+        ),
+    ]
+}
+
+fn resource_applied_response() -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            "Resource applied: Rust review used references/checklist.md.",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "36",
+            "12",
         ),
     ]
 }

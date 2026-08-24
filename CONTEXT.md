@@ -6,8 +6,9 @@ This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, composable Prompt/Skill
 contributions, a CLI Runner, and the
-checked `headless-readonly`, `openai-readonly`, and experimental
-`openai-codex-direct` App Compositions.
+checked `headless-readonly`, `openai-readonly`, experimental
+`openai-codex-direct`, and opt-in `openai-codex-direct-skills` App
+Compositions.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
 protocol, and optional Module packages. The OpenAI-compatible profile pins the
@@ -32,9 +33,10 @@ completed-turn history from the Session log.
 - **Prompt Runtime Module** owns contribution collision checks, deterministic
   assembly, aggregate limits, and content digests.
 - **Prompt Provider Modules** own versioned instruction or Skill content and
-  provider-local order. The optional filesystem Provider additionally owns
-  explicit Skill selection, rooted path containment, bounded reads, and the
-  startup snapshot of selected `SKILL.md` files.
+  provider-local order. Filesystem Providers additionally own rooted path
+  containment, bounded reads, and startup snapshots. The progressive Skills
+  Provider contributes only its bounded metadata catalog to Prompt assembly;
+  Skill bodies and resources remain Tool-selected.
 - **Tool Runtime Module** owns Tool catalog aggregation, collision checks,
   argument validation, and deterministic dispatch to explicitly bound Tool
   Provider Modules.
@@ -59,8 +61,9 @@ completed-turn history from the Session log.
   Modules that provide declared Agent Capabilities.
 - Prompt and Skill plugins never scan or mutate the running graph; Composition
   explicitly binds their Provider Instances in deterministic order.
-- Filesystem Skill Providers read only explicitly named files below an
-  explicitly configured root; they never execute Skill assets or scripts.
+- Filesystem Skill Providers read only selected documents or discovered Skill
+  children below an explicitly configured root. They snapshot at startup,
+  enforce path and byte limits, and never execute Skill assets or scripts.
 - No Harness Module may discover dependencies through a global registry.
 - Every invocation is bounded by Plan admission, deadlines, cancellation, and
   product limits. There is no unbounded queue or implicit retry loop.
@@ -116,11 +119,18 @@ Capability to call the Codex Responses backend. Tokens never enter the App
 Plan, Session log, or diagnostic output. This integration does not shell out
 to or read credentials from the Codex CLI.
 
+The opt-in `openai-codex-direct-skills` Composition adds one filesystem Skills
+Module to the `readonly` Tool profile. The same immutable startup snapshot
+provides a bounded name/description Prompt catalog plus `skills.list`,
+`skills.read`, `skills.list_resources`, and `skills.read_resource`. Normal
+selection reads the matching Skill directly; `skills.list` remains available
+for diagnostics and catalog overflow.
+
 ## Deferred direction
 
-Web UI, approval policy, dynamic Skill discovery/selection, ordered Hook
-interception, Trajectory inspection, replay analysis, multi-agent scheduling,
-sandboxed Code Mode, Creator experiments, and App Generation require their own
-product slices.
+Web UI, approval policy, marketplace Skill installation, live Skill watching,
+ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
+scheduling, sandboxed Code Mode, Creator experiments, and App Generation
+require their own product slices.
 True seamless plugin-set replacement must stage a new Resolved App Plan and App
 generation above the Kernel rather than mutate the running graph.

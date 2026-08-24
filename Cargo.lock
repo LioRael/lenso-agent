@@ -867,6 +867,7 @@ version = "0.1.0"
 dependencies = [
  "directories",
  "futures",
+ "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "lenso-native-adapter",
