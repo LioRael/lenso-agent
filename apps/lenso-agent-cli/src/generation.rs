@@ -24,7 +24,6 @@ use lenso_agent_prompt_module::PromptFactory;
 use lenso_agent_prompt_static_module::StaticPromptFactory;
 use lenso_agent_session_file_module::FileSessionFactory;
 use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
-use lenso_agent_text_tools_module::TextToolsFactory;
 use lenso_agent_tools_module::ToolsFactory;
 use lenso_agent_workspace_edit_module::WorkspaceEditFactory;
 use lenso_agent_workspace_read_module::WorkspaceReadFactory;
@@ -34,7 +33,7 @@ use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, Kernel, NativeApp,
     NativeStreamHandle, ShutdownOutcome,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleRegistry};
+use lenso_native_adapter::NativeModuleRegistry;
 use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, BuiltInModule,
     CanonicalDocument, ClassPolicy, ControlPlaneError, GenerationLease, GenerationRuntime,
@@ -382,7 +381,7 @@ fn resolve_generation_with_authority(
             built_in_modules,
             adapter_profiles: vec![AdapterProfile {
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-                adapter_build_identity: "lenso-native-adapter@runtime-a42c7f7".to_owned(),
+                adapter_build_identity: "lenso-native-adapter@runtime-58c02e8".to_owned(),
                 targets: vec![target.clone()],
                 profiles: native_profiles.clone(),
             }],
@@ -617,15 +616,9 @@ fn maintenance_transition(
 
 fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
     let mut registry = NativeModuleRegistry::new();
-    let mut built_in_modules = Vec::new();
     macro_rules! register {
         ($factory:expr) => {{
             let factory = $factory;
-            built_in_modules.push(BuiltInModule {
-                package_id: factory.package_id().to_owned(),
-                factory_identity: factory.factory_identity(),
-                execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-            });
             registry = registry.with_factory(factory);
         }};
     }
@@ -641,12 +634,20 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
     register!(NativeProcessFactory);
     register!(ProcessToolsFactory);
     register!(FilesystemSkillsFactory);
-    register!(TextToolsFactory);
     register!(ToolsFactory);
     register!(WorkspaceEditFactory);
     register!(WorkspaceReadFactory);
     register!(FileSessionFactory);
     register!(EnvSecretsFactory::new());
+    registry = registry.with_linked_factories();
+    let mut built_in_modules = registry
+        .factories()
+        .map(|factory| BuiltInModule {
+            package_id: factory.package_id().to_owned(),
+            factory_identity: factory.factory_identity(),
+            execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        })
+        .collect::<Vec<_>>();
     built_in_modules.sort_by(|left, right| left.factory_identity.cmp(&right.factory_identity));
     (registry, built_in_modules)
 }

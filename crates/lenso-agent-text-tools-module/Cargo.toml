@@ -8,12 +8,17 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[package.metadata.lenso]
+package-id = "lenso.agent.text-tools"
+
 [dependencies]
-futures.workspace = true
-lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
-lenso-kernel.workspace = true
+lenso-agent-module.workspace = true
 lenso-native-adapter.workspace = true
+schemars = "1.1"
 serde.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
 serde_json.workspace = true
 
 [lints]

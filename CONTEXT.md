@@ -21,11 +21,12 @@ on this repository.
 The current host baseline selects released `lenso-app-plan 0.1.2` and
 `lenso-kernel 0.1.7`. It pins `lenso-runner` and `lenso-native-adapter` to
 `lenso-runtime-rust` revision
-`a42c7f7e160513968aaef33af087d76cff8adc99`, the merged Runtime revision
-that also contains `lenso-plugin-control-plane` and the preview Wasm Component,
-QuickJS, and native-dylib Execution Adapters, and projects declared Plugin
-request/stream operation kinds into the Plan. The CLI now uses the generic
-control plane to admit and lock reviewed passive releases plus executable
+`58c02e882b90147c2fb0c7a4a5d778ad083ab1c4`, the merged Runtime revision
+that also contains `lenso-plugin-control-plane`, the preview Wasm Component,
+QuickJS, and native-dylib Execution Adapters, and the source-derived native
+Module factory catalog. The catalog records code linked into the Host; it does
+not discover dependencies or activate Module Instances. The CLI now uses the
+generic control plane to admit and lock reviewed passive releases plus executable
 contributions registered in a product-owned Plugin Profile Catalog, resolve and
 stage one initial App Generation, and pin each Turn with a Generation lease.
 Before the Ready Gate, the Host content-addresses the canonical Generation Spec
@@ -133,6 +134,8 @@ completed-turn history from the Session log.
   children below an explicitly configured root. They snapshot at startup,
   enforce path and byte limits, and never execute Skill assets or scripts.
 - No Harness Module may discover dependencies through a global registry.
+- The generated native factory catalog is Host build availability, not Module
+  dependency discovery; only the immutable Plan may activate and bind an entry.
 - Every invocation is bounded by Plan admission, deadlines, cancellation, and
   product limits. There is no unbounded queue or implicit retry loop.
 - Model calls and Tool calls are never replayed automatically after uncertain

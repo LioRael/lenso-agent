@@ -1,111 +1,35 @@
 //! Removable, stateless text Tool Provider Plugin Module.
 
-use std::rc::Rc;
+use lenso_agent_module as agent;
 
-use futures::future::{LocalBoxFuture, ready};
-use lenso_capability_agent_tool_provider::{
-    CatalogError, CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteRequest, ExecuteResponse, ExecuteResponseContentType, ToolProviderEndpoint,
-    ToolProviderProvider,
-};
-use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
-
-/// Runtime package identity selected by the Plugin contribution.
-pub const PACKAGE_ID: &str = "lenso.agent.text-tools";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Exact Host Build identity referenced by reviewed Plugin Manifests.
-pub const FACTORY_IDENTITY: &str = "lenso.agent.text-tools@0.1.0";
 /// Stable Tool name exposed only while the Plugin is active.
 pub const UPPERCASE_TOOL: &str = "text.uppercase";
 
 const MAX_TEXT_BYTES: usize = 4_096;
 
-/// Native factory linked into the Host but activated only by Plugin Composition.
-#[derive(Clone, Debug, Default)]
-pub struct TextToolsFactory;
-
-impl NativeModuleFactory for TextToolsFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
-    }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn factory_identity(&self) -> String {
-        FACTORY_IDENTITY.to_owned()
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" || context.configuration() != "{}" {
-            return Err(RuntimeFailure::InvalidResolvedPlan {
-                detail: "text-tools requires the default entrypoint and empty configuration"
-                    .to_owned(),
-            });
-        }
-        let endpoint =
-            Rc::new(ToolProviderEndpoint::new(TextToolsProvider)) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::new(vec![endpoint]))
-    }
+#[derive(agent::JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UppercaseArguments {
+    #[schemars(length(max = 4096))]
+    text: String,
 }
 
-#[derive(Clone, Debug)]
-struct TextToolsProvider;
-
-impl ToolProviderProvider for TextToolsProvider {
-    fn catalog(
-        &self,
-        _context: InvocationContext,
-        _request: CatalogRequest,
-    ) -> LocalBoxFuture<'static, Result<Result<CatalogResponse, CatalogError>, RuntimeFailure>>
-    {
-        Box::pin(ready(Ok(Ok(CatalogResponse {
-            tools: vec![CatalogResponseToolsItem {
-                name: UPPERCASE_TOOL.to_owned(),
-                description: "Convert one bounded UTF-8 string to uppercase.".to_owned(),
-                input_schema_json: r#"{"additionalProperties":false,"properties":{"text":{"maxLength":4096,"type":"string"}},"required":["text"],"type":"object"}"#.to_owned(),
-            }],
-        }))))
-    }
-
-    fn execute(
-        &self,
-        _context: InvocationContext,
-        request: ExecuteRequest,
-    ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
-    {
-        let result = execute_now(&request);
-        Box::pin(ready(Ok(result)))
-    }
-}
-
-fn execute_now(request: &ExecuteRequest) -> Result<ExecuteResponse, ExecuteError> {
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct Arguments {
-        text: String,
-    }
-    if request.name != UPPERCASE_TOOL {
-        return Err(ExecuteError::NotFound);
-    }
-    let arguments = serde_json::from_str::<Arguments>(&request.arguments_json)
-        .map_err(|_| ExecuteError::InvalidArguments)?;
+#[agent::tool(
+    name = UPPERCASE_TOOL,
+    description = "Convert one bounded UTF-8 string to uppercase."
+)]
+fn uppercase(arguments: UppercaseArguments) -> Result<agent::ToolOutput, agent::ToolError> {
     if arguments.text.len() > MAX_TEXT_BYTES {
-        return Err(ExecuteError::OutputLimitExceeded);
+        return Err(agent::ToolError::OutputLimitExceeded);
     }
-    let content = arguments.text.to_uppercase();
+    let UppercaseArguments { text } = arguments;
+    let content = text.to_uppercase();
     if content.len() > MAX_TEXT_BYTES {
-        return Err(ExecuteError::OutputLimitExceeded);
+        return Err(agent::ToolError::OutputLimitExceeded);
     }
-    Ok(ExecuteResponse {
+    Ok(agent::ToolOutput {
         content,
-        content_type: ExecuteResponseContentType::Text,
+        content_type: agent::ToolOutputType::Text,
         metadata_json: r#"{"operation":"uppercase"}"#.to_owned(),
     })
 }
@@ -113,28 +37,61 @@ fn execute_now(request: &ExecuteRequest) -> Result<ExecuteResponse, ExecuteError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent::__private::{
+        CancellationToken, CatalogRequest, ExecuteRequest, InvocationContext, ToolProviderProvider,
+    };
 
     #[test]
-    fn uppercase_is_bounded_and_rejects_unknown_tools_or_arguments() {
-        let response = execute_now(&ExecuteRequest {
-            name: UPPERCASE_TOOL.to_owned(),
-            arguments_json: r#"{"text":"Lenso plugin"}"#.to_owned(),
+    fn uppercase_is_bounded() {
+        let response = uppercase(UppercaseArguments {
+            text: "Lenso plugin".to_owned(),
         })
         .unwrap();
         assert_eq!(response.content, "LENSO PLUGIN");
+
+        let oversized = "x".repeat(MAX_TEXT_BYTES + 1);
         assert!(matches!(
-            execute_now(&ExecuteRequest {
+            uppercase(UppercaseArguments { text: oversized }),
+            Err(agent::ToolError::OutputLimitExceeded)
+        ));
+    }
+
+    #[test]
+    fn generated_provider_derives_schema_and_dispatches_safely() {
+        let context = || InvocationContext::new(1, None, CancellationToken::new());
+        let catalog = futures::executor::block_on(ToolProviderProvider::catalog(
+            &__LensoToolProvider_uppercase,
+            context(),
+            CatalogRequest {},
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(catalog.tools.len(), 1);
+        let schema: serde_json::Value =
+            serde_json::from_str(&catalog.tools[0].input_schema_json).unwrap();
+        assert_eq!(schema["properties"]["text"]["maxLength"], 4096);
+        assert_eq!(schema["additionalProperties"], false);
+
+        let unknown = futures::executor::block_on(ToolProviderProvider::execute(
+            &__LensoToolProvider_uppercase,
+            context(),
+            ExecuteRequest {
                 name: "text.unknown".to_owned(),
                 arguments_json: "{}".to_owned(),
-            }),
-            Err(ExecuteError::NotFound)
-        ));
-        assert!(matches!(
-            execute_now(&ExecuteRequest {
+            },
+        ))
+        .unwrap();
+        assert!(matches!(unknown, Err(agent::ToolError::NotFound)));
+
+        let invalid = futures::executor::block_on(ToolProviderProvider::execute(
+            &__LensoToolProvider_uppercase,
+            context(),
+            ExecuteRequest {
                 name: UPPERCASE_TOOL.to_owned(),
                 arguments_json: r#"{"extra":true,"text":"x"}"#.to_owned(),
-            }),
-            Err(ExecuteError::InvalidArguments)
-        ));
+            },
+        ))
+        .unwrap();
+        assert!(matches!(invalid, Err(agent::ToolError::InvalidArguments)));
     }
 }
