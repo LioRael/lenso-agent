@@ -15,11 +15,13 @@ contracts.
 - Treat native Rust, Bun, and installed package code as trusted. Do not claim
   process or `node:vm` execution is a security sandbox. Untrusted code requires
   a reviewed Wasm or isolated-process Adapter.
-- Until the source-first Capability migration lands, Capability Descriptors and
-  package-local Schemas remain the source of truth and generated Rust/TypeScript
-  bindings must not be hand-edited. For Modules already migrated to the
-  source-first authoring Interface, do not restore hand-written factories,
-  endpoint glue, Schemas, or Host registration.
+- For a source-first Capability crate, its annotated Rust contract is the
+  authoring source; committed Descriptors and package-local Schemas are locked
+  cross-language artifacts and generated Rust/TypeScript bindings must not be
+  hand-edited. Unmigrated Capability crates still own their Descriptor and
+  Schemas directly. For Modules already migrated to source-first authoring, do
+  not restore hand-written factories, endpoint glue, Schemas, or Host
+  registration.
 - Edit App variants through `composition/recipes.json` and ordinary reusable
   Project fragments under `composition/fragments`. Never hand-edit
   `composition/*/resolved-plan.json` Plans. Run `lenso compose resolve` and

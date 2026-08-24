@@ -1355,7 +1355,7 @@ name = "lenso-capability-agent"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1367,7 +1367,7 @@ name = "lenso-capability-agent-auth-openai-codex"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1379,7 +1379,7 @@ name = "lenso-capability-agent-model"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1391,7 +1391,7 @@ name = "lenso-capability-agent-process"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1403,7 +1403,7 @@ name = "lenso-capability-agent-prompt"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1415,7 +1415,7 @@ name = "lenso-capability-agent-prompt-provider"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1427,7 +1427,7 @@ name = "lenso-capability-agent-session"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1439,9 +1439,11 @@ name = "lenso-capability-agent-tool-provider"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -1451,7 +1453,7 @@ name = "lenso-capability-agent-tools"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
@@ -1464,11 +1466,31 @@ version = "0.1.0"
 source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=8fcef31d2f27b3b1bb8785855613b14e273a3e96#8fcef31d2f27b3b1bb8785855613b14e273a3e96"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
+ "lenso-contract-codegen 0.5.2",
  "lenso-contract-runtime",
  "lenso-kernel",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-contract-authoring"
+version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=e3a0c07e631a5a04ee6348ebc64d8070c40d73f5#e3a0c07e631a5a04ee6348ebc64d8070c40d73f5"
+dependencies = [
+ "lenso-contract-authoring-macros",
+ "schemars",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-contract-authoring-macros"
+version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=e3a0c07e631a5a04ee6348ebc64d8070c40d73f5#e3a0c07e631a5a04ee6348ebc64d8070c40d73f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -1477,6 +1499,16 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d705a51256e28e1c835c86dc8de83aa4472f01d51ffbdd40345227ec20e10af"
 dependencies = [
+ "semver",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-contract-codegen"
+version = "0.6.0"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=e3a0c07e631a5a04ee6348ebc64d8070c40d73f5#e3a0c07e631a5a04ee6348ebc64d8070c40d73f5"
+dependencies = [
+ "lenso-contract-authoring",
  "semver",
  "serde_json",
 ]
