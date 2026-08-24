@@ -27,6 +27,7 @@ lenso-agent-text-tools-module = { path = "../../crates/lenso-agent-text-tools-mo
 lenso-agent-workspace-edit-module = { path = "../../crates/lenso-agent-workspace-edit-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
+lenso-capability-agent-model = { path = "../../crates/lenso-capability-agent-model" }
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
 futures.workspace = true
 fs2.workspace = true

@@ -21,18 +21,20 @@ on this repository.
 The current host baseline selects released `lenso-app-plan 0.1.2` and
 `lenso-kernel 0.1.7`. It pins `lenso-runner` and `lenso-native-adapter` to
 `lenso-runtime-rust` revision
-`25812bcbaf3b488d1a03f1864eb0130b53cadd93`, the merged Runtime revision
+`a42c7f7e160513968aaef33af087d76cff8adc99`, the merged Runtime revision
 that also contains `lenso-plugin-control-plane` and the preview Wasm Component,
-QuickJS, and native-dylib Execution Adapters. The CLI now uses the generic
+QuickJS, and native-dylib Execution Adapters, and projects declared Plugin
+request/stream operation kinds into the Plan. The CLI now uses the generic
 control plane to admit and lock reviewed passive releases plus executable
 contributions registered in a product-owned Plugin Profile Catalog, resolve and
 stage one initial App Generation, and pin each Turn with a Generation lease.
-The Catalog currently contains one exact native Tool Provider entry and derives
-only append-to-`many` attachments. Plugin removal atomically deletes active
-Release and Instance authority for the next Generation. The non-native Adapter
+The Catalog currently contains one exact native Tool Provider append-to-`many`
+entry and one restricted fixture Model Provider replace-`one` entry. Model
+replacement requires the exact base edge and allowlisted displaced package;
+removal restores the base Plan for the next Generation. The non-native Adapter
 crates remain unselected. Package presence or Catalog extensibility is not a
-claim that arbitrary executable Plugins, permissions, replacement, Generation
-provenance, or non-native execution classes are ready.
+claim that arbitrary executable Plugins, permissions, general provider
+replacement, Generation provenance, or non-native execution classes are ready.
 
 ## Product outcome
 
@@ -183,8 +185,9 @@ Web UI, approval policy, hostile-code sandboxing, marketplace Skill
 installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
-Plugin Profile Catalog entries, one/optional binding replacement, Plugin
-upgrade, Session Generation provenance, durable
+Plugin Profile Catalog entries, general `one` replacement, `optional` binding
+replacement, provider configuration selection, Plugin upgrade, Session
+Generation provenance, durable
 cross-process fencing, and overlap/rollback replacement require their own
 product slices. Replacement must stage a new Resolved App Plan and App
 Generation above the Kernel rather than mutate the running graph.

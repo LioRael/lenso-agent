@@ -4,3 +4,8 @@
 - [0002 — Own direct ChatGPT subscription access](0002-own-direct-chatgpt-subscription-access.md)
 - [0003 — Compose Prompt and Skill contributions](0003-compose-prompt-and-skill-contributions.md)
 - [0004 — Use minimal composed Tool profiles and progressive Skills](0004-use-minimal-composed-tool-profiles-and-progressive-skills.md)
+- [0005 — Bootstrap Turns through an App Generation](0005-bootstrap-turns-through-an-app-generation.md)
+- [0006 — Admit passive Plugin releases before executable Plugins](0006-admit-passive-plugin-releases-before-executable-plugins.md)
+- [0007 — Admit one native Tool Plugin profile](0007-admit-one-native-tool-plugin-profile.md)
+- [0008 — Centralize executable Plugin profiles](0008-centralize-executable-plugin-profiles.md)
+- [0009 — Admit one fixture Model replacement profile](0009-admit-one-fixture-model-replacement-profile.md)

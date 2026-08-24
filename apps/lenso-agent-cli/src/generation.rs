@@ -279,7 +279,7 @@ pub(crate) fn resolve_initial_generation(
             built_in_modules,
             adapter_profiles: vec![AdapterProfile {
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-                adapter_build_identity: "lenso-native-adapter@runtime-25812bc".to_owned(),
+                adapter_build_identity: "lenso-native-adapter@runtime-a42c7f7".to_owned(),
                 targets: vec![target.clone()],
                 profiles: native_profiles.clone(),
             }],
@@ -305,7 +305,7 @@ pub(crate) fn resolve_initial_generation(
     )
     .map_err(control_error)?;
     let authority = crate::plugins::load_generation_authority(store_root)?;
-    let bindings = crate::plugins::generation_bindings(&authority, &plan)?;
+    let composition = crate::plugins::generation_composition(&authority, &plan)?;
     let generation = resolve_generation(&ResolutionInput {
         lock: &authority.lock,
         manifests: &authority.manifests,
@@ -313,29 +313,27 @@ pub(crate) fn resolve_initial_generation(
         host_build: &host_build,
         policy: &policy,
         store: &authority.store,
-        base_instances: plan.module_instances().to_vec(),
-        bindings,
+        base_instances: composition.base_instances,
+        bindings: composition.bindings,
     })
     .map_err(control_error)?;
-    close_over_base_binding_order(generation, &plan)
+    close_over_base_binding_order(generation, &composition.preserved_base_bindings)
 }
 
 fn close_over_base_binding_order(
     mut generation: ResolvedGeneration,
-    base_plan: &ResolvedAppPlan,
+    preserved_base_bindings: &[lenso_app_plan::CapabilityBinding],
 ) -> Result<ResolvedGeneration, String> {
-    let base_keys = base_plan
-        .capability_bindings()
+    let base_keys = preserved_base_bindings
         .iter()
         .map(binding_key)
         .collect::<BTreeSet<_>>();
-    let mut bindings = base_plan
-        .capability_bindings()
+    let mut bindings = preserved_base_bindings
         .iter()
         .map(|binding| serde_json::to_value(binding).map_err(|error| error.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     let mut next_orders = BTreeMap::<(String, String), usize>::new();
-    for binding in base_plan.capability_bindings() {
+    for binding in preserved_base_bindings {
         let group = (
             binding.consumer_instance().to_owned(),
             binding.capability_id().to_owned(),

@@ -29,9 +29,10 @@ before boot.
 The host currently uses released `lenso-app-plan 0.1.2` and
 `lenso-kernel 0.1.7`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`25812bcbaf3b488d1a03f1864eb0130b53cadd93`, which closes the generic dynamic
+`a42c7f7e160513968aaef33af087d76cff8adc99`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
-Execution Adapters alongside the existing native host runtime.
+Execution Adapters alongside the existing native host runtime, and preserves
+declared request/stream operation kinds when Plugin Manifests become Plans.
 
 The CLI now passes its reviewed Resolved App Plan through the first bounded
 Plugin control-plane slice. It opens the content-addressed Plugin Store at
@@ -46,14 +47,17 @@ then drains all Generation-owned resources.
 The Host can admit reviewed passive Plugin releases plus executable profiles
 registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
 entry closes the exact package, factory, entrypoint, configuration Schema,
-Capability Descriptor and Operations, execution class, target, support/trust
-policy, and one bounded attachment rule. The first production entry admits only
-the linked `lenso.agent.text-tools@0.1.0` factory as a stateless,
-permission-free `lenso.agent.tool-provider@1` provider. Data mounts, permission
-requests, and Plugin-authored binding templates fail admission. Overlap
-replacement, rollback, durable cross-process fencing, Generation provenance in
-Session events, and product acceptance of the preview Wasm Component, QuickJS,
-and native-dylib Adapters remain deferred.
+Capability Descriptor and Operations, operation kinds, execution class, target,
+support/trust policy, canonical configuration, and one bounded attachment rule.
+The Catalog admits the linked `lenso.agent.text-tools@0.1.0` factory as a
+stateless, permission-free append-to-`many` Tool Provider. It also admits one
+restricted `lenso.agent.model.fixture@0.1.0` profile that replaces the fixture
+base Plan's exact `model` provider for the `agent` consumer. Data mounts,
+permission requests, and Plugin-authored binding templates fail admission.
+General provider/configuration replacement, overlap replacement, rollback,
+durable cross-process fencing, Generation provenance in Session events, and
+product acceptance of the preview Wasm Component, QuickJS, and native-dylib
+Adapters remain deferred.
 
 ## Install and remove a reviewed Plugin release
 
@@ -79,6 +83,16 @@ cargo run -p lenso-agent-cli -- \
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.text-tools
+
+cargo run -p lenso-agent-cli -- plugins install \
+  --bundle examples/plugins/model-fixture \
+  --evidence "review-ticket-88"
+
+cargo run -p lenso-agent-cli -- \
+  --prompt "Answer directly: hello"
+
+cargo run -p lenso-agent-cli -- plugins remove \
+  --plugin example.fixture-model
 ```
 
 Admission stores immutable objects and its receipt under
@@ -88,12 +102,15 @@ Manifest authorities, and Admission Receipt digests. The next App start
 digest-verifies that closure and includes selected artifacts and executable
 Instances in its initial Generation. The Catalog derives the registered Tool
 Provider attachment to the existing `tools` aggregator only when that consumer
-declares the exact Capability with `many` cardinality. Removing a Plugin
-atomically removes its Release, Instances, and derived bindings from the next
-Generation. Reinstalling the same Plugin ID from a different immutable Manifest
-remains an explicit future upgrade flow. Adding another Catalog entry is a Host
-code and review change, not runtime discovery or permission to replace a `one`
-binding.
+declares the exact Capability with `many` cardinality. Its Model profile
+requires `one` cardinality, the exact base `agent -> model` edge, and the
+allowlisted fixture package; it removes the displaced Instance and all of that
+Instance's bindings before resolving the next Generation. Removing either
+Plugin atomically removes its Release, Instances, and derived bindings;
+removing the Model Plugin restores the exact base Plan. Reinstalling the same
+Plugin ID from a different immutable Manifest remains an explicit future
+upgrade flow. Adding another Catalog entry is a Host code and review change,
+not runtime discovery or general permission to replace a `one` binding.
 
 ## Run the deterministic slice
 
