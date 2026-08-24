@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-24
 - Refines: ADR 0007
+- Refined by: ADR 0009
 
 ## Context
 
@@ -25,7 +26,7 @@ registration closes:
 - one Catalog registration ID, adapter profile ID, package ID, built-in factory
   identity, entrypoint, and configuration Schema digest;
 - an exact ordered set of provided Capability identities, Descriptor versions
-  and digests, and request Operations;
+  and digests, request Operations, and operation interaction kinds;
 - execution class, target, support channel, and trust level; and
 - one product-owned attachment consumer and Capability.
 
@@ -52,8 +53,9 @@ profile, provide a binding template, or mutate the Catalog.
 - Unknown, partial, duplicate, or ambiguous executable profiles fail before
   active authority is written and fail again if persisted authority is
   tampered with.
-- The current attachment mode is append-to-`many`. Model replacement and other
-  `one` or `optional` binding transitions need a separate reviewed profile
-  operation rather than hidden rebinding.
+- ADR 0008's initial attachment mode is append-to-`many`. ADR 0009 adds one
+  restricted replace-`one` operation for the fixture Model; other `one` or
+  `optional` transitions still need separate reviewed profiles rather than
+  hidden rebinding.
 - The Catalog is above Kernel and does not introduce runtime discovery, hot
   loading, or a global Capability registry.

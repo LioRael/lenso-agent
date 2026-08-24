@@ -7,6 +7,10 @@ fn plan_path() -> std::path::PathBuf {
         .join("../../composition/headless-readonly/resolved-plan.json")
 }
 
+fn fixture_model_bundle_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/model-fixture")
+}
+
 #[test]
 fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
     let workspace = tempfile::tempdir().unwrap();
@@ -116,6 +120,52 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
         .unwrap();
     assert!(!after_remove.status.success());
     assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+}
+
+#[test]
+fn reviewed_fixture_model_plugin_replaces_the_base_provider_and_runs() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(fixture_model_bundle_path())
+        .args(["--evidence", "review-ticket-88"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&install.stdout).contains("installed: example.fixture-model@1.0.0")
+    );
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Answer directly: hello"])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Plugin: Direct answer.\n"
+    );
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "remove", "--plugin", "example.fixture-model"])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
 }
 
 fn write_passive_bundle(root: &Path) {

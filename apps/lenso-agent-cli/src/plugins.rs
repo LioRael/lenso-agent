@@ -6,14 +6,14 @@ use std::{
 };
 
 use fs2::FileExt;
-use lenso_app_plan::{CapabilityBinding, ResolvedAppPlan};
+use lenso_app_plan::{CapabilityBinding, ModuleInstancePlan, ResolvedAppPlan};
 use lenso_plugin_control_plane::{
     AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedInstance, LockedPlugin,
     PluginBundle, PluginManifest, PluginSetLock, PluginStore,
 };
 use serde::{Deserialize, Serialize};
 
-use crate::plugin_profiles::{PluginProfileCatalog, harness_plugin_profiles};
+use crate::plugin_profiles::{PluginProfileCatalog, ResolvedAttachment, harness_plugin_profiles};
 
 const APP_ID: &str = "lenso.agent.harness";
 const ACTIVE_SET_FILE: &str = "active-set.json";
@@ -30,6 +30,12 @@ const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"typ
 #[cfg(test)]
 const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-tool-provider/capability.json");
+#[cfg(test)]
+const MODEL_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-model/capability.json");
+#[cfg(test)]
+const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../composition/headless-readonly/config/model.schema.json");
 
 #[derive(Debug)]
 pub enum PluginCommand {
@@ -206,6 +212,13 @@ pub(crate) struct GenerationPluginAuthority {
     pub(crate) admission_receipts: BTreeMap<String, String>,
 }
 
+#[derive(Debug)]
+pub(crate) struct GenerationComposition {
+    pub(crate) base_instances: Vec<ModuleInstancePlan>,
+    pub(crate) bindings: Vec<CapabilityBinding>,
+    pub(crate) preserved_base_bindings: Vec<CapabilityBinding>,
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct InstallOutcome {
     plugin_id: String,
@@ -326,7 +339,8 @@ fn install(
     active.lock.instances.extend(locked_instances(
         manifest.value(),
         &selected.module_contribution_ids,
-    ));
+        &profiles,
+    )?);
     active
         .lock
         .instances
@@ -421,15 +435,22 @@ pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginA
     })
 }
 
-pub(crate) fn generation_bindings(
+pub(crate) fn generation_composition(
     authority: &GenerationPluginAuthority,
     base_plan: &ResolvedAppPlan,
-) -> Result<Vec<CapabilityBinding>, String> {
+) -> Result<GenerationComposition, String> {
     let profiles = harness_plugin_profiles()?;
     if authority.lock.value().instances.is_empty() {
-        return Ok(base_plan.capability_bindings().to_vec());
+        return Ok(GenerationComposition {
+            base_instances: base_plan.module_instances().to_vec(),
+            bindings: base_plan.capability_bindings().to_vec(),
+            preserved_base_bindings: base_plan.capability_bindings().to_vec(),
+        });
     }
-    let mut bindings = base_plan.capability_bindings().to_vec();
+    let mut base_instances = base_plan.module_instances().to_vec();
+    let mut preserved_base_bindings = base_plan.capability_bindings().to_vec();
+    let mut plugin_bindings = Vec::new();
+    let mut displaced_instances = BTreeSet::new();
     let target = host_target();
     for instance in &authority.lock.value().instances {
         let manifest = authority
@@ -452,14 +473,34 @@ pub(crate) fn generation_bindings(
                     instance.instance_key
                 )
             })?;
-        bindings.push(profiles.binding_for(
-            contribution,
-            &target,
-            &instance.instance_key,
-            base_plan,
-        )?);
+        match profiles.attachment_for(contribution, &target, &instance.instance_key, base_plan)? {
+            ResolvedAttachment::AppendMany(binding) => plugin_bindings.push(binding),
+            ResolvedAttachment::ReplaceOne {
+                binding,
+                displaced_provider_instance,
+            } => {
+                if !displaced_instances.insert(displaced_provider_instance.clone()) {
+                    return Err(format!(
+                        "more than one Plugin replacement targets Instance `{displaced_provider_instance}`"
+                    ));
+                }
+                base_instances
+                    .retain(|candidate| candidate.instance_key() != displaced_provider_instance);
+                preserved_base_bindings.retain(|candidate| {
+                    candidate.consumer_instance() != displaced_provider_instance
+                        && candidate.provider_instance() != displaced_provider_instance
+                });
+                plugin_bindings.push(binding);
+            }
+        }
     }
-    Ok(bindings)
+    let mut bindings = preserved_base_bindings.clone();
+    bindings.extend(plugin_bindings);
+    Ok(GenerationComposition {
+        base_instances,
+        bindings,
+        preserved_base_bindings,
+    })
 }
 
 fn validate_active_set(
@@ -523,7 +564,8 @@ fn validate_active_set(
         expected_instances.extend(locked_instances(
             manifest.value(),
             &selected.module_contribution_ids,
-        ));
+            profiles,
+        )?);
         validate_receipt_closure(locked, release, manifest.value(), store)?;
     }
     expected_instances.sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
@@ -693,20 +735,34 @@ fn validate_selection(
 fn locked_instances(
     manifest: &PluginManifest,
     selected_contributions: &[String],
-) -> Vec<LockedInstance> {
+    profiles: &PluginProfileCatalog,
+) -> Result<Vec<LockedInstance>, String> {
+    let target = host_target();
     selected_contributions
         .iter()
-        .map(|contribution_id| LockedInstance {
-            plugin_id: manifest.plugin_id.clone(),
-            contribution_id: contribution_id.clone(),
-            instance_key: format!(
-                "plugin:{}:{}:{contribution_id}",
-                manifest.plugin_id.len(),
-                manifest.plugin_id
-            ),
-            implementation_variant: None,
-            configuration: "{}".to_owned(),
-            execution_lane: "main".to_owned(),
+        .map(|contribution_id| {
+            let contribution = manifest
+                .module_contributions
+                .iter()
+                .find(|contribution| &contribution.id == contribution_id)
+                .ok_or_else(|| {
+                    format!("selected Module contribution `{contribution_id}` is absent")
+                })?;
+            let configuration = profiles
+                .configuration_for(contribution, &target)
+                .map_err(control_error)?;
+            Ok(LockedInstance {
+                plugin_id: manifest.plugin_id.clone(),
+                contribution_id: contribution_id.clone(),
+                instance_key: format!(
+                    "plugin:{}:{}:{contribution_id}",
+                    manifest.plugin_id.len(),
+                    manifest.plugin_id
+                ),
+                implementation_variant: None,
+                configuration,
+                execution_lane: "main".to_owned(),
+            })
         })
         .collect()
 }
@@ -925,23 +981,35 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_agent_model_fixture_module::{
+        FixtureModelFactory, MODEL_ID as FIXTURE_MODEL_ID, PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
+    };
     use lenso_agent_text_tools_module::FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY;
-    use lenso_app_plan::ResolvedAppPlan;
+    use lenso_app_plan::{CapabilityOperationKind, ResolvedAppPlan};
+    use lenso_capability_agent_model::{
+        CAPABILITY_ID as MODEL_CAPABILITY_ID, COMPLETE_OPERATION as MODEL_COMPLETE_OPERATION,
+        DESCRIPTOR_VERSION as MODEL_DESCRIPTOR_VERSION,
+    };
     use lenso_capability_agent_tool_provider::{
         CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
         CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
         DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
         EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
     };
+    use lenso_native_adapter::NativeModuleFactory;
     use lenso_plugin_control_plane::{
         ArtifactDeclaration, ArtifactKind, CapabilityDeclaration, ImplementationVariant,
         ModuleContribution, PermissionRequest, PluginFeature, ProductMetadataDeclaration,
         SupportChannel, TrustLevel, sha256_digest,
     };
 
-    use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, NATIVE_TOOL_PROFILE};
+    use crate::plugin_profiles::{
+        NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, NATIVE_TOOL_PROFILE,
+    };
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
+    const OPENAI_PLAN: &[u8] =
+        include_bytes!("../../../composition/openai-codex-direct/resolved-plan.json");
 
     #[test]
     fn reviewed_passive_release_is_locked_and_closed_into_a_generation() {
@@ -1035,8 +1103,8 @@ mod tests {
         tools["required_capabilities"][0]["cardinality"] = "one".into();
         let one_plan: ResolvedAppPlan = serde_json::from_value(one_plan_value).unwrap();
         one_plan.validate().unwrap();
-        let error = generation_bindings(&authority, &one_plan).unwrap_err();
-        assert!(error.contains("as a many Capability"));
+        let error = generation_composition(&authority, &one_plan).unwrap_err();
+        assert!(error.contains("as a Many Capability"));
 
         let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
         assert_eq!(
@@ -1064,6 +1132,83 @@ mod tests {
         let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
         assert_eq!(generation.plan, approved);
         assert!(generation.artifact_set.value().instances.is_empty());
+    }
+
+    #[test]
+    fn reviewed_fixture_model_plugin_replaces_one_provider_and_removal_restores_base_plan() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        write_model_bundle(bundle.path(), "example.fixture-model");
+        install(root.path(), bundle.path(), "review-ticket-88", Vec::new()).unwrap();
+
+        let authority = load_generation_authority(root.path()).unwrap();
+        let instance_key = authority.lock.value().instances[0].instance_key.clone();
+        let composition =
+            generation_composition(&authority, &serde_json::from_slice(PLAN).unwrap()).unwrap();
+        assert!(
+            composition
+                .base_instances
+                .iter()
+                .all(|instance| instance.instance_key() != "model")
+        );
+        assert!(composition.bindings.iter().all(|binding| {
+            binding.consumer_instance() != "model" && binding.provider_instance() != "model"
+        }));
+
+        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        assert!(generation.plan.module_instance("model").is_none());
+        let replacement = generation.plan.module_instance(&instance_key).unwrap();
+        assert_eq!(replacement.package_id(), FIXTURE_MODEL_PACKAGE_ID);
+        assert_eq!(
+            replacement.configuration(),
+            format!(r#"{{"model":"{FIXTURE_MODEL_ID}"}}"#)
+        );
+        assert_eq!(
+            replacement.provided_capabilities()[0].stream_operations(),
+            [MODEL_COMPLETE_OPERATION]
+        );
+        let binding = generation
+            .plan
+            .capability_bindings()
+            .iter()
+            .find(|binding| {
+                binding.consumer_instance() == "agent"
+                    && binding.capability_id() == MODEL_CAPABILITY_ID
+            })
+            .unwrap();
+        assert_eq!(binding.provider_instance(), instance_key);
+        assert_eq!(binding.provider_order(), 0);
+
+        remove(root.path(), "example.fixture-model").unwrap();
+        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        assert_eq!(generation.plan, approved);
+    }
+
+    #[test]
+    fn fixture_model_replacement_is_restricted_to_the_fixture_base_profile() {
+        let root = tempfile::tempdir().unwrap();
+        let bundle = tempfile::tempdir().unwrap();
+        write_model_bundle(bundle.path(), "example.fixture-model");
+        install(root.path(), bundle.path(), "review-ticket-89", Vec::new()).unwrap();
+
+        let error =
+            crate::generation::resolve_initial_generation(OPENAI_PLAN, root.path()).unwrap_err();
+        assert!(error.contains("cannot displace package `lenso.agent.model.openai-codex-direct`"));
+    }
+
+    #[test]
+    fn two_fixture_model_replacements_for_one_base_instance_fail_closed() {
+        let root = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        write_model_bundle(first.path(), "example.fixture-model-a");
+        write_model_bundle(second.path(), "example.fixture-model-b");
+        install(root.path(), first.path(), "review-ticket-90", Vec::new()).unwrap();
+        install(root.path(), second.path(), "review-ticket-91", Vec::new()).unwrap();
+
+        let error = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap_err();
+        assert!(error.contains("more than one Plugin replacement targets Instance `model`"));
     }
 
     #[test]
@@ -1126,6 +1271,7 @@ mod tests {
                         TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
                         TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
                     ],
+                    operation_kinds: BTreeMap::new(),
                 }],
                 requires: Vec::new(),
                 implementations: vec![ImplementationVariant {
@@ -1136,6 +1282,54 @@ mod tests {
                     execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                     targets: vec![host_target()],
                     profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
+                    support_channel: SupportChannel::Stable,
+                    trust: TrustLevel::Trusted,
+                }],
+                permission_request_ids: Vec::new(),
+                state: None,
+            }],
+            data_contributions: Vec::new(),
+            permission_requests: Vec::new(),
+            features: Vec::new(),
+            binding_templates: Vec::new(),
+            product_metadata: Vec::new(),
+        };
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn write_model_bundle(root: &Path, plugin_id: &str) {
+        let manifest = PluginManifest {
+            schema_version: 1,
+            plugin_id: plugin_id.to_owned(),
+            release_version: "1.0.0".to_owned(),
+            artifacts: Vec::new(),
+            module_contributions: vec![ModuleContribution {
+                id: "fixture-model".to_owned(),
+                package_id: FIXTURE_MODEL_PACKAGE_ID.to_owned(),
+                configuration_schema_digest: sha256_digest(FIXTURE_MODEL_CONFIGURATION_SCHEMA),
+                provides: vec![CapabilityDeclaration {
+                    capability_id: MODEL_CAPABILITY_ID.to_owned(),
+                    descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
+                    descriptor_digest: sha256_digest(MODEL_DESCRIPTOR),
+                    request_operations: vec![MODEL_COMPLETE_OPERATION.to_owned()],
+                    operation_kinds: BTreeMap::from([(
+                        MODEL_COMPLETE_OPERATION.to_owned(),
+                        CapabilityOperationKind::Stream,
+                    )]),
+                }],
+                requires: Vec::new(),
+                implementations: vec![ImplementationVariant {
+                    id: "native".to_owned(),
+                    artifact: None,
+                    built_in_factory: Some(FixtureModelFactory.factory_identity()),
+                    entrypoint: "default".to_owned(),
+                    execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+                    targets: vec![host_target()],
+                    profiles: vec![NATIVE_MODEL_PROFILE.to_owned()],
                     support_channel: SupportChannel::Stable,
                     trust: TrustLevel::Trusted,
                 }],
