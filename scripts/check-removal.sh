@@ -6,7 +6,8 @@ temporary_project="$(mktemp "${repo_root}/.lenso-removal.XXXXXX.json")"
 temporary_openai_project="$(mktemp "${repo_root}/.lenso-openai-removal.XXXXXX.json")"
 temporary_direct_project="$(mktemp "${repo_root}/.lenso-direct-removal.XXXXXX.json")"
 temporary_prompt_project="$(mktemp "${repo_root}/.lenso-prompt-removal.XXXXXX.json")"
-trap 'rm -f "${temporary_project}" "${temporary_openai_project}" "${temporary_direct_project}" "${temporary_prompt_project}"' EXIT
+temporary_skills_project="$(mktemp "${repo_root}/.lenso-skills-removal.XXXXXX.json")"
+trap 'rm -f "${temporary_project}" "${temporary_openai_project}" "${temporary_direct_project}" "${temporary_prompt_project}" "${temporary_skills_project}"' EXIT
 
 node - "${repo_root}/lenso.json" "${temporary_project}" <<'NODE'
 const fs = require("node:fs");
@@ -106,4 +107,24 @@ NODE
 
 lenso check \
   --project "${temporary_prompt_project}" \
+  --execution-class lenso.native-rust@1
+
+node - \
+  "${repo_root}/lenso.openai-codex-direct-skills.json" \
+  "${temporary_skills_project}" <<'NODE'
+const fs = require("node:fs");
+const [source, target] = process.argv.slice(2);
+const project = JSON.parse(fs.readFileSync(source, "utf8"));
+project.composition.modules = project.composition.modules.filter(
+  (module) => module.key !== "skills",
+);
+project.composition.bindings = project.composition.bindings.filter(
+  (binding) => binding.provider !== "skills",
+);
+delete project.packages["lenso.agent.skills.filesystem"];
+fs.writeFileSync(target, `${JSON.stringify(project, null, 2)}\n`);
+NODE
+
+lenso check \
+  --project "${temporary_skills_project}" \
   --execution-class lenso.native-rust@1

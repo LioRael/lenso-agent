@@ -20,6 +20,7 @@ members = [
     "crates/lenso-agent-prompt-module",
     "crates/lenso-agent-prompt-static-module",
     "crates/lenso-agent-session-file-module",
+    "crates/lenso-agent-skills-filesystem-module",
     "crates/lenso-agent-tools-module",
     "crates/lenso-agent-workspace-read-module",
     "crates/lenso-agent-cli-module",

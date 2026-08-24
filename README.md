@@ -13,9 +13,9 @@ owns:
 - validation commands that keep generated artifacts fresh;
 - deterministic, OpenAI-compatible, and experimental direct ChatGPT
   subscription Model Modules; Tool Runtime; Prompt aggregation; static
-  Prompt/Skill contributions; and workspace-read, file Session, Agent Loop,
-  and CLI Modules; and
-- three checked App Compositions plus their canonical Resolved App Plans.
+  Prompt/Skill contributions; and workspace-read, filesystem Skill catalog,
+  file Session, Agent Loop, and CLI Modules; and
+- four checked App Compositions plus their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
@@ -103,6 +103,41 @@ then check and resolve the project again. The Module does not enumerate
 unselected directories, execute referenced scripts, follow a Skill outside the
 configured root, or observe file changes after startup. A missing or malformed
 selected Skill prevents the App from becoming ready.
+
+### Discover Skills on demand
+
+`lenso.agent.skills.filesystem` is an ordinary Tool Provider for progressive
+Skill disclosure. It snapshots the immediate
+`~/.agents/skills/<name>/SKILL.md` children during startup and contributes two
+Tools:
+
+- `skills.list` returns only ordered names, descriptions, and SHA-256 content
+  versions;
+- `skills.read` returns the full snapshotted document for one exact name.
+
+The Module enforces catalog count, per-file, aggregate content, and catalog
+output limits. It rejects invalid UTF-8, malformed name/description
+frontmatter, directory/name mismatches, and symlink escapes. It never executes
+referenced scripts or assets and does not observe filesystem changes until the
+next App generation.
+
+The opt-in ChatGPT Subscription composition enables this catalog without
+changing the base direct profile:
+
+```sh
+lenso check --project lenso.openai-codex-direct-skills.json \
+  --execution-class lenso.native-rust@1
+lenso resolve --project lenso.openai-codex-direct-skills.json \
+  --execution-class lenso.native-rust@1 \
+  --output composition/openai-codex-direct-skills/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan composition/openai-codex-direct-skills/resolved-plan.json \
+  --prompt "List available Skills, read the most relevant one, then use it."
+```
+
+This profile requires `~/.agents/skills` to exist. The base
+`lenso.openai-codex-direct.json` remains portable and does not inspect that
+directory.
 
 ## Validate
 

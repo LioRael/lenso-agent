@@ -715,6 +715,7 @@ dependencies = [
  "lenso-agent-prompt-module",
  "lenso-agent-prompt-static-module",
  "lenso-agent-session-file-module",
+ "lenso-agent-skills-filesystem-module",
  "lenso-agent-tools-module",
  "lenso-agent-workspace-read-module",
  "lenso-app-plan",
@@ -858,6 +859,21 @@ dependencies = [
  "serde_json",
  "tempfile",
  "uuid",
+]
+
+[[package]]
+name = "lenso-agent-skills-filesystem-module"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "futures",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
