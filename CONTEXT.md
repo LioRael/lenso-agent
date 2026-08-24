@@ -6,9 +6,9 @@ This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, composable Prompt/Skill
 contributions, a CLI Runner, and the
-checked `headless-readonly`, `openai-readonly`, experimental
-`openai-codex-direct`, and opt-in `openai-codex-direct-skills` App
-Compositions.
+checked `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
+`openai-codex-direct`, opt-in `openai-codex-direct-skills`, and opt-in
+`openai-codex-direct-coding` App Compositions.
 
 The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
 protocol, and optional Module packages. The OpenAI-compatible profile pins the
@@ -73,9 +73,12 @@ completed-turn history from the Session log.
   streams are not substitutes for the Session log.
 - Secret values never enter App Composition, Session events, errors, Debug
   output, or Runtime Diagnostics.
-- V1 Tool access is read-only and rooted in an explicitly selected workspace.
-- V1 has no Creator Mode, Code Mode, shell/write Tools, subagents, automatic
-  compaction, or runtime code replacement.
+- Default Tool access is read-only and rooted in an explicitly selected
+  workspace. Workspace mutation exists only in explicitly selected coding
+  Compositions.
+- The initial coding profile has create-only and unique exact-edit Tools, but no
+  generic overwrite, delete, shell/process execution, approval workflow,
+  subagents, automatic compaction, or runtime code replacement.
 
 ## First executable slice
 
@@ -126,6 +129,11 @@ provides a bounded name/description Prompt catalog plus `skills.list`,
 `skills.read`, `skills.list_resources`, and `skills.read_resource`. Normal
 selection reads the matching Skill directly; `skills.list` remains available
 for diagnostics and catalog overflow.
+
+The opt-in `headless-coding` and `openai-codex-direct-coding` Compositions add
+the independent `lenso.agent.workspace-edit` Tool Provider. It atomically
+creates absent UTF-8 files and performs one unique exact replacement in an
+existing UTF-8 file. Existing readonly Compositions remain unchanged.
 
 ## Deferred direction
 

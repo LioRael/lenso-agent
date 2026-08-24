@@ -21,6 +21,7 @@ use lenso_agent_prompt_static_module::StaticPromptFactory;
 use lenso_agent_session_file_module::FileSessionFactory;
 use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
 use lenso_agent_tools_module::ToolsFactory;
+use lenso_agent_workspace_edit_module::WorkspaceEditFactory;
 use lenso_agent_workspace_read_module::WorkspaceReadFactory;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::{Agent, RUN_TURN_OPERATION, RunTurnRequest};
@@ -86,6 +87,7 @@ async fn run() -> Result<(), String> {
         .with_factory(StaticPromptFactory)
         .with_factory(FilesystemSkillsFactory)
         .with_factory(ToolsFactory)
+        .with_factory(WorkspaceEditFactory)
         .with_factory(WorkspaceReadFactory)
         .with_factory(FileSessionFactory)
         .with_factory(EnvSecretsFactory::new());

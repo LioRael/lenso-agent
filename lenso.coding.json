@@ -1,0 +1,473 @@
+{
+  "schema_version": 1,
+  "composition": {
+    "modules": [
+      {
+        "key": "cli",
+        "package": "lenso.agent.cli",
+        "requires": [
+          {
+            "capability_id": "lenso.agent@1",
+            "descriptor_version": "1.1.0",
+            "cardinality": "one"
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "agent",
+        "package": "lenso.agent.loop",
+        "configuration": {
+          "model": "fixture/readme-summary-v1",
+          "max_steps": 8,
+          "max_tool_calls": 4,
+          "max_output_tokens": 1024,
+          "max_history_events": 200
+        },
+        "configuration_schema": "composition/headless-readonly/config/agent-loop.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent@1",
+            "descriptor_version": "1.1.0",
+            "operations": [
+              "run_turn"
+            ],
+            "operation_kinds": {
+              "run_turn": "stream"
+            },
+            "admission": {
+              "queue_capacity": 0,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "requires": [
+          {
+            "capability_id": "lenso.agent.model@1",
+            "descriptor_version": "1.1.0",
+            "cardinality": "one"
+          },
+          {
+            "capability_id": "lenso.agent.prompt@1",
+            "descriptor_version": "1.0.0",
+            "cardinality": "one"
+          },
+          {
+            "capability_id": "lenso.agent.tools@1",
+            "descriptor_version": "1.0.0",
+            "cardinality": "one"
+          },
+          {
+            "capability_id": "lenso.agent.session@1",
+            "descriptor_version": "1.1.0",
+            "cardinality": "one"
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "model",
+        "package": "lenso.agent.model.fixture",
+        "configuration": {
+          "model": "fixture/readme-summary-v1"
+        },
+        "configuration_schema": "composition/headless-readonly/config/model.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.model@1",
+            "descriptor_version": "1.1.0",
+            "operations": [
+              "complete"
+            ],
+            "operation_kinds": {
+              "complete": "stream"
+            },
+            "admission": {
+              "queue_capacity": 1,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "prompt",
+        "package": "lenso.agent.prompt",
+        "configuration": {
+          "max_contributions": 16,
+          "max_total_bytes": 65536
+        },
+        "configuration_schema": "crates/lenso-agent-prompt-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.prompt@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "assemble"
+            ],
+            "admission": {
+              "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "requires": [
+          {
+            "capability_id": "lenso.agent.prompt-provider@1",
+            "descriptor_version": "1.0.0",
+            "cardinality": "many"
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "fixture-instructions",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "id": "fixture.behavior",
+              "version": "1.0.0",
+              "kind": "instruction",
+              "content": "Prefix direct answers with `Plugin: `."
+            }
+          ]
+        },
+        "configuration_schema": "crates/lenso-agent-prompt-static-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.prompt-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "contribute"
+            ],
+            "admission": {
+              "queue_capacity": 1,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "summary-skill",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "id": "workspace.summary",
+              "version": "1.0.0",
+              "kind": "skill",
+              "content": "When summarizing a workspace file, ground the answer in the Tool result."
+            }
+          ]
+        },
+        "configuration_schema": "crates/lenso-agent-prompt-static-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.prompt-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "contribute"
+            ],
+            "admission": {
+              "queue_capacity": 1,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "tools",
+        "package": "lenso.agent.tools",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tools@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "execute"
+            ],
+            "admission": {
+              "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "requires": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "cardinality": "many"
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "workspace-read",
+        "package": "lenso.agent.workspace-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576,
+          "max_list_entries": 1000,
+          "max_search_entries": 10000,
+          "max_search_bytes": 16777216,
+          "max_search_matches": 1000
+        },
+        "configuration_schema": "composition/headless-readonly/config/workspace-read.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "execute"
+            ],
+            "admission": {
+              "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "sessions",
+        "package": "lenso.agent.session.file",
+        "configuration": {
+          "directory": ".lenso/sessions"
+        },
+        "configuration_schema": "composition/headless-readonly/config/session-file.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.session@1",
+            "descriptor_version": "1.1.0",
+            "operations": [
+              "append",
+              "open",
+              "read"
+            ],
+            "admission": {
+              "queue_capacity": 8,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      },
+      {
+        "key": "workspace-edit",
+        "package": "lenso.agent.workspace-edit",
+        "configuration": {
+          "root": ".",
+          "max_file_bytes": 1048576,
+          "max_edit_bytes": 131072
+        },
+        "configuration_schema": "crates/lenso-agent-workspace-edit-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "execute"
+            ],
+            "admission": {
+              "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      }
+    ],
+    "bindings": [
+      {
+        "consumer": "cli",
+        "capability_id": "lenso.agent@1",
+        "descriptor_version": "1.1.0",
+        "provider": "agent"
+      },
+      {
+        "consumer": "agent",
+        "capability_id": "lenso.agent.model@1",
+        "descriptor_version": "1.1.0",
+        "provider": "model"
+      },
+      {
+        "consumer": "agent",
+        "capability_id": "lenso.agent.prompt@1",
+        "descriptor_version": "1.0.0",
+        "provider": "prompt"
+      },
+      {
+        "consumer": "agent",
+        "capability_id": "lenso.agent.tools@1",
+        "descriptor_version": "1.0.0",
+        "provider": "tools"
+      },
+      {
+        "consumer": "agent",
+        "capability_id": "lenso.agent.session@1",
+        "descriptor_version": "1.1.0",
+        "provider": "sessions"
+      },
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "workspace-read"
+      },
+      {
+        "consumer": "prompt",
+        "capability_id": "lenso.agent.prompt-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "fixture-instructions"
+      },
+      {
+        "consumer": "prompt",
+        "capability_id": "lenso.agent.prompt-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "summary-skill"
+      },
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "workspace-edit"
+      }
+    ],
+    "execution_lanes": [
+      {
+        "id": "main"
+      }
+    ]
+  },
+  "packages": {
+    "lenso.agent.cli": {
+      "name": "lenso.agent.cli",
+      "package_name": "lenso-agent-cli-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.loop": {
+      "name": "lenso.agent.loop",
+      "package_name": "lenso-agent-loop-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.model.fixture": {
+      "name": "lenso.agent.model.fixture",
+      "package_name": "lenso-agent-model-fixture-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.prompt": {
+      "name": "lenso.agent.prompt",
+      "package_name": "lenso-agent-prompt-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.prompt.static": {
+      "name": "lenso.agent.prompt.static",
+      "package_name": "lenso-agent-prompt-static-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.tools": {
+      "name": "lenso.agent.tools",
+      "package_name": "lenso-agent-tools-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.workspace-read": {
+      "name": "lenso.agent.workspace-read",
+      "package_name": "lenso-agent-workspace-read-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.session.file": {
+      "name": "lenso.agent.session.file",
+      "package_name": "lenso-agent-session-file-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    },
+    "lenso.agent.workspace-edit": {
+      "name": "lenso.agent.workspace-edit",
+      "package_name": "lenso-agent-workspace-edit-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    }
+  },
+  "contracts": [
+    {
+      "capability_id": "lenso.agent@1",
+      "descriptor_version": "1.1.0",
+      "descriptor": "crates/lenso-capability-agent/capability.json",
+      "rust": "crates/lenso-capability-agent/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent/generated/bindings.ts"
+    },
+    {
+      "capability_id": "lenso.agent.model@1",
+      "descriptor_version": "1.1.0",
+      "descriptor": "crates/lenso-capability-agent-model/capability.json",
+      "rust": "crates/lenso-capability-agent-model/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent-model/generated/bindings.ts"
+    },
+    {
+      "capability_id": "lenso.agent.prompt@1",
+      "descriptor_version": "1.0.0",
+      "descriptor": "crates/lenso-capability-agent-prompt/capability.json",
+      "rust": "crates/lenso-capability-agent-prompt/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent-prompt/generated/bindings.ts"
+    },
+    {
+      "capability_id": "lenso.agent.prompt-provider@1",
+      "descriptor_version": "1.0.0",
+      "descriptor": "crates/lenso-capability-agent-prompt-provider/capability.json",
+      "rust": "crates/lenso-capability-agent-prompt-provider/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent-prompt-provider/generated/bindings.ts"
+    },
+    {
+      "capability_id": "lenso.agent.tools@1",
+      "descriptor_version": "1.0.0",
+      "descriptor": "crates/lenso-capability-agent-tools/capability.json",
+      "rust": "crates/lenso-capability-agent-tools/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent-tools/generated/bindings.ts"
+    },
+    {
+      "capability_id": "lenso.agent.tool-provider@1",
+      "descriptor_version": "1.0.0",
+      "descriptor": "crates/lenso-capability-agent-tool-provider/capability.json",
+      "rust": "crates/lenso-capability-agent-tool-provider/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent-tool-provider/generated/bindings.ts"
+    },
+    {
+      "capability_id": "lenso.agent.session@1",
+      "descriptor_version": "1.1.0",
+      "descriptor": "crates/lenso-capability-agent-session/capability.json",
+      "rust": "crates/lenso-capability-agent-session/src/generated.rs",
+      "typescript": "crates/lenso-capability-agent-session/generated/bindings.ts"
+    }
+  ],
+  "profiles": {}
+}

@@ -717,6 +717,7 @@ dependencies = [
  "lenso-agent-session-file-module",
  "lenso-agent-skills-filesystem-module",
  "lenso-agent-tools-module",
+ "lenso-agent-workspace-edit-module",
  "lenso-agent-workspace-read-module",
  "lenso-app-plan",
  "lenso-capability-agent",
@@ -887,6 +888,20 @@ dependencies = [
  "lenso-kernel",
  "lenso-native-adapter",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-workspace-edit-module"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
 ]
 
 [[package]]
