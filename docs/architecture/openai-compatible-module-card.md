@@ -29,7 +29,7 @@ Status: implementation baseline for the first real provider slice.
 ## Secrets selection
 
 The development profile selects external package `lenso.secrets.env` pinned to
-repository commit `be02927a185ebdbb463038ba79d8c6ebbea771f1`. App Composition
+repository commit `8fcef31d2f27b3b1bb8785855613b14e273a3e96`. App Composition
 maps `model/openai-api-key` to `OPENAI_API_KEY`; the resolved value never enters
 the project document or Plan. The checked contract files under
 `contracts/vendor/lenso-secrets` are an immutable generated snapshot of that

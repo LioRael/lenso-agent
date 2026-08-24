@@ -24,6 +24,57 @@ The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
 before boot.
 
+## Runtime baseline
+
+The host currently uses released `lenso-app-plan 0.1.2` and
+`lenso-kernel 0.1.7`. `lenso-runner` and `lenso-native-adapter` are locked to
+`lenso-runtime-rust` commit
+`b442dfbbb66d5a4480b28b2fa1e855f69718d1e8`, which contains the generic dynamic
+Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
+Execution Adapters alongside the existing native host runtime.
+
+The CLI now passes its reviewed Resolved App Plan through the first bounded
+Plugin control-plane slice. It opens the content-addressed Plugin Store at
+`.lenso/plugins/store`, closes the executable and installed native factories in
+a Host Build Manifest, applies a native-only Host Execution Policy, and resolves
+the validated base Plan plus an empty Plugin lock into one exact initial App
+Generation. The already-resolved base Plan, including explicit Provider order,
+remains authoritative in the Generation spec. Each Agent Turn holds a
+Generation lease until its stream reaches a terminal outcome; host shutdown
+then drains all Generation-owned resources.
+
+The Host can admit reviewed passive Plugin releases containing target-scoped
+artifacts and Product Metadata. It still selects only `lenso.native-rust@1` for
+executable Modules: releases containing Module, Data mount, permission, or
+binding contributions fail admission. Overlap replacement, rollback, durable
+cross-process fencing, Generation provenance in Session events, and product
+acceptance of the preview Wasm Component, QuickJS, and native-dylib Adapters
+remain deferred.
+
+## Install a reviewed passive Plugin release
+
+A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
+declared by that Manifest. Admission rejects undeclared files, symlinks, digest
+or size mismatches, unsupported selected targets, executable contributions, and
+unbounded review evidence.
+
+```sh
+cargo run -p lenso-agent-cli -- plugins install \
+  --bundle ./reviewed-plugin \
+  --feature extras \
+  --evidence "review-ticket-42"
+
+cargo run -p lenso-agent-cli -- plugins status
+```
+
+Admission stores immutable objects and its receipt under
+`.lenso/plugins/store`. Activation atomically writes
+`.lenso/plugins/active-set.json`, which embeds the exact `PluginSetLock`,
+Manifest authorities, and Admission Receipt digests. The next App start
+digest-verifies that closure and includes selected passive artifacts in its
+initial Generation. Reinstalling the same Plugin ID from a different immutable
+Manifest is rejected; upgrade and uninstall transitions remain future commands.
+
 ## Run the deterministic slice
 
 From the repository root:

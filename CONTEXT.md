@@ -11,10 +11,24 @@ checked `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
 `openai-codex-direct-coding` App Compositions, plus the higher-authority
 `headless-local-coding` and `openai-codex-direct-local-coding` Compositions.
 
-The Harness depends inward on released Lenso Plan, Kernel, Runtime, Adapter,
-protocol, and optional Module packages. The OpenAI-compatible profile pins the
-external Secrets package by Git revision until that package is published.
-Portable core must never depend back on this repository.
+The Harness depends inward on released Lenso Plan, Kernel, protocol, and
+optional Module packages. It temporarily pins the host Runtime and Adapter to
+one exact Git revision until the Plugin Runtime baseline is published. The
+OpenAI-compatible profile likewise pins the external Secrets package by Git
+revision until that package is published. Portable core must never depend back
+on this repository.
+
+The current host baseline selects released `lenso-app-plan 0.1.2` and
+`lenso-kernel 0.1.7`. It pins `lenso-runner` and `lenso-native-adapter` to
+`lenso-runtime-rust` revision
+`b442dfbbb66d5a4480b28b2fa1e855f69718d1e8`, the first merged Runtime revision
+that also contains `lenso-plugin-control-plane` and the preview Wasm Component,
+QuickJS, and native-dylib Execution Adapters. The CLI now uses the generic
+control plane to admit and lock reviewed passive artifact/metadata Plugin
+releases, resolve and stage one initial native-only App Generation, and pin each
+Turn with a Generation lease. The non-native Adapter crates remain unselected.
+Package presence is not a claim that executable external Plugins, permissions,
+replacement, Generation provenance, or non-native execution classes are ready.
 
 ## Product outcome
 
@@ -55,6 +69,9 @@ completed-turn history from the Session log.
   and Session selection.
 - **App Composition** owns exact Module Instances, configuration, bindings,
   execution classes, and admission limits.
+- **Agent Host control plane** owns the content-addressed Plugin Store, exact
+  Host Build Manifest, Host Execution Policy, immutable App Generation
+  resolution, Ready Gate, Turn routing lease, and Generation resource drain.
 - **Kernel** remains product-neutral and owns only its accepted portable runtime
   mechanisms.
 
@@ -62,8 +79,13 @@ completed-turn history from the Session log.
 
 - The Kernel receives one immutable Resolved App Plan. The Harness never asks a
   running Kernel to discover, install, rebind, or hot-load a plugin.
+- Every Agent Turn is admitted through a lease for one exact active App
+  Generation. Dropping the lease is required before Generation resource drain.
 - User-facing Agent plugins are ordinary packages containing one or more
   Modules that provide declared Agent Capabilities.
+- Passive Plugin Bundle admission never authorizes executable contributions.
+  The active authority must close one exact local-review Receipt, Manifest,
+  Feature selection, Product Metadata selection, and immutable Plugin lock.
 - Prompt and Skill plugins never scan or mutate the running graph; Composition
   explicitly binds their Provider Instances in deterministic order.
 - Filesystem Skill Providers read only selected documents or discovered Skill
@@ -156,7 +178,8 @@ or dropped invocation.
 Web UI, approval policy, hostile-code sandboxing, marketplace Skill
 installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
-scheduling, sandboxed Code Mode, Creator experiments, and App Generation
-require their own product slices.
-True seamless plugin-set replacement must stage a new Resolved App Plan and App
-generation above the Kernel rather than mutate the running graph.
+scheduling, sandboxed Code Mode, Creator experiments, executable Plugin
+admission, Plugin upgrade/uninstall, Session Generation provenance, durable
+cross-process fencing, and overlap/rollback replacement require their own
+product slices. Replacement must stage a new Resolved App Plan and App
+Generation above the Kernel rather than mutate the running graph.
