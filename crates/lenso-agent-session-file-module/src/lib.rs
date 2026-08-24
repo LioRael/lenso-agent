@@ -1,6 +1,12 @@
 //! Durable file-backed Session Module.
 
-use std::{cell::RefCell, fs, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    rc::Rc,
+};
 
 use futures::future::ready;
 use lenso_capability_agent_session::{
@@ -19,6 +25,57 @@ use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, Nati
 pub const PACKAGE_ID: &str = "lenso.agent.session.file";
 /// Exact linked package version.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// One validated `turn_started` event projected from the private file store.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredTurnStartedEvent {
+    /// Durable Session revision.
+    pub revision: u64,
+    /// Optional Turn identity as stored through the portable Session contract.
+    pub turn_id: Option<String>,
+    /// Opaque payload owned by the event producer.
+    pub payload_json: String,
+}
+
+/// Validate one file Session and project only its `turn_started` events.
+pub fn inspect_turn_started_events(
+    directory: &Path,
+    session_id: &str,
+) -> Result<Vec<StoredTurnStartedEvent>, String> {
+    if !valid_session_id(session_id) {
+        return Err("Session ID is invalid".to_owned());
+    }
+    let directory_metadata = fs::symlink_metadata(directory)
+        .map_err(|error| format!("failed to inspect Session directory: {error}"))?;
+    if !directory_metadata.is_dir() || directory_metadata.file_type().is_symlink() {
+        return Err("Session directory is not a regular directory".to_owned());
+    }
+    let path = directory.join(format!("{session_id}.json"));
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("failed to inspect Session record: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Session record is not a regular file".to_owned());
+    }
+    let provider = FileSessionProvider {
+        directory: directory.to_path_buf(),
+        operation_lock: Rc::new(RefCell::new(())),
+    };
+    let session = provider
+        .load(session_id)
+        .map_err(|error| format!("failed to load Session record: {error:?}"))?
+        .ok_or_else(|| format!("Session `{session_id}` was not found"))?;
+    validate_stored_session(&session)?;
+    Ok(session
+        .events
+        .into_iter()
+        .filter(|event| event.kind == "turn_started")
+        .map(|event| StoredTurnStartedEvent {
+            revision: event.revision,
+            turn_id: event.turn_id,
+            payload_json: event.payload_json,
+        })
+        .collect())
+}
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -393,6 +450,27 @@ fn read_event_kind(kind: &str) -> Option<ReadResponseEventsItemKind> {
     })
 }
 
+fn validate_stored_session(session: &StoredSession) -> Result<(), String> {
+    if session.revision != u64::try_from(session.events.len()).unwrap_or(u64::MAX) {
+        return Err("Session revision does not close its event count".to_owned());
+    }
+    let mut event_ids = BTreeSet::new();
+    for (offset, event) in session.events.iter().enumerate() {
+        let expected_revision = u64::try_from(offset)
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or_else(|| "Session revision space overflowed".to_owned())?;
+        if event.revision != expected_revision
+            || !event_ids.insert(&event.event_id)
+            || read_event_kind(&event.kind).is_none()
+            || serde_json::from_str::<serde_json::Value>(&event.payload_json).is_err()
+        {
+            return Err("Session event sequence or payload is invalid".to_owned());
+        }
+    }
+    Ok(())
+}
+
 fn valid_session_id(session_id: &str) -> bool {
     !session_id.is_empty()
         && session_id.len() <= 128
@@ -434,7 +512,10 @@ mod tests {
             kind: AppendRequestEventsItemKind::TurnStarted,
             turn_id: Some("turn-1".to_owned()),
             occurred_at: "2026-08-24T00:00:00Z".to_owned(),
-            payload_json: r#"{"input":"hello"}"#.to_owned(),
+            payload_json: format!(
+                r#"{{"generation_spec_digest":"sha256:{}","input":"hello"}}"#,
+                "a".repeat(64)
+            ),
         }
     }
 
@@ -527,5 +608,38 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(failure, OperationFailure::Runtime(_)));
+    }
+
+    #[test]
+    fn inspection_validates_the_private_store_and_projects_only_turn_starts() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("sessions");
+        let provider = FileSessionProvider {
+            directory: directory.clone(),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider.prepare_store().unwrap();
+        let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
+        provider
+            .append_now(AppendRequest {
+                session_id: opened.session_id.clone(),
+                expected_revision: "0".to_owned(),
+                events: vec![event("event-1")],
+            })
+            .unwrap();
+
+        let events = inspect_turn_started_events(&directory, &opened.session_id).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].revision, 1);
+        assert_eq!(events[0].turn_id.as_deref(), Some("turn-1"));
+        assert!(events[0].payload_json.contains("generation_spec_digest"));
+
+        let path = directory.join(format!("{}.json", opened.session_id));
+        let mut corrupted: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        corrupted["revision"] = 2.into();
+        fs::write(path, serde_json::to_vec(&corrupted).unwrap()).unwrap();
+        let error = inspect_turn_started_events(&directory, &opened.session_id).unwrap_err();
+        assert!(error.contains("does not close"));
     }
 }

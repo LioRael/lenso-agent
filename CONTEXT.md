@@ -42,6 +42,13 @@ retained by digest for explicit manual rollback through the same gate. The
 transition process shuts the preview Generation down after validation; it is
 not live hot loading or durable cross-process fencing.
 
+The CLI provides read-only provenance inspection across retained Active Sets,
+Generation Specs, and Session Turns. The File Session Module validates and
+projects its private `turn_started` records, the Agent Loop interprets its own
+payload contract, and the CLI joins them without printing user input. Missing
+or corrupt Generation Specs are observable facts; inspection never repairs,
+deletes, activates, or rolls back authority.
+
 The Catalog currently contains one exact native Tool Provider append-to-`many`
 entry, one restricted fixture Model Provider replace-`one` entry, and one
 experimental Codex Direct replacement set. The Codex set closes exact Model and
@@ -50,8 +57,8 @@ Agent model configuration. Replacement requires the exact base edge and
 allowlisted displaced package; removal restores the base Plan for the next
 Generation. The non-native Adapter crates remain unselected. Package presence
 or Catalog extensibility is not a claim that arbitrary executable Plugins,
-permissions, general provider replacement, provenance inspection/retention, or
-non-native execution classes are ready.
+permissions, general provider replacement, provenance retention/garbage
+collection, or non-native execution classes are ready.
 
 ## Product outcome
 
@@ -206,7 +213,8 @@ ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, automatic rollback,
-Generation provenance inspection and retention policy, durable cross-process
-fencing, and overlap replacement require their own product slices. Replacement
+Generation provenance retention policy and garbage collection, durable
+cross-process fencing, and overlap replacement require their own product
+slices. Replacement
 must stage a new Resolved App Plan and App Generation above the Kernel rather
 than mutate the running graph.

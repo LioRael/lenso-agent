@@ -43,9 +43,9 @@ resources after the Turn lease is released.
 - Wasm Component, QuickJS, and native-dylib packages are transitive preview
   dependencies but are absent from the Host Execution Policy and Adapter
   catalog.
-- ADR 0011 records Generation provenance in Session events. Overlap
-  replacement, rollback, durable cross-process fencing, provenance inspection,
-  and retention require later acceptance slices.
+- ADR 0011 records Generation provenance in Session events, ADR 0012 admits
+  manual rollback, and ADR 0013 provides inspection. Overlap replacement,
+  durable cross-process fencing, and retention require later acceptance slices.
 
 ## Rejected alternatives
 

@@ -54,6 +54,9 @@ boot. No contract opts into cross-lane transfer in V1.
 - Offline Plugin Release transition owns Manifest CAS, current/candidate
   Generation resolution, maintenance Ready Gate, content-addressed Active Set
   history, and atomic candidate or manual-rollback commit.
+- Provenance inspection validates Active Set and Generation content addresses,
+  while Session storage and Agent event semantics remain with their owning
+  Modules.
 
 ## First turn
 
@@ -143,6 +146,9 @@ make both the workspace root and model endpoint visible before execution.
     candidate passes a real maintenance Ready Gate before commit, manual
     rollback restores byte-identical authority, and tampered history fails
     closed.
+14. Read-only inspection tests recover retained rollback handles, close Plugin
+    authority, inspect Generation fields, trace resumed Session Turns across
+    Generations, and classify corrupted Specs without exposing Turn input.
 
 ## Deferred
 

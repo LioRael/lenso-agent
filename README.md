@@ -62,8 +62,8 @@ binding, and the coupled Agent model configuration. Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
 automatic rollback, durable cross-process fencing, Generation provenance
-inspection/retention and garbage collection, and product acceptance of the preview Wasm Component,
-QuickJS, and native-dylib Adapters remain deferred.
+retention and garbage collection, and product acceptance of the preview Wasm
+Component, QuickJS, and native-dylib Adapters remain deferred.
 
 ## Install, upgrade, roll back, and remove a reviewed Plugin release
 
@@ -95,6 +95,17 @@ cargo run -p lenso-agent-cli -- plugins upgrade \
 cargo run -p lenso-agent-cli -- plugins rollback \
   --to sha256:<previous-active-set-digest> \
   --plan composition/headless-readonly/resolved-plan.json
+
+cargo run -p lenso-agent-cli -- plugins history
+
+cargo run -p lenso-agent-cli -- plugins inspect \
+  --active-set sha256:<active-set-digest>
+
+cargo run -p lenso-agent-cli -- generations inspect \
+  --digest sha256:<generation-spec-digest>
+
+cargo run -p lenso-agent-cli -- sessions provenance \
+  --session <session-id>
 
 cargo run -p lenso-agent-cli -- \
   --prompt "Use text.uppercase to uppercase Lenso plugin."
@@ -145,7 +156,10 @@ only after an explicit Manifest CAS and a Runtime maintenance Ready Gate. It
 retains canonical authorities by digest under `.lenso/plugins/active-sets`;
 `plugins rollback` applies the same Ready-before-commit rule to an exact
 retained digest. These commands are offline transitions, not running-Kernel hot
-loading, and do not fence a concurrently starting App process. Adding another Catalog entry
+loading, and do not fence a concurrently starting App process. The read-only
+history and inspection commands validate every selected canonical record and
+its closure; Session provenance reports each Turn's Spec as available, missing,
+or invalid without rendering the stored input. Adding another Catalog entry
 is a Host code and review change, not runtime discovery or general permission to
 replace a `one` binding.
 

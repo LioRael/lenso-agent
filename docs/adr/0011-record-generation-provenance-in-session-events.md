@@ -50,9 +50,9 @@ additional provenance field.
   supplying canonical Generation provenance. The extension is product-owned
   caller context, not a hostile-code authentication boundary for trusted native
   Modules.
-- Plugin upgrade, automatic rollback, durable cross-process fencing, retention
-  and garbage collection of unreferenced Generation Specs, and a provenance
-  inspection CLI remain separate slices.
+- ADR 0012 adds Plugin upgrade and manual rollback; ADR 0013 adds provenance
+  inspection. Automatic rollback, durable cross-process fencing, retention, and
+  garbage collection of unreferenced Generation Specs remain separate slices.
 
 ## Rejected alternatives
 
