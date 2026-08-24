@@ -12,21 +12,21 @@ use std::{
 
 use futures::future::LocalBoxFuture;
 use lenso_agent_auth_openai_codex_module::OpenAiCodexAuthFactory;
-use lenso_agent_cli_module::CliModuleFactory;
-use lenso_agent_loop_module::{AgentLoopFactory, GENERATION_SPEC_DIGEST_EXTENSION};
-use lenso_agent_model_fixture_module::FixtureModelFactory;
+use lenso_agent_cli_module as _;
+use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;
+use lenso_agent_model_fixture_module as _;
 use lenso_agent_model_openai_codex_direct_module::OpenAiCodexDirectModelFactory;
 use lenso_agent_model_openai_compatible_module::OpenAiCompatibleModelFactory;
 use lenso_agent_process_native_module::NativeProcessFactory;
 use lenso_agent_process_tools_module::ProcessToolsFactory;
 use lenso_agent_prompt_filesystem_module::FilesystemPromptFactory;
-use lenso_agent_prompt_module::PromptFactory;
-use lenso_agent_prompt_static_module::StaticPromptFactory;
-use lenso_agent_session_file_module::FileSessionFactory;
+use lenso_agent_prompt_module as _;
+use lenso_agent_prompt_static_module as _;
+use lenso_agent_session_file_module as _;
 use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
-use lenso_agent_tools_module::ToolsFactory;
+use lenso_agent_tools_module as _;
 use lenso_agent_workspace_edit_module::WorkspaceEditFactory;
-use lenso_agent_workspace_read_module::WorkspaceReadFactory;
+use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::Agent;
 use lenso_kernel::{
@@ -622,22 +622,14 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
             registry = registry.with_factory(factory);
         }};
     }
-    register!(CliModuleFactory);
-    register!(AgentLoopFactory);
     register!(OpenAiCodexAuthFactory);
-    register!(FixtureModelFactory);
     register!(OpenAiCompatibleModelFactory);
     register!(OpenAiCodexDirectModelFactory);
     register!(FilesystemPromptFactory);
-    register!(PromptFactory);
-    register!(StaticPromptFactory);
     register!(NativeProcessFactory);
     register!(ProcessToolsFactory);
     register!(FilesystemSkillsFactory);
-    register!(ToolsFactory);
     register!(WorkspaceEditFactory);
-    register!(WorkspaceReadFactory);
-    register!(FileSessionFactory);
     register!(EnvSecretsFactory::new());
     registry = registry.with_linked_factories();
     let mut built_in_modules = registry

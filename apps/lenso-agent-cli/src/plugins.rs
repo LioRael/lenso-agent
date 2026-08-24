@@ -37,7 +37,7 @@ const MODEL_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-model/capability.json");
 #[cfg(test)]
 const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
-    include_bytes!("../../../composition/headless-readonly/config/model.schema.json");
+    include_bytes!("../../../crates/lenso-agent-model-fixture-module/config.schema.json");
 #[cfg(test)]
 const CODEX_MODEL_CONFIGURATION_SCHEMA: &[u8] = include_bytes!(
     "../../../crates/lenso-agent-model-openai-codex-direct-module/config.schema.json"
@@ -1633,7 +1633,8 @@ mod tests {
         OpenAiCodexAuthFactory, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
     };
     use lenso_agent_model_fixture_module::{
-        FixtureModelFactory, MODEL_ID as FIXTURE_MODEL_ID, PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
+        FACTORY_IDENTITY as FIXTURE_MODEL_FACTORY_IDENTITY, MODEL_ID as FIXTURE_MODEL_ID,
+        PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
     };
     use lenso_agent_model_openai_codex_direct_module::{
         OpenAiCodexDirectModelFactory, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
@@ -2139,7 +2140,7 @@ mod tests {
                 implementations: vec![ImplementationVariant {
                     id: "native".to_owned(),
                     artifact: None,
-                    built_in_factory: Some(FixtureModelFactory.factory_identity()),
+                    built_in_factory: Some(FIXTURE_MODEL_FACTORY_IDENTITY.to_owned()),
                     entrypoint: "default".to_owned(),
                     execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                     targets: vec![host_target()],

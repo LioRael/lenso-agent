@@ -18,35 +18,41 @@ owns:
   Prompt/Skill contributions; workspace-read, opt-in workspace-edit, structured
   process execution, and progressive-disclosure filesystem Skills; file
   Session; Agent Loop; and CLI Modules; and
-- eight checked App Compositions plus their canonical Resolved App Plans.
+- one complete source-derived App Definition, seven legacy fragment variants,
+  and their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
 before boot.
 
-## Source-derived Module proof
+## Source-derived App Definition
 
-[`composition/text-tools.app.json`](composition/text-tools.app.json) is the
-first compact App Definition. It selects the `lenso.agent.text-tools` package
-and one Instance key without repeating Capability IDs, operations, bindings,
-execution class, or lifecycle policy:
+[`composition/headless-readonly.app.json`](composition/headless-readonly.app.json)
+is the first complete App Definition. It selects eight locked Cargo packages
+and nine keyed Instances without repeating Capability IDs, operations,
+bindings, execution classes, lifecycle policy, or configuration Schemas:
 
 ```sh
-lenso app check --definition composition/text-tools.app.json
-lenso app resolve --definition composition/text-tools.app.json \
-  --output .lenso/text-tools/resolved-plan.json
+lenso app check --definition composition/headless-readonly.app.json
+lenso app resolve --definition composition/headless-readonly.app.json \
+  --output .lenso/headless-readonly/resolved-plan.json
+
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/headless-readonly/resolved-plan.json \
+  --prompt "Summarize this workspace README."
 ```
 
-The `agent::tool` source macro derives the Module Descriptor and embeds it in
-the selected Cargo artifact. The CLI reads that artifact without executing
-Module code, derives the App Composition, and emits an immutable Plan. This is
-the first vertical proof, not yet a replacement for the complete Harness
-variants below; their fragments remain until each selected Module derives an
-equivalent package descriptor.
+Each selected Module derives its identity, package-owned configuration Schema,
+Capability endpoints and Ports, execution policy, factory, and link-time Host
+registration into its Cargo artifact. The CLI reads those artifacts without
+executing Module code, validates configuration, derives eight bindings, and
+emits bytes identical to the reviewed `headless-readonly` Plan. The smaller
+[`composition/text-tools.app.json`](composition/text-tools.app.json) remains a
+single-Module authoring fixture.
 
 ## Compose an App variant
 
-App authors assemble named variants from ordinary Project fragments in
+The remaining variants still assemble from ordinary Project fragments in
 [`composition/recipes.json`](composition/recipes.json):
 
 ```json
@@ -65,7 +71,7 @@ App authors assemble named variants from ordinary Project fragments in
 }
 ```
 
-Each fragment owns one cohesive selection of ordinary Module Instances,
+Each legacy fragment owns one cohesive selection of ordinary Module Instances,
 bindings, packages, and contracts. Run one variant without managing a Plan
 path:
 
@@ -92,7 +98,7 @@ Use `lenso compose list` to inspect the available variants and
 `lenso compose check` to validate them without writing Plans. For one variant,
 add `--variant <variant-name>`.
 
-Fragments are an authoring convenience only. `lenso-authoring` expands them
+Fragments are now a migration-only authoring surface. `lenso-authoring` expands them
 into one exact ordinary Project in memory before the existing validation and
 resolution path. The tracked `composition/*/resolved-plan.json` artifacts remain
 the exact review and release authority; do not edit them by hand. `compose run`
@@ -103,10 +109,10 @@ published 0.2.34 does not.
 
 ## Runtime baseline
 
-The host currently uses released `lenso-app-plan 0.1.3` and
+The host currently uses released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.8`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`235708023d4d468d1f10665483cb6e43ba2941cc`, which closes the generic dynamic
+`13906bb13f959450dfd9f30920dccd58901fefd6`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.

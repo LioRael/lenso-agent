@@ -11,7 +11,7 @@
           "max_output_tokens": 1024,
           "max_history_events": 200
         },
-        "configuration_schema": "composition/headless-readonly/config/agent-loop.schema.json",
+        "configuration_schema": "crates/lenso-agent-loop-module/config.schema.json",
         "provides": [
           {
             "capability_id": "lenso.agent@1",
@@ -58,7 +58,7 @@
         "configuration": {
           "model": "fixture/readme-summary-v1"
         },
-        "configuration_schema": "composition/headless-readonly/config/model.schema.json",
+        "configuration_schema": "crates/lenso-agent-model-fixture-module/config.schema.json",
         "provides": [
           {
             "capability_id": "lenso.agent.model@1",
