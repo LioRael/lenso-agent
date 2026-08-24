@@ -25,6 +25,12 @@ and TypeScript projections continue to consume those locked artifacts, so the
 migration does not change the Capability identity, version, digest, wire
 contract, or cross-language authority.
 
+Agent Model is the second migration and the first source-derived Stream
+Capability. Its `Stream<Message, DomainError>` return type derives the
+interaction kind without a duplicated string annotation. The migration keeps
+the existing stream Descriptor, open/message/error Schemas, generated clients
+and providers, and plugin digest byte-identical.
+
 The current host baseline selects released `lenso-app-plan 0.1.2` and
 `lenso-kernel 0.1.7`. It pins `lenso-runner` and `lenso-native-adapter` to
 `lenso-runtime-rust` revision
