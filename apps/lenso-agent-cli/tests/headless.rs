@@ -335,6 +335,26 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
     let digests = turn_generation_digests(&session);
     assert_eq!(digests.len(), 2);
     assert_ne!(digests[0], digests[1]);
+    let provenance = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["sessions", "provenance", "--session", session_id])
+        .output()
+        .unwrap();
+    assert!(provenance.status.success());
+    let provenance_stdout = String::from_utf8(provenance.stdout).unwrap();
+    for digest in &digests {
+        assert!(provenance_stdout.contains(&format!("generation={digest} spec=available")));
+        let inspect = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(temporary.path())
+            .args(["generations", "inspect", "--digest", digest])
+            .output()
+            .unwrap();
+        assert!(inspect.status.success());
+        let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
+        assert!(inspect_stdout.contains(&format!("generation: {digest}")));
+        assert!(inspect_stdout.contains("app: lenso.agent.harness"));
+        assert!(inspect_stdout.contains("plugin-set: sha256:"));
+    }
     for digest in digests {
         let hash = digest.strip_prefix("sha256:").unwrap();
         let record = temporary
@@ -366,6 +386,15 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
         .join(".lenso/plugins/generations")
         .join(format!("{}.json", digest.strip_prefix("sha256:").unwrap()));
     fs::write(record, "{}").unwrap();
+
+    let session_id = before["session_id"].as_str().unwrap_or_default();
+    let inspect = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["sessions", "provenance", "--session", session_id])
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    assert!(String::from_utf8_lossy(&inspect.stdout).contains("spec=invalid"));
 
     let second = run(
         temporary.path(),

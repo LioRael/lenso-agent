@@ -8,6 +8,7 @@ use std::{
 mod generation;
 mod plugin_profiles;
 mod plugins;
+mod provenance;
 
 use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
@@ -28,6 +29,8 @@ enum CliCommand {
     Run(Args),
     Auth(AuthCommand),
     Plugins(plugins::PluginCommand),
+    Generations(provenance::GenerationCommand),
+    Sessions(provenance::SessionCommand),
 }
 
 #[derive(Debug)]
@@ -54,6 +57,8 @@ async fn run() -> Result<(), String> {
         CliCommand::Run(args) => args,
         CliCommand::Auth(command) => return run_auth(&command).await,
         CliCommand::Plugins(command) => return plugins::run(command).await,
+        CliCommand::Generations(command) => return provenance::run_generation(command),
+        CliCommand::Sessions(command) => return provenance::run_session(command),
     };
     let bytes = fs::read(&args.plan)
         .map_err(|error| format!("failed to read {}: {error}", args.plan.display()))?;
@@ -126,6 +131,12 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "plugins") {
         return plugins::parse_command(&raw[1..]).map(CliCommand::Plugins);
     }
+    if raw.first().is_some_and(|value| value == "generations") {
+        return provenance::parse_generation_command(&raw[1..]).map(CliCommand::Generations);
+    }
+    if raw.first().is_some_and(|value| value == "sessions") {
+        return provenance::parse_session_command(&raw[1..]).map(CliCommand::Sessions);
+    }
     let mut plan = PathBuf::from("composition/headless-readonly/resolved-plan.json");
     let mut prompt = None;
     let mut session = None;
@@ -155,7 +166,7 @@ fn parse_args() -> Result<CliCommand, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: lenso-agent-cli <plugins|auth> ... | --prompt <text> [--session <id>] [--plan <path>]".to_owned(),
+                    "usage: lenso-agent-cli <plugins|generations|sessions|auth> ... | --prompt <text> [--session <id>] [--plan <path>]".to_owned(),
                 );
             }
             unknown => return Err(format!("unknown argument `{unknown}`")),

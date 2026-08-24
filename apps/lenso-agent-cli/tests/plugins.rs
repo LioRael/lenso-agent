@@ -71,6 +71,20 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
 }
 
 #[test]
+fn provenance_inspection_does_not_create_missing_authority() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().join("missing-plugins");
+    let history = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "history", "--root"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(!history.status.success());
+    assert!(!root.exists());
+}
+
+#[test]
 fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
     let workspace = tempfile::tempdir().unwrap();
     let bundle = tempfile::tempdir().unwrap();
@@ -168,7 +182,11 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
         .output()
         .unwrap();
     assert!(!failed_cas.status.success());
-    assert!(String::from_utf8_lossy(&failed_cas.stderr).contains("compare-and-swap failed"));
+    assert!(
+        String::from_utf8_lossy(&failed_cas.stderr).contains("compare-and-swap failed"),
+        "{}",
+        String::from_utf8_lossy(&failed_cas.stderr)
+    );
     assert_eq!(
         fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
         active_before
@@ -224,6 +242,31 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
     assert_ne!(previous, upgraded);
     assert!(upgrade_stdout.contains("generation: sha256:"));
 
+    let history = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "history"])
+        .output()
+        .unwrap();
+    assert!(
+        history.status.success(),
+        "{}",
+        String::from_utf8_lossy(&history.stderr)
+    );
+    let history_stdout = String::from_utf8(history.stdout).unwrap();
+    assert!(history_stdout.contains(&format!("retained: {previous}")));
+    assert!(history_stdout.contains(&format!("current: {upgraded}")));
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "inspect", "--active-set", previous])
+        .output()
+        .unwrap();
+    assert!(inspect.status.success());
+    let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
+    assert!(inspect_stdout.contains("current: false"));
+    assert!(inspect_stdout.contains("release: example.text-tools@1.0.0"));
+    assert!(inspect_stdout.contains("instance: plugin:18:example.text-tools:text-tools"));
+
     let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
         .args(["plugins", "status"])
@@ -272,6 +315,12 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
         fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
         active_before
     );
+    let tampered_history = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "history"])
+        .output()
+        .unwrap();
+    assert!(!tampered_history.status.success());
 }
 
 #[test]

@@ -47,6 +47,54 @@ pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Host-issued Invocation Context key for the leased App Generation identity.
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 
+/// One validated Turn-to-Generation provenance reference.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnGenerationProvenance {
+    /// Durable Session revision of the `turn_started` event.
+    pub revision: u64,
+    /// Stable Turn identity.
+    pub turn_id: String,
+    /// Exact content-addressed App Generation Spec digest.
+    pub generation_spec_digest: String,
+}
+
+/// Interpret one `turn_started` payload owned by this Agent Loop.
+pub fn inspect_turn_generation_provenance(
+    revision: u64,
+    turn_id: Option<&str>,
+    payload_json: &str,
+) -> Result<TurnGenerationProvenance, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct TurnStartedPayload {
+        generation_spec_digest: String,
+        input: String,
+    }
+    let payload = serde_json::from_str::<TurnStartedPayload>(payload_json)
+        .map_err(|error| format!("Turn provenance payload is invalid: {error}"))?;
+    let _ = payload.input;
+    if !canonical_generation_digest(&payload.generation_spec_digest) {
+        return Err("Turn Generation Spec digest is invalid".to_owned());
+    }
+    Ok(TurnGenerationProvenance {
+        revision,
+        turn_id: turn_id
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "Turn provenance has no Turn ID".to_owned())?
+            .to_owned(),
+        generation_spec_digest: payload.generation_spec_digest,
+    })
+}
+
+fn canonical_generation_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
@@ -1042,5 +1090,27 @@ mod tests {
             )
             .unwrap();
         assert!(generation_spec_digest(&uppercase).is_err());
+    }
+
+    #[test]
+    fn turn_provenance_parser_owns_the_exact_agent_event_payload() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let payload = serde_json::json!({
+            "generation_spec_digest": digest,
+            "input": "hello"
+        })
+        .to_string();
+        let provenance = inspect_turn_generation_provenance(2, Some("turn-1"), &payload).unwrap();
+        assert_eq!(provenance.revision, 2);
+        assert_eq!(provenance.turn_id, "turn-1");
+        assert_eq!(provenance.generation_spec_digest, digest);
+
+        let unknown = serde_json::json!({
+            "generation_spec_digest": digest,
+            "input": "hello",
+            "unexpected": true
+        })
+        .to_string();
+        assert!(inspect_turn_generation_provenance(2, Some("turn-1"), &unknown).is_err());
     }
 }

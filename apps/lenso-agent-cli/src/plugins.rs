@@ -76,6 +76,13 @@ pub enum PluginCommand {
     Status {
         root: PathBuf,
     },
+    History {
+        root: PathBuf,
+    },
+    Inspect {
+        active_set_digest: String,
+        root: PathBuf,
+    },
 }
 
 pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
@@ -88,6 +95,8 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
         "upgrade" => parse_upgrade(&arguments[1..]),
         "rollback" => parse_rollback(&arguments[1..]),
         "status" => parse_status(&arguments[1..]),
+        "history" => parse_history(&arguments[1..]),
+        "inspect" => parse_inspect(&arguments[1..]),
         _ => Err(usage()),
     }
 }
@@ -168,7 +177,60 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             println!("generation: {}", outcome.generation_spec);
             Ok(())
         }
+        PluginCommand::History { root } => print_active_set_history(&root),
+        PluginCommand::Inspect {
+            active_set_digest,
+            root,
+        } => print_active_set(&root, &active_set_digest),
     }
+}
+
+fn print_active_set_history(root: &Path) -> Result<(), String> {
+    let (current, history) = active_set_history(root)?;
+    for (digest, active) in history {
+        let state = if digest == current {
+            "current"
+        } else {
+            "retained"
+        };
+        let lock =
+            CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
+                .map_err(control_error)?;
+        println!(
+            "{state}: {digest} plugin-set={} releases={}",
+            lock.digest(),
+            active.value().releases.len()
+        );
+    }
+    Ok(())
+}
+
+fn print_active_set(root: &Path, digest: &str) -> Result<(), String> {
+    let (active, current) = active_set_by_digest(root, digest)?;
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
+            .map_err(control_error)?;
+    println!("active-set: {}", active.digest());
+    println!("current: {current}");
+    println!("plugin-set: {}", lock.digest());
+    for release in &active.value().releases {
+        let manifest = CanonicalDocument::from_value(MANIFEST_FILE, release.manifest.clone())
+            .map_err(control_error)?;
+        println!(
+            "release: {}@{} manifest={} receipt={}",
+            release.plugin_id,
+            release.manifest.release_version,
+            manifest.digest(),
+            release.admission_receipt_digest
+        );
+    }
+    for instance in &active.value().lock.instances {
+        println!(
+            "instance: {} plugin={} contribution={}",
+            instance.instance_key, instance.plugin_id, instance.contribution_id
+        );
+    }
+    Ok(())
 }
 
 fn parse_install(arguments: &[String]) -> Result<PluginCommand, String> {
@@ -207,6 +269,35 @@ fn parse_status(arguments: &[String]) -> Result<PluginCommand, String> {
         _ => return Err(usage()),
     };
     Ok(PluginCommand::Status { root })
+}
+
+fn parse_history(arguments: &[String]) -> Result<PluginCommand, String> {
+    parse_root_only(arguments).map(|root| PluginCommand::History { root })
+}
+
+fn parse_inspect(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut active_set_digest = None;
+    let mut root = default_root();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--active-set" => active_set_digest = Some(arguments.next().ok_or_else(usage)?.clone()),
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Inspect {
+        active_set_digest: active_set_digest.ok_or_else(usage)?,
+        root,
+    })
+}
+
+fn parse_root_only(arguments: &[String]) -> Result<PathBuf, String> {
+    match arguments {
+        [] => Ok(default_root()),
+        [flag, root] if flag == "--root" => Ok(PathBuf::from(root)),
+        _ => Err(usage()),
+    }
 }
 
 fn parse_remove(arguments: &[String]) -> Result<PluginCommand, String> {
@@ -278,7 +369,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> --evidence <review> --expected-manifest <sha256:digest> --plan <path> [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> --plan <path> [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> --evidence <review> --expected-manifest <sha256:digest> --plan <path> [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> --plan <path> [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -1336,6 +1427,100 @@ fn load_active_set_record(root: &Path, digest: &str) -> Result<ActivePluginSet, 
         return Err("rollback Plugin Set record does not match its digest".to_owned());
     }
     Ok(active.into_value())
+}
+
+fn active_set_by_digest(
+    root: &Path,
+    digest: &str,
+) -> Result<(CanonicalDocument<ActivePluginSet>, bool), String> {
+    let profiles = harness_plugin_profiles()?;
+    let store = open_existing_store(root)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    if current.digest() == digest {
+        return Ok((current, true));
+    }
+    let retained = validate_active_set(load_active_set_record(root, digest)?, &store, &profiles)?;
+    if retained.digest() != digest {
+        return Err("retained Active Set does not match its requested digest".to_owned());
+    }
+    Ok((retained, false))
+}
+
+fn active_set_history(
+    root: &Path,
+) -> Result<(String, BTreeMap<String, CanonicalDocument<ActivePluginSet>>), String> {
+    let profiles = harness_plugin_profiles()?;
+    let store = open_existing_store(root)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let current_digest = current.digest().to_owned();
+    let mut history = BTreeMap::from([(current_digest.clone(), current)]);
+    let directory = root.join(ACTIVE_SET_DIRECTORY);
+    let metadata = match fs::symlink_metadata(&directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((current_digest, history));
+        }
+        Err(error) => return Err(format!("failed to inspect Active Set history: {error}")),
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("Active Set history is not a regular directory".to_owned());
+    }
+    let mut entries = fs::read_dir(&directory)
+        .map_err(|error| format!("failed to enumerate Active Set history: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to enumerate Active Set history: {error}"))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "Active Set history contains a non-UTF-8 name".to_owned())?;
+        if name.starts_with('.')
+            && Path::new(&name)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("tmp"))
+        {
+            continue;
+        }
+        let hash = name
+            .strip_suffix(".json")
+            .filter(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+            .ok_or_else(|| format!("Active Set history entry `{name}` is not content-addressed"))?;
+        let digest = format!("sha256:{hash}");
+        let active =
+            validate_active_set(load_active_set_record(root, &digest)?, &store, &profiles)?;
+        history.insert(digest, active);
+    }
+    Ok((current_digest, history))
+}
+
+fn open_existing_store(root: &Path) -> Result<PluginStore, String> {
+    for directory in [
+        root.to_path_buf(),
+        root.join("store"),
+        root.join("store/objects"),
+        root.join("store/manifests"),
+        root.join("store/receipts"),
+    ] {
+        let metadata = fs::symlink_metadata(&directory).map_err(|error| {
+            format!(
+                "failed to inspect Plugin authority directory {}: {error}",
+                directory.display()
+            )
+        })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "Plugin authority path {} is not a regular directory",
+                directory.display()
+            ));
+        }
+    }
+    PluginStore::open(root.join("store")).map_err(control_error)
 }
 
 fn record_active_set(
