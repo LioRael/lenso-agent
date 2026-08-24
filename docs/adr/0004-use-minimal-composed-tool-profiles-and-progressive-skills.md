@@ -25,8 +25,8 @@ The initial profile vocabulary is:
 
 - `readonly`: rooted observation Providers, including bounded workspace
   listing, literal text search, file reads, and Skill documents/resources;
-- `coding`: `readonly` plus separately removable workspace mutation and process
-  execution Providers when implemented; and
+- `coding`: `readonly` plus the separately removable create-only/exact-edit
+  workspace mutation Provider; process execution remains a later Provider; and
 - `automation`: explicitly selected typed domain Providers, without raw
   workspace or process authority by default.
 

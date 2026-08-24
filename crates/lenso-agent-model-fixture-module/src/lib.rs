@@ -141,6 +141,9 @@ impl FixtureModel {
         if current_user == "Navigate the workspace to find the navigation target." {
             return workspace_navigation_response(request, &tool_results);
         }
+        if current_user == "Create and edit a workspace note." {
+            return workspace_mutation_response(request, &tool_results);
+        }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
         }
@@ -322,6 +325,66 @@ fn navigation_response(first_line: &str) -> Vec<CompleteResponse> {
             "1",
             CompleteResponseKind::TextDelta,
             format!("Navigation result: {first_line}"),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteResponseKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "32",
+            "12",
+        ),
+    ]
+}
+
+fn workspace_mutation_response(
+    request: &CompleteRequest,
+    tool_results: &[&CompleteRequestMessagesItem],
+) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+    let has_mutation_tools = [
+        "workspace.write_text",
+        "workspace.edit_text",
+        "workspace.read_text",
+    ]
+    .iter()
+    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    if !has_mutation_tools {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-workspace-write",
+            "workspace.write_text",
+            r#"{"path":"note.txt","content":"before\n"}"#,
+        )),
+        [created] if created.content == "created note.txt" => Ok(named_tool_request(
+            "call-workspace-edit",
+            "workspace.edit_text",
+            r#"{"path":"note.txt","old_text":"before","new_text":"after"}"#,
+        )),
+        [_, edited] if edited.content == "edited note.txt" => Ok(named_tool_request(
+            "call-workspace-read-after-edit",
+            "workspace.read_text",
+            r#"{"path":"note.txt"}"#,
+        )),
+        [_, _, document] if document.content == "after\n" => Ok(mutation_response()),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn mutation_response() -> Vec<CompleteResponse> {
+    vec![
+        response(
+            "1",
+            CompleteResponseKind::TextDelta,
+            "Workspace mutation result: after",
             "",
             "",
             "{}",

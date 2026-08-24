@@ -21,6 +21,7 @@ lenso-agent-prompt-static-module = { path = "../../crates/lenso-agent-prompt-sta
 lenso-agent-session-file-module = { path = "../../crates/lenso-agent-session-file-module" }
 lenso-agent-skills-filesystem-module = { path = "../../crates/lenso-agent-skills-filesystem-module" }
 lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
+lenso-agent-workspace-edit-module = { path = "../../crates/lenso-agent-workspace-edit-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-app-plan.workspace = true

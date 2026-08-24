@@ -16,7 +16,7 @@ agent-cli
        |- one lenso.agent.model@1 -> openai-compatible-model
        |    `- one lenso.secrets@1 -> env-secrets
        |- one lenso.agent.tools@1 -> tool-runtime
-       |    `- many lenso.agent.tool-provider@1 -> workspace-read-tools
+       |    `- many lenso.agent.tool-provider@1 -> selected workspace providers
        |- one lenso.agent.prompt@1 -> prompt-runtime
        |    `- many lenso.agent.prompt-provider@1 -> prompt plugins
        `- one lenso.agent.session@1 -> session-log
@@ -77,10 +77,11 @@ Initial event types are `session_created`, `turn_started`, `model_requested`,
 ## Trust and authorization
 
 The App author selects all trusted packages and explicitly configures the
-remote model endpoint and allowed workspace root. `workspace-read-tools`
-normalizes paths, rejects symlink/root escapes, binary files, and bounded-size
-violations, and owns the final access decision. The Agent Loop cannot bypass
-the Tool Runtime or acquire undeclared Tool handles.
+remote model endpoint and allowed workspace root. Workspace Tool Providers
+normalize paths, reject symlink/root escapes and bounded-size violations, and
+own their final access decisions. The opt-in mutation Provider adds only
+create-absent and unique exact-edit semantics. The Agent Loop cannot bypass the
+Tool Runtime or acquire undeclared Tool handles.
 
 Model credentials resolve through `lenso.secrets@1`. They never enter model
 messages, Session payloads, errors, configuration, or diagnostics. Because
@@ -106,11 +107,13 @@ make both the workspace root and model endpoint visible before execution.
    occurs.
 8. Budget exhaustion produces a declared terminal Domain Error and a durable
    failure event.
+9. The opt-in coding fixture proves atomic create, unique exact edit, and
+   read-back; removing the mutation Provider restores the readonly graph.
 
 ## Deferred
 
 Web UI, approval workflows, marketplace Skill installation, live Skill
 watching, ordered Hooks, automatic compaction, Trajectory UI, replay
-inspection, re-execution, subagents, scheduling, shell/write Tools, Creator
-Mode, Code Mode, hostile-code isolation, multi-lane placement, and App
-Generation are separate slices.
+inspection, re-execution, subagents, scheduling, generic overwrite/delete,
+shell/process execution, Creator Mode, hostile-code isolation, multi-lane
+placement, and App Generation are separate slices.

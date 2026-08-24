@@ -13,9 +13,10 @@ owns:
 - validation commands that keep generated artifacts fresh;
 - deterministic, OpenAI-compatible, and experimental direct ChatGPT
   subscription Model Modules; Tool Runtime; Prompt aggregation; static
-  Prompt/Skill contributions; workspace-read and progressive-disclosure
-  filesystem Skills; file Session; Agent Loop; and CLI Modules; and
-- four checked App Compositions plus their canonical Resolved App Plans.
+  Prompt/Skill contributions; workspace-read, opt-in workspace-edit, and
+  progressive-disclosure filesystem Skills; file Session; Agent Loop; and CLI
+  Modules; and
+- six checked App Compositions plus their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
@@ -162,15 +163,39 @@ and explicit bindings:
 - `readonly` selects rooted observation providers such as `workspace.list`,
   `workspace.search`, `workspace.read_text`, and the filesystem Skills
   provider;
-- `coding` will add separate workspace mutation and process execution Providers
-  when those slices are implemented; and
+- `coding` adds the separate create-only/exact-edit workspace mutation Provider;
+  process execution remains a later independently removable Provider; and
 - `automation` selects explicit domain Providers and does not receive raw
   workspace or process access by default.
 
-The current checked Compositions are `readonly`. They expose no generic shell,
-write, edit, delete, browser, or network Tool. Removing a Provider and its
-bindings removes its entire Tool surface without changing the Agent Loop or
+The existing readonly Compositions still expose no generic shell, write, edit,
+delete, browser, or network Tool. The two opt-in coding Compositions add only
+`workspace.write_text` and `workspace.edit_text`; they do not add overwrite,
+delete, shell, process, browser, or network authority. Removing a Provider and
+its bindings removes its entire Tool surface without changing the Agent Loop or
 Kernel. See [ADR-0004](docs/adr/0004-use-minimal-composed-tool-profiles-and-progressive-skills.md).
+
+## Run the opt-in coding slice
+
+The deterministic coding Composition proves create, unique exact edit, and
+read-back without changing the readonly Composition:
+
+```sh
+lenso check --project lenso.coding.json --execution-class lenso.native-rust@1
+lenso resolve --project lenso.coding.json \
+  --execution-class lenso.native-rust@1 \
+  --output composition/headless-coding/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan composition/headless-coding/resolved-plan.json \
+  --prompt "Create and edit a workspace note."
+```
+
+For ChatGPT Subscription, use
+`lenso.openai-codex-direct-coding.json` and
+`composition/openai-codex-direct-coding/resolved-plan.json`. This profile is
+explicitly mutating: run it only with a reviewed workspace root. Tool arguments
+are retained in the durable Session trajectory, so do not use mutation Tools
+for credentials or other secret content.
 
 ## Validate
 

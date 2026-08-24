@@ -5,6 +5,11 @@ fn plan_path() -> std::path::PathBuf {
         .join("../../composition/headless-readonly/resolved-plan.json")
 }
 
+fn coding_plan_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../composition/headless-coding/resolved-plan.json")
+}
+
 fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
     command
@@ -445,6 +450,74 @@ fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
             .collect::<Vec<_>>(),
         ["workspace.list", "workspace.search", "workspace.read_text"]
     );
+}
+
+#[test]
+fn opt_in_coding_profile_creates_edits_then_reads_back_one_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let output = run(
+        temporary.path(),
+        &coding_plan_path(),
+        "Create and edit a workspace note.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Workspace mutation result: after\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temporary.path().join("note.txt")).unwrap(),
+        "after\n"
+    );
+
+    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let events = state["events"].as_array().unwrap();
+    let requests = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "workspace.write_text",
+            "workspace.edit_text",
+            "workspace.read_text",
+        ]
+    );
+    let mutation_results = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_result")
+        .take(2)
+        .map(|event| {
+            let payload =
+                serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                    .unwrap();
+            serde_json::from_str::<serde_json::Value>(payload["metadata_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(mutation_results[0]["operation"], "created");
+    assert_eq!(mutation_results[1]["operation"], "edited");
+    assert_eq!(mutation_results[1]["sha256"].as_str().unwrap().len(), 64);
 }
 
 #[test]
