@@ -31,10 +31,19 @@ interaction kind without a duplicated string annotation. The migration keeps
 the existing stream Descriptor, open/message/error Schemas, generated clients
 and providers, and plugin digest byte-identical.
 
-The current host baseline selects released `lenso-app-plan 0.1.2` and
-`lenso-kernel 0.1.7`. It pins `lenso-runner` and `lenso-native-adapter` to
+The text-tools package is the first Module whose ordinary `agent::tool` source
+also derives a package-owned Module Descriptor. The native authoring macro
+embeds deterministic Descriptor bytes in the Cargo artifact; authoring tools
+can inspect those bytes without loading or executing Module code. The compact
+`composition/text-tools.app.json` proof selects only a package and Instance key;
+Capability endpoints, execution policy, and Plan fields come from the artifact.
+Other Harness Modules and complete product variants remain on fragments until
+their source authoring derives equivalent descriptors.
+
+The current host baseline selects released `lenso-app-plan 0.1.3` and
+`lenso-kernel 0.1.8`. It pins `lenso-runner` and `lenso-native-adapter` to
 `lenso-runtime-rust` revision
-`58c02e882b90147c2fb0c7a4a5d778ad083ab1c4`, the merged Runtime revision
+`235708023d4d468d1f10665483cb6e43ba2941cc`, the merged Runtime revision
 that also contains `lenso-plugin-control-plane`, the preview Wasm Component,
 QuickJS, and native-dylib Execution Adapters, and the source-derived native
 Module factory catalog. The catalog records code linked into the Host; it does
