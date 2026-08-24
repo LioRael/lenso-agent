@@ -2,15 +2,18 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     env, fs,
+    fs::OpenOptions,
+    io::Write,
     path::Path,
     rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
 use futures::future::LocalBoxFuture;
 use lenso_agent_auth_openai_codex_module::OpenAiCodexAuthFactory;
 use lenso_agent_cli_module::CliModuleFactory;
-use lenso_agent_loop_module::AgentLoopFactory;
+use lenso_agent_loop_module::{AgentLoopFactory, GENERATION_SPEC_DIGEST_EXTENSION};
 use lenso_agent_model_fixture_module::FixtureModelFactory;
 use lenso_agent_model_openai_codex_direct_module::OpenAiCodexDirectModelFactory;
 use lenso_agent_model_openai_compatible_module::OpenAiCompatibleModelFactory;
@@ -28,7 +31,8 @@ use lenso_agent_workspace_read_module::WorkspaceReadFactory;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::Agent;
 use lenso_kernel::{
-    ExecutionAdapterCatalog, Kernel, NativeApp, NativeStreamHandle, ShutdownOutcome,
+    CancellationToken, ExecutionAdapterCatalog, InvocationContext, Kernel, NativeApp,
+    NativeStreamHandle, ShutdownOutcome,
 };
 use lenso_native_adapter::{NativeModuleFactory, NativeModuleRegistry};
 use lenso_plugin_control_plane::{
@@ -45,6 +49,9 @@ use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, harness_plugin_profiles};
 const APP_ID: &str = "lenso.agent.harness";
 const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
+const GENERATION_DIRECTORY: &str = "generations";
+
+static NEXT_ROOT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
 struct LiveGeneration {
@@ -188,6 +195,7 @@ impl AgentApp {
 
     async fn start_with_store(plan_bytes: &[u8], store_root: &Path) -> Result<Self, String> {
         let generation = resolve_initial_generation(plan_bytes, store_root)?;
+        record_generation_spec(store_root, &generation.spec)?;
         let transition = initial_transition(&generation).map_err(control_error)?;
         let routes = GenerationRoutes::default();
         let runtime = HarnessGenerationRuntime {
@@ -232,10 +240,97 @@ impl TurnGeneration {
         &self.handle
     }
 
-    #[cfg(test)]
+    pub fn invocation_context(&self) -> Result<InvocationContext, String> {
+        let mut request_id = NEXT_ROOT_REQUEST_ID.load(Ordering::Relaxed);
+        loop {
+            let next = request_id
+                .checked_add(1)
+                .ok_or_else(|| "Host root request identity space is exhausted".to_owned())?;
+            match NEXT_ROOT_REQUEST_ID.compare_exchange_weak(
+                request_id,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => request_id = current,
+            }
+        }
+        InvocationContext::new(request_id, None, CancellationToken::new())
+            .with_extension(
+                GENERATION_SPEC_DIGEST_EXTENSION,
+                self.generation_spec_digest().as_bytes().to_vec(),
+            )
+            .map_err(|error| format!("failed to attach Generation provenance: {error}"))
+    }
+
     fn generation_spec_digest(&self) -> &str {
         self.lease.generation_spec_digest()
     }
+}
+
+fn record_generation_spec(
+    store_root: &Path,
+    spec: &CanonicalDocument<AppGenerationSpec>,
+) -> Result<(), String> {
+    let digest = spec
+        .digest()
+        .strip_prefix("sha256:")
+        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| "Generation Spec digest is not canonical SHA-256".to_owned())?;
+    let directory = store_root.join(GENERATION_DIRECTORY);
+    fs::create_dir_all(&directory)
+        .map_err(|error| format!("failed to create Generation provenance directory: {error}"))?;
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|error| format!("failed to inspect Generation provenance directory: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("Generation provenance path is not a regular directory".to_owned());
+    }
+
+    let destination = directory.join(format!("{digest}.json"));
+    match fs::symlink_metadata(&destination) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("Generation provenance record is not a regular file".to_owned());
+            }
+            let existing = fs::read(&destination)
+                .map_err(|error| format!("failed to read Generation provenance: {error}"))?;
+            if existing != spec.bytes() {
+                return Err("Generation provenance record does not match its digest".to_owned());
+            }
+            return Ok(());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect Generation provenance record: {error}"
+            ));
+        }
+    }
+
+    let temporary = directory.join(format!(".{digest}.{}.tmp", uuid::Uuid::new_v4()));
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("failed to create Generation provenance: {error}"))?;
+        file.write_all(spec.bytes())
+            .map_err(|error| format!("failed to write Generation provenance: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("failed to sync Generation provenance: {error}"))?;
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("failed to commit Generation provenance: {error}"))?;
+        OpenOptions::new()
+            .read(true)
+            .open(&directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| format!("failed to sync Generation provenance directory: {error}"))
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    write_result
 }
 
 pub(crate) fn resolve_initial_generation(
@@ -509,6 +604,23 @@ mod tests {
         assert!(generation.artifact_set.value().instances.is_empty());
     }
 
+    #[test]
+    fn generation_spec_is_content_addressed_and_tampering_fails_closed() {
+        let directory = tempfile::tempdir().unwrap();
+        let generation = resolve_initial_generation(PLAN, directory.path()).unwrap();
+        record_generation_spec(directory.path(), &generation.spec).unwrap();
+        let digest = generation.spec.digest().strip_prefix("sha256:").unwrap();
+        let record = directory
+            .path()
+            .join(GENERATION_DIRECTORY)
+            .join(format!("{digest}.json"));
+        assert_eq!(fs::read(&record).unwrap(), generation.spec.bytes());
+
+        fs::write(&record, b"{}").unwrap();
+        let error = record_generation_spec(directory.path(), &generation.spec).unwrap_err();
+        assert!(error.contains("does not match its digest"));
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn one_turn_is_pinned_to_the_active_generation() {
         let local = tokio::task::LocalSet::new();
@@ -521,6 +633,11 @@ mod tests {
                 let turn = app.lease_turn().unwrap();
                 assert_eq!(turn.handle().binding_count(), 1);
                 assert!(!turn.generation_spec_digest().is_empty());
+                let context = turn.invocation_context().unwrap();
+                assert_eq!(
+                    context.extension(GENERATION_SPEC_DIGEST_EXTENSION),
+                    Some(turn.generation_spec_digest().as_bytes())
+                );
                 assert!(app.shutdown().await.is_err());
                 drop(turn);
                 app.shutdown().await.unwrap();

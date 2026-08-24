@@ -10,3 +10,4 @@
 - [0008 — Centralize executable Plugin profiles](0008-centralize-executable-plugin-profiles.md)
 - [0009 — Admit one fixture Model replacement profile](0009-admit-one-fixture-model-replacement-profile.md)
 - [0010 — Admit an atomic Codex Direct Plugin](0010-admit-an-atomic-codex-direct-plugin.md)
+- [0011 — Record Generation provenance in Session events](0011-record-generation-provenance-in-session-events.md)

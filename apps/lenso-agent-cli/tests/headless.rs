@@ -1,5 +1,7 @@
 use std::{fs, path::Path, process::Command};
 
+use lenso_plugin_control_plane::sha256_digest;
+
 fn plan_path() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../composition/headless-readonly/resolved-plan.json")
@@ -25,6 +27,49 @@ fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::pr
         command.args(["--session", session]);
     }
     command.output().unwrap()
+}
+
+fn install_text_tools_plugin(root: &Path) -> std::process::Output {
+    let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/text-tools");
+    Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(root)
+        .args([
+            "plugins",
+            "install",
+            "--bundle",
+            bundle.to_str().unwrap(),
+            "--evidence",
+            "generation-provenance-test",
+        ])
+        .output()
+        .unwrap()
+}
+
+fn stored_session(root: &Path) -> serde_json::Value {
+    let path = fs::read_dir(root.join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
+    session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "turn_started")
+        .map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            payload["generation_spec_digest"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
 }
 
 fn plan_with_limits(root: &Path, max_steps: u64, max_tool_calls: u64) -> std::path::PathBuf {
@@ -252,6 +297,87 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
         serde_json::from_slice(&fs::read(stored[0].path()).unwrap()).unwrap();
     assert_eq!(state["revision"], 12);
     assert_eq!(state["events"].as_array().unwrap().len(), 12);
+}
+
+#[test]
+fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Generation Fixture\n").unwrap();
+    let plan = plan_path();
+    let first = run(temporary.path(), &plan, "Answer directly: hello", None);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let first_stderr = String::from_utf8(first.stderr).unwrap();
+    let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
+
+    let install = install_text_tools_plugin(temporary.path());
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let second = run(
+        temporary.path(),
+        &plan,
+        "What did you answer?",
+        Some(session_id),
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let session = stored_session(temporary.path());
+    let digests = turn_generation_digests(&session);
+    assert_eq!(digests.len(), 2);
+    assert_ne!(digests[0], digests[1]);
+    for digest in digests {
+        let hash = digest.strip_prefix("sha256:").unwrap();
+        let record = temporary
+            .path()
+            .join(".lenso/plugins/generations")
+            .join(format!("{hash}.json"));
+        let bytes = fs::read(record).unwrap();
+        assert_eq!(sha256_digest(&bytes), digest);
+        let spec: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(spec["app_id"], "lenso.agent.harness");
+    }
+}
+
+#[test]
+fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Generation Fixture\n").unwrap();
+    let first = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: hello",
+        None,
+    );
+    assert!(first.status.success());
+    let before = stored_session(temporary.path());
+    let digest = turn_generation_digests(&before).pop().unwrap();
+    let record = temporary
+        .path()
+        .join(".lenso/plugins/generations")
+        .join(format!("{}.json", digest.strip_prefix("sha256:").unwrap()));
+    fs::write(record, "{}").unwrap();
+
+    let second = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: this must not run",
+        None,
+    );
+    assert!(!second.status.success());
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(stderr.contains("App startup failed"));
+    assert!(stderr.contains("does not match its digest"));
+    assert_eq!(stored_session(temporary.path()), before);
 }
 
 #[test]

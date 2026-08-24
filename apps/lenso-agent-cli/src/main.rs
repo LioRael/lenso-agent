@@ -13,8 +13,8 @@ use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_capability_agent::{Agent, RUN_TURN_OPERATION, RunTurnRequest};
-use lenso_kernel::{NativeStreamHandle, StreamEvent};
+use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
+use lenso_kernel::StreamEvent;
 
 #[derive(Debug)]
 struct Args {
@@ -61,16 +61,19 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
     let turn = app.lease_turn()?;
-    let result = invoke(turn.handle(), args).await;
+    let result = invoke(&turn, args).await;
     drop(turn);
     let shutdown = app.shutdown().await;
     result.and(shutdown)
 }
 
-async fn invoke(handle: &NativeStreamHandle<Agent>, args: Args) -> Result<(), String> {
-    let stream = handle
-        .open(
+async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), String> {
+    let context = turn.invocation_context()?;
+    let stream = turn
+        .handle()
+        .open_with_context(
             RUN_TURN_OPERATION,
+            context,
             RunTurnRequest {
                 input: args.prompt,
                 session_id: args.session,
