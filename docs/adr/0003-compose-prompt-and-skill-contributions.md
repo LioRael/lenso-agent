@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+The progressive, model-selected filesystem catalog originally deferred by this
+decision is specified by ADR-0004. The explicitly selected full-document
+Provider described here remains supported as a separate Composition choice.
+
 ## Context
 
 The Harness already replaces Model, Tool Provider, and Session behavior through
@@ -49,5 +53,6 @@ It does not enumerate unselected Skills, execute assets, or watch for changes.
   their full contents.
 - Changing a contribution requires resolving and restarting a new App
   generation; live mutation is deliberately unsupported.
-- Dynamic Skill discovery, model-driven selection, recursive filesystem
-  scanning, and marketplace installation remain separate product slices.
+- Marketplace installation and live filesystem watching remain separate product
+  slices. ADR-0004 adds bounded startup discovery and model-driven selection as
+  an ordinary dual Prompt/Tool Provider.

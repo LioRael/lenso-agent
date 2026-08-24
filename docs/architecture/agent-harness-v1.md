@@ -46,12 +46,15 @@ No contract opts into cross-lane transfer in V1.
 1. CLI opens `lenso.agent@1/run_turn` and closes its sending half.
 2. Agent opens or resumes the Session and atomically records `turn_started`.
 3. Agent reads the bounded Session tail and the validated Tool catalog.
-4. Agent opens `lenso.agent.model@1/complete` with normalized messages and Tool
+4. Agent assembles bounded Prompt contributions. A selected progressive Skills
+   Provider contributes only Skill names and descriptions from its startup
+   snapshot.
+5. Agent opens `lenso.agent.model@1/complete` with normalized messages and Tool
    definitions.
-5. Text deltas flow to CLI. A complete Tool call is recorded before execution.
-6. Tool Runtime validates the arguments and dispatches to the owning Provider.
-7. Agent records the Tool result and opens the next bounded Model step.
-8. Agent records `turn_completed`, closes the stream, and returns terminal
+6. Text deltas flow to CLI. A complete Tool call is recorded before execution.
+7. Tool Runtime validates the arguments and dispatches to the owning Provider.
+8. Agent records the Tool result and opens the next bounded Model step.
+9. Agent records `turn_completed`, closes the stream, and returns terminal
    success. Domain or Runtime failure records `turn_failed` or
    `turn_cancelled` before the terminal outcome when Session remains available.
 
@@ -104,7 +107,8 @@ make both the workspace root and model endpoint visible before execution.
 
 ## Deferred
 
-Web UI, approval workflows, dynamic Skill discovery and selection, ordered Hooks,
-automatic compaction, Trajectory UI, replay inspection, re-execution,
-subagents, scheduling, shell/write Tools, Creator Mode, Code Mode, hostile-code
-isolation, multi-lane placement, and App Generation are separate slices.
+Web UI, approval workflows, marketplace Skill installation, live Skill
+watching, ordered Hooks, automatic compaction, Trajectory UI, replay
+inspection, re-execution, subagents, scheduling, shell/write Tools, Creator
+Mode, Code Mode, hostile-code isolation, multi-lane placement, and App
+Generation are separate slices.

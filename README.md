@@ -13,8 +13,8 @@ owns:
 - validation commands that keep generated artifacts fresh;
 - deterministic, OpenAI-compatible, and experimental direct ChatGPT
   subscription Model Modules; Tool Runtime; Prompt aggregation; static
-  Prompt/Skill contributions; and workspace-read, filesystem Skill catalog,
-  file Session, Agent Loop, and CLI Modules; and
+  Prompt/Skill contributions; workspace-read and progressive-disclosure
+  filesystem Skills; file Session; Agent Loop; and CLI Modules; and
 - four checked App Compositions plus their canonical Resolved App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
@@ -106,20 +106,34 @@ selected Skill prevents the App from becoming ready.
 
 ### Discover Skills on demand
 
-`lenso.agent.skills.filesystem` is an ordinary Tool Provider for progressive
-Skill disclosure. It snapshots the immediate
-`~/.agents/skills/<name>/SKILL.md` children during startup and contributes two
+`lenso.agent.skills.filesystem` is an ordinary Prompt and Tool Provider for
+progressive Skill disclosure. It snapshots the immediate
+`~/.agents/skills/<name>/SKILL.md` children and their readable resources during
+startup. Its bounded Prompt contribution contains only ordered Skill names and
+descriptions. When one matches the task, the Model can call `skills.read`
+directly without a preliminary catalog Tool call. It also contributes four
 Tools:
 
 - `skills.list` returns only ordered names, descriptions, and SHA-256 content
   versions;
-- `skills.read` returns the full snapshotted document for one exact name.
+- `skills.read` returns the full snapshotted document for one exact name;
+- `skills.list_resources` returns paths, sizes, and SHA-256 versions for one
+  Skill without returning resource contents;
+- `skills.read_resource` returns one snapshotted UTF-8 resource by exact Skill
+  name and relative path.
 
-The Module enforces catalog count, per-file, aggregate content, and catalog
-output limits. It rejects invalid UTF-8, malformed name/description
-frontmatter, directory/name mismatches, and symlink escapes. It never executes
-referenced scripts or assets and does not observe filesystem changes until the
-next App generation.
+`skills.list` remains a diagnostic and overflow fallback. If the configured
+Prompt catalog byte budget cannot include every Skill, the deterministic
+catalog reports the omitted count and tells the Model to use `skills.list`.
+Skill bodies and resource contents never enter the Prompt catalog.
+
+The Module enforces catalog/resource entry, per-file, aggregate content, and
+manifest output limits. It rejects malformed Skill documents, directory/name
+mismatches, path traversal, special filesystem entries, and every resource
+symlink. Hidden, binary, and oversized resources are omitted from the readable
+manifest and reported through an omitted count. Scripts are returned only as
+text and are never executed. No file changes are observed until the next App
+generation.
 
 The opt-in ChatGPT Subscription composition enables this catalog without
 changing the base direct profile:
@@ -132,12 +146,30 @@ lenso resolve --project lenso.openai-codex-direct-skills.json \
   --output composition/openai-codex-direct-skills/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
   --plan composition/openai-codex-direct-skills/resolved-plan.json \
-  --prompt "List available Skills, read the most relevant one, then use it."
+  --prompt "Use the most relevant available Skill and one relevant resource to review this repository."
 ```
 
 This profile requires `~/.agents/skills` to exist. The base
 `lenso.openai-codex-direct.json` remains portable and does not inspect that
 directory.
+
+## Tool profiles
+
+Tool profiles are App Composition recipes, not Kernel modes or Tool Runtime
+switches. A profile expands to ordinary selected Tool Provider Module Instances
+and explicit bindings:
+
+- `readonly` selects rooted observation providers such as
+  `workspace.read_text` and the filesystem Skills provider;
+- `coding` will add separate workspace mutation and process execution Providers
+  when those slices are implemented; and
+- `automation` selects explicit domain Providers and does not receive raw
+  workspace or process access by default.
+
+The current checked Compositions are `readonly`. They expose no generic shell,
+write, edit, delete, browser, or network Tool. Removing a Provider and its
+bindings removes its entire Tool surface without changing the Agent Loop or
+Kernel. See [ADR-0004](docs/adr/0004-use-minimal-composed-tool-profiles-and-progressive-skills.md).
 
 ## Validate
 

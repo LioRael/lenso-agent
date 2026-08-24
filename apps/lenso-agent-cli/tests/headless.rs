@@ -103,14 +103,33 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
     provider["package_revision"] = "0.1.0".into();
     provider["configuration"] = serde_json::json!({
         "max_catalog_bytes": 8192,
+        "catalog_contribution_id": "agents.skills.catalog",
         "max_file_bytes": 8192,
+        "max_prompt_catalog_bytes": 8192,
         "max_skills": 16,
         "max_total_bytes": 32768,
+        "max_resource_entries": 64,
+        "max_resource_file_bytes": 8192,
+        "max_resource_total_bytes": 32768,
+        "max_resource_manifest_bytes": 8192,
         "root": skill_root,
     })
     .to_string()
     .into();
     modules.push(provider);
+
+    let prompt_capability = modules
+        .iter()
+        .find(|module| module["instance_key"] == "summary-skill")
+        .unwrap()["provided_capabilities"][0]
+        .clone();
+    modules
+        .iter_mut()
+        .find(|module| module["instance_key"] == "skills")
+        .unwrap()["provided_capabilities"]
+        .as_array_mut()
+        .unwrap()
+        .push(prompt_capability);
 
     let bindings = plan["capability_bindings"].as_array_mut().unwrap();
     let mut binding = bindings
@@ -121,6 +140,14 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
     binding["provider_instance"] = "skills".into();
     binding["provider_order"] = 1.into();
     bindings.push(binding);
+    let mut prompt_binding = bindings
+        .iter()
+        .find(|binding| binding["provider_instance"] == "summary-skill")
+        .unwrap()
+        .clone();
+    prompt_binding["provider_instance"] = "skills".into();
+    prompt_binding["provider_order"] = 2.into();
+    bindings.push(prompt_binding);
 
     let path = root.join("plan-with-on-demand-skills.json");
     fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
@@ -142,7 +169,7 @@ fn write_on_demand_skills(root: &Path) {
         (
             "rust-review",
             "Review Rust changes with project conventions.",
-            "RUST REVIEW INSTRUCTION: check ownership and error boundaries.",
+            "RUST REVIEW INSTRUCTION: check ownership and error boundaries. Read references/checklist.md when a detailed checklist is needed.",
         ),
         (
             "unused-secret",
@@ -158,6 +185,19 @@ fn write_on_demand_skills(root: &Path) {
         )
         .unwrap();
     }
+    let rust_review = root.join("rust-review");
+    fs::create_dir_all(rust_review.join("references")).unwrap();
+    fs::create_dir_all(rust_review.join("scripts")).unwrap();
+    fs::write(
+        rust_review.join("references/checklist.md"),
+        "RESOURCE CHECKLIST CONTENT: verify ownership, errors, and tests.\n",
+    )
+    .unwrap();
+    fs::write(
+        rust_review.join("scripts/do-not-run.sh"),
+        "touch resource-script-executed\n# UNREAD RESOURCE CONTENT MUST NOT REACH THE MODEL\n",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -389,9 +429,8 @@ fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    assert_eq!(requests.len(), 2);
-    assert_eq!(requests[0]["name"], "skills.list");
-    assert_eq!(requests[1]["name"], "skills.read");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["name"], "skills.read");
 
     let results = events
         .iter()
@@ -401,17 +440,94 @@ fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    assert_eq!(results.len(), 2);
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(results[0]["metadata_json"].as_str().unwrap())
-            .unwrap()["skill_count"],
-        2
-    );
+    assert_eq!(results.len(), 1);
     let read_metadata =
-        serde_json::from_str::<serde_json::Value>(results[1]["metadata_json"].as_str().unwrap())
+        serde_json::from_str::<serde_json::Value>(results[0]["metadata_json"].as_str().unwrap())
             .unwrap();
     assert_eq!(read_metadata["name"], "rust-review");
-    assert!(results[1].to_string().contains("sha256:"));
+    assert!(results[0].to_string().contains("sha256:"));
+    let model_requested = events
+        .iter()
+        .find(|event| event["kind"] == "model_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .unwrap();
+    assert!(
+        model_requested["prompt_contributions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|contribution| contribution["id"] == "agents.skills.catalog")
+    );
+}
+
+#[test]
+fn skill_resources_are_listed_then_one_resource_is_read_without_executing_scripts() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let skill_root = temporary.path().join("skills");
+    write_on_demand_skills(&skill_root);
+    let plan = plan_with_on_demand_skills(temporary.path(), &skill_root);
+    let output = run(
+        temporary.path(),
+        &plan,
+        "Use a Skill resource to review Rust.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Resource applied: Rust review used references/checklist.md.\n"
+    );
+    assert!(!temporary.path().join("resource-script-executed").exists());
+
+    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let events = state["events"].as_array().unwrap();
+    let requests = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "skills.read",
+            "skills.list_resources",
+            "skills.read_resource",
+        ]
+    );
+    let read_result = events
+        .iter()
+        .rfind(|event| event["kind"] == "tool_result")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .unwrap();
+    let metadata =
+        serde_json::from_str::<serde_json::Value>(read_result["metadata_json"].as_str().unwrap())
+            .unwrap();
+    assert_eq!(metadata["name"], "rust-review");
+    assert_eq!(metadata["path"], "references/checklist.md");
+    assert!(metadata["digest"].as_str().unwrap().starts_with("sha256:"));
 }
 
 #[test]

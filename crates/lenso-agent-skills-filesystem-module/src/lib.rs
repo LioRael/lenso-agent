@@ -1,8 +1,9 @@
-//! Bounded filesystem-backed Skill catalog Tool Provider Module.
+//! Bounded filesystem-backed Skill catalog and progressive-disclosure Provider Module.
 
 use std::{
     cell::RefCell,
     collections::BTreeMap,
+    fmt::Write as _,
     fs,
     path::{Component, Path, PathBuf},
     rc::Rc,
@@ -10,6 +11,10 @@ use std::{
 
 use directories::BaseDirs;
 use futures::future::{LocalBoxFuture, ready};
+use lenso_capability_agent_prompt_provider::{
+    ContributeRequest, ContributeResponse, ContributeResponseContributionsItem,
+    ContributeResponseContributionsItemKind, PromptProviderEndpoint, PromptProviderProvider,
+};
 use lenso_capability_agent_tool_provider::{
     CatalogError, CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecuteResponseContentType, ToolProviderEndpoint,
@@ -30,6 +35,10 @@ pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const LIST_TOOL: &str = "skills.list";
 /// Reads one full snapshotted Skill document.
 pub const READ_TOOL: &str = "skills.read";
+/// Lists readable resources snapshotted below one Skill directory.
+pub const LIST_RESOURCES_TOOL: &str = "skills.list_resources";
+/// Reads one UTF-8 resource snapshotted below one Skill directory.
+pub const READ_RESOURCE_TOOL: &str = "skills.read_resource";
 
 const MAX_PROVIDER_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_DESCRIPTION_BYTES: usize = 4_096;
@@ -42,6 +51,12 @@ struct SkillsConfig {
     max_file_bytes: usize,
     max_total_bytes: usize,
     max_catalog_bytes: usize,
+    catalog_contribution_id: String,
+    max_prompt_catalog_bytes: usize,
+    max_resource_entries: usize,
+    max_resource_file_bytes: usize,
+    max_resource_total_bytes: usize,
+    max_resource_manifest_bytes: usize,
 }
 
 /// Native factory for an explicitly selected filesystem Skill catalog.
@@ -70,11 +85,15 @@ impl NativeModuleFactory for FilesystemSkillsFactory {
             })?;
         validate_config(&config)?;
         let state = Rc::new(RefCell::new(None));
-        let endpoint = Rc::new(ToolProviderEndpoint::new(FilesystemSkillsProvider {
+        let provider = FilesystemSkillsProvider {
             state: state.clone(),
-        })) as Rc<dyn NativeRequestEndpoint>;
+        };
+        let tool_endpoint =
+            Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
+        let prompt_endpoint =
+            Rc::new(PromptProviderEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
         Ok(NativeModuleInstance::with_lifecycle(
-            vec![endpoint],
+            vec![tool_endpoint, prompt_endpoint],
             FilesystemSkillsLifecycle { config, state },
         ))
     }
@@ -86,12 +105,23 @@ struct SkillSnapshot {
     description: String,
     version: String,
     content: String,
+    resources: BTreeMap<String, ResourceSnapshot>,
+    resource_manifest_json: String,
+    omitted_resource_count: usize,
+}
+
+#[derive(Clone, Debug)]
+struct ResourceSnapshot {
+    path: String,
+    version: String,
+    content: String,
 }
 
 #[derive(Clone, Debug)]
 struct SkillsSnapshot {
     skills: BTreeMap<String, SkillSnapshot>,
     catalog_json: String,
+    catalog_contribution: ContributeResponseContributionsItem,
 }
 
 #[derive(Clone, Debug)]
@@ -150,9 +180,73 @@ impl FilesystemSkillsProvider {
                     .to_string(),
                 })
             }
+            LIST_RESOURCES_TOOL => {
+                let name = parse_skill_name(&request.arguments_json)?;
+                let skill = state.skills.get(&name).ok_or(ExecuteError::NotFound)?;
+                Ok(ExecuteResponse {
+                    content: skill.resource_manifest_json.clone(),
+                    content_type: ExecuteResponseContentType::Text,
+                    metadata_json: serde_json::json!({
+                        "name": skill.name,
+                        "skill_version": skill.version,
+                        "resource_count": skill.resources.len(),
+                        "omitted_resource_count": skill.omitted_resource_count,
+                    })
+                    .to_string(),
+                })
+            }
+            READ_RESOURCE_TOOL => {
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Arguments {
+                    name: String,
+                    path: String,
+                }
+
+                let arguments = serde_json::from_str::<Arguments>(&request.arguments_json)
+                    .map_err(|_| ExecuteError::InvalidArguments)?;
+                if !valid_path_component(&arguments.name) || !valid_resource_path(&arguments.path) {
+                    return Err(ExecuteError::InvalidArguments.into());
+                }
+                let skill = state
+                    .skills
+                    .get(&arguments.name)
+                    .ok_or(ExecuteError::NotFound)?;
+                let resource = skill
+                    .resources
+                    .get(&arguments.path)
+                    .ok_or(ExecuteError::NotFound)?;
+                Ok(ExecuteResponse {
+                    content: resource.content.clone(),
+                    content_type: ExecuteResponseContentType::Text,
+                    metadata_json: serde_json::json!({
+                        "name": skill.name,
+                        "skill_version": skill.version,
+                        "path": resource.path,
+                        "version": resource.version,
+                        "digest": format!("sha256:{}", resource.version),
+                    })
+                    .to_string(),
+                })
+            }
             _ => Err(ExecuteError::NotFound.into()),
         }
     }
+}
+
+fn parse_skill_name(arguments_json: &str) -> Result<String, ExecuteError> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Arguments {
+        name: String,
+    }
+
+    let arguments = serde_json::from_str::<Arguments>(arguments_json)
+        .map_err(|_| ExecuteError::InvalidArguments)?;
+    if !valid_path_component(&arguments.name) {
+        return Err(ExecuteError::InvalidArguments);
+    }
+    Ok(arguments.name)
 }
 
 #[derive(Debug)]
@@ -197,6 +291,20 @@ impl ToolProviderProvider for FilesystemSkillsProvider {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
                         .to_owned(),
                 },
+                CatalogResponseToolsItem {
+                    name: LIST_RESOURCES_TOOL.to_owned(),
+                    description: "List readable snapshotted resources for one Skill without returning their contents."
+                        .to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
+                        .to_owned(),
+                },
+                CatalogResponseToolsItem {
+                    name: READ_RESOURCE_TOOL.to_owned(),
+                    description: "Read one UTF-8 snapshotted resource by Skill name and relative path. This never executes scripts."
+                        .to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["name","path"],"type":"object"}"#
+                        .to_owned(),
+                },
             ],
         }))))
     }
@@ -213,6 +321,27 @@ impl ToolProviderProvider for FilesystemSkillsProvider {
             Err(ProviderFailure::Runtime(error)) => Err(error),
         };
         Box::pin(ready(result))
+    }
+}
+
+impl PromptProviderProvider for FilesystemSkillsProvider {
+    fn contribute(
+        &self,
+        _context: InvocationContext,
+        _request: ContributeRequest,
+    ) -> lenso_kernel::NativeRequestFuture<lenso_capability_agent_prompt_provider::PromptProvider>
+    {
+        let result = self
+            .state
+            .borrow()
+            .as_ref()
+            .map(|state| ContributeResponse {
+                contributions: vec![state.catalog_contribution.clone()],
+            })
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: lenso_capability_agent_prompt_provider::CAPABILITY_ID,
+            });
+        Box::pin(ready(result.map(Ok)))
     }
 }
 
@@ -238,7 +367,14 @@ fn validate_config(config: &SkillsConfig) -> Result<(), RuntimeFailure> {
         || !(1..=MAX_PROVIDER_OUTPUT_BYTES).contains(&config.max_file_bytes)
         || !(1..=16_777_216).contains(&config.max_total_bytes)
         || !(1..=MAX_PROVIDER_OUTPUT_BYTES).contains(&config.max_catalog_bytes)
+        || !valid_contribution_id(&config.catalog_contribution_id)
+        || !(512..=262_144).contains(&config.max_prompt_catalog_bytes)
+        || !(1..=65_536).contains(&config.max_resource_entries)
+        || !(1..=MAX_PROVIDER_OUTPUT_BYTES).contains(&config.max_resource_file_bytes)
+        || !(1..=67_108_864).contains(&config.max_resource_total_bytes)
+        || !(1..=MAX_PROVIDER_OUTPUT_BYTES).contains(&config.max_resource_manifest_bytes)
         || config.max_file_bytes > config.max_total_bytes
+        || config.max_resource_file_bytes > config.max_resource_total_bytes
     {
         return Err(invalid_plan(
             "filesystem Skills configuration limits are invalid",
@@ -252,9 +388,16 @@ fn load_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure
     let root = canonical_root(&config.root)?;
     let candidates = discover_skills(&root, config.max_skills)?;
     let mut total_bytes = 0_usize;
+    let mut resource_budget = ResourceBudget::default();
     let mut skills = BTreeMap::new();
     for (directory_name, document) in candidates {
-        let (skill, file_bytes) = load_skill(&root, &directory_name, &document, config)?;
+        let (skill, file_bytes) = load_skill(
+            &root,
+            &directory_name,
+            &document,
+            config,
+            &mut resource_budget,
+        )?;
         total_bytes = total_bytes.saturating_add(file_bytes);
         if total_bytes > config.max_total_bytes {
             return Err(module_failure(
@@ -264,10 +407,24 @@ fn load_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure
         skills.insert(skill.name.clone(), skill);
     }
     let catalog_json = catalog_json(&skills, config.max_catalog_bytes)?;
+    let catalog_content = prompt_catalog(&skills, config.max_prompt_catalog_bytes)?;
+    let catalog_contribution = ContributeResponseContributionsItem {
+        id: config.catalog_contribution_id.clone(),
+        version: format!("{:x}", Sha256::digest(catalog_content.as_bytes())),
+        kind: ContributeResponseContributionsItemKind::Instruction,
+        content: catalog_content,
+    };
     Ok(SkillsSnapshot {
         skills,
         catalog_json,
+        catalog_contribution,
     })
+}
+
+#[derive(Debug, Default)]
+struct ResourceBudget {
+    entries: usize,
+    content_bytes: usize,
 }
 
 fn canonical_root(configured: &Path) -> Result<PathBuf, RuntimeFailure> {
@@ -329,6 +486,7 @@ fn load_skill(
     directory_name: &str,
     document: &Path,
     config: &SkillsConfig,
+    resource_budget: &mut ResourceBudget,
 ) -> Result<(SkillSnapshot, usize), RuntimeFailure> {
     let resolved = fs::canonicalize(document).map_err(|error| {
         module_failure(format!(
@@ -363,15 +521,184 @@ fn load_skill(
         )));
     }
     let version = format!("{:x}", Sha256::digest(content.as_bytes()));
+    let skill_root = resolved.parent().ok_or_else(|| {
+        module_failure(format!("filesystem Skill `{directory_name}` has no root"))
+    })?;
+    let (resources, omitted_resource_count) =
+        load_resources(skill_root, directory_name, config, resource_budget)?;
+    let resource_manifest_json = resource_manifest_json(
+        directory_name,
+        &version,
+        &resources,
+        omitted_resource_count,
+        config.max_resource_manifest_bytes,
+    )?;
     Ok((
         SkillSnapshot {
             name,
             description,
             version,
             content,
+            resources,
+            resource_manifest_json,
+            omitted_resource_count,
         },
         file_bytes,
     ))
+}
+
+fn load_resources(
+    skill_root: &Path,
+    skill_name: &str,
+    config: &SkillsConfig,
+    budget: &mut ResourceBudget,
+) -> Result<(BTreeMap<String, ResourceSnapshot>, usize), RuntimeFailure> {
+    let mut directories = vec![skill_root.to_path_buf()];
+    let mut candidates = Vec::new();
+    let mut omitted = 0_usize;
+    while let Some(directory) = directories.pop() {
+        let entries = fs::read_dir(&directory).map_err(|error| {
+            module_failure(format!(
+                "filesystem Skill `{skill_name}` resource directory is unreadable: {error}"
+            ))
+        })?;
+        let mut entries = entries.collect::<Result<Vec<_>, _>>().map_err(|error| {
+            module_failure(format!(
+                "filesystem Skill `{skill_name}` resource entry is unreadable: {error}"
+            ))
+        })?;
+        entries.sort_by_key(fs::DirEntry::file_name);
+        for entry in entries {
+            let path = entry.path();
+            let relative = path.strip_prefix(skill_root).map_err(|_| {
+                module_failure(format!(
+                    "filesystem Skill `{skill_name}` resource escapes its root"
+                ))
+            })?;
+            let file_type = entry.file_type().map_err(|error| {
+                module_failure(format!(
+                    "filesystem Skill `{skill_name}` resource type is unavailable: {error}"
+                ))
+            })?;
+            if file_type.is_symlink() {
+                return Err(module_failure(format!(
+                    "filesystem Skill `{skill_name}` contains a resource symlink"
+                )));
+            }
+            if hidden_resource_path(relative) {
+                continue;
+            }
+            budget.entries = budget.entries.saturating_add(1);
+            if budget.entries > config.max_resource_entries {
+                return Err(module_failure(
+                    "filesystem Skill resources exceed their aggregate entry limit",
+                ));
+            }
+            if file_type.is_dir() {
+                directories.push(path);
+            } else if file_type.is_file() && relative != Path::new("SKILL.md") {
+                candidates.push((relative_resource_path(relative)?, path));
+            } else if !file_type.is_file() {
+                return Err(module_failure(format!(
+                    "filesystem Skill `{skill_name}` contains an unsupported resource entry"
+                )));
+            }
+        }
+    }
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut resources = BTreeMap::new();
+    for (path, source) in candidates {
+        let Some(resource) =
+            snapshot_resource(skill_root, skill_name, path, &source, config, budget)?
+        else {
+            omitted = omitted.saturating_add(1);
+            continue;
+        };
+        resources.insert(resource.path.clone(), resource);
+    }
+    Ok((resources, omitted))
+}
+
+fn snapshot_resource(
+    skill_root: &Path,
+    skill_name: &str,
+    path: String,
+    source: &Path,
+    config: &SkillsConfig,
+    budget: &mut ResourceBudget,
+) -> Result<Option<ResourceSnapshot>, RuntimeFailure> {
+    let resolved = fs::canonicalize(source).map_err(|error| {
+        module_failure(format!(
+            "filesystem Skill `{skill_name}` resource `{path}` is unavailable: {error}"
+        ))
+    })?;
+    if !resolved.starts_with(skill_root) || !resolved.is_file() {
+        return Err(module_failure(format!(
+            "filesystem Skill `{skill_name}` resource `{path}` escapes its root"
+        )));
+    }
+    let metadata = fs::metadata(&resolved).map_err(|error| {
+        module_failure(format!(
+            "filesystem Skill `{skill_name}` resource `{path}` metadata is unavailable: {error}"
+        ))
+    })?;
+    let file_bytes = usize::try_from(metadata.len()).unwrap_or(usize::MAX);
+    if file_bytes > config.max_resource_file_bytes {
+        return Ok(None);
+    }
+    let bytes = fs::read(&resolved).map_err(|error| {
+        module_failure(format!(
+            "filesystem Skill `{skill_name}` resource `{path}` is unreadable: {error}"
+        ))
+    })?;
+    let Ok(content) = String::from_utf8(bytes) else {
+        return Ok(None);
+    };
+    budget.content_bytes = budget.content_bytes.saturating_add(content.len());
+    if budget.content_bytes > config.max_resource_total_bytes {
+        return Err(module_failure(
+            "filesystem Skill resources exceed their aggregate content limit",
+        ));
+    }
+    let version = format!("{:x}", Sha256::digest(content.as_bytes()));
+    Ok(Some(ResourceSnapshot {
+        path,
+        version,
+        content,
+    }))
+}
+
+fn resource_manifest_json(
+    skill_name: &str,
+    skill_version: &str,
+    resources: &BTreeMap<String, ResourceSnapshot>,
+    omitted_resource_count: usize,
+    max_bytes: usize,
+) -> Result<String, RuntimeFailure> {
+    let entries = resources
+        .values()
+        .map(|resource| {
+            serde_json::json!({
+                "path": resource.path,
+                "bytes": resource.content.len(),
+                "version": resource.version,
+            })
+        })
+        .collect::<Vec<_>>();
+    let manifest = serde_json::json!({
+        "name": skill_name,
+        "skill_version": skill_version,
+        "resources": entries,
+        "omitted_resource_count": omitted_resource_count,
+    })
+    .to_string();
+    if manifest.len() > max_bytes {
+        return Err(module_failure(format!(
+            "filesystem Skill `{skill_name}` resource manifest exceeds its output limit"
+        )));
+    }
+    Ok(manifest)
 }
 
 fn catalog_json(
@@ -395,6 +722,70 @@ fn catalog_json(
         ));
     }
     Ok(catalog_json)
+}
+
+fn prompt_catalog(
+    skills: &BTreeMap<String, SkillSnapshot>,
+    max_bytes: usize,
+) -> Result<String, RuntimeFailure> {
+    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skills.read` with its exact name before following it. Use `skills.list` only when this catalog reports omissions or no visible Skill matches.\n\n";
+    const EMPTY: &str = "No Skills are available.\n";
+
+    if skills.is_empty() {
+        let content = format!("{HEADER}{EMPTY}");
+        if content.len() > max_bytes {
+            return Err(module_failure(
+                "filesystem Skills prompt catalog limit is too small",
+            ));
+        }
+        return Ok(content);
+    }
+
+    let maximum_footer = format!(
+        "\n{} additional Skills were omitted by the prompt catalog byte limit; call `skills.list` to inspect them.\n",
+        skills.len()
+    );
+    let mut content = String::from(HEADER);
+    let mut omitted = 0_usize;
+    let mut catalog_full = false;
+    for skill in skills.values() {
+        let line = format!("- `{}`: {}\n", skill.name, skill.description);
+        if !catalog_full
+            && content
+                .len()
+                .saturating_add(line.len())
+                .saturating_add(maximum_footer.len())
+                <= max_bytes
+        {
+            content.push_str(&line);
+        } else {
+            catalog_full = true;
+            omitted = omitted.saturating_add(1);
+        }
+    }
+    if omitted > 0 {
+        write!(
+            &mut content,
+            "\n{omitted} additional Skills were omitted by the prompt catalog byte limit; call `skills.list` to inspect them.\n"
+        )
+        .expect("writing to a String cannot fail");
+    }
+    if content.len() > max_bytes {
+        return Err(module_failure(
+            "filesystem Skills prompt catalog exceeds its output limit",
+        ));
+    }
+    Ok(content)
+}
+
+fn valid_contribution_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || (index > 0 && matches!(byte, b'.' | b'_' | b'/' | b'-'))
+        })
 }
 
 fn parse_frontmatter(
@@ -485,6 +876,49 @@ fn valid_path_component(value: &str) -> bool {
         && value.len() <= 96
 }
 
+fn valid_resource_path(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 512
+        || value.contains('\\')
+        || value.split('/').any(str::is_empty)
+    {
+        return false;
+    }
+    let path = Path::new(value);
+    path.components().all(|component| match component {
+        Component::Normal(component) => component
+            .to_str()
+            .is_some_and(|part| !part.is_empty() && !part.starts_with('.')),
+        _ => false,
+    })
+}
+
+fn hidden_resource_path(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        Component::Normal(component) => component.to_str().is_none_or(|part| part.starts_with('.')),
+        _ => true,
+    })
+}
+
+fn relative_resource_path(path: &Path) -> Result<String, RuntimeFailure> {
+    let parts =
+        path.components()
+            .map(|component| match component {
+                Component::Normal(part) => part.to_str().map(ToOwned::to_owned).ok_or_else(|| {
+                    module_failure("filesystem Skill resource path is not valid UTF-8")
+                }),
+                _ => Err(module_failure(
+                    "filesystem Skill resource path is not relative",
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+    let value = parts.join("/");
+    if !valid_resource_path(&value) {
+        return Err(module_failure("filesystem Skill resource path is invalid"));
+    }
+    Ok(value)
+}
+
 fn invalid_frontmatter(skill: &str) -> RuntimeFailure {
     module_failure(format!(
         "filesystem Skill `{skill}` has invalid name or description frontmatter"
@@ -514,6 +948,12 @@ mod tests {
             max_file_bytes: 8_192,
             max_total_bytes: 32_768,
             max_catalog_bytes: 8_192,
+            catalog_contribution_id: "agents.skills.catalog".to_owned(),
+            max_prompt_catalog_bytes: 8_192,
+            max_resource_entries: 64,
+            max_resource_file_bytes: 8_192,
+            max_resource_total_bytes: 32_768,
+            max_resource_manifest_bytes: 8_192,
         }
     }
 
@@ -542,6 +982,20 @@ mod tests {
         assert!(snapshot.catalog_json.contains("Beta help on two lines"));
         assert!(!snapshot.catalog_json.contains("ALPHA SECRET"));
         assert!(!snapshot.catalog_json.contains("BETA SECRET"));
+        assert_eq!(snapshot.catalog_contribution.id, "agents.skills.catalog");
+        assert!(snapshot.catalog_contribution.content.contains("Alpha help"));
+        assert!(
+            snapshot
+                .catalog_contribution
+                .content
+                .contains("Beta help on two lines")
+        );
+        assert!(
+            !snapshot
+                .catalog_contribution
+                .content
+                .contains("ALPHA SECRET")
+        );
 
         let state = Rc::new(RefCell::new(Some(snapshot)));
         let provider = FilesystemSkillsProvider { state };
@@ -564,6 +1018,94 @@ mod tests {
     }
 
     #[test]
+    fn lists_and_reads_nested_text_resources_without_executing_scripts() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(
+            temporary.path(),
+            "alpha",
+            "Alpha help",
+            "Read references/checklist.md.",
+        );
+        let skill = temporary.path().join("alpha");
+        fs::create_dir_all(skill.join("references/nested")).unwrap();
+        fs::create_dir_all(skill.join("scripts")).unwrap();
+        fs::write(skill.join("references/checklist.md"), "RESOURCE CHECKLIST").unwrap();
+        fs::write(skill.join("references/nested/details.txt"), "DETAILS").unwrap();
+        let sentinel = temporary.path().join("must-not-exist");
+        fs::write(
+            skill.join("scripts/do-not-run.sh"),
+            format!("touch {}\n", sentinel.display()),
+        )
+        .unwrap();
+
+        let snapshot = load_snapshot(&config(temporary.path())).unwrap();
+        assert!(!sentinel.exists());
+        let provider = FilesystemSkillsProvider {
+            state: Rc::new(RefCell::new(Some(snapshot))),
+        };
+        let listed = provider
+            .execute_now(&ExecuteRequest {
+                name: LIST_RESOURCES_TOOL.to_owned(),
+                arguments_json: r#"{"name":"alpha"}"#.to_owned(),
+            })
+            .unwrap();
+        assert!(listed.content.contains("references/checklist.md"));
+        assert!(listed.content.contains("references/nested/details.txt"));
+        assert!(listed.content.contains("scripts/do-not-run.sh"));
+        assert!(!listed.content.contains("RESOURCE CHECKLIST"));
+
+        let read = provider
+            .execute_now(&ExecuteRequest {
+                name: READ_RESOURCE_TOOL.to_owned(),
+                arguments_json: r#"{"name":"alpha","path":"references/checklist.md"}"#.to_owned(),
+            })
+            .unwrap();
+        assert_eq!(read.content, "RESOURCE CHECKLIST");
+        assert!(read.metadata_json.contains("sha256:"));
+        assert!(!sentinel.exists());
+        assert!(matches!(
+            provider.execute_now(&ExecuteRequest {
+                name: READ_RESOURCE_TOOL.to_owned(),
+                arguments_json: r#"{"name":"alpha","path":"references/missing.md"}"#.to_owned(),
+            }),
+            Err(ProviderFailure::Domain(ExecuteError::NotFound))
+        ));
+    }
+
+    #[test]
+    fn omits_binary_and_oversized_resources_and_keeps_resource_snapshots_stable() {
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(temporary.path(), "alpha", "Alpha help", "body");
+        let skill = temporary.path().join("alpha");
+        fs::write(skill.join("binary.bin"), [0xff, 0xfe]).unwrap();
+        fs::write(skill.join("large.txt"), "too large").unwrap();
+        fs::write(skill.join("stable.txt"), "ORIGINAL RESOURCE").unwrap();
+        let mut bounded = config(temporary.path());
+        bounded.max_resource_file_bytes = 20;
+        let snapshot = load_snapshot(&bounded).unwrap();
+        assert_eq!(snapshot.skills["alpha"].omitted_resource_count, 1);
+        assert!(
+            !snapshot.skills["alpha"]
+                .resources
+                .contains_key("binary.bin")
+        );
+        fs::write(skill.join("stable.txt"), "CHANGED RESOURCE").unwrap();
+        assert_eq!(
+            snapshot.skills["alpha"].resources["stable.txt"].content,
+            "ORIGINAL RESOURCE"
+        );
+
+        let mut aggregate_limited = bounded.clone();
+        aggregate_limited.max_resource_total_bytes = 20;
+        assert!(load_snapshot(&aggregate_limited).is_err());
+
+        bounded.max_resource_file_bytes = 4;
+        let bounded_snapshot = load_snapshot(&bounded).unwrap();
+        assert!(bounded_snapshot.skills["alpha"].resources.is_empty());
+        assert_eq!(bounded_snapshot.skills["alpha"].omitted_resource_count, 3);
+    }
+
+    #[test]
     fn accepts_an_indented_plain_multiline_description() {
         let temporary = tempfile::tempdir().unwrap();
         let directory = temporary.path().join("multiline");
@@ -577,6 +1119,31 @@ mod tests {
         assert_eq!(
             snapshot.skills["multiline"].description,
             "First line second line."
+        );
+    }
+
+    #[test]
+    fn prompt_catalog_is_bounded_and_reports_deterministic_omissions() {
+        let temporary = tempfile::tempdir().unwrap();
+        for name in ["alpha", "beta", "gamma", "omega"] {
+            write_skill(
+                temporary.path(),
+                name,
+                &format!("{name} {}", "description ".repeat(20)),
+                "PRIVATE BODY",
+            );
+        }
+        let mut bounded = config(temporary.path());
+        bounded.max_prompt_catalog_bytes = 512;
+        let snapshot = load_snapshot(&bounded).unwrap();
+        let content = &snapshot.catalog_contribution.content;
+        assert!(content.len() <= 512);
+        assert!(content.contains("additional Skills were omitted"));
+        assert!(content.contains("skills.list"));
+        assert!(!content.contains("PRIVATE BODY"));
+        assert_eq!(
+            snapshot.catalog_contribution.version,
+            format!("{:x}", Sha256::digest(content.as_bytes()))
         );
     }
 
@@ -605,6 +1172,10 @@ mod tests {
         let mut limited = config(temporary.path());
         limited.max_file_bytes = 4;
         assert!(load_snapshot(&limited).is_err());
+
+        let mut invalid_id = config(temporary.path());
+        invalid_id.catalog_contribution_id = "Invalid ID".to_owned();
+        assert!(load_snapshot(&invalid_id).is_err());
     }
 
     #[cfg(unix)]
@@ -623,6 +1194,33 @@ mod tests {
         .unwrap();
         symlink(&outside, root.join("escape/SKILL.md")).unwrap();
         assert!(load_snapshot(&config(&root)).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_resource_symlinks_and_invalid_resource_arguments() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        write_skill(temporary.path(), "alpha", "Alpha help", "body");
+        let outside = temporary.path().join("outside.txt");
+        fs::write(&outside, "outside").unwrap();
+        symlink(&outside, temporary.path().join("alpha/escape.txt")).unwrap();
+        assert!(load_snapshot(&config(temporary.path())).is_err());
+
+        fs::remove_file(temporary.path().join("alpha/escape.txt")).unwrap();
+        let provider = FilesystemSkillsProvider {
+            state: Rc::new(RefCell::new(Some(
+                load_snapshot(&config(temporary.path())).unwrap(),
+            ))),
+        };
+        assert!(matches!(
+            provider.execute_now(&ExecuteRequest {
+                name: READ_RESOURCE_TOOL.to_owned(),
+                arguments_json: r#"{"name":"alpha","path":"../outside.txt"}"#.to_owned(),
+            }),
+            Err(ProviderFailure::Domain(ExecuteError::InvalidArguments))
+        ));
     }
 
     #[test]

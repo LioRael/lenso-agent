@@ -294,7 +294,13 @@
           "max_skills": 256,
           "max_file_bytes": 262144,
           "max_total_bytes": 8388608,
-          "max_catalog_bytes": 262144
+          "max_catalog_bytes": 262144,
+          "catalog_contribution_id": "agents.skills.catalog",
+          "max_prompt_catalog_bytes": 8000,
+          "max_resource_entries": 8192,
+          "max_resource_file_bytes": 262144,
+          "max_resource_total_bytes": 16777216,
+          "max_resource_manifest_bytes": 524288
         },
         "configuration_schema": "crates/lenso-agent-skills-filesystem-module/config.schema.json",
         "provides": [
@@ -307,6 +313,17 @@
             ],
             "admission": {
               "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          },
+          {
+            "capability_id": "lenso.agent.prompt-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "contribute"
+            ],
+            "admission": {
+              "queue_capacity": 1,
               "max_concurrency": 1
             }
           }
@@ -372,6 +389,12 @@
       {
         "consumer": "tools",
         "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "skills"
+      },
+      {
+        "consumer": "prompt",
+        "capability_id": "lenso.agent.prompt-provider@1",
         "descriptor_version": "1.0.0",
         "provider": "skills"
       }
