@@ -26,11 +26,15 @@ lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
 lenso-agent-workspace-edit-module = { path = "../../crates/lenso-agent-workspace-edit-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
+futures.workspace = true
+fs2.workspace = true
 lenso-app-plan.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
+lenso-plugin-control-plane.workspace = true
 lenso-runner.workspace = true
 lenso-secrets-env-module.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

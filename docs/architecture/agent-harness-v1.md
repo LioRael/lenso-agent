@@ -23,9 +23,9 @@ agent-cli
        `- one lenso.agent.session@1 -> session-log
 ```
 
-All selected Instances run in one Execution Lane for the first slice. The
-native Runner assembles the Rust and Bun Execution Adapters before Kernel boot.
-No contract opts into cross-lane transfer in V1.
+All selected Instances run in one Execution Lane for the first slice. The Host
+control plane assembles only the native Rust Execution Adapter before Kernel
+boot. No contract opts into cross-lane transfer in V1.
 
 ## Authoritative facts
 
@@ -41,23 +41,32 @@ No contract opts into cross-lane transfer in V1.
   Domain Errors.
 - Model Modules own provider protocol, egress, cancellation, response limits,
   and provider error translation.
+- The Host control plane owns Plugin Store authority, Host Build and Execution
+  Policy documents, Generation resolution, Ready Gate, routing leases, and
+  Generation resource drain.
+- Passive Plugin activation owns one atomic active-set document closing the
+  exact Plugin lock, embedded Manifests, selected Features and Product
+  Metadata, and immutable local-review Admission Receipts.
 
 ## First turn
 
-1. CLI opens `lenso.agent@1/run_turn` and closes its sending half.
-2. Agent opens or resumes the Session and atomically records `turn_started`.
-3. Agent reads the bounded Session tail and the validated Tool catalog.
-4. Agent assembles bounded Prompt contributions. A selected progressive Skills
+1. CLI leases the exact active App Generation and resolves the Agent route from
+   that lease.
+2. CLI opens `lenso.agent@1/run_turn` and closes its sending half.
+3. Agent opens or resumes the Session and atomically records `turn_started`.
+4. Agent reads the bounded Session tail and the validated Tool catalog.
+5. Agent assembles bounded Prompt contributions. A selected progressive Skills
    Provider contributes only Skill names and descriptions from its startup
    snapshot.
-5. Agent opens `lenso.agent.model@1/complete` with normalized messages and Tool
+6. Agent opens `lenso.agent.model@1/complete` with normalized messages and Tool
    definitions.
-6. Text deltas flow to CLI. A complete Tool call is recorded before execution.
-7. Tool Runtime validates the arguments and dispatches to the owning Provider.
-8. Agent records the Tool result and opens the next bounded Model step.
-9. Agent records `turn_completed`, closes the stream, and returns terminal
+7. Text deltas flow to CLI. A complete Tool call is recorded before execution.
+8. Tool Runtime validates the arguments and dispatches to the owning Provider.
+9. Agent records the Tool result and opens the next bounded Model step.
+10. Agent records `turn_completed`, closes the stream, and returns terminal
    success. Domain or Runtime failure records `turn_failed` or
    `turn_cancelled` before the terminal outcome when Session remains available.
+11. CLI releases the Generation lease only after the terminal outcome.
 
 The first implementation sets finite limits for steps, Tool calls, Session
 events read per turn, model output bytes, Tool output bytes, stream messages,
@@ -124,4 +133,6 @@ Web UI, approval workflows, marketplace Skill installation, live Skill
 watching, ordered Hooks, automatic compaction, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
-placement, and App Generation are separate slices.
+placement, executable Plugin admission, Plugin upgrade/uninstall, Generation
+provenance in Session, durable fencing, and overlap/rollback replacement are
+separate slices.

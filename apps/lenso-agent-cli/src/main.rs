@@ -3,36 +3,17 @@ use std::{
     io::{self, Write},
     path::PathBuf,
     process::{Command, ExitCode},
-    time::Duration,
 };
 
+mod generation;
+mod plugins;
+
 use lenso_agent_auth_openai_codex_module::{
-    DirectAuthOptions, OpenAiCodexAuthFactory, begin_browser_login, begin_device_login,
-    complete_browser_login, complete_device_login, direct_auth_status, direct_logout,
+    DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
+    complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_agent_cli_module::CliModuleFactory;
-use lenso_agent_loop_module::AgentLoopFactory;
-use lenso_agent_model_fixture_module::FixtureModelFactory;
-use lenso_agent_model_openai_codex_direct_module::OpenAiCodexDirectModelFactory;
-use lenso_agent_model_openai_compatible_module::OpenAiCompatibleModelFactory;
-use lenso_agent_process_native_module::NativeProcessFactory;
-use lenso_agent_process_tools_module::ProcessToolsFactory;
-use lenso_agent_prompt_filesystem_module::FilesystemPromptFactory;
-use lenso_agent_prompt_module::PromptFactory;
-use lenso_agent_prompt_static_module::StaticPromptFactory;
-use lenso_agent_session_file_module::FileSessionFactory;
-use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
-use lenso_agent_tools_module::ToolsFactory;
-use lenso_agent_workspace_edit_module::WorkspaceEditFactory;
-use lenso_agent_workspace_read_module::WorkspaceReadFactory;
-use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::{Agent, RUN_TURN_OPERATION, RunTurnRequest};
-use lenso_kernel::{
-    ExecutionAdapterCatalog, Kernel, NativeStreamHandle, ShutdownOutcome, StreamEvent,
-};
-use lenso_native_adapter::NativeModuleRegistry;
-use lenso_runner::TokioDriver;
-use lenso_secrets_env_module::EnvSecretsFactory;
+use lenso_kernel::{NativeStreamHandle, StreamEvent};
 
 #[derive(Debug)]
 struct Args {
@@ -45,6 +26,7 @@ struct Args {
 enum CliCommand {
     Run(Args),
     Auth(AuthCommand),
+    Plugins(plugins::PluginCommand),
 }
 
 #[derive(Debug)]
@@ -70,50 +52,21 @@ async fn run() -> Result<(), String> {
     let args = match parse_args()? {
         CliCommand::Run(args) => args,
         CliCommand::Auth(command) => return run_auth(&command).await,
+        CliCommand::Plugins(command) => return plugins::run(command),
     };
     let bytes = fs::read(&args.plan)
         .map_err(|error| format!("failed to read {}: {error}", args.plan.display()))?;
-    let plan = serde_json::from_slice::<ResolvedAppPlan>(&bytes)
-        .map_err(|error| format!("resolved Plan is invalid JSON: {error}"))?;
-    plan.validate()
-        .map_err(|error| format!("resolved Plan is invalid: {error}"))?;
-    let registry = NativeModuleRegistry::new()
-        .with_factory(CliModuleFactory)
-        .with_factory(AgentLoopFactory)
-        .with_factory(OpenAiCodexAuthFactory)
-        .with_factory(FixtureModelFactory)
-        .with_factory(OpenAiCompatibleModelFactory)
-        .with_factory(OpenAiCodexDirectModelFactory)
-        .with_factory(FilesystemPromptFactory)
-        .with_factory(PromptFactory)
-        .with_factory(StaticPromptFactory)
-        .with_factory(NativeProcessFactory)
-        .with_factory(ProcessToolsFactory)
-        .with_factory(FilesystemSkillsFactory)
-        .with_factory(ToolsFactory)
-        .with_factory(WorkspaceEditFactory)
-        .with_factory(WorkspaceReadFactory)
-        .with_factory(FileSessionFactory)
-        .with_factory(EnvSecretsFactory::new());
-    let app = Kernel::start(
-        plan,
-        TokioDriver::new(),
-        ExecutionAdapterCatalog::single(registry),
-    )
-    .await
-    .map_err(|error| format!("App startup failed: {error:?}"))?;
-    let handle = app
-        .stream_handle::<Agent>("cli")
-        .map_err(|error| format!("Agent binding is unavailable: {error:?}"))?;
-    let result = invoke(handle, args).await;
-    let shutdown = app.shutdown(Duration::from_secs(2)).await;
-    if !matches!(shutdown, ShutdownOutcome::Clean) {
-        return Err(format!("App shutdown was not clean: {shutdown:?}"));
-    }
-    result
+    let mut app = generation::AgentApp::start(&bytes)
+        .await
+        .map_err(|error| format!("App startup failed: {error}"))?;
+    let turn = app.lease_turn()?;
+    let result = invoke(turn.handle(), args).await;
+    drop(turn);
+    let shutdown = app.shutdown().await;
+    result.and(shutdown)
 }
 
-async fn invoke(handle: NativeStreamHandle<Agent>, args: Args) -> Result<(), String> {
+async fn invoke(handle: &NativeStreamHandle<Agent>, args: Args) -> Result<(), String> {
     let stream = handle
         .open(
             RUN_TURN_OPERATION,
@@ -166,6 +119,9 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "auth") {
         return parse_auth(&raw[1..]).map(CliCommand::Auth);
     }
+    if raw.first().is_some_and(|value| value == "plugins") {
+        return plugins::parse_command(&raw[1..]).map(CliCommand::Plugins);
+    }
     let mut plan = PathBuf::from("composition/headless-readonly/resolved-plan.json");
     let mut prompt = None;
     let mut session = None;
@@ -195,8 +151,7 @@ fn parse_args() -> Result<CliCommand, String> {
             }
             "--help" | "-h" => {
                 return Err(
-                    "usage: lenso-agent-cli --prompt <text> [--session <id>] [--plan <path>]"
-                        .to_owned(),
+                    "usage: lenso-agent-cli <plugins|auth> ... | --prompt <text> [--session <id>] [--plan <path>]".to_owned(),
                 );
             }
             unknown => return Err(format!("unknown argument `{unknown}`")),
