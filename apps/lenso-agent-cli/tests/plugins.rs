@@ -12,7 +12,7 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
     let workspace = tempfile::tempdir().unwrap();
     let bundle = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
-    write_bundle(bundle.path());
+    write_passive_bundle(bundle.path());
 
     let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
@@ -62,7 +62,63 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
     );
 }
 
-fn write_bundle(root: &Path) {
+#[test]
+fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
+    let workspace = tempfile::tempdir().unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    write_tool_bundle(bundle.path());
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(bundle.path())
+        .args(["--evidence", "review-ticket-77"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Use the text Plugin to uppercase Lenso plugin."])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Text Plugin result: LENSO PLUGIN\n"
+    );
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "remove", "--plugin", "example.text-tools"])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+    assert!(String::from_utf8_lossy(&remove.stdout).contains("removed: example.text-tools"));
+
+    let after_remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Use the text Plugin to uppercase Lenso plugin."])
+        .output()
+        .unwrap();
+    assert!(!after_remove.status.success());
+    assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+}
+
+fn write_passive_bundle(root: &Path) {
     let artifact = b"passive artifact";
     let metadata = b"{\"kind\":\"fixture\"}";
     let target = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
@@ -106,4 +162,50 @@ fn write_bundle(root: &Path) {
     .unwrap();
     fs::write(root.join("extra.bin"), artifact).unwrap();
     fs::write(root.join("extra.json"), metadata).unwrap();
+}
+
+fn write_tool_bundle(root: &Path) {
+    let target = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+    let empty_configuration_schema = br#"{"additionalProperties":false,"type":"object"}"#;
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "plugin_id": "example.text-tools",
+        "release_version": "1.0.0",
+        "artifacts": [],
+        "module_contributions": [{
+            "id": "text-tools",
+            "package_id": "lenso.agent.text-tools",
+            "configuration_schema_digest": sha256_digest(empty_configuration_schema),
+            "provides": [{
+                "capability_id": "lenso.agent.tool-provider@1",
+                "descriptor_version": "1.0.0",
+                "descriptor_digest": sha256_digest(include_bytes!("../../../crates/lenso-capability-agent-tool-provider/capability.json")),
+                "request_operations": ["catalog", "execute"]
+            }],
+            "requires": [],
+            "implementations": [{
+                "id": "native",
+                "artifact": null,
+                "built_in_factory": "lenso.agent.text-tools@0.1.0",
+                "entrypoint": "default",
+                "execution_class": "lenso.native-rust@1",
+                "targets": [target],
+                "profiles": ["agent-tool-provider-v1"],
+                "support_channel": "stable",
+                "trust": "trusted"
+            }],
+            "permission_request_ids": [],
+            "state": null
+        }],
+        "data_contributions": [],
+        "permission_requests": [],
+        "features": [],
+        "binding_templates": [],
+        "product_metadata": []
+    });
+    fs::write(
+        root.join("lenso-plugin.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
 }

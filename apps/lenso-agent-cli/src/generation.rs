@@ -1,4 +1,11 @@
-use std::{cell::RefCell, collections::BTreeMap, env, fs, path::Path, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
+    path::Path,
+    rc::Rc,
+    time::Duration,
+};
 
 use futures::future::LocalBoxFuture;
 use lenso_agent_auth_openai_codex_module::OpenAiCodexAuthFactory;
@@ -14,6 +21,7 @@ use lenso_agent_prompt_module::PromptFactory;
 use lenso_agent_prompt_static_module::StaticPromptFactory;
 use lenso_agent_session_file_module::FileSessionFactory;
 use lenso_agent_skills_filesystem_module::FilesystemSkillsFactory;
+use lenso_agent_text_tools_module::TextToolsFactory;
 use lenso_agent_tools_module::ToolsFactory;
 use lenso_agent_workspace_edit_module::WorkspaceEditFactory;
 use lenso_agent_workspace_read_module::WorkspaceReadFactory;
@@ -35,6 +43,7 @@ use lenso_secrets_env_module::EnvSecretsFactory;
 
 const APP_ID: &str = "lenso.agent.harness";
 const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
+const NATIVE_TOOL_PROFILE: &str = "agent-tool-provider-v1";
 const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 
@@ -265,9 +274,9 @@ pub(crate) fn resolve_initial_generation(
             built_in_modules,
             adapter_profiles: vec![AdapterProfile {
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-                adapter_build_identity: "lenso-native-adapter@runtime-b442dfb".to_owned(),
+                adapter_build_identity: "lenso-native-adapter@runtime-25812bc".to_owned(),
                 targets: vec![target.clone()],
-                profiles: Vec::new(),
+                profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
             }],
         },
     )
@@ -283,7 +292,7 @@ pub(crate) fn resolve_initial_generation(
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                 support_channels: vec![SupportChannel::Stable],
                 trust_levels: vec![TrustLevel::Trusted],
-                profiles: Vec::new(),
+                profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
             }],
             preference: vec![NATIVE_EXECUTION_CLASS.to_owned()],
             instance_overrides: Vec::new(),
@@ -291,6 +300,7 @@ pub(crate) fn resolve_initial_generation(
     )
     .map_err(control_error)?;
     let authority = crate::plugins::load_generation_authority(store_root)?;
+    let bindings = crate::plugins::generation_bindings(&authority, &plan)?;
     let generation = resolve_generation(&ResolutionInput {
         lock: &authority.lock,
         manifests: &authority.manifests,
@@ -299,19 +309,72 @@ pub(crate) fn resolve_initial_generation(
         policy: &policy,
         store: &authority.store,
         base_instances: plan.module_instances().to_vec(),
-        bindings: plan.capability_bindings().to_vec(),
+        bindings,
     })
     .map_err(control_error)?;
-    close_over_base_plan(generation, plan)
+    close_over_base_binding_order(generation, &plan)
 }
 
-fn close_over_base_plan(
+fn close_over_base_binding_order(
     mut generation: ResolvedGeneration,
-    plan: ResolvedAppPlan,
+    base_plan: &ResolvedAppPlan,
 ) -> Result<ResolvedGeneration, String> {
+    let base_keys = base_plan
+        .capability_bindings()
+        .iter()
+        .map(binding_key)
+        .collect::<BTreeSet<_>>();
+    let mut bindings = base_plan
+        .capability_bindings()
+        .iter()
+        .map(|binding| serde_json::to_value(binding).map_err(|error| error.to_string()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut next_orders = BTreeMap::<(String, String), usize>::new();
+    for binding in base_plan.capability_bindings() {
+        let group = (
+            binding.consumer_instance().to_owned(),
+            binding.capability_id().to_owned(),
+        );
+        next_orders
+            .entry(group)
+            .and_modify(|order| *order = (*order).max(binding.provider_order() + 1))
+            .or_insert(binding.provider_order() + 1);
+    }
+    for binding in generation
+        .plan
+        .capability_bindings()
+        .iter()
+        .filter(|binding| !base_keys.contains(&binding_key(binding)))
+    {
+        let group = (
+            binding.consumer_instance().to_owned(),
+            binding.capability_id().to_owned(),
+        );
+        let order = next_orders.entry(group).or_default();
+        let mut value = serde_json::to_value(binding).map_err(|error| error.to_string())?;
+        value["provider_order"] = (*order).into();
+        *order += 1;
+        bindings.push(value);
+    }
+    bindings.sort_by(|left, right| {
+        binding_value_key(left)
+            .cmp(&binding_value_key(right))
+            .then_with(|| {
+                left["provider_order"]
+                    .as_u64()
+                    .cmp(&right["provider_order"].as_u64())
+            })
+    });
+    let mut plan_value =
+        serde_json::to_value(&generation.plan).map_err(|error| error.to_string())?;
+    plan_value["capability_bindings"] = bindings.into();
+    let plan = serde_json::from_value::<ResolvedAppPlan>(plan_value)
+        .map_err(|error| format!("failed to close Plugin bindings into the Plan: {error}"))?;
+    plan.validate()
+        .map_err(|error| format!("Plugin-resolved Plan is invalid: {error}"))?;
     let resolved_plan_digest = sha256_digest(
         &serde_json::to_vec(&plan)
-            .map_err(|error| format!("failed to encode resolved Plan: {error}"))?,
+            .map_err(|error| format!("failed to encode Plugin-resolved Plan: {error}"))?,
     );
     generation.plan = plan;
     generation.spec = CanonicalDocument::from_value(
@@ -341,6 +404,21 @@ fn close_over_base_plan(
     )
     .map_err(control_error)?;
     Ok(generation)
+}
+
+fn binding_key(binding: &lenso_app_plan::CapabilityBinding) -> (String, String, String) {
+    (
+        binding.consumer_instance().to_owned(),
+        binding.capability_id().to_owned(),
+        binding.provider_instance().to_owned(),
+    )
+}
+
+fn binding_value_key(value: &serde_json::Value) -> (&str, &str) {
+    (
+        value["consumer_instance"].as_str().unwrap_or_default(),
+        value["capability_id"].as_str().unwrap_or_default(),
+    )
 }
 
 fn initial_transition(
@@ -373,7 +451,7 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
             let factory = $factory;
             built_in_modules.push(BuiltInModule {
                 package_id: factory.package_id().to_owned(),
-                factory_identity: format!("{}@{}", factory.package_id(), factory.package_version()),
+                factory_identity: factory.factory_identity(),
                 execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
             });
             registry = registry.with_factory(factory);
@@ -391,6 +469,7 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
     register!(NativeProcessFactory);
     register!(ProcessToolsFactory);
     register!(FilesystemSkillsFactory);
+    register!(TextToolsFactory);
     register!(ToolsFactory);
     register!(WorkspaceEditFactory);
     register!(WorkspaceReadFactory);

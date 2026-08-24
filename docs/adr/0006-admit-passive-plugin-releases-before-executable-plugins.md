@@ -1,6 +1,6 @@
 # ADR 0006: Admit passive Plugin releases before executable Plugins
 
-- Status: accepted
+- Status: superseded by ADR 0007
 - Date: 2026-08-24
 - Relates to: ADR 0005 and Lenso ADR 0065
 
