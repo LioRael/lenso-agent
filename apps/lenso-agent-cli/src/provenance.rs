@@ -1,8 +1,16 @@
-use std::{fs, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+};
 
 use lenso_agent_loop_module::inspect_turn_generation_provenance;
-use lenso_agent_session_file_module::inspect_turn_started_events;
+use lenso_agent_session_file_module::{
+    inspect_all_turn_started_events, inspect_turn_started_events,
+};
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
+
+use crate::plugins::retained_plugin_set_digests;
 
 const GENERATION_DIRECTORY: &str = "generations";
 const APP_ID: &str = "lenso.agent.harness";
@@ -10,6 +18,7 @@ const APP_ID: &str = "lenso.agent.harness";
 #[derive(Debug)]
 pub enum GenerationCommand {
     Inspect { digest: String, root: PathBuf },
+    GcPlan { root: PathBuf, sessions: PathBuf },
 }
 
 #[derive(Debug)]
@@ -25,23 +34,30 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     let [command, rest @ ..] = arguments else {
         return Err(generation_usage());
     };
-    if command != "inspect" {
-        return Err(generation_usage());
-    }
-    let mut digest = None;
     let mut root = PathBuf::from(".lenso/plugins");
+    let mut sessions = PathBuf::from(".lenso/sessions");
+    let mut digest = None;
     let mut arguments = rest.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
-            "--digest" => digest = Some(arguments.next().ok_or_else(generation_usage)?.clone()),
+            "--digest" if command == "inspect" => {
+                digest = Some(arguments.next().ok_or_else(generation_usage)?.clone());
+            }
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(generation_usage)?),
+            "--sessions" if command == "gc-plan" => {
+                sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
+            }
             _ => return Err(generation_usage()),
         }
     }
-    Ok(GenerationCommand::Inspect {
-        digest: digest.ok_or_else(generation_usage)?,
-        root,
-    })
+    match command.as_str() {
+        "inspect" => Ok(GenerationCommand::Inspect {
+            digest: digest.ok_or_else(generation_usage)?,
+            root,
+        }),
+        "gc-plan" => Ok(GenerationCommand::GcPlan { root, sessions }),
+        _ => Err(generation_usage()),
+    }
 }
 
 pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, String> {
@@ -98,7 +114,101 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
             );
             Ok(())
         }
+        GenerationCommand::GcPlan { root, sessions } => print_gc_plan(&root, &sessions),
     }
+}
+
+fn print_gc_plan(root: &Path, sessions: &Path) -> Result<(), String> {
+    let plugin_sets = retained_plugin_set_digests(root)?;
+    let session_generations = inspect_all_turn_started_events(sessions)?
+        .into_iter()
+        .map(|stored| {
+            inspect_turn_generation_provenance(
+                stored.event.revision,
+                stored.event.turn_id.as_deref(),
+                &stored.event.payload_json,
+            )
+            .map(|turn| turn.generation_spec_digest)
+            .map_err(|error| {
+                format!(
+                    "Session `{}` has invalid Turn Generation provenance: {error}",
+                    stored.session_id
+                )
+            })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let generations = load_all_generations(root)?;
+    for digest in &session_generations {
+        if !generations.contains_key(digest) {
+            return Err(format!(
+                "Session provenance references missing Generation Spec `{digest}`"
+            ));
+        }
+    }
+
+    let mut protected = 0;
+    let mut candidates = 0;
+    for (digest, generation) in generations {
+        let mut reasons = Vec::new();
+        if plugin_sets.contains(&generation.value().plugin_set_lock_digest) {
+            reasons.push("plugin-set");
+        }
+        if session_generations.contains(&digest) {
+            reasons.push("session");
+        }
+        if reasons.is_empty() {
+            candidates += 1;
+            println!("candidate: {digest}");
+        } else {
+            protected += 1;
+            println!("protected: {digest} reason={}", reasons.join(","));
+        }
+    }
+    println!("summary: protected={protected} candidates={candidates}");
+    Ok(())
+}
+
+fn load_all_generations(
+    root: &Path,
+) -> Result<BTreeMap<String, CanonicalDocument<AppGenerationSpec>>, String> {
+    let directory = root.join(GENERATION_DIRECTORY);
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|error| format!("failed to inspect Generation provenance directory: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("Generation provenance path is not a regular directory".to_owned());
+    }
+    let mut entries = fs::read_dir(&directory)
+        .map_err(|error| format!("failed to enumerate Generation Specs: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to enumerate Generation Specs: {error}"))?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+
+    let mut generations = BTreeMap::new();
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "Generation directory contains a non-UTF-8 name".to_owned())?;
+        if name.starts_with('.')
+            && Path::new(&name)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("tmp"))
+        {
+            continue;
+        }
+        let hash = name
+            .strip_suffix(".json")
+            .filter(|hash| {
+                hash.len() == 64
+                    && hash
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            })
+            .ok_or_else(|| format!("Generation entry `{name}` is not content-addressed"))?;
+        let digest = format!("sha256:{hash}");
+        generations.insert(digest.clone(), load_generation(root, &digest)?);
+    }
+    Ok(generations)
 }
 
 pub fn run_session(command: SessionCommand) -> Result<(), String> {
@@ -190,8 +300,7 @@ fn canonical_digest_hash(digest: &str) -> Result<&str, String> {
 }
 
 fn generation_usage() -> String {
-    "usage: lenso-agent-cli generations inspect --digest <sha256:digest> [--root <plugin-root>]"
-        .to_owned()
+    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-plan [--root <plugin-root>] [--sessions <session-directory>]>".to_owned()
 }
 
 fn session_usage() -> String {

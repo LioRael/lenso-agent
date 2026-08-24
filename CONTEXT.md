@@ -52,6 +52,12 @@ payload contract, and the CLI joins them without printing user input. Missing
 or corrupt Generation Specs are observable facts; inspection never repairs,
 deletes, activates, or rolls back authority.
 
+The Host can also produce a read-only Generation GC plan. It protects Specs
+referenced by current or retained Plugin Sets or by any durable Session Turn,
+and reports only the remaining Specs as candidates. A candidate is not deletion
+authorization; deletion, time-based retention, and Plugin Store collection
+remain deferred.
+
 The Catalog currently contains one exact native Tool Provider append-to-`many`
 entry, one restricted fixture Model Provider replace-`one` entry, and one
 experimental Codex Direct replacement set. The Codex set closes exact Model and
@@ -60,7 +66,7 @@ Agent model configuration. Replacement requires the exact base edge and
 allowlisted displaced package; removal restores the base Plan for the next
 Generation. The non-native Adapter crates remain unselected. Package presence
 or Catalog extensibility is not a claim that arbitrary executable Plugins,
-permissions, general provider replacement, provenance retention/garbage
+permissions, general provider replacement, Generation deletion, Plugin Store
 collection, or non-native execution classes are ready.
 
 ## Product outcome
@@ -216,8 +222,8 @@ ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, automatic rollback,
-Generation provenance retention policy and garbage collection, distributed
-coordination, and overlap replacement require their own product
+Generation retention windows and deletion, Plugin Store garbage collection,
+distributed coordination, and overlap replacement require their own product
 slices. Replacement
 must stage a new Resolved App Plan and App Generation above the Kernel rather
 than mutate the running graph.

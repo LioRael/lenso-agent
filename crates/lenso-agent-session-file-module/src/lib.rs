@@ -37,6 +37,15 @@ pub struct StoredTurnStartedEvent {
     pub payload_json: String,
 }
 
+/// One validated `turn_started` event together with its owning Session.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredSessionTurnStartedEvent {
+    /// Durable Session identity.
+    pub session_id: String,
+    /// Projected event.
+    pub event: StoredTurnStartedEvent,
+}
+
 /// Validate one file Session and project only its `turn_started` events.
 pub fn inspect_turn_started_events(
     directory: &Path,
@@ -75,6 +84,55 @@ pub fn inspect_turn_started_events(
             payload_json: event.payload_json,
         })
         .collect())
+}
+
+/// Validate every durable file Session and project its `turn_started` events.
+pub fn inspect_all_turn_started_events(
+    directory: &Path,
+) -> Result<Vec<StoredSessionTurnStartedEvent>, String> {
+    let directory_metadata = fs::symlink_metadata(directory)
+        .map_err(|error| format!("failed to inspect Session directory: {error}"))?;
+    if !directory_metadata.is_dir() || directory_metadata.file_type().is_symlink() {
+        return Err("Session directory is not a regular directory".to_owned());
+    }
+    let mut entries = fs::read_dir(directory)
+        .map_err(|error| format!("failed to enumerate Session directory: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to enumerate Session directory: {error}"))?;
+    entries.sort_by_key(fs::DirEntry::file_name);
+
+    let mut projected = Vec::new();
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| "Session directory contains a non-UTF-8 name".to_owned())?;
+        if name.starts_with('.')
+            && Path::new(&name)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("tmp"))
+        {
+            continue;
+        }
+        let session_id = name
+            .strip_suffix(".json")
+            .filter(|session_id| valid_session_id(session_id))
+            .ok_or_else(|| format!("Session entry `{name}` is not a durable Session record"))?;
+        let metadata = fs::symlink_metadata(entry.path())
+            .map_err(|error| format!("failed to inspect Session record: {error}"))?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(format!("Session record `{name}` is not a regular file"));
+        }
+        projected.extend(
+            inspect_turn_started_events(directory, session_id)?
+                .into_iter()
+                .map(|event| StoredSessionTurnStartedEvent {
+                    session_id: session_id.to_owned(),
+                    event,
+                }),
+        );
+    }
+    Ok(projected)
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -641,5 +699,35 @@ mod tests {
         fs::write(path, serde_json::to_vec(&corrupted).unwrap()).unwrap();
         let error = inspect_turn_started_events(&directory, &opened.session_id).unwrap_err();
         assert!(error.contains("does not close"));
+    }
+
+    #[test]
+    fn all_session_inspection_is_deterministic_and_fails_closed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("sessions");
+        let provider = FileSessionProvider {
+            directory: directory.clone(),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider.prepare_store().unwrap();
+        for _ in 0..2 {
+            let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
+            provider
+                .append_now(AppendRequest {
+                    session_id: opened.session_id,
+                    expected_revision: "0".to_owned(),
+                    events: vec![event("event-1")],
+                })
+                .unwrap();
+        }
+        fs::write(directory.join(".transaction.tmp"), b"in progress").unwrap();
+
+        let events = inspect_all_turn_started_events(&directory).unwrap();
+        assert_eq!(events.len(), 2);
+        assert!(events[0].session_id < events[1].session_id);
+
+        fs::write(directory.join("unexpected"), b"invalid").unwrap();
+        let error = inspect_all_turn_started_events(&directory).unwrap_err();
+        assert!(error.contains("not a durable Session record"));
     }
 }

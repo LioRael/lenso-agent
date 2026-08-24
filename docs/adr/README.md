@@ -14,3 +14,4 @@
 - [0012 — Ready-gate Plugin Release transitions](0012-ready-gate-plugin-release-transitions.md)
 - [0013 — Inspect Plugin and Generation provenance](0013-inspect-plugin-and-generation-provenance.md)
 - [0014 — Fence Plugin authority across processes](0014-fence-plugin-authority-across-processes.md)
+- [0015 — Plan Generation retention without deleting](0015-plan-generation-retention-without-deleting.md)
