@@ -31,13 +31,14 @@ Status: implementation baseline for the first real provider slice.
 The development profile selects external package `lenso.secrets.env` pinned to
 repository commit `8fcef31d2f27b3b1bb8785855613b14e273a3e96`. App Composition
 maps `model/openai-api-key` to `OPENAI_API_KEY`; the resolved value never enters
-the project document or Plan. The checked contract files under
-`contracts/vendor/lenso-secrets` are an immutable generated snapshot of that
-external Capability source for authoring validation.
+the project document or Plan. The Composition fragment selects the external
+`lenso-capability-secrets` Cargo contract package; `lenso compose` reads its
+owner-local Descriptor and generated Rust binding through Cargo metadata during
+authoring validation. The Harness does not vendor a second contract copy.
 
 ## Removal proof
 
 Removing the OpenAI-compatible Model Instance, Env Secrets Instance, their
-binding, package selections, and vendored contract input leaves the existing
+binding, package selections, and Cargo contract selection leaves the existing
 `headless-readonly` fixture Composition valid and executable. Kernel has no
 provider-specific branch or runtime plugin registry.

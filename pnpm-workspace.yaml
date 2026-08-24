@@ -1,2 +1,0 @@
-minimumReleaseAgeExclude:
-  - '@lenso/contract-runtime@0.1.0'

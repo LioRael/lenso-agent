@@ -18,6 +18,10 @@ contracts.
 - Capability Descriptors and package-local Schemas are the source of truth.
   Native Capability crates own only generated Rust bindings; the supported Bun
   SDK owns generated TypeScript bindings. Never hand-edit either projection.
+- Edit App variants through `composition/recipes.json` and ordinary reusable
+  Project fragments under `composition/fragments`. Never hand-edit
+  `composition/*/resolved-plan.json` Plans. Run `lenso compose resolve` and
+  `lenso compose check`.
 - Use `/Users/leosouthey/Projects/framework/.lenso-tools/bin/lenso-cargo` for
   local Cargo commands. Public documentation must use portable `cargo`
   commands without local absolute paths.

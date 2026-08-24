@@ -1,0 +1,54 @@
+{
+  "composition": {
+    "modules": [
+      {
+        "key": "default-instructions",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "id": "harness.default",
+              "version": "1.0.0",
+              "kind": "instruction",
+              "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App."
+            }
+          ]
+        },
+        "configuration_schema": "crates/lenso-agent-prompt-static-module/config.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.prompt-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "contribute"
+            ],
+            "admission": {
+              "queue_capacity": 1,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      }
+    ],
+    "bindings": [
+      {
+        "consumer": "prompt",
+        "capability_id": "lenso.agent.prompt-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "default-instructions"
+      }
+    ]
+  },
+  "packages": {
+    "lenso.agent.prompt.static": {
+      "name": "lenso.agent.prompt.static",
+      "package_name": "lenso-agent-prompt-static-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    }
+  },
+  "contracts": []
+}

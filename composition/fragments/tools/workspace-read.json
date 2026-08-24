@@ -1,0 +1,53 @@
+{
+  "composition": {
+    "modules": [
+      {
+        "key": "workspace-read",
+        "package": "lenso.agent.workspace-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576,
+          "max_list_entries": 1000,
+          "max_search_entries": 10000,
+          "max_search_bytes": 16777216,
+          "max_search_matches": 1000
+        },
+        "configuration_schema": "composition/headless-readonly/config/workspace-read.schema.json",
+        "provides": [
+          {
+            "capability_id": "lenso.agent.tool-provider@1",
+            "descriptor_version": "1.0.0",
+            "operations": [
+              "catalog",
+              "execute"
+            ],
+            "admission": {
+              "queue_capacity": 4,
+              "max_concurrency": 1
+            }
+          }
+        ],
+        "execution_class": "lenso.native-rust@1"
+      }
+    ],
+    "bindings": [
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@1",
+        "descriptor_version": "1.0.0",
+        "provider": "workspace-read"
+      }
+    ]
+  },
+  "packages": {
+    "lenso.agent.workspace-read": {
+      "name": "lenso.agent.workspace-read",
+      "package_name": "lenso-agent-workspace-read-module",
+      "source": "cargo",
+      "version": "0.1.0",
+      "manifest": "Cargo.toml",
+      "lockfile": "Cargo.lock"
+    }
+  },
+  "contracts": []
+}
