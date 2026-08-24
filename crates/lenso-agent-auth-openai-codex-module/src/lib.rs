@@ -17,17 +17,13 @@ use lenso_capability_agent_auth_openai_codex::{
     AccessError, AccessRequest, AccessResponse, OpenaiCodexEndpoint, OpenaiCodexProvider,
 };
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use sha2::{Digest as _, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
 };
 
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.auth.openai-codex";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Public OAuth client used by Codex-compatible clients.
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
@@ -166,38 +162,26 @@ pub struct DirectAuthStatus {
     pub expires_at: Option<u64>,
 }
 
-/// Native factory for one `OpenAI` Codex Auth generation.
-#[derive(Clone, Debug, Default)]
-pub struct OpenAiCodexAuthFactory;
-
-impl NativeModuleFactory for OpenAiCodexAuthFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates one `OpenAI` Codex Auth generation.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.auth.openai-codex@1","descriptor_version":"1.0.0","operations":["access"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported OpenAI Codex Auth entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported OpenAI Codex Auth entrypoint"));
-        }
-        let config = serde_json::from_str::<AuthConfig>(context.configuration())
-            .map_err(|error| {
-                invalid_plan(format!("invalid OpenAI Codex Auth configuration: {error}"))
-            })?
-            .validate()?;
-        let provider = CodexAuth {
-            config,
-            client: reqwest::Client::new(),
-        };
-        let endpoint = Rc::new(OpenaiCodexEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::new(vec![endpoint]))
-    }
+    let config = serde_json::from_str::<AuthConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid OpenAI Codex Auth configuration: {error}")))?
+        .validate()?;
+    let provider = CodexAuth {
+        config,
+        client: reqwest::Client::new(),
+    };
+    let endpoint = Rc::new(OpenaiCodexEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::new(vec![endpoint]))
 }
 
 #[derive(Clone, Debug)]

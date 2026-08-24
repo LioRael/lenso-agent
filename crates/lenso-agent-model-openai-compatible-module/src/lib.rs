@@ -23,12 +23,7 @@ use lenso_kernel::{
     ActivateContext, DeactivateContext, InvocationContext, ModuleFuture, ModuleLifecycle,
     NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
-
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.model.openai-compatible";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -77,45 +72,35 @@ impl OpenAiConfig {
     }
 }
 
-/// Native factory for one OpenAI-compatible Model generation.
-#[derive(Clone, Debug, Default)]
-pub struct OpenAiCompatibleModelFactory;
-
-impl NativeModuleFactory for OpenAiCompatibleModelFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates one OpenAI-compatible Model generation.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","operations":["complete"],"operation_kinds":{"complete":"stream"},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.secrets@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan(
+            "unsupported OpenAI-compatible Model entrypoint",
+        ));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan(
-                "unsupported OpenAI-compatible Model entrypoint",
-            ));
-        }
-        let config = serde_json::from_str::<OpenAiConfig>(context.configuration())
-            .map_err(|_| invalid_plan("invalid OpenAI-compatible Model configuration"))?
-            .validate()?;
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(|_| invalid_plan("failed to construct OpenAI-compatible HTTP client"))?;
-        let secrets = Rc::new(RefCell::new(None));
-        let endpoint = Rc::new(ModelEndpoint::new(OpenAiCompatibleModel {
-            config,
-            client,
-            secrets: secrets.clone(),
-        })) as Rc<dyn NativeStreamEndpoint>;
-        Ok(NativeModuleInstance::with_stream_endpoints(
-            vec![endpoint],
-            OpenAiLifecycle { secrets },
-        ))
-    }
+    let config = serde_json::from_str::<OpenAiConfig>(context.configuration())
+        .map_err(|_| invalid_plan("invalid OpenAI-compatible Model configuration"))?
+        .validate()?;
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|_| invalid_plan("failed to construct OpenAI-compatible HTTP client"))?;
+    let secrets = Rc::new(RefCell::new(None));
+    let endpoint = Rc::new(ModelEndpoint::new(OpenAiCompatibleModel {
+        config,
+        client,
+        secrets: secrets.clone(),
+    })) as Rc<dyn NativeStreamEndpoint>;
+    Ok(NativeModuleInstance::with_stream_endpoints(
+        vec![endpoint],
+        OpenAiLifecycle { secrets },
+    ))
 }
 
 #[derive(Debug)]

@@ -3,31 +3,39 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lenso_bin="${LENSO_BIN:-lenso}"
-recipe="composition/recipes.json"
-execution_class="lenso.native-rust@1"
-
 cd "${repo_root}"
-"${lenso_bin}" compose check --recipe "${recipe}" \
-  --execution-class "${execution_class}"
-"${lenso_bin}" compose check --recipe "${recipe}" \
-  --variant headless-readonly \
-  --without composition/fragments/tools/workspace-read.json \
-  --execution-class "${execution_class}"
-"${lenso_bin}" compose check --recipe "${recipe}" \
-  --variant headless-readonly \
-  --without composition/fragments/prompt/fixture.json \
-  --without composition/fragments/prompt/summary.json \
-  --execution-class "${execution_class}"
-"${lenso_bin}" compose check --recipe "${recipe}" \
-  --variant openai-codex-direct-skills \
-  --without composition/fragments/tools/skills.json \
-  --execution-class "${execution_class}"
-"${lenso_bin}" compose check --recipe "${recipe}" \
-  --variant headless-coding \
-  --without composition/fragments/tools/coding.json \
-  --execution-class "${execution_class}"
-"${lenso_bin}" compose check --recipe "${recipe}" \
-  --variant headless-local-coding \
-  --without composition/fragments/tools/process.json \
-  --without composition/fragments/process/fixture.json \
-  --execution-class "${execution_class}"
+proof_root="$(mktemp -d composition/.removal-proof.XXXXXX)"
+trap 'rm -rf "${proof_root}"' EXIT
+
+for definition in composition/*.app.json; do
+  "${lenso_bin}" app check --definition "${definition}"
+done
+
+remove_modules() {
+  local source="$1"
+  local target="$2"
+  shift 2
+  local keys
+  keys="$(printf '%s\n' "$@" | jq -R . | jq -s .)"
+  jq --argjson keys "${keys}" \
+    '.manifest = "../../Cargo.toml" |
+      .app.modules |= map(select(.key as $key | ($keys | index($key) | not)))' \
+    "${source}" > "${target}"
+  "${lenso_bin}" app check --definition "${target}"
+}
+
+remove_modules composition/headless-readonly.app.json \
+  "${proof_root}/headless-without-workspace-read.app.json" \
+  workspace-read
+remove_modules composition/headless-readonly.app.json \
+  "${proof_root}/headless-without-prompt-providers.app.json" \
+  fixture-instructions summary-skill
+remove_modules composition/openai-codex-direct-skills.app.json \
+  "${proof_root}/codex-without-skills.app.json" \
+  skills
+remove_modules composition/headless-coding.app.json \
+  "${proof_root}/headless-without-workspace-edit.app.json" \
+  workspace-edit
+remove_modules composition/headless-local-coding.app.json \
+  "${proof_root}/headless-without-process.app.json" \
+  process-tools native-process

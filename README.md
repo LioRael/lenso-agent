@@ -18,8 +18,8 @@ owns:
   Prompt/Skill contributions; workspace-read, opt-in workspace-edit, structured
   process execution, and progressive-disclosure filesystem Skills; file
   Session; Agent Loop; and CLI Modules; and
-- one complete source-derived App Definition, seven legacy fragment variants,
-  and their canonical Resolved App Plans.
+- eight complete source-derived App Definitions and their canonical Resolved
+  App Plans.
 
 The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
 packages and an App Composition materialize one immutable Resolved App Plan
@@ -27,10 +27,10 @@ before boot.
 
 ## Source-derived App Definition
 
-[`composition/headless-readonly.app.json`](composition/headless-readonly.app.json)
-is the first complete App Definition. It selects eight locked Cargo packages
-and nine keyed Instances without repeating Capability IDs, operations,
-bindings, execution classes, lifecycle policy, or configuration Schemas:
+Each executable variant has one `composition/<variant>.app.json` App Definition.
+The definitions select locked Cargo packages and keyed Instances without
+repeating Capability IDs, operations, bindings, execution classes, lifecycle
+policy, or configuration Schemas:
 
 ```sh
 lenso app check --definition composition/headless-readonly.app.json
@@ -44,68 +44,35 @@ cargo run -p lenso-agent-cli -- \
 
 Each selected Module derives its identity, package-owned configuration Schema,
 Capability endpoints and Ports, execution policy, factory, and link-time Host
-registration into its Cargo artifact. The CLI reads those artifacts without
-executing Module code, validates configuration, derives eight bindings, and
-emits bytes identical to the reviewed `headless-readonly` Plan. The smaller
+registration into its Cargo artifact. The App Definition names the statically
+linked Host package, so external Cargo dependencies are discovered through the
+same artifact path as workspace Modules. The CLI reads those artifacts without
+executing Module code, validates configuration, derives bindings, and emits
+bytes identical to each reviewed Plan. The smaller
 [`composition/text-tools.app.json`](composition/text-tools.app.json) remains a
 single-Module authoring fixture.
 
-## Compose an App variant
+## Select an App variant
 
-The remaining variants still assemble from ordinary Project fragments in
-[`composition/recipes.json`](composition/recipes.json):
-
-```json
-"openai-codex-direct-local-coding": {
-  "fragments": [
-    "composition/fragments/core/runtime.json",
-    "composition/fragments/models/codex-direct.json",
-    "composition/fragments/prompt/default.json",
-    "composition/fragments/prompt/summary.json",
-    "composition/fragments/tools/workspace-read.json",
-    "composition/fragments/tools/coding.json",
-    "composition/fragments/tools/process.json",
-    "composition/fragments/process/local.json"
-  ],
-  "output": "composition/openai-codex-direct-local-coding/resolved-plan.json"
-}
-```
-
-Each legacy fragment owns one cohesive selection of ordinary Module Instances,
-bindings, packages, and contracts. Run one variant without managing a Plan
-path:
+Choose one definition, resolve it, and pass only the reviewed immutable Plan to
+the product Runner:
 
 ```sh
-lenso compose run --variant headless-readonly -- \
-  --prompt "Summarize this workspace README."
+lenso app check \
+  --definition composition/openai-codex-direct-local-coding.app.json
+lenso app resolve \
+  --definition composition/openai-codex-direct-local-coding.app.json \
+  --output .lenso/openai-codex-direct-local-coding/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/openai-codex-direct-local-coding/resolved-plan.json \
+  --prompt "Inspect this workspace."
 ```
 
-During development, use the same product Runner with automatic fresh-Plan
-restart after source changes:
-
-```sh
-lenso compose dev --variant headless-readonly -- \
-  --prompt "Summarize this workspace README."
-```
-
-Resolve every tracked canonical Plan for review and release with:
-
-```sh
-lenso compose resolve --recipe composition/recipes.json
-```
-
-Use `lenso compose list` to inspect the available variants and
-`lenso compose check` to validate them without writing Plans. For one variant,
-add `--variant <variant-name>`.
-
-Fragments are now a migration-only authoring surface. `lenso-authoring` expands them
-into one exact ordinary Project in memory before the existing validation and
-resolution path. The tracked `composition/*/resolved-plan.json` artifacts remain
-the exact review and release authority; do not edit them by hand. `compose run`
-and `compose dev` instead use an ignored `.lenso/compose/<variant>` Plan and
-provide its path to the product Runner through `LENSO_RESOLVED_PLAN`. This
-workflow requires a `lenso` build that exposes the new compose commands;
-published 0.2.34 does not.
+The tracked `composition/*/resolved-plan.json` artifacts remain exact review
+and release evidence; never edit them by hand. Legacy recipe and fragment
+authorities have been removed. `scripts/check-removal.sh` validates every App
+Definition and proves that optional Prompt, Skill, workspace-edit, and process
+Modules can be removed while the remaining graph still resolves.
 
 ## Runtime baseline
 
@@ -257,7 +224,10 @@ permission to replace a `one` binding.
 From the repository root:
 
 ```sh
-lenso compose run --variant headless-readonly -- \
+lenso app resolve --definition composition/headless-readonly.app.json \
+  --output .lenso/headless-readonly/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/headless-readonly/resolved-plan.json \
   --prompt "Summarize this workspace README."
 ```
 
@@ -369,7 +339,10 @@ The opt-in ChatGPT Subscription composition enables this catalog without
 changing the base direct profile:
 
 ```sh
-lenso compose run --variant openai-codex-direct-skills -- \
+lenso app resolve --definition composition/openai-codex-direct-skills.app.json \
+  --output .lenso/openai-codex-direct-skills/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/openai-codex-direct-skills/resolved-plan.json \
   --prompt "Use the most relevant available Skill and one relevant resource to review this repository."
 ```
 
@@ -407,7 +380,10 @@ The deterministic coding Composition proves create, unique exact edit, and
 read-back without changing the readonly Composition:
 
 ```sh
-lenso compose run --variant headless-coding -- \
+lenso app resolve --definition composition/headless-coding.app.json \
+  --output .lenso/headless-coding/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/headless-coding/resolved-plan.json \
   --prompt "Create and edit a workspace note."
 ```
 
@@ -423,7 +399,10 @@ The deterministic local-coding Composition proves edit, `cargo check`, and
 read-back through separate workspace and process providers:
 
 ```sh
-lenso compose run --variant headless-local-coding -- \
+lenso app resolve --definition composition/headless-local-coding.app.json \
+  --output .lenso/headless-local-coding/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/headless-local-coding/resolved-plan.json \
   --prompt "Edit and validate the workspace project."
 ```
 
@@ -443,8 +422,9 @@ secrets.
 cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets
 cargo test --locked --workspace
-lenso compose check --recipe composition/recipes.json \
-  --execution-class lenso.native-rust@1
+for definition in composition/*.app.json; do
+  lenso app check --definition "${definition}"
+done
 ./scripts/check-contracts.sh
 ./scripts/check-removal.sh
 ```
@@ -460,7 +440,10 @@ Resolved App Plan:
 
 ```sh
 export OPENAI_API_KEY="..."
-lenso compose run --variant openai-readonly -- \
+lenso app resolve --definition composition/openai-readonly.app.json \
+  --output .lenso/openai-readonly/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/openai-readonly/resolved-plan.json \
   --prompt "Use workspace.read_text to read README.md, then summarize it."
 ```
 
@@ -494,7 +477,10 @@ The subscription Composition defaults to `gpt-5.6-luna` with medium reasoning.
 Resolve and run the subscription Composition with:
 
 ```sh
-lenso compose run --variant openai-codex-direct -- \
+lenso app resolve --definition composition/openai-codex-direct.app.json \
+  --output .lenso/openai-codex-direct/resolved-plan.json
+cargo run -p lenso-agent-cli -- \
+  --plan .lenso/openai-codex-direct/resolved-plan.json \
   --prompt "Summarize this repository."
 ```
 

@@ -18,13 +18,8 @@ use lenso_kernel::{
     InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
     RuntimeFailure,
 };
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use sha2::{Digest, Sha256};
-
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.prompt.filesystem";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -36,40 +31,29 @@ struct FilesystemPromptConfig {
     max_total_bytes: usize,
 }
 
-/// Native factory for an explicitly selected filesystem Skill set.
-#[derive(Clone, Debug, Default)]
-pub struct FilesystemPromptFactory;
-
-impl NativeModuleFactory for FilesystemPromptFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates an explicitly selected filesystem Skill set.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","operations":["contribute"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported filesystem Prompt entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
-    }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported filesystem Prompt entrypoint"));
-        }
-        let config = serde_json::from_str::<FilesystemPromptConfig>(context.configuration())
-            .map_err(|error| {
-                invalid_plan(format!("invalid filesystem Prompt configuration: {error}"))
-            })?;
-        validate_config(&config)?;
-        let state = Rc::new(RefCell::new(None));
-        let endpoint = Rc::new(PromptProviderEndpoint::new(FilesystemPrompt {
-            state: state.clone(),
-        })) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::with_lifecycle(
-            vec![endpoint],
-            FilesystemPromptLifecycle { config, state },
-        ))
-    }
+    let config = serde_json::from_str::<FilesystemPromptConfig>(context.configuration()).map_err(
+        |error| invalid_plan(format!("invalid filesystem Prompt configuration: {error}")),
+    )?;
+    validate_config(&config)?;
+    let state = Rc::new(RefCell::new(None));
+    let endpoint = Rc::new(PromptProviderEndpoint::new(FilesystemPrompt {
+        state: state.clone(),
+    })) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::with_lifecycle(
+        vec![endpoint],
+        FilesystemPromptLifecycle { config, state },
+    ))
 }
 
 #[derive(Clone, Debug)]

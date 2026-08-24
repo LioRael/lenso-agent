@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lenso_agent_auth_openai_codex_module::{
-    OpenAiCodexAuthFactory, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
+    FACTORY_IDENTITY as CODEX_AUTH_FACTORY_IDENTITY, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
 };
 use lenso_agent_loop_module::PACKAGE_ID as AGENT_LOOP_PACKAGE_ID;
 use lenso_agent_model_fixture_module::{
@@ -9,7 +9,7 @@ use lenso_agent_model_fixture_module::{
     PACKAGE_ID as FIXTURE_MODEL_PACKAGE_ID,
 };
 use lenso_agent_model_openai_codex_direct_module::{
-    OpenAiCodexDirectModelFactory, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
+    FACTORY_IDENTITY as CODEX_MODEL_FACTORY_IDENTITY, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
 };
 use lenso_agent_text_tools_module::{
     FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as TEXT_TOOLS_PACKAGE_ID,
@@ -31,7 +31,6 @@ use lenso_capability_agent_tool_provider::{
     DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
     EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
 };
-use lenso_native_adapter::NativeModuleFactory;
 use lenso_plugin_control_plane::{
     BindingTemplate, CapabilityDeclaration, CapabilityRequirement, ControlPlaneError,
     ModuleContribution, PluginManifest, RequirementCardinality, SupportChannel, TrustLevel,
@@ -583,7 +582,7 @@ fn codex_model_profile() -> ExecutablePluginProfile {
         registration_id: "native-codex-direct-model-v1".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package_id: CODEX_MODEL_PACKAGE_ID.to_owned(),
-        factory_identity: OpenAiCodexDirectModelFactory.factory_identity(),
+        factory_identity: CODEX_MODEL_FACTORY_IDENTITY.to_owned(),
         configuration_schema_digest: sha256_digest(CODEX_MODEL_CONFIGURATION_SCHEMA),
         configuration: CODEX_MODEL_CONFIGURATION.to_owned(),
         provides: vec![CapabilityProfile {
@@ -626,7 +625,7 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
         registration_id: "native-codex-auth-v1".to_owned(),
         adapter_profile: NATIVE_AUTH_PROFILE.to_owned(),
         package_id: CODEX_AUTH_PACKAGE_ID.to_owned(),
-        factory_identity: OpenAiCodexAuthFactory.factory_identity(),
+        factory_identity: CODEX_AUTH_FACTORY_IDENTITY.to_owned(),
         configuration_schema_digest: sha256_digest(CODEX_AUTH_CONFIGURATION_SCHEMA),
         configuration: CODEX_AUTH_CONFIGURATION.to_owned(),
         provides: vec![CapabilityProfile {

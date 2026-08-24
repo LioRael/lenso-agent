@@ -10,20 +10,23 @@
     "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
-    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module"
+    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
+    "lenso.agent.process-tools": "lenso-agent-process-tools-module",
+    "lenso.agent.process.native": "lenso-agent-process-native-module"
   },
   "app": {
-    "name": "headless-readonly",
+    "name": "headless-local-coding",
     "modules": [
       {
         "key": "agent",
         "package": "lenso.agent.loop",
         "configuration": {
-          "model": "fixture/readme-summary-v1",
+          "max_history_events": 200,
+          "max_output_tokens": 1024,
           "max_steps": 8,
           "max_tool_calls": 4,
-          "max_output_tokens": 1024,
-          "max_history_events": 200
+          "model": "fixture/readme-summary-v1"
         }
       },
       {
@@ -37,10 +40,10 @@
         "configuration": {
           "contributions": [
             {
+              "content": "Prefix direct answers with `Plugin: `.",
               "id": "fixture.behavior",
-              "version": "1.0.0",
               "kind": "instruction",
-              "content": "Prefix direct answers with `Plugin: `."
+              "version": "1.0.0"
             }
           ]
         }
@@ -50,6 +53,35 @@
         "package": "lenso.agent.model.fixture",
         "configuration": {
           "model": "fixture/readme-summary-v1"
+        }
+      },
+      {
+        "key": "native-process",
+        "package": "lenso.agent.process.native",
+        "configuration": {
+          "allowed_programs": [
+            "cargo"
+          ],
+          "environment_allowlist": [
+            "PATH",
+            "HOME",
+            "CARGO_HOME",
+            "RUSTUP_HOME",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL"
+          ],
+          "max_argument_bytes": 131072,
+          "max_output_bytes": 262144,
+          "max_timeout_ms": 600000,
+          "root": "."
+        }
+      },
+      {
+        "key": "process-tools",
+        "package": "lenso.agent.process-tools",
+        "configuration": {
+          "default_timeout_ms": 120000
         }
       },
       {
@@ -73,10 +105,10 @@
         "configuration": {
           "contributions": [
             {
+              "content": "When summarizing a workspace file, ground the answer in the Tool result.",
               "id": "workspace.summary",
-              "version": "1.0.0",
               "kind": "skill",
-              "content": "When summarizing a workspace file, ground the answer in the Tool result."
+              "version": "1.0.0"
             }
           ]
         }
@@ -87,15 +119,24 @@
         "configuration": {}
       },
       {
+        "key": "workspace-edit",
+        "package": "lenso.agent.workspace-edit",
+        "configuration": {
+          "max_edit_bytes": 131072,
+          "max_file_bytes": 1048576,
+          "root": "."
+        }
+      },
+      {
         "key": "workspace-read",
         "package": "lenso.agent.workspace-read",
         "configuration": {
-          "root": ".",
-          "max_output_bytes": 1048576,
           "max_list_entries": 1000,
-          "max_search_entries": 10000,
+          "max_output_bytes": 1048576,
           "max_search_bytes": 16777216,
-          "max_search_matches": 1000
+          "max_search_entries": 10000,
+          "max_search_matches": 1000,
+          "root": "."
         }
       }
     ],

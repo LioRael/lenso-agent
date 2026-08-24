@@ -15,13 +15,8 @@ use lenso_capability_agent_process::{
     ProcessRun, RunError, RunRequest, RunResponse,
 };
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactory, NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use tokio::{io::AsyncReadExt, process::Child};
-
-/// Runtime package identity selected by App Composition.
-pub const PACKAGE_ID: &str = "lenso.agent.process.native";
-/// Exact linked package version.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,50 +43,38 @@ struct ResolvedProgram {
     canonical_target: PathBuf,
 }
 
-/// Native factory for one explicitly configured process authority.
-#[derive(Clone, Debug, Default)]
-pub struct NativeProcessFactory;
-
-impl NativeModuleFactory for NativeProcessFactory {
-    fn package_id(&self) -> &'static str {
-        PACKAGE_ID
+/// Instantiates one explicitly configured process authority.
+#[lenso_native_adapter::module(
+    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.process@1","descriptor_version":"1.0.0","operations":["catalog","run"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
+    configuration_schema = "config.schema.json"
+)]
+fn instantiate(
+    context: NativeModuleFactoryContext<'_>,
+) -> Result<NativeModuleInstance, RuntimeFailure> {
+    if context.entrypoint() != "default" {
+        return Err(invalid_plan("unsupported native-process entrypoint"));
     }
-
-    fn package_version(&self) -> &'static str {
-        PACKAGE_VERSION
+    let config = serde_json::from_str::<ProcessConfig>(context.configuration())
+        .map_err(|error| invalid_plan(format!("invalid native-process configuration: {error}")))?;
+    validate_config(&config)?;
+    let root = fs::canonicalize(&config.root)
+        .map_err(|error| invalid_plan(format!("process root is unavailable: {error}")))?;
+    if !root.is_dir() {
+        return Err(invalid_plan("process root is not a directory"));
     }
-
-    fn instantiate(
-        &self,
-        context: NativeModuleFactoryContext<'_>,
-    ) -> Result<NativeModuleInstance, RuntimeFailure> {
-        if context.entrypoint() != "default" {
-            return Err(invalid_plan("unsupported native-process entrypoint"));
-        }
-        let config =
-            serde_json::from_str::<ProcessConfig>(context.configuration()).map_err(|error| {
-                invalid_plan(format!("invalid native-process configuration: {error}"))
-            })?;
-        validate_config(&config)?;
-        let root = fs::canonicalize(&config.root)
-            .map_err(|error| invalid_plan(format!("process root is unavailable: {error}")))?;
-        if !root.is_dir() {
-            return Err(invalid_plan("process root is not a directory"));
-        }
-        let programs = resolve_programs(&config.allowed_programs)?;
-        let environment = config
-            .environment_allowlist
-            .iter()
-            .filter_map(|name| env::var(name).ok().map(|value| (name.clone(), value)))
-            .collect();
-        let endpoint = Rc::new(ProcessEndpoint::new(NativeProcessProvider {
-            config,
-            root,
-            programs,
-            environment,
-        })) as Rc<dyn NativeRequestEndpoint>;
-        Ok(NativeModuleInstance::new(vec![endpoint]))
-    }
+    let programs = resolve_programs(&config.allowed_programs)?;
+    let environment = config
+        .environment_allowlist
+        .iter()
+        .filter_map(|name| env::var(name).ok().map(|value| (name.clone(), value)))
+        .collect();
+    let endpoint = Rc::new(ProcessEndpoint::new(NativeProcessProvider {
+        config,
+        root,
+        programs,
+        environment,
+    })) as Rc<dyn NativeRequestEndpoint>;
+    Ok(NativeModuleInstance::new(vec![endpoint]))
 }
 
 fn validate_config(config: &ProcessConfig) -> Result<(), RuntimeFailure> {
