@@ -18,6 +18,13 @@ OpenAI-compatible profile likewise pins the external Secrets package by Git
 revision until that package is published. Portable core must never depend back
 on this repository.
 
+Agent Tool Provider is the first source-first Capability migration. Its
+annotated Rust trait and value types own authoring, while the build derives and
+byte-checks the committed Descriptor and package-local Schemas. Existing Rust
+and TypeScript projections continue to consume those locked artifacts, so the
+migration does not change the Capability identity, version, digest, wire
+contract, or cross-language authority.
+
 The current host baseline selects released `lenso-app-plan 0.1.2` and
 `lenso-kernel 0.1.7`. It pins `lenso-runner` and `lenso-native-adapter` to
 `lenso-runtime-rust` revision
