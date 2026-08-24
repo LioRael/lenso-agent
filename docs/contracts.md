@@ -1,8 +1,9 @@
 # Capability contract semantics
 
 The JSON Schemas and Capability Descriptors are the portable source of truth.
-The generated Rust and TypeScript files are checked-in projections and must not
-be edited by hand.
+Generated projections must not be edited by hand. This native App owns its Rust
+projections; `@lenso/bun` owns the TypeScript projections generated from locked
+snapshots of the same sources.
 
 ## Stream conventions
 
