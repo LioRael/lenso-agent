@@ -1,6 +1,11 @@
 {
   "schema_version": 1,
   "root": "..",
+  "runner": {
+    "program": "cargo",
+    "args": ["run", "-p", "lenso-agent-cli", "--"],
+    "execution_classes": ["lenso.native-rust@1"]
+  },
   "variants": {
     "headless-readonly": {
       "fragments": [

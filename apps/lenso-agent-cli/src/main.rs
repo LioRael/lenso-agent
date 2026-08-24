@@ -138,7 +138,10 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "sessions") {
         return provenance::parse_session_command(&raw[1..]).map(CliCommand::Sessions);
     }
-    let mut plan = PathBuf::from("composition/headless-readonly/resolved-plan.json");
+    let mut plan = env::var_os("LENSO_RESOLVED_PLAN").map_or_else(
+        || PathBuf::from("composition/headless-readonly/resolved-plan.json"),
+        PathBuf::from,
+    );
     let mut prompt = None;
     let mut session = None;
     let mut arguments = raw.into_iter();

@@ -538,6 +538,28 @@ fn direct_answer_finishes_without_a_tool_call() {
 }
 
 #[test]
+fn product_runner_accepts_the_authoring_plan_environment() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["--prompt", "Answer directly: hello"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Plugin: Direct answer.\n"
+    );
+}
+
+#[test]
 fn removing_all_prompt_plugins_leaves_the_agent_composition_runnable() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
