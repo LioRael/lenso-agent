@@ -166,7 +166,7 @@
       {
         "key": "workspace-read",
         "package": "lenso.agent.workspace-read",
-        "configuration": { "root": ".", "max_output_bytes": 1048576 },
+        "configuration": { "root": ".", "max_output_bytes": 1048576, "max_list_entries": 1000, "max_search_entries": 10000, "max_search_bytes": 16777216, "max_search_matches": 1000 },
         "configuration_schema": "composition/headless-readonly/config/workspace-read.schema.json",
         "provides": [
           {

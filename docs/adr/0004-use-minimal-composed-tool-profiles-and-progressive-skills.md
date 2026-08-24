@@ -23,8 +23,8 @@ Instances and explicit `lenso.agent.tool-provider@1` bindings.
 
 The initial profile vocabulary is:
 
-- `readonly`: rooted observation Providers, including workspace reads and
-  bounded Skill documents/resources;
+- `readonly`: rooted observation Providers, including bounded workspace
+  listing, literal text search, file reads, and Skill documents/resources;
 - `coding`: `readonly` plus separately removable workspace mutation and process
   execution Providers when implemented; and
 - `automation`: explicitly selected typed domain Providers, without raw

@@ -98,9 +98,10 @@ Session events. Contribution content becomes one system message and is not
 copied into the Session log. Removing all Prompt Providers leaves the aggregate
 and Agent runnable with an empty system prompt.
 
-The first useful transition asks the Agent to summarize a selected workspace
-README. A deterministic Model fixture proves the Tool call and Session facts;
-it also proves direct answers, sequential Tool calls, budget failures, and
+The first useful transitions ask the Agent to summarize a selected workspace
+README and to navigate by listing, literal search, then targeted read. A
+deterministic Model fixture proves the Tool calls and Session facts; it also
+proves direct answers, sequential Tool calls, budget failures, and
 completed-turn context after restart. Unavailable durable Session storage keeps
 the App from becoming ready.
 

@@ -159,8 +159,9 @@ Tool profiles are App Composition recipes, not Kernel modes or Tool Runtime
 switches. A profile expands to ordinary selected Tool Provider Module Instances
 and explicit bindings:
 
-- `readonly` selects rooted observation providers such as
-  `workspace.read_text` and the filesystem Skills provider;
+- `readonly` selects rooted observation providers such as `workspace.list`,
+  `workspace.search`, `workspace.read_text`, and the filesystem Skills
+  provider;
 - `coding` will add separate workspace mutation and process execution Providers
   when those slices are implemented; and
 - `automation` selects explicit domain Providers and does not receive raw

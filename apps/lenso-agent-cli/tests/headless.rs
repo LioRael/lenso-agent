@@ -396,6 +396,58 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
 }
 
 #[test]
+fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    fs::create_dir(temporary.path().join("docs")).unwrap();
+    fs::write(
+        temporary.path().join("docs/guide.md"),
+        "NAVIGATION_TARGET: bounded workspace discovery.\n",
+    )
+    .unwrap();
+    let output = run(
+        temporary.path(),
+        &plan_path(),
+        "Navigate the workspace to find the navigation target.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Navigation result: NAVIGATION_TARGET: bounded workspace discovery.\n"
+    );
+
+    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let requests = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests
+            .iter()
+            .map(|request| request["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["workspace.list", "workspace.search", "workspace.read_text"]
+    );
+}
+
+#[test]
 fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();

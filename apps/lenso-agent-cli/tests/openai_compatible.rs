@@ -65,8 +65,13 @@ fn openai_model_streams_tool_call_and_resumes_through_real_http() {
     assert_eq!(requests.len(), 2);
     assert_eq!(requests[0]["model"], "gpt-4o-mini");
     assert_eq!(
-        requests[0]["tools"][0]["function"]["name"],
-        "workspace.read_text"
+        requests[0]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["function"]["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["workspace.list", "workspace.read_text", "workspace.search"]
     );
     assert_eq!(
         requests[1]["messages"][2]["tool_calls"][0]["function"]["name"],

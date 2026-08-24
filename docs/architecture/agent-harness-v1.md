@@ -91,7 +91,8 @@ make both the workspace root and model endpoint visible before execution.
 
 1. A deterministic Model fixture proves a composed Prompt behavior, direct
    streamed answer, one or more
-   sequential `workspace.read_text` calls, and finite step/Tool-call limits.
+  sequential `workspace.list`, `workspace.search`, and `workspace.read_text`
+  calls, and finite step/Tool-call limits.
 2. OpenAI-compatible and direct ChatGPT subscription smoke tests exercise the
    same logical turn without changing the Agent Loop.
 3. Restarting the App preserves the Session, its next revision, and bounded
@@ -99,7 +100,8 @@ make both the workspace root and model endpoint visible before execution.
 4. Rebinding Model or Tool Provider Instances changes behavior without changing
    Agent Loop code.
 5. Missing credentials or Session storage prevents readiness.
-6. Workspace escape returns a Tool Domain Error and never reads the target.
+6. Workspace escape or symlink traversal returns a Tool Domain Error and never
+   reads the target; list/search traversal remains deterministically bounded.
 7. Model failure is a Runtime Failure; no provider substitution or replay
    occurs.
 8. Budget exhaustion produces a declared terminal Domain Error and a durable

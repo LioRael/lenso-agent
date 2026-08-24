@@ -122,7 +122,15 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
             .unwrap()
             .contains("Be concise")
     );
-    assert_eq!(requests[0].body["tools"][0]["name"], "workspace_read_text");
+    assert_eq!(
+        requests[0].body["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["workspace_list", "workspace_read_text", "workspace_search"]
+    );
     assert_eq!(requests[1].body["input"][0]["type"], "message");
     assert_eq!(
         requests[1].body["input"][0]["content"][0]["text"],
