@@ -1,4 +1,4 @@
-# ADR 0016: Run the Host through durable Generation control
+# ADR 0017: Run the Host through durable Generation control
 
 ## Status
 
