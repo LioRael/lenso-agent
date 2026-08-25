@@ -31,7 +31,10 @@ fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteEr
     Ok(ExecuteResponse {
         content,
         content_type: ContentType::Text,
-        metadata_json: r#"{"operation":"uppercase"}"#.to_owned(),
+        metadata_json: r#"{"operation":"uppercase"}"#
+            .to_owned()
+            .try_into()
+            .expect("static Tool metadata must be valid JSON"),
     })
 }
 
@@ -57,7 +60,9 @@ impl TextTools {
             tools: vec![ToolDefinition {
                 name: UPPERCASE_TOOL.to_owned(),
                 description: "Convert one bounded UTF-8 string to uppercase.".to_owned(),
-                input_schema_json,
+                input_schema_json: input_schema_json
+                    .try_into()
+                    .expect("derived Tool input Schema must be valid JSON"),
             }],
         })
     }
@@ -68,7 +73,7 @@ impl TextTools {
         request: ExecuteRequest,
     ) -> ModuleResult<ExecuteResponse, ExecuteError> {
         if request.name == UPPERCASE_TOOL {
-            let arguments = serde_json::from_str(&request.arguments_json)
+            let arguments = serde_json::from_str(request.arguments_json.as_str())
                 .map_err(|_| ModuleError::domain(ExecuteError::InvalidArguments))?;
             uppercase(arguments).map_err(ModuleError::domain)
         } else {
@@ -105,7 +110,7 @@ mod tests {
                 .unwrap();
         assert_eq!(catalog.tools.len(), 1);
         let schema: serde_json::Value =
-            serde_json::from_str(&catalog.tools[0].input_schema_json).unwrap();
+            serde_json::from_str(catalog.tools[0].input_schema_json.as_str()).unwrap();
         assert_eq!(schema["properties"]["text"]["maxLength"], 4096);
         assert_eq!(schema["additionalProperties"], false);
 
@@ -113,7 +118,7 @@ mod tests {
             context(),
             ExecuteRequest {
                 name: "missing_tool".to_owned(),
-                arguments_json: "{}".to_owned(),
+                arguments_json: "{}".to_owned().try_into().unwrap(),
             },
         ));
         assert!(matches!(
@@ -125,7 +130,7 @@ mod tests {
             context(),
             ExecuteRequest {
                 name: UPPERCASE_TOOL.to_owned(),
-                arguments_json: r#"{"extra":true,"text":"x"}"#.to_owned(),
+                arguments_json: r#"{"extra":true,"text":"x"}"#.to_owned().try_into().unwrap(),
             },
         ));
         assert!(matches!(

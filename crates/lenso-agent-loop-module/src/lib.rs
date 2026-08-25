@@ -753,7 +753,7 @@ fn history_payload_text(
     event: &ReadSessionResponseEventsItem,
     field: &str,
 ) -> Result<String, TurnFailure> {
-    serde_json::from_str::<serde_json::Value>(&event.payload_json)
+    serde_json::from_str::<serde_json::Value>(event.payload_json.as_str())
         .ok()
         .and_then(|payload| payload.get(field)?.as_str().map(ToOwned::to_owned))
         .ok_or_else(|| {
@@ -872,7 +872,10 @@ fn session_event(
                     detail: format!("failed to format event timestamp: {error}"),
                 })
             })?,
-        payload_json: payload.to_string(),
+        payload_json: payload
+            .to_string()
+            .try_into()
+            .expect("serde_json values must produce valid JSON"),
     })
 }
 
@@ -1006,7 +1009,7 @@ mod tests {
             kind,
             turn_id: Some("turn-1".to_owned()),
             occurred_at: "2026-08-24T00:00:00Z".to_owned(),
-            payload_json: payload_json.to_owned(),
+            payload_json: payload_json.to_owned().try_into().unwrap(),
         }
     }
 
@@ -1099,7 +1102,12 @@ mod tests {
             AppendSessionRequestEventsItemKind::TurnFailed
         );
         assert_eq!(recovery[0].turn_id.as_deref(), Some("turn-1"));
-        assert!(recovery[0].payload_json.contains("host_interrupted"));
+        assert!(
+            recovery[0]
+                .payload_json
+                .as_str()
+                .contains("host_interrupted")
+        );
     }
 
     #[test]

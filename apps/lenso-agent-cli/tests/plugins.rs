@@ -144,7 +144,11 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
         .output()
         .unwrap();
     assert!(!after_remove.status.success());
-    assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+    assert!(
+        String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"),
+        "{}",
+        String::from_utf8_lossy(&after_remove.stderr)
+    );
 }
 
 #[test]
@@ -236,7 +240,11 @@ fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
 
     let after_remove = run_external_text_tool(workspace.path());
     assert!(!after_remove.status.success());
-    assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+    assert!(
+        String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"),
+        "{}",
+        String::from_utf8_lossy(&after_remove.stderr)
+    );
 }
 
 #[test]
@@ -347,7 +355,11 @@ fn external_wasm_tool_imports_only_the_host_selected_workspace_reader() {
     assert!(remove.status.success());
     let after_remove = run_external_workspace_reader(workspace.path());
     assert!(!after_remove.status.success());
-    assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+    assert!(
+        String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"),
+        "{}",
+        String::from_utf8_lossy(&after_remove.stderr)
+    );
 }
 
 #[test]

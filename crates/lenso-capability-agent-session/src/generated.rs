@@ -27,7 +27,7 @@ pub const APPEND_OPERATION: &str = "append";
 pub const OPEN_OPERATION: &str = "open";
 pub const READ_OPERATION: &str = "read";
 
-pub use lenso_contract_runtime::{Timestamp, Uint64, UnknownDomainError};
+pub use lenso_contract_runtime::{RawJson, Timestamp, Uint64, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -56,7 +56,7 @@ pub struct AppendSessionRequestEventsItem {
     pub occurred_at: Timestamp,
     #[serde(rename = "payload_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub payload_json: String,
+    pub payload_json: RawJson,
     #[serde(rename = "turn_id")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_id: Option<String>,
@@ -172,7 +172,7 @@ pub struct ReadSessionResponseEventsItem {
     pub occurred_at: Timestamp,
     #[serde(rename = "payload_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub payload_json: String,
+    pub payload_json: RawJson,
     #[serde(rename = "revision")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub revision: Uint64,

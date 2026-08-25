@@ -326,8 +326,8 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-authoring"
-version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+version = "0.1.1"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "lenso-contract-authoring-macros",
  "schemars",
@@ -337,7 +337,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -346,8 +346,8 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-codegen"
-version = "0.6.2"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+version = "0.6.3"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "lenso-contract-authoring",
  "semver",
@@ -356,9 +356,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-runtime"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f56bfb2aaaa51297547762092ff859e774908a05737c4d7d44a2064e8a29c83"
+checksum = "bfe0fcb14bdeab759dbba8263142b387a70690597974dc1ae219d8cc95b06571"
 dependencies = [
  "base64",
  "bytes",

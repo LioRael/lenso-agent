@@ -183,7 +183,7 @@ fn responses_request(
         .tools
         .iter()
         .map(|tool| {
-            let parameters = serde_json::from_str::<serde_json::Value>(&tool.input_schema_json)
+            let parameters = serde_json::from_str::<serde_json::Value>(tool.input_schema_json.as_str())
                 .map_err(|_| CompleteError::InvalidRequest)?;
             Ok(serde_json::json!({
                 "type": "function",
@@ -611,7 +611,10 @@ impl ResponsesDecoder {
             text: text.to_owned(),
             tool_call_id: tool_call_id.to_owned(),
             tool_name: tool_name.to_owned(),
-            arguments_json: arguments_json.to_owned(),
+            arguments_json: arguments_json
+                .to_owned()
+                .try_into()
+                .expect("provider Tool arguments must be valid JSON"),
             input_tokens: input_tokens.to_string(),
             output_tokens: output_tokens.to_string(),
         }))
@@ -660,7 +663,7 @@ mod tests {
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
                     tool_name: Some("read".to_owned()),
-                    arguments_json: Some(r#"{"path":"README.md"}"#.to_owned()),
+                    arguments_json: Some(r#"{"path":"README.md"}"#.to_owned().try_into().unwrap()),
                 },
                 CompleteMessageInput {
                     role: CompleteMessageRole::Tool,
@@ -673,7 +676,7 @@ mod tests {
             tools: vec![CompleteTool {
                 name: "read".to_owned(),
                 description: "Read text".to_owned(),
-                input_schema_json: r#"{"type":"object"}"#.to_owned(),
+                input_schema_json: r#"{"type":"object"}"#.to_owned().try_into().unwrap(),
             }],
             temperature: 0.0,
             max_output_tokens: 128,
@@ -702,12 +705,12 @@ mod tests {
                 CompleteTool {
                     name: "workspace.read".to_owned(),
                     description: "Read text".to_owned(),
-                    input_schema_json: r#"{"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"type":"object"}"#.to_owned().try_into().unwrap(),
                 },
                 CompleteTool {
                     name: "workspace_read".to_owned(),
                     description: "Read other text".to_owned(),
-                    input_schema_json: r#"{"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"type":"object"}"#.to_owned().try_into().unwrap(),
                 },
             ],
             temperature: 0.0,

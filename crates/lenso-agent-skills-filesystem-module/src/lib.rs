@@ -118,13 +118,14 @@ impl FilesystemSkillsProvider {
                 #[serde(deny_unknown_fields)]
                 struct Arguments {}
 
-                serde_json::from_str::<Arguments>(&request.arguments_json)
+                serde_json::from_str::<Arguments>(request.arguments_json.as_str())
                     .map_err(|_| ExecuteError::InvalidArguments)?;
                 Ok(ExecuteResponse {
                     content: state.catalog_json,
                     content_type: ContentType::Text,
-                    metadata_json: serde_json::json!({ "skill_count": state.skills.len() })
-                        .to_string(),
+                    metadata_json: json_metadata(
+                        &serde_json::json!({ "skill_count": state.skills.len() }),
+                    ),
                 })
             }
             READ_TOOL => {
@@ -134,7 +135,7 @@ impl FilesystemSkillsProvider {
                     name: String,
                 }
 
-                let arguments = serde_json::from_str::<Arguments>(&request.arguments_json)
+                let arguments = serde_json::from_str::<Arguments>(request.arguments_json.as_str())
                     .map_err(|_| ExecuteError::InvalidArguments)?;
                 if !valid_path_component(&arguments.name) {
                     return Err(ExecuteError::InvalidArguments.into());
@@ -146,27 +147,25 @@ impl FilesystemSkillsProvider {
                 Ok(ExecuteResponse {
                     content: skill.content.clone(),
                     content_type: ContentType::Text,
-                    metadata_json: serde_json::json!({
+                    metadata_json: json_metadata(&serde_json::json!({
                         "name": skill.name,
                         "version": skill.version,
                         "digest": format!("sha256:{}", skill.version),
-                    })
-                    .to_string(),
+                    })),
                 })
             }
             LIST_RESOURCES_TOOL => {
-                let name = parse_skill_name(&request.arguments_json)?;
+                let name = parse_skill_name(request.arguments_json.as_str())?;
                 let skill = state.skills.get(&name).ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: skill.resource_manifest_json.clone(),
                     content_type: ContentType::Text,
-                    metadata_json: serde_json::json!({
+                    metadata_json: json_metadata(&serde_json::json!({
                         "name": skill.name,
                         "skill_version": skill.version,
                         "resource_count": skill.resources.len(),
                         "omitted_resource_count": skill.omitted_resource_count,
-                    })
-                    .to_string(),
+                    })),
                 })
             }
             READ_RESOURCE_TOOL => {
@@ -177,7 +176,7 @@ impl FilesystemSkillsProvider {
                     path: String,
                 }
 
-                let arguments = serde_json::from_str::<Arguments>(&request.arguments_json)
+                let arguments = serde_json::from_str::<Arguments>(request.arguments_json.as_str())
                     .map_err(|_| ExecuteError::InvalidArguments)?;
                 if !valid_path_component(&arguments.name) || !valid_resource_path(&arguments.path) {
                     return Err(ExecuteError::InvalidArguments.into());
@@ -193,19 +192,25 @@ impl FilesystemSkillsProvider {
                 Ok(ExecuteResponse {
                     content: resource.content.clone(),
                     content_type: ContentType::Text,
-                    metadata_json: serde_json::json!({
+                    metadata_json: json_metadata(&serde_json::json!({
                         "name": skill.name,
                         "skill_version": skill.version,
                         "path": resource.path,
                         "version": resource.version,
                         "digest": format!("sha256:{}", resource.version),
-                    })
-                    .to_string(),
+                    })),
                 })
             }
             _ => Err(ExecuteError::NotFound.into()),
         }
     }
+}
+
+fn json_metadata(value: &serde_json::Value) -> tool_provider::RawJson {
+    value
+        .to_string()
+        .try_into()
+        .expect("serde_json output must be valid JSON")
 }
 
 fn parse_skill_name(arguments_json: &str) -> Result<String, ExecuteError> {
@@ -256,29 +261,33 @@ impl FilesystemSkillsModule {
                     description:
                         "List available Skills by name, description, and immutable content version."
                             .to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{},"type":"object"}"#
-                        .to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{},"type":"object"}"#.to_owned()
+                        .try_into()
+                        .expect("static Tool Schema must be valid JSON"),
                 },
                 ToolDefinition {
                     name: READ_TOOL.to_owned(),
                     description: "Read the full SKILL.md for one available Skill by exact name."
                         .to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
-                        .to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#.to_owned()
+                        .try_into()
+                        .expect("static Tool Schema must be valid JSON"),
                 },
                 ToolDefinition {
                     name: LIST_RESOURCES_TOOL.to_owned(),
                     description: "List readable snapshotted resources for one Skill without returning their contents."
                         .to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
-                        .to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#.to_owned()
+                        .try_into()
+                        .expect("static Tool Schema must be valid JSON"),
                 },
                 ToolDefinition {
                     name: READ_RESOURCE_TOOL.to_owned(),
                     description: "Read one UTF-8 snapshotted resource by Skill name and relative path. This never executes scripts."
                         .to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["name","path"],"type":"object"}"#
-                        .to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["name","path"],"type":"object"}"#.to_owned()
+                        .try_into()
+                        .expect("static Tool Schema must be valid JSON"),
                 },
             ],
         }))
@@ -974,19 +983,19 @@ mod tests {
         let listed = provider
             .execute_now(&ExecuteRequest {
                 name: LIST_TOOL.to_owned(),
-                arguments_json: "{}".to_owned(),
+                arguments_json: "{}".to_owned().try_into().unwrap(),
             })
             .unwrap();
         assert!(!listed.content.contains("SECRET"));
         let read = provider
             .execute_now(&ExecuteRequest {
                 name: READ_TOOL.to_owned(),
-                arguments_json: r#"{"name":"beta"}"#.to_owned(),
+                arguments_json: r#"{"name":"beta"}"#.to_owned().try_into().unwrap(),
             })
             .unwrap();
         assert!(read.content.contains("BETA SECRET"));
         assert!(!read.content.contains("ALPHA SECRET"));
-        assert!(read.metadata_json.contains("sha256:"));
+        assert!(read.metadata_json.as_str().contains("sha256:"));
     }
 
     #[test]
@@ -1018,7 +1027,7 @@ mod tests {
         let listed = provider
             .execute_now(&ExecuteRequest {
                 name: LIST_RESOURCES_TOOL.to_owned(),
-                arguments_json: r#"{"name":"alpha"}"#.to_owned(),
+                arguments_json: r#"{"name":"alpha"}"#.to_owned().try_into().unwrap(),
             })
             .unwrap();
         assert!(listed.content.contains("references/checklist.md"));
@@ -1029,16 +1038,22 @@ mod tests {
         let read = provider
             .execute_now(&ExecuteRequest {
                 name: READ_RESOURCE_TOOL.to_owned(),
-                arguments_json: r#"{"name":"alpha","path":"references/checklist.md"}"#.to_owned(),
+                arguments_json: r#"{"name":"alpha","path":"references/checklist.md"}"#
+                    .to_owned()
+                    .try_into()
+                    .unwrap(),
             })
             .unwrap();
         assert_eq!(read.content, "RESOURCE CHECKLIST");
-        assert!(read.metadata_json.contains("sha256:"));
+        assert!(read.metadata_json.as_str().contains("sha256:"));
         assert!(!sentinel.exists());
         assert!(matches!(
             provider.execute_now(&ExecuteRequest {
                 name: READ_RESOURCE_TOOL.to_owned(),
-                arguments_json: r#"{"name":"alpha","path":"references/missing.md"}"#.to_owned(),
+                arguments_json: r#"{"name":"alpha","path":"references/missing.md"}"#
+                    .to_owned()
+                    .try_into()
+                    .unwrap(),
             }),
             Err(ProviderFailure::Domain(ExecuteError::NotFound))
         ));
@@ -1189,7 +1204,8 @@ mod tests {
         assert!(matches!(
             provider.execute_now(&ExecuteRequest {
                 name: READ_RESOURCE_TOOL.to_owned(),
-                arguments_json: r#"{"name":"alpha","path":"../outside.txt"}"#.to_owned(),
+                arguments_json:
+                    r#"{"name":"alpha","path":"../outside.txt"}"#.to_owned().try_into().unwrap(),
             }),
             Err(ProviderFailure::Domain(ExecuteError::InvalidArguments))
         ));
@@ -1212,7 +1228,7 @@ mod tests {
         assert!(matches!(
             provider.execute_now(&ExecuteRequest {
                 name: READ_TOOL.to_owned(),
-                arguments_json: r#"{"name":"missing"}"#.to_owned(),
+                arguments_json: r#"{"name":"missing"}"#.to_owned().try_into().unwrap(),
             }),
             Err(ProviderFailure::Domain(ExecuteError::NotFound))
         ));

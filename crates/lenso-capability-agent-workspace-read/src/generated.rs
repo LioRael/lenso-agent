@@ -25,7 +25,7 @@ macro_rules! __lenso_required_many_workspace_read_client { () => { "{\"capabilit
 
 pub const READ_TEXT_OPERATION: &str = "read_text";
 
-pub use lenso_contract_runtime::{UnknownDomainError};
+pub use lenso_contract_runtime::{RawJson, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -42,14 +42,14 @@ pub struct ReadTextResponse {
     pub content: String,
     #[serde(rename = "metadata_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub metadata_json: String,
+    pub metadata_json: RawJson,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ReadTextErrorExecutionFailedPayload {
     #[serde(rename = "details_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub details_json: String,
+    pub details_json: RawJson,
     #[serde(rename = "message")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub message: String,

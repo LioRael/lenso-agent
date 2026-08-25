@@ -109,13 +109,18 @@ impl WorkspaceReadProvider for WorkspaceImportReader {
                     payload: ReadTextErrorExecutionFailedPayload {
                         reason_code: "not_utf8".to_owned(),
                         message: "workspace file is not valid UTF-8".to_owned(),
-                        details_json: "{}".to_owned(),
+                        details_json: "{}"
+                            .try_into()
+                            .expect("static error details must be valid JSON"),
                     },
                 })
             })?;
             Ok(ReadTextResponse {
                 content,
-                metadata_json: serde_json::json!({"path": request.path}).to_string(),
+                metadata_json: serde_json::json!({"path": request.path})
+                    .to_string()
+                    .try_into()
+                    .expect("serde_json values must produce valid JSON"),
             })
         })();
         Box::pin(ready(match result {
