@@ -60,7 +60,9 @@ use crate::plugin_profiles::{
 };
 
 const APP_ID: &str = "lenso.agent.harness";
-const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
+// Wasm component instantiation can legitimately cross ten seconds on a busy developer machine.
+// Keep the gate bounded while avoiding spurious install and rollback failures under local load.
+const READY_TIMEOUT_NANOS: u64 = 30_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
