@@ -369,7 +369,7 @@ dependencies = [
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=ffb07bc8dc7103b58c864b59225ca0f4609b6fdf#ffb07bc8dc7103b58c864b59225ca0f4609b6fdf"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1f79f3b4911a8d33323eb265668babcda7b22f34#1f79f3b4911a8d33323eb265668babcda7b22f34"
 dependencies = [
  "serde",
  "serde_json",
@@ -393,7 +393,7 @@ source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=ffb07bc8dc7103b58c864b59225ca0f4609b6fdf#ffb07bc8dc7103b58c864b59225ca0f4609b6fdf"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1f79f3b4911a8d33323eb265668babcda7b22f34#1f79f3b4911a8d33323eb265668babcda7b22f34"
 dependencies = [
  "futures",
  "hex",

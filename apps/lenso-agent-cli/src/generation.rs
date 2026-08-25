@@ -139,9 +139,24 @@ impl AgentApp {
         store_root: &Path,
         control_directory: &str,
     ) -> Result<Self, String> {
+        let host_build = HostBuildIdentity::current()?;
+        Self::start_with_store_control_directory_and_host_build(
+            plan_bytes,
+            store_root,
+            control_directory,
+            host_build,
+        )
+        .await
+    }
+
+    async fn start_with_store_control_directory_and_host_build(
+        plan_bytes: &[u8],
+        store_root: &Path,
+        control_directory: &str,
+        host_build: HostBuildIdentity,
+    ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
         let _authority_fence = authority.snapshot()?;
-        let host_build = HostBuildIdentity::current()?;
         let generation = resolve_initial_generation_for_host(plan_bytes, store_root, &host_build)?;
         record_generation_spec(store_root, &generation.spec)?;
         crate::plugins::record_current_generation_authority(store_root)?;
@@ -177,22 +192,26 @@ impl AgentApp {
                 .filter(|digest| !recoverable.contains_key(**digest))
                 .copied()
                 .collect::<Vec<_>>();
-            if !missing.is_empty() {
+            if missing.is_empty() {
+                DurableGenerationSupervisor::recover(
+                    APP_ID,
+                    runtime,
+                    store,
+                    &recoverable,
+                    now_unix_nanos()?,
+                )
+                .await
+                .map_err(control_error)?
+            } else if durable.host_suspended {
+                DurableGenerationSupervisor::replace_suspended_host(APP_ID, runtime, store)
+                    .map_err(control_error)?
+            } else {
                 return Err(format!(
-                    "durable Generation recovery lacks retained exact Plugin authority for {}; recoverable Generation Specs: {}",
+                    "durable Generation recovery lacks retained exact Plugin authority for {}; recoverable Generation Specs: {}; automatic Host replacement requires a clean suspension",
                     missing.join(", "),
                     recoverable.keys().cloned().collect::<Vec<_>>().join(", ")
                 ));
             }
-            DurableGenerationSupervisor::recover(
-                APP_ID,
-                runtime,
-                store,
-                &recoverable,
-                now_unix_nanos()?,
-            )
-            .await
-            .map_err(control_error)?
         } else {
             DurableGenerationSupervisor::open(APP_ID, runtime, store).map_err(control_error)?
         };
@@ -972,6 +991,80 @@ mod tests {
                 .await
                 .unwrap();
                 tui.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn clean_host_upgrade_replaces_an_unrecoverable_suspended_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let first_host = HostBuildIdentity {
+                    executable_digest: sha256_digest(b"host build A"),
+                };
+                let second_host = HostBuildIdentity {
+                    executable_digest: sha256_digest(b"host build B"),
+                };
+                let mut first = AgentApp::start_with_store_control_directory_and_host_build(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    TUI_CONTROL_DIRECTORY,
+                    first_host,
+                )
+                .await
+                .unwrap();
+                let first_turn = first.lease_tui_turn().await.unwrap();
+                let first_digest = first_turn.generation_spec_digest().to_owned();
+                drop(first_turn);
+                first.shutdown().await.unwrap();
+
+                let mut upgraded = AgentApp::start_with_store_control_directory_and_host_build(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    TUI_CONTROL_DIRECTORY,
+                    second_host,
+                )
+                .await
+                .unwrap();
+                let upgraded_turn = upgraded.lease_tui_turn().await.unwrap();
+                assert_ne!(upgraded_turn.generation_spec_digest(), first_digest);
+                drop(upgraded_turn);
+                upgraded.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn concurrent_or_unclean_host_upgrade_still_fails_closed() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut first = AgentApp::start_with_store_control_directory_and_host_build(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    TUI_CONTROL_DIRECTORY,
+                    HostBuildIdentity {
+                        executable_digest: sha256_digest(b"live host build"),
+                    },
+                )
+                .await
+                .unwrap();
+
+                let error = AgentApp::start_with_store_control_directory_and_host_build(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    TUI_CONTROL_DIRECTORY,
+                    HostBuildIdentity {
+                        executable_digest: sha256_digest(b"concurrent replacement build"),
+                    },
+                )
+                .await
+                .unwrap_err();
+                assert!(error.contains("automatic Host replacement requires a clean suspension"));
+                first.shutdown().await.unwrap();
             })
             .await;
     }
