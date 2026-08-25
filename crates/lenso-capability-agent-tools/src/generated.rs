@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.tools@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = true;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_tools { () => { "{\"capability_id\":\"lenso.agent.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const EXECUTE_OPERATION: &str = "execute";
@@ -284,6 +288,9 @@ pub trait __LensoIntoToolsCatalogResult {
 impl __LensoIntoToolsCatalogResult for Result<CatalogResponse, CatalogError> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoToolsCatalogResult for Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { self }
+}
 impl __LensoIntoToolsCatalogResult for Result<CatalogResponse, lenso_module_authoring::ModuleError<CatalogError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
         match self {
@@ -309,6 +316,9 @@ pub trait __LensoIntoToolsExecuteResult {
 }
 impl __LensoIntoToolsExecuteResult for Result<ExecuteResponse, ExecuteError> {
     fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoToolsExecuteResult for Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> { self }
 }
 impl __LensoIntoToolsExecuteResult for Result<ExecuteResponse, lenso_module_authoring::ModuleError<ExecuteError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
@@ -498,6 +508,27 @@ impl CapabilityClient for ToolsClient {
     }
 }
 
+impl CapabilityClientMany for ToolsClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    catalog: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<ToolsCatalog>()?,
+                    execute: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<ToolsExecute>()?,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolsCatalogInvocationError {
     Domain(CatalogError),
@@ -507,6 +538,27 @@ pub enum ToolsCatalogInvocationError {
 pub enum ToolsExecuteInvocationError {
     Domain(ExecuteError),
     Runtime(RuntimeFailure),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ToolsGuestClient<'a, H: lenso_guest_sdk::HostImports> {
+    capability: lenso_guest_sdk::GuestCapability<'a, H>,
+}
+
+impl<'a, H: lenso_guest_sdk::HostImports> ToolsGuestClient<'a, H> {
+    pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
+        context
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[CATALOG_OPERATION, EXECUTE_OPERATION], &[])
+            .map(|capability| Self { capability })
+    }
+
+    pub fn catalog(&self, request: &CatalogRequest) -> Result<CatalogResponse, lenso_guest_sdk::GuestError<CatalogError>> {
+        self.capability.request(CATALOG_OPERATION, request)
+    }
+
+    pub fn execute(&self, request: &ExecuteRequest) -> Result<ExecuteResponse, lenso_guest_sdk::GuestError<ExecuteError>> {
+        self.capability.request(EXECUTE_OPERATION, request)
+    }
 }
 
 #[derive(Debug, Default)]

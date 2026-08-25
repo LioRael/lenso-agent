@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "plugin_id": "example.wasm-agent",
+  "release_version": "1.0.0",
+  "artifacts": [
+    {
+      "id": "agent-wasm",
+      "kind": "wasm_component",
+      "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 0,
+      "media_type": "application/wasm",
+      "path": "plugin.wasm",
+      "targets": [
+        "aarch64-linux",
+        "aarch64-macos",
+        "x86_64-linux",
+        "x86_64-macos"
+      ]
+    }
+  ],
+  "module_contributions": [
+    {
+      "id": "agent",
+      "package_id": "lenso.agent.guest",
+      "configuration_schema_digest": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
+      "provides": [
+        {
+          "capability_id": "lenso.agent@1",
+          "descriptor_version": "1.1.0",
+          "descriptor_digest": "sha256:b732474abb0a706714c72c7534a3ddbc61f1ec01289d036b02124d18aa63ffdb",
+          "request_operations": ["run_turn"],
+          "operation_kinds": { "run_turn": "stream" }
+        }
+      ],
+      "requires": [
+        {
+          "capability_id": "lenso.agent.model@1",
+          "descriptor_version": "1.1.0",
+          "cardinality": "one"
+        },
+        {
+          "capability_id": "lenso.agent.prompt@1",
+          "descriptor_version": "1.0.0",
+          "cardinality": "one"
+        },
+        {
+          "capability_id": "lenso.agent.session@1",
+          "descriptor_version": "1.1.0",
+          "cardinality": "one"
+        },
+        {
+          "capability_id": "lenso.agent.tools@1",
+          "descriptor_version": "1.0.0",
+          "cardinality": "one"
+        }
+      ],
+      "implementations": [
+        {
+          "id": "wasm",
+          "artifact": "agent-wasm",
+          "built_in_factory": null,
+          "entrypoint": "plugin",
+          "execution_class": "lenso.wasm-component@1",
+          "targets": [
+            "aarch64-linux",
+            "aarch64-macos",
+            "x86_64-linux",
+            "x86_64-macos"
+          ],
+          "profiles": ["agent-provider-v1"],
+          "support_channel": "experimental",
+          "trust": "isolated"
+        }
+      ],
+      "permission_request_ids": [],
+      "state": null
+    }
+  ],
+  "data_contributions": [],
+  "permission_requests": [],
+  "features": [],
+  "binding_templates": [],
+  "product_metadata": []
+}

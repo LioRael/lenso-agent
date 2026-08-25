@@ -1806,6 +1806,8 @@ fn control_error(error: ControlPlaneError) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
     use lenso_agent_auth_openai_codex_module::{
         FACTORY_IDENTITY as CODEX_AUTH_FACTORY_IDENTITY, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
@@ -1844,7 +1846,7 @@ mod tests {
 
     use crate::plugin_profiles::{
         NATIVE_AUTH_PROFILE, NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, NATIVE_TOOL_PROFILE,
-        QUICKJS_EXECUTION_CLASS,
+        QUICKJS_EXECUTION_CLASS, WASM_EXECUTION_CLASS,
     };
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
@@ -2052,6 +2054,141 @@ mod tests {
                         }
                         StreamEvent::Terminal(Ok(())) => break,
                         other => panic!("unexpected guest Agent frame: {other:?}"),
+                    }
+                }
+                assert_eq!(text, "Plugin: Direct answer.");
+                assert!(session_id.is_some());
+                drop(stream);
+                drop(turn);
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    fn write_wasm_agent_bundle(root: &Path) {
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/wasm-agent");
+        let target = tempfile::tempdir().unwrap();
+        let status = Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--locked",
+                "--release",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--manifest-path",
+            ])
+            .arg(source.join("guest/Cargo.toml"))
+            .arg("--target-dir")
+            .arg(target.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let core = fs::read(
+            target
+                .path()
+                .join("wasm32-unknown-unknown/release/lenso_wasm_agent_example.wasm"),
+        )
+        .unwrap();
+        let component = wit_component::ComponentEncoder::default()
+            .module(&core)
+            .unwrap()
+            .validate(true)
+            .encode()
+            .unwrap();
+        fs::write(root.join("plugin.wasm"), &component).unwrap();
+
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(source.join("lenso-plugin.template.json")).unwrap())
+                .unwrap();
+        manifest["artifacts"][0]["digest"] = sha256_digest(&component).into();
+        manifest["artifacts"][0]["size"] = u64::try_from(component.len()).unwrap().into();
+        fs::write(
+            root.join(MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reviewed_wasm_agent_plugin_uses_generated_clients_and_runs_in_a_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let root = tempfile::tempdir().unwrap();
+                let bundle = tempfile::tempdir().unwrap();
+                write_wasm_agent_bundle(bundle.path());
+                install(
+                    root.path(),
+                    bundle.path(),
+                    Some("review-ticket-wasm-agent"),
+                    Vec::new(),
+                )
+                .unwrap();
+
+                let mut plan_value: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+                let sessions = plan_value["module_instances"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|instance| instance["instance_key"] == "sessions")
+                    .unwrap();
+                sessions["configuration"] = serde_json::to_string(&serde_json::json!({
+                    "directory": root.path().join("sessions")
+                }))
+                .unwrap()
+                .into();
+                let plan = serde_json::to_vec(&plan_value).unwrap();
+
+                let generation =
+                    crate::generation::resolve_initial_generation(&plan, root.path()).unwrap();
+                assert!(generation.plan.module_instance("agent").is_none());
+                let guest = generation
+                    .plan
+                    .module_instances()
+                    .iter()
+                    .find(|instance| instance.package_id() == "lenso.agent.guest")
+                    .unwrap();
+                assert_eq!(guest.execution_class().as_str(), WASM_EXECUTION_CLASS);
+                assert_eq!(guest.required_capabilities().len(), 4);
+                assert_eq!(
+                    generation
+                        .plan
+                        .capability_bindings()
+                        .iter()
+                        .filter(|binding| binding.consumer_instance() == guest.instance_key())
+                        .count(),
+                    4
+                );
+
+                let mut app = crate::generation::AgentApp::start_with_store(&plan, root.path())
+                    .await
+                    .unwrap();
+                let turn = app.lease_turn().await.unwrap();
+                let context = turn.invocation_context().unwrap();
+                let stream = turn
+                    .handle()
+                    .open_with_context(
+                        RUN_TURN_OPERATION,
+                        context,
+                        RunTurnRequest {
+                            input: "hello wasm guest".to_owned(),
+                            session_id: None,
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut text = String::new();
+                let mut session_id = None;
+                loop {
+                    match stream.receive().await.unwrap() {
+                        StreamEvent::Message(message) => {
+                            text.push_str(&message.text);
+                            session_id = message.session_id;
+                        }
+                        StreamEvent::Terminal(Ok(())) => break,
+                        other => panic!("unexpected Wasm Agent frame: {other:?}"),
                     }
                 }
                 assert_eq!(text, "Plugin: Direct answer.");

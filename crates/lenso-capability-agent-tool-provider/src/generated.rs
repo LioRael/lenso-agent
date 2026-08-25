@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.tool-provider@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = true;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_tool_provider { () => { "{\"capability_id\":\"lens
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_tool_provider_client { () => { "{\"capability_id\":\"lenso.agent.tool-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_tool_provider_client { () => { "{\"capability_id\":\"lenso.agent.tool-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const EXECUTE_OPERATION: &str = "execute";
@@ -290,6 +294,9 @@ pub trait __LensoIntoToolProviderCatalogResult {
 impl __LensoIntoToolProviderCatalogResult for Result<CatalogResponse, CatalogError> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoToolProviderCatalogResult for Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { self }
+}
 impl __LensoIntoToolProviderCatalogResult for Result<CatalogResponse, lenso_module_authoring::ModuleError<CatalogError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
         match self {
@@ -315,6 +322,9 @@ pub trait __LensoIntoToolProviderExecuteResult {
 }
 impl __LensoIntoToolProviderExecuteResult for Result<ExecuteResponse, ExecuteError> {
     fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoToolProviderExecuteResult for Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> { self }
 }
 impl __LensoIntoToolProviderExecuteResult for Result<ExecuteResponse, lenso_module_authoring::ModuleError<ExecuteError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
@@ -501,6 +511,27 @@ impl CapabilityClient for ToolProviderClient {
         RuntimeFailure::ModuleFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
         }
+    }
+}
+
+impl CapabilityClientMany for ToolProviderClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    catalog: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<ToolProviderCatalog>()?,
+                    execute: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<ToolProviderExecute>()?,
+                    },
+                ))
+            })
+            .collect()
     }
 }
 

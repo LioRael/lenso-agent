@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.auth.openai-codex@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = false;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_openai_codex { () => { "{\"capability_id\":\"lenso
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_openai_codex_client { () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_openai_codex_client { () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const ACCESS_OPERATION: &str = "access";
 
@@ -145,6 +149,9 @@ pub trait __LensoIntoOpenaiCodexAccessResult {
 }
 impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, AccessError> {
     fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoOpenaiCodexAccessResult for Result<Result<AccessResponse, AccessError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> { self }
 }
 impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, lenso_module_authoring::ModuleError<AccessError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> {
@@ -299,6 +306,26 @@ impl CapabilityClient for OpenaiCodexClient {
         RuntimeFailure::ModuleFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
         }
+    }
+}
+
+impl CapabilityClientMany for OpenaiCodexClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    access: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<OpenaiCodex>()?,
+                    },
+                ))
+            })
+            .collect()
     }
 }
 

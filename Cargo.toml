@@ -47,22 +47,23 @@ directories = "6.0"
 fs2 = "0.4"
 futures = "0.3"
 lenso-agent-module = { path = "crates/lenso-agent-module" }
-lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "dfdaaef9bffc2f804284195df09f6dd62d3a442e" }
+lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "b404598383042138f3bcb90ec2a4f5f312ada1b2" }
 lenso-app-plan = "0.1.4"
-lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
-lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "c732d0612d782c47ca4616da672fc81ae8e38652" }
-lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "c732d0612d782c47ca4616da672fc81ae8e38652" }
+lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "801353949443a32df70ea0730b3093fcafb30401" }
+lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "801353949443a32df70ea0730b3093fcafb30401" }
 lenso-contract-runtime = "0.1.0"
 lenso-kernel = "0.1.8"
-lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "c732d0612d782c47ca4616da672fc81ae8e38652" }
-lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
-lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
-lenso-quickjs-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
-lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
-lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
-lenso-wasm-component-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "9e54c87c574c7c027b05189d8f5033b52f92149b" }
+lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "801353949443a32df70ea0730b3093fcafb30401" }
+lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-quickjs-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-wasm-component-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
 nix = { version = "0.31", features = ["process", "signal"] }
-lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "dfdaaef9bffc2f804284195df09f6dd62d3a442e" }
+lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "b404598383042138f3bcb90ec2a4f5f312ada1b2" }
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }
 schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }
@@ -72,6 +73,7 @@ tempfile = "3.23"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt", "signal", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
+wit-component = "0.254"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
