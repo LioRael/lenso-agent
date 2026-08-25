@@ -36,10 +36,12 @@ Generation path.
   user-visible rollback history and Generation GC roots. It opens a new durable
   control state when none is live, or recovers every durable Active or Standby
   digest from retained exact Plugin authority. One shared Plugin authority
-  fence covers resolve, recovery, Ready, and switch. When committed authority
-  changed while the CLI was stopped, startup performs a standard maintenance
-  transition from the recovered Active Generation to the newly resolved
-  Generation before routing.
+  fence covers resolve, recovery, Ready, and switch. The Host hashes its exact
+  executable once per startup or offline transition and reuses that immutable
+  build identity across every Generation resolution in the operation. When
+  committed authority changed while the CLI was stopped, startup performs a
+  standard maintenance transition from the recovered Active Generation to the
+  newly resolved Generation before routing.
 - Every Turn acquires a Controller route. That route owns the durable Generation
   Lease and supplies both the Agent handle and the Generation Spec digest
   recorded in Invocation Context.
