@@ -14,11 +14,11 @@ use std::{
 };
 
 /// Stable Tool name for listing one workspace directory.
-pub const LIST_TOOL: &str = "workspace.list";
+pub const LIST_TOOL: &str = "list";
 /// Stable Tool name for bounded literal search.
-pub const SEARCH_TOOL: &str = "workspace.search";
+pub const SEARCH_TOOL: &str = "search";
 /// Stable Tool name for reading one UTF-8 file.
-pub const READ_TEXT_TOOL: &str = "workspace.read_text";
+pub const READ_TOOL: &str = "read";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -388,7 +388,7 @@ impl ToolProviderProvider for WorkspaceProvider {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"},"query":{"minLength":1,"type":"string"}},"required":["query"],"type":"object"}"#.to_owned(),
                 },
                 CatalogResponseToolsItem {
-                    name: READ_TEXT_TOOL.to_owned(),
+                    name: READ_TOOL.to_owned(),
                     description: "Read one UTF-8 text file below the selected workspace root.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"minLength":1,"type":"string"}},"required":["path"],"type":"object"}"#.to_owned(),
                 },
@@ -404,7 +404,7 @@ impl ToolProviderProvider for WorkspaceProvider {
         let result = match request.name.as_str() {
             LIST_TOOL => self.list(&request.arguments_json),
             SEARCH_TOOL => self.search(&request.arguments_json),
-            READ_TEXT_TOOL => self.read_text(&request.arguments_json),
+            READ_TOOL => self.read_text(&request.arguments_json),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {

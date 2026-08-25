@@ -6,7 +6,7 @@ wit_bindgen::generate!({
 });
 
 const CAPABILITY: &str = "lenso.agent.tool-provider@1";
-const TOOL: &str = "text.uppercase";
+const TOOL: &str = "uppercase";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

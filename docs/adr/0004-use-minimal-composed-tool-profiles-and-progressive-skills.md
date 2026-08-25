@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+Refined by: ADR 0019
+
 ## Context
 
 A coding Agent can expose only generic file and process primitives, while a

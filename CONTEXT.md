@@ -268,9 +268,9 @@ to or read credentials from the Codex CLI.
 
 The opt-in `openai-codex-direct-skills` Composition adds one filesystem Skills
 Module to the `readonly` Tool profile. The same immutable startup snapshot
-provides a bounded name/description Prompt catalog plus `skills.list`,
-`skills.read`, `skills.list_resources`, and `skills.read_resource`. Normal
-selection reads the matching Skill directly; `skills.list` remains available
+provides a bounded name/description Prompt catalog plus `skill_list`,
+`skill`, `skill_resources`, and `skill_resource`. Normal
+selection reads the matching Skill directly; `skill_list` remains available
 for diagnostics and catalog overflow.
 
 The opt-in `headless-coding` and `openai-codex-direct-coding` Compositions add

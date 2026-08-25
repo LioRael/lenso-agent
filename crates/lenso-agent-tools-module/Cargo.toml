@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-tools-module"
-version = "0.1.0"
+version = "0.2.0"
 description = "Aggregate Tool Runtime Module for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true

@@ -15,7 +15,7 @@ use lenso_capability_agent_tool_provider::{
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
 /// Stable structured process Tool name.
-pub const EXEC_TOOL: &str = "process.exec";
+pub const EXEC_TOOL: &str = "run_process";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

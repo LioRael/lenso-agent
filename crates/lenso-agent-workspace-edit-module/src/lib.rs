@@ -17,9 +17,9 @@ use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
 
 /// Stable Tool name for unique exact text replacement.
-pub const EDIT_TEXT_TOOL: &str = "workspace.edit_text";
+pub const EDIT_TOOL: &str = "edit";
 /// Stable Tool name for create-only UTF-8 file writes.
-pub const WRITE_TEXT_TOOL: &str = "workspace.write_text";
+pub const CREATE_FILE_TOOL: &str = "create_file";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -287,12 +287,12 @@ impl ToolProviderProvider for WorkspaceEditProvider {
         Box::pin(ready(Ok(Ok(CatalogResponse {
             tools: vec![
                 CatalogResponseToolsItem {
-                    name: EDIT_TEXT_TOOL.to_owned(),
+                    name: EDIT_TOOL.to_owned(),
                     description: "Replace one unique, exact UTF-8 string in an existing workspace file. The call fails if old_text is absent or not unique.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned(),
                 },
                 CatalogResponseToolsItem {
-                    name: WRITE_TEXT_TOOL.to_owned(),
+                    name: CREATE_FILE_TOOL.to_owned(),
                     description: "Create one new UTF-8 workspace file below an existing directory. Existing targets are never overwritten.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned(),
                 },
@@ -307,8 +307,8 @@ impl ToolProviderProvider for WorkspaceEditProvider {
     ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
     {
         let result = match request.name.as_str() {
-            EDIT_TEXT_TOOL => self.edit_text(&request.arguments_json),
-            WRITE_TEXT_TOOL => self.write_text(&request.arguments_json),
+            EDIT_TOOL => self.edit_text(&request.arguments_json),
+            CREATE_FILE_TOOL => self.write_text(&request.arguments_json),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {

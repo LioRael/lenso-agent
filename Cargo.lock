@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-model-fixture-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
@@ -1207,7 +1207,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-process-tools-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
@@ -1280,7 +1280,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-skills-filesystem-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "directories",
  "lenso",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-text-tools-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
@@ -1307,7 +1307,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-tools-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-workspace-edit-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
@@ -1335,7 +1335,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-workspace-read-module"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",

@@ -71,11 +71,11 @@ fn openai_model_streams_tool_call_and_resumes_through_real_http() {
             .iter()
             .map(|tool| tool["function"]["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["workspace.list", "workspace.read_text", "workspace.search"]
+        ["list", "read", "search"]
     );
     assert_eq!(
         requests[1]["messages"][2]["tool_calls"][0]["function"]["name"],
-        "workspace.read_text"
+        "read"
     );
     assert_eq!(requests[1]["messages"][0]["role"], "system");
     assert!(
@@ -172,7 +172,7 @@ fn write_response(stream: &mut TcpStream, body: &[u8]) {
 
 fn tool_call_response() -> String {
     concat!(
-        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-readme-1\",\"function\":{\"name\":\"workspace.read_text\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-readme-1\",\"function\":{\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":null}]}\n\n",
         "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"README.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":20,\"completion_tokens\":6}}\n\n",
         "data: [DONE]\n\n"
     )

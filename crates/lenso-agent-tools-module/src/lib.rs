@@ -98,6 +98,14 @@ impl Lifecycle for ToolsModule {
                     provider_contract::ToolProviderCatalogInvocationError::Runtime(error) => error,
                 })?;
             for tool in response.tools {
+                if !valid_model_tool_name(&tool.name) {
+                    return Err(RuntimeFailure::InvalidResolvedPlan {
+                        detail: format!(
+                            "invalid Tool name `{}`; expected lowercase snake_case with at most 64 ASCII characters",
+                            tool.name
+                        ),
+                    });
+                }
                 if routes.insert(tool.name.clone(), index).is_some() {
                     return Err(RuntimeFailure::InvalidResolvedPlan {
                         detail: format!("duplicate Tool name `{}`", tool.name),
@@ -115,6 +123,15 @@ impl Lifecycle for ToolsModule {
             .replace(Some(ToolRuntimeState { catalog, routes }));
         Ok(())
     }
+}
+
+fn valid_model_tool_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes.len() <= 64
+        && bytes[1..]
+            .iter()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
 }
 
 fn convert_execute_response(response: provider_contract::ExecuteResponse) -> ExecuteResponse {
@@ -160,5 +177,31 @@ fn tool_error(code: &str, message: &str, details_json: &str) -> ExecuteError {
             message: message.to_owned(),
             details_json: details_json.to_owned(),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_model_tool_name;
+
+    #[test]
+    fn model_tool_names_use_bounded_lowercase_snake_case() {
+        for name in ["read", "create_file", "run_process", "skill_resource"] {
+            assert!(valid_model_tool_name(name), "expected `{name}` to be valid");
+        }
+        for name in [
+            "",
+            "Read",
+            "workspace.read",
+            "read-file",
+            "_read",
+            "réad",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ] {
+            assert!(
+                !valid_model_tool_name(name),
+                "expected `{name}` to be invalid"
+            );
+        }
     }
 }
