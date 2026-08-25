@@ -261,7 +261,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-agent-http-fetch"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-agent-harness.git?rev=ef9ec56dae937765161d8372472a69bc043882c0#ef9ec56dae937765161d8372472a69bc043882c0"
+source = "git+https://github.com/LioRael/lenso-agent-harness.git?rev=684201fe3b491eb55b7e77fe9b5939f863a8e807#684201fe3b491eb55b7e77fe9b5939f863a8e807"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
@@ -277,8 +277,8 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-authoring"
-version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+version = "0.1.1"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "lenso-contract-authoring-macros",
  "schemars",
@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -297,8 +297,8 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-codegen"
-version = "0.6.2"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+version = "0.6.3"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "lenso-contract-authoring",
  "semver",
