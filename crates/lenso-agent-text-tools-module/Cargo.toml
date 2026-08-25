@@ -14,6 +14,7 @@ package-id = "lenso.agent.text-tools"
 [dependencies]
 futures.workspace = true
 lenso.workspace = true
+lenso-agent-tool-sdk = { path = "../lenso-agent-tool-sdk" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-kernel.workspace = true
 schemars = "1.1"

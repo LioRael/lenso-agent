@@ -1,0 +1,20 @@
+[package]
+name = "lenso-agent-tool-sdk-macros"
+version = "0.1.0"
+description = "Procedural macros for typed Agent Tool Provider authoring."
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+
+[lints]
+workspace = true

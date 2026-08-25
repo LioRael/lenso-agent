@@ -1,4 +1,4 @@
-# ADR 0024: Enforce reviewed network grants through one HTTP Capability
+# ADR 0025: Enforce reviewed network grants through one HTTP Capability
 
 ## Status
 

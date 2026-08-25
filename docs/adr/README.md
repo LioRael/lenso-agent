@@ -23,4 +23,5 @@
 - [0021 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0021-bind-reviewed-wasm-tools-to-workspace-read.md)
 - [0022 — Compose optional built-ins through Plugin state](0022-compose-optional-builtins-through-plugin-state.md)
 - [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-modules-through-plugin-state.md)
-- [0024 — Enforce reviewed network grants through one HTTP Capability](0024-enforce-reviewed-network-grants-through-http-capability.md)
+- [0024 — Derive typed Agent Tool Providers](0024-derive-agent-tool-providers.md)
+- [0025 — Enforce reviewed network grants through one HTTP Capability](0025-enforce-reviewed-network-grants-through-http-capability.md)
