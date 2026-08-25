@@ -1,6 +1,7 @@
 # Workspace edit Module card
 
-Status: implementation baseline for the opt-in coding profile.
+Status: implementation baseline for the opt-in coding profile and bundled
+Plugin selection.
 
 ## `lenso.agent.workspace-edit`
 
@@ -25,13 +26,15 @@ Status: implementation baseline for the opt-in coding profile.
   one unique, non-empty UTF-8 substring in one existing UTF-8 file while
   preserving its permissions.
 
-## Composition
+## Selection
 
-The Module is absent from every existing readonly Composition. The opt-in
-headless and direct ChatGPT coding Compositions add one `workspace-edit`
-Instance and one explicit `many` Tool Provider binding. Removing the Instance,
-binding, and package input restores the corresponding readonly graph without a
-Tool Runtime, Agent Loop, Adapter, Driver, or Kernel branch.
+The Module is absent from the root read-only App. The product workflow enables
+its exact bundled Release with `plugins enable
+workspace-edit --evidence <review>`. The persisted Plugin Set contributes one
+`workspace-edit` Instance and the Host derives one `many` Tool Provider binding
+to `tools` before staging the candidate App Generation. `plugins disable
+workspace-edit` removes that authority through the same Ready Gate. Mutation
+authority exists only through this persisted Plugin selection.
 
 Deletion and generic overwrite are deliberately unsupported in this slice.
 Approval policy and process execution remain separate future Modules.

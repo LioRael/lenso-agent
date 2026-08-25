@@ -5,7 +5,7 @@ Status: implementation baseline for the higher-authority local-coding profile.
 ## `lenso.agent.process.native`
 
 - **Deletion boundary:** removes the authorized program catalog and every local
-  subprocess; workspace read/edit, Prompt, Session, Agent Loop, Runner,
+  subprocess; workspace read, Prompt, Session, Agent Loop, Runner,
   Execution Adapter, and Kernel remain unchanged.
 - **Owned facts:** canonical workspace root, allowed executable basenames and
   resolved identities, inherited environment allowlist, argument/time/output
@@ -38,11 +38,11 @@ Status: implementation baseline for the higher-authority local-coding profile.
 - **First behavior:** project one provider-authorized process request into one
   `run_process` Tool call while forwarding the Kernel Invocation Context.
 
-## Composition and trust
+## Selection and trust
 
-The two Modules appear only in `headless-local-coding` and
-`openai-codex-direct-local-coding`. Removing their Instances, bindings, package
-inputs, and now-unused private contract restores the ordinary coding graph.
+The two Modules are one atomic `local-process` Plugin selection. Disabling it
+removes their Instances, bindings, package inputs, and now-unused private
+contract, restoring the ordinary read-only graph.
 
 This slice is not hostile-code isolation. Allowing Cargo, a test runner, or Git
 can execute project code, hooks, aliases, or other configured behavior with the

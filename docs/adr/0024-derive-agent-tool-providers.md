@@ -1,4 +1,4 @@
-# 0022 — Derive typed Agent Tool Providers
+# 0024 — Derive typed Agent Tool Providers
 
 ## Status
 

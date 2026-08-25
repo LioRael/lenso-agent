@@ -31,9 +31,9 @@ Status: experimental direct-provider baseline.
   event bound, and sanitized status policy.
 - **Provides:** `lenso.agent.model@1` (`complete`, stream).
 - **Requires:** exactly one `lenso.agent.auth.openai-codex@1` provider selected
-  by Composition.
+  by the Host Profile.
 - **Configuration:** official backend base URL, model, reasoning effort, and
-  maximum SSE event bytes. The shipped Composition selects `gpt-5.6-luna` with
+  maximum SSE event bytes. The shipped Profile selects `gpt-5.6-luna` with
   medium reasoning.
 - **Lifecycle/resources:** activation constructs the generated Auth client only
   from `ModuleDependencies`; every completion owns one HTTP response stream.

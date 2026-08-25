@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-26
 - Extends: ADR 0001, ADR 0003, ADR 0005, and Lenso ADRs 0043, 0045, 0057
+- Updated by: ADR 0023 replaces the separate TUI App variant with the shared root base.
 
 ## Context
 

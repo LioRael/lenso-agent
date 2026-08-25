@@ -11,8 +11,23 @@ use lenso_agent_model_fixture_module::{
 use lenso_agent_model_openai_codex_direct_module::{
     FACTORY_IDENTITY as CODEX_MODEL_FACTORY_IDENTITY, PACKAGE_ID as CODEX_MODEL_PACKAGE_ID,
 };
+use lenso_agent_model_openai_compatible_module::{
+    FACTORY_IDENTITY as OPENAI_MODEL_FACTORY_IDENTITY, PACKAGE_ID as OPENAI_MODEL_PACKAGE_ID,
+};
+use lenso_agent_process_native_module::{
+    FACTORY_IDENTITY as PROCESS_NATIVE_FACTORY_IDENTITY, PACKAGE_ID as PROCESS_NATIVE_PACKAGE_ID,
+};
+use lenso_agent_process_tools_module::{
+    FACTORY_IDENTITY as PROCESS_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as PROCESS_TOOLS_PACKAGE_ID,
+};
+use lenso_agent_skills_filesystem_module::{
+    FACTORY_IDENTITY as SKILLS_FACTORY_IDENTITY, PACKAGE_ID as SKILLS_PACKAGE_ID,
+};
 use lenso_agent_text_tools_module::{
     FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as TEXT_TOOLS_PACKAGE_ID,
+};
+use lenso_agent_workspace_edit_module::{
+    FACTORY_IDENTITY as WORKSPACE_EDIT_FACTORY_IDENTITY, PACKAGE_ID as WORKSPACE_EDIT_PACKAGE_ID,
 };
 use lenso_app_plan::{
     CapabilityBinding, CapabilityCardinality, CapabilityOperationKind, ResolvedAppPlan,
@@ -29,8 +44,17 @@ use lenso_capability_agent_model::{
     CAPABILITY_ID as MODEL_CAPABILITY_ID, COMPLETE_OPERATION as MODEL_COMPLETE_OPERATION,
     DESCRIPTOR_VERSION as MODEL_DESCRIPTOR_VERSION,
 };
+use lenso_capability_agent_process::{
+    CAPABILITY_ID as PROCESS_CAPABILITY_ID, CATALOG_OPERATION as PROCESS_CATALOG_OPERATION,
+    DESCRIPTOR_VERSION as PROCESS_DESCRIPTOR_VERSION, RUN_OPERATION as PROCESS_RUN_OPERATION,
+};
 use lenso_capability_agent_prompt::{
     CAPABILITY_ID as PROMPT_CAPABILITY_ID, DESCRIPTOR_VERSION as PROMPT_DESCRIPTOR_VERSION,
+};
+use lenso_capability_agent_prompt_provider::{
+    CAPABILITY_ID as PROMPT_PROVIDER_CAPABILITY_ID,
+    CONTRIBUTE_OPERATION as PROMPT_PROVIDER_CONTRIBUTE_OPERATION,
+    DESCRIPTOR_VERSION as PROMPT_PROVIDER_DESCRIPTOR_VERSION,
 };
 use lenso_capability_agent_session::{
     CAPABILITY_ID as SESSION_CAPABILITY_ID, DESCRIPTOR_VERSION as SESSION_DESCRIPTOR_VERSION,
@@ -48,6 +72,10 @@ use lenso_capability_agent_workspace_read::{
     CAPABILITY_ID as WORKSPACE_READ_CAPABILITY_ID,
     DESCRIPTOR_VERSION as WORKSPACE_READ_DESCRIPTOR_VERSION,
 };
+use lenso_capability_secrets::{
+    CAPABILITY_ID as SECRETS_CAPABILITY_ID, DESCRIPTOR_VERSION as SECRETS_DESCRIPTOR_VERSION,
+    RESOLVE_OPERATION as SECRETS_RESOLVE_OPERATION,
+};
 use lenso_plugin_control_plane::{
     BindingTemplate, CapabilityDeclaration, CapabilityRequirement, ControlPlaneError,
     ModuleContribution, PluginManifest, RequirementCardinality, SupportChannel, TrustLevel,
@@ -58,6 +86,9 @@ pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 pub(crate) const TOOL_PROVIDER_PROFILE: &str = "agent-tool-provider-v1";
 pub(crate) const NATIVE_MODEL_PROFILE: &str = "agent-model-provider-v1";
 pub(crate) const NATIVE_AUTH_PROFILE: &str = "agent-auth-provider-v1";
+pub(crate) const NATIVE_SKILLS_PROFILE: &str = "agent-skills-provider-v1";
+pub(crate) const NATIVE_PROCESS_PROFILE: &str = "agent-process-provider-v1";
+pub(crate) const NATIVE_SECRETS_PROFILE: &str = "secrets-provider-v1";
 pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
 pub(crate) const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 pub(crate) const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
@@ -69,6 +100,20 @@ const MODEL_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-model/capability.json");
 const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-model-fixture-module/config.schema.json");
+const WORKSPACE_EDIT_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-workspace-edit-module/config.schema.json");
+const SKILLS_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-skills-filesystem-module/config.schema.json");
+const PROCESS_TOOLS_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-process-tools-module/config.schema.json");
+const PROCESS_NATIVE_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-process-native-module/config.schema.json");
+const OPENAI_MODEL_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-model-openai-compatible-module/config.schema.json");
+const PROMPT_PROVIDER_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-prompt-provider/capability.json");
+const PROCESS_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-process/capability.json");
 const CODEX_MODEL_CONFIGURATION_SCHEMA: &[u8] = include_bytes!(
     "../../../crates/lenso-agent-model-openai-codex-direct-module/config.schema.json"
 );
@@ -86,6 +131,20 @@ const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
 const CODEX_AUTH_CONFIGURATION: &str =
     r#"{"issuer":"https://auth.openai.com","profile":"default","refresh_margin_seconds":60}"#;
+const WORKSPACE_EDIT_CONFIGURATION: &str =
+    r#"{"max_edit_bytes":131072,"max_file_bytes":1048576,"root":"."}"#;
+const SKILLS_CONFIGURATION: &str = r#"{"catalog_contribution_id":"agents.skills.catalog","max_catalog_bytes":262144,"max_file_bytes":262144,"max_prompt_catalog_bytes":8000,"max_resource_entries":8192,"max_resource_file_bytes":262144,"max_resource_manifest_bytes":524288,"max_resource_total_bytes":16777216,"max_skills":256,"max_total_bytes":8388608,"root":"~/.agents/skills"}"#;
+const PROCESS_TOOLS_CONFIGURATION: &str = r#"{"default_timeout_ms":120000}"#;
+const PROCESS_NATIVE_CONFIGURATION: &str = r#"{"allowed_programs":["cargo","git","rg"],"environment_allowlist":["PATH","HOME","CARGO_HOME","RUSTUP_HOME","TMPDIR","LANG","LC_ALL"],"max_argument_bytes":131072,"max_output_bytes":262144,"max_timeout_ms":600000,"root":"."}"#;
+const OPENAI_MODEL_CONFIGURATION: &str = r#"{"api_key_ref":"model/openai-api-key","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#;
+const OPENAI_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-4o-mini"}"#;
+const SECRETS_CONFIGURATION: &str = r#"{"references":{"model/openai-api-key":"OPENAI_API_KEY"}}"#;
+const SECRETS_PACKAGE_ID: &str = "lenso.secrets.env";
+const SECRETS_FACTORY_IDENTITY: &str = "lenso.secrets.env@0.1.0";
+const SECRETS_CONFIGURATION_SCHEMA_DIGEST: &str =
+    "sha256:2fafb2e087e788ab1a9f52b5b3cb9f050a79a7e9d6309f369477f60de428faa2";
+const SECRETS_DESCRIPTOR_DIGEST: &str =
+    "sha256:c45e1c4ea7e77a0ba367d573f092c745d552c489ae0db6828cc6f218763ecf05";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CapabilityProfile {
@@ -103,6 +162,9 @@ pub(crate) enum AttachmentProfile {
         capability_id: String,
         descriptor_version: String,
     },
+    AppendManySet {
+        edges: Vec<AttachmentEdge>,
+    },
     ReplaceOne {
         consumer_instance: String,
         capability_id: String,
@@ -112,6 +174,13 @@ pub(crate) enum AttachmentProfile {
         base_configuration_replacements: Vec<BaseConfigurationReplacement>,
     },
     IntraPluginOnly,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AttachmentEdge {
+    consumer_instance: String,
+    capability_id: String,
+    descriptor_version: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -125,6 +194,7 @@ pub(crate) struct BaseConfigurationReplacement {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResolvedAttachment {
     AppendMany(CapabilityBinding),
+    AppendManySet(Vec<CapabilityBinding>),
     ReplaceOne {
         binding: CapabilityBinding,
         displaced_provider_instance: String,
@@ -293,7 +363,7 @@ impl PluginProfileCatalog {
                         ));
                     }
                 }
-                AttachmentProfile::AppendMany { .. } => {}
+                AttachmentProfile::AppendMany { .. } | AttachmentProfile::AppendManySet { .. } => {}
             }
             for requirement in &contribution.requires {
                 if requirement.cardinality != RequirementCardinality::One {
@@ -459,27 +529,14 @@ impl PluginProfileCatalog {
         let profile = self
             .matching_profile(contribution, target)
             .map_err(|error| format!("Plugin profile selection failed: {error}"))?;
-        let Some((consumer_instance, capability_id, descriptor_version)) =
-            profile.attachment.capability_edge()
-        else {
-            return Ok(ResolvedAttachment::IntraPluginOnly);
-        };
-        let consumer = base_plan
-            .module_instance(consumer_instance)
-            .ok_or_else(|| {
-                format!(
-                    "Plugin profile `{}` requires consumer Instance `{}`",
-                    profile.registration_id, consumer_instance
-                )
-            })?;
-        let binding = CapabilityBinding::new(
-            consumer_instance,
-            capability_id,
-            descriptor_version,
-            instance_key,
-        );
         match &profile.attachment {
-            AttachmentProfile::AppendMany { .. } => {
+            AttachmentProfile::AppendMany {
+                consumer_instance,
+                capability_id,
+                descriptor_version,
+            } => {
+                let consumer =
+                    require_consumer(base_plan, consumer_instance, &profile.registration_id)?;
                 require_cardinality(
                     consumer,
                     capability_id,
@@ -487,14 +544,50 @@ impl PluginProfileCatalog {
                     CapabilityCardinality::Many,
                     &profile.registration_id,
                 )?;
-                Ok(ResolvedAttachment::AppendMany(binding))
+                Ok(ResolvedAttachment::AppendMany(CapabilityBinding::new(
+                    consumer_instance,
+                    capability_id,
+                    descriptor_version,
+                    instance_key,
+                )))
+            }
+            AttachmentProfile::AppendManySet { edges } => {
+                let bindings = edges
+                    .iter()
+                    .map(|edge| {
+                        let consumer = require_consumer(
+                            base_plan,
+                            &edge.consumer_instance,
+                            &profile.registration_id,
+                        )?;
+                        require_cardinality(
+                            consumer,
+                            &edge.capability_id,
+                            &edge.descriptor_version,
+                            CapabilityCardinality::Many,
+                            &profile.registration_id,
+                        )?;
+                        Ok(CapabilityBinding::new(
+                            &edge.consumer_instance,
+                            &edge.capability_id,
+                            &edge.descriptor_version,
+                            instance_key,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                Ok(ResolvedAttachment::AppendManySet(bindings))
             }
             AttachmentProfile::ReplaceOne {
+                consumer_instance,
+                capability_id,
+                descriptor_version,
                 displaced_provider_instance,
                 allowed_displaced_packages,
                 base_configuration_replacements,
                 ..
             } => {
+                let consumer =
+                    require_consumer(base_plan, consumer_instance, &profile.registration_id)?;
                 require_cardinality(
                     consumer,
                     capability_id,
@@ -512,12 +605,17 @@ impl PluginProfileCatalog {
                     &profile.registration_id,
                 )?;
                 Ok(ResolvedAttachment::ReplaceOne {
-                    binding,
+                    binding: CapabilityBinding::new(
+                        consumer_instance,
+                        capability_id,
+                        descriptor_version,
+                        instance_key,
+                    ),
                     displaced_provider_instance: displaced_provider_instance.clone(),
                     base_configuration_replacements: base_configuration_replacements.clone(),
                 })
             }
-            AttachmentProfile::IntraPluginOnly => unreachable!("handled above"),
+            AttachmentProfile::IntraPluginOnly => Ok(ResolvedAttachment::IntraPluginOnly),
         }
     }
 
@@ -571,6 +669,11 @@ impl ExecutablePluginProfile {
         ) {
             return Err("built-in Plugin profile factory identity must be non-empty".to_owned());
         }
+        self.validate_attachment()?;
+        self.validate_configuration()
+    }
+
+    fn validate_attachment(&self) -> Result<(), String> {
         if let Some((consumer, attachment_capability_id, attachment_descriptor_version)) =
             self.attachment.capability_edge()
         {
@@ -589,6 +692,40 @@ impl ExecutablePluginProfile {
                     "Plugin profile `{}` attachment must select exactly one provided Capability",
                     self.registration_id
                 ));
+            }
+        }
+        if let AttachmentProfile::AppendManySet { edges } = &self.attachment {
+            if edges.len() < 2 {
+                return Err(format!(
+                    "Plugin profile `{}` multi-attachment policy requires at least two edges",
+                    self.registration_id
+                ));
+            }
+            let mut unique_edges = BTreeSet::new();
+            for edge in edges {
+                if edge.consumer_instance.is_empty()
+                    || edge.capability_id.is_empty()
+                    || edge.descriptor_version.is_empty()
+                    || !unique_edges.insert((
+                        edge.consumer_instance.as_str(),
+                        edge.capability_id.as_str(),
+                        edge.descriptor_version.as_str(),
+                    ))
+                    || self
+                        .provides
+                        .iter()
+                        .filter(|provided| {
+                            provided.capability_id == edge.capability_id
+                                && provided.descriptor_version == edge.descriptor_version
+                        })
+                        .count()
+                        != 1
+                {
+                    return Err(format!(
+                        "Plugin profile `{}` has an invalid multi-attachment edge",
+                        self.registration_id
+                    ));
+                }
             }
         }
         if let AttachmentProfile::ReplaceOne {
@@ -630,6 +767,10 @@ impl ExecutablePluginProfile {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_configuration(&self) -> Result<(), String> {
         let configuration: serde_json::Value = serde_json::from_str(&self.configuration)
             .map_err(|error| format!("Plugin profile configuration is invalid JSON: {error}"))?;
         if serde_json::to_string(&configuration).map_err(|error| error.to_string())?
@@ -754,7 +895,13 @@ fn requirements_match(
 pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> {
     PluginProfileCatalog::default()
         .register(text_tools_profile())?
+        .register(workspace_edit_profile())?
+        .register(skills_profile())?
+        .register(process_native_profile())?
+        .register(process_tools_profile())?
         .register(fixture_model_profile())?
+        .register(openai_model_profile())?
+        .register(secrets_profile())?
         .register(codex_model_profile())?
         .register(codex_auth_profile())?
         .register(guest_agent_profile(
@@ -771,6 +918,239 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         ))?
         .register(third_party_wasm_tool_profile())?
         .register(third_party_wasm_workspace_read_tool_profile())
+}
+
+fn skills_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-skills-filesystem-v1".to_owned(),
+        adapter_profile: NATIVE_SKILLS_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(SKILLS_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: SKILLS_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(SKILLS_CONFIGURATION_SCHEMA),
+        configuration: SKILLS_CONFIGURATION.to_owned(),
+        provides: vec![
+            CapabilityProfile {
+                capability_id: PROMPT_PROVIDER_CAPABILITY_ID.to_owned(),
+                descriptor_version: PROMPT_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                descriptor_digest: sha256_digest(PROMPT_PROVIDER_DESCRIPTOR),
+                request_operations: vec![PROMPT_PROVIDER_CONTRIBUTE_OPERATION.to_owned()],
+                operation_kinds: BTreeMap::new(),
+            },
+            CapabilityProfile {
+                capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+                descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+                request_operations: vec![
+                    TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                    TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+                ],
+                operation_kinds: BTreeMap::new(),
+            },
+        ],
+        requires: Vec::new(),
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::AppendManySet {
+            edges: vec![
+                AttachmentEdge {
+                    consumer_instance: "prompt".to_owned(),
+                    capability_id: PROMPT_PROVIDER_CAPABILITY_ID.to_owned(),
+                    descriptor_version: PROMPT_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                },
+                AttachmentEdge {
+                    consumer_instance: "tools".to_owned(),
+                    capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+                    descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                },
+            ],
+        },
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
+}
+
+fn process_native_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-process-v1".to_owned(),
+        adapter_profile: NATIVE_PROCESS_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(PROCESS_NATIVE_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: PROCESS_NATIVE_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(PROCESS_NATIVE_CONFIGURATION_SCHEMA),
+        configuration: PROCESS_NATIVE_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: PROCESS_CAPABILITY_ID.to_owned(),
+            descriptor_version: PROCESS_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(PROCESS_DESCRIPTOR),
+            request_operations: vec![
+                PROCESS_CATALOG_OPERATION.to_owned(),
+                PROCESS_RUN_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: Vec::new(),
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::IntraPluginOnly,
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
+}
+
+fn process_tools_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-process-tools-v1".to_owned(),
+        adapter_profile: TOOL_PROVIDER_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(PROCESS_TOOLS_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: PROCESS_TOOLS_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(PROCESS_TOOLS_CONFIGURATION_SCHEMA),
+        configuration: PROCESS_TOOLS_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+            request_operations: vec![
+                TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: vec![CapabilityRequirement {
+            capability_id: PROCESS_CAPABILITY_ID.to_owned(),
+            descriptor_version: PROCESS_DESCRIPTOR_VERSION.to_owned(),
+            cardinality: RequirementCardinality::One,
+        }],
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::AppendMany {
+            consumer_instance: "tools".to_owned(),
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+        },
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
+}
+
+fn openai_model_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-openai-compatible-model-v1".to_owned(),
+        adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(OPENAI_MODEL_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: OPENAI_MODEL_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(OPENAI_MODEL_CONFIGURATION_SCHEMA),
+        configuration: OPENAI_MODEL_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: MODEL_CAPABILITY_ID.to_owned(),
+            descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(MODEL_DESCRIPTOR),
+            request_operations: vec![MODEL_COMPLETE_OPERATION.to_owned()],
+            operation_kinds: BTreeMap::from([(
+                MODEL_COMPLETE_OPERATION.to_owned(),
+                CapabilityOperationKind::Stream,
+            )]),
+        }],
+        requires: vec![CapabilityRequirement {
+            capability_id: SECRETS_CAPABILITY_ID.to_owned(),
+            descriptor_version: SECRETS_DESCRIPTOR_VERSION.to_owned(),
+            cardinality: RequirementCardinality::One,
+        }],
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::ReplaceOne {
+            consumer_instance: "agent".to_owned(),
+            capability_id: MODEL_CAPABILITY_ID.to_owned(),
+            descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
+            displaced_provider_instance: "model".to_owned(),
+            allowed_displaced_packages: BTreeSet::from([FIXTURE_MODEL_PACKAGE_ID.to_owned()]),
+            base_configuration_replacements: vec![BaseConfigurationReplacement {
+                instance_key: "agent".to_owned(),
+                allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
+                expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
+                replacement_configuration: OPENAI_AGENT_CONFIGURATION.to_owned(),
+            }],
+        },
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
+}
+
+fn secrets_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-env-secrets-v1".to_owned(),
+        adapter_profile: NATIVE_SECRETS_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(SECRETS_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: SECRETS_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: SECRETS_CONFIGURATION_SCHEMA_DIGEST.to_owned(),
+        configuration: SECRETS_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: SECRETS_CAPABILITY_ID.to_owned(),
+            descriptor_version: SECRETS_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: SECRETS_DESCRIPTOR_DIGEST.to_owned(),
+            request_operations: vec![SECRETS_RESOLVE_OPERATION.to_owned()],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: Vec::new(),
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::IntraPluginOnly,
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
+}
+
+fn workspace_edit_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-workspace-edit-v1".to_owned(),
+        adapter_profile: TOOL_PROVIDER_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(WORKSPACE_EDIT_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: WORKSPACE_EDIT_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(WORKSPACE_EDIT_CONFIGURATION_SCHEMA),
+        configuration: WORKSPACE_EDIT_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+            request_operations: vec![
+                TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: Vec::new(),
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::AppendMany {
+            consumer_instance: "tools".to_owned(),
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+        },
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
 }
 
 fn text_tools_profile() -> ExecutablePluginProfile {
@@ -1047,7 +1427,7 @@ impl AttachmentProfile {
                 descriptor_version,
                 ..
             } => Some((consumer_instance, capability_id, descriptor_version)),
-            Self::IntraPluginOnly => None,
+            Self::AppendManySet { .. } | Self::IntraPluginOnly => None,
         }
     }
 }
@@ -1108,6 +1488,18 @@ fn is_canonical_json(value: &str) -> Result<bool, String> {
     Ok(serde_json::to_string(&parsed).map_err(|error| error.to_string())? == value)
 }
 
+fn require_consumer<'a>(
+    base_plan: &'a ResolvedAppPlan,
+    consumer_instance: &str,
+    registration_id: &str,
+) -> Result<&'a lenso_app_plan::ModuleInstancePlan, String> {
+    base_plan.module_instance(consumer_instance).ok_or_else(|| {
+        format!(
+            "Plugin profile `{registration_id}` requires consumer Instance `{consumer_instance}`"
+        )
+    })
+}
+
 fn require_cardinality(
     consumer: &lenso_app_plan::ModuleInstancePlan,
     capability_id: &str,
@@ -1166,15 +1558,14 @@ fn validate_displaced_provider(
             displaced.package_id()
         ));
     }
-    let other_consumers = base_plan.capability_bindings().iter().any(|binding| {
+    let incompatible_consumers = base_plan.capability_bindings().iter().any(|binding| {
         binding.provider_instance() == displaced_provider_instance
-            && !(binding.consumer_instance() == consumer_instance
-                && binding.capability_id() == capability_id
-                && binding.descriptor_version() == descriptor_version)
+            && (binding.capability_id() != capability_id
+                || binding.descriptor_version() != descriptor_version)
     });
-    if other_consumers {
+    if incompatible_consumers {
         return Err(format!(
-            "Plugin profile `{profile_id}` cannot remove displaced Instance `{displaced_provider_instance}` while another consumer references it"
+            "Plugin profile `{profile_id}` cannot replace displaced Instance `{displaced_provider_instance}` because it provides another Capability"
         ));
     }
     Ok(())

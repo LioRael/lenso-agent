@@ -8,9 +8,10 @@ use std::{
     time::Duration,
 };
 
+mod support;
+
 fn canonical_plan_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/openai-readonly/resolved-plan.json")
+    support::plan("openai-compatible")
 }
 
 fn test_plan(root: &Path, base_url: &str) -> PathBuf {
