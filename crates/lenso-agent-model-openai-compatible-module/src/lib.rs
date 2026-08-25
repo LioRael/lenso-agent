@@ -587,7 +587,7 @@ mod tests {
                     role: CompleteRequestMessagesItemRole::Assistant,
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
-                    tool_name: Some("workspace.read_text".to_owned()),
+                    tool_name: Some("read".to_owned()),
                     arguments_json: Some(r#"{"path":"README.md"}"#.to_owned()),
                 },
                 CompleteRequestMessagesItem {
@@ -599,7 +599,7 @@ mod tests {
                 },
             ],
             tools: vec![CompleteRequestToolsItem {
-                name: "workspace.read_text".to_owned(),
+                name: "read".to_owned(),
                 description: "Read a file".to_owned(),
                 input_schema_json: r#"{"type":"object"}"#.to_owned(),
             }],
@@ -610,7 +610,7 @@ mod tests {
         assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "call-1");
         assert_eq!(
             body["messages"][0]["tool_calls"][0]["function"]["name"],
-            "workspace.read_text"
+            "read"
         );
         assert_eq!(body["messages"][1]["tool_call_id"], "call-1");
         assert_eq!(body["parallel_tool_calls"], false);
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn decoder_assembles_fragmented_tool_call_and_usage() {
         let mut decoder = SseDecoder::default();
-        let first = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"workspace.read_text","arguments":"{\"path\":"}}]},"finish_reason":null}]}
+        let first = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":"{\"path\":"}}]},"finish_reason":null}]}
 
 "#;
         let second = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":4}}

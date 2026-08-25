@@ -10,7 +10,7 @@ use lenso_kernel::InvocationContext;
 use schemars::JsonSchema;
 
 /// Stable Tool name exposed only while the Plugin is active.
-pub const UPPERCASE_TOOL: &str = "text.uppercase";
+pub const UPPERCASE_TOOL: &str = "uppercase";
 
 const MAX_TEXT_BYTES: usize = 4_096;
 
@@ -120,7 +120,7 @@ mod tests {
             &TextTools {},
             context(),
             ExecuteRequest {
-                name: "text.unknown".to_owned(),
+                name: "missing_tool".to_owned(),
                 arguments_json: "{}".to_owned(),
             },
         ))

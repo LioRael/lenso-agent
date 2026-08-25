@@ -24,13 +24,13 @@ use lenso_capability_agent_tool_provider::{
 use sha2::{Digest, Sha256};
 
 /// Lists metadata for the snapshotted Skills.
-pub const LIST_TOOL: &str = "skills.list";
+pub const LIST_TOOL: &str = "skill_list";
 /// Reads one full snapshotted Skill document.
-pub const READ_TOOL: &str = "skills.read";
+pub const READ_TOOL: &str = "skill";
 /// Lists readable resources snapshotted below one Skill directory.
-pub const LIST_RESOURCES_TOOL: &str = "skills.list_resources";
+pub const LIST_RESOURCES_TOOL: &str = "skill_resources";
 /// Reads one UTF-8 resource snapshotted below one Skill directory.
-pub const READ_RESOURCE_TOOL: &str = "skills.read_resource";
+pub const READ_RESOURCE_TOOL: &str = "skill_resource";
 
 const MAX_PROVIDER_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_DESCRIPTION_BYTES: usize = 4_096;
@@ -686,7 +686,7 @@ fn prompt_catalog(
     skills: &BTreeMap<String, SkillSnapshot>,
     max_bytes: usize,
 ) -> Result<String, RuntimeFailure> {
-    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skills.read` with its exact name before following it. Use `skills.list` only when this catalog reports omissions or no visible Skill matches.\n\n";
+    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skill` with its exact name before following it. Use `skill_list` only when this catalog reports omissions or no visible Skill matches.\n\n";
     const EMPTY: &str = "No Skills are available.\n";
 
     if skills.is_empty() {
@@ -700,7 +700,7 @@ fn prompt_catalog(
     }
 
     let maximum_footer = format!(
-        "\n{} additional Skills were omitted by the prompt catalog byte limit; call `skills.list` to inspect them.\n",
+        "\n{} additional Skills were omitted by the prompt catalog byte limit; call `skill_list` to inspect them.\n",
         skills.len()
     );
     let mut content = String::from(HEADER);
@@ -724,7 +724,7 @@ fn prompt_catalog(
     if omitted > 0 {
         write!(
             &mut content,
-            "\n{omitted} additional Skills were omitted by the prompt catalog byte limit; call `skills.list` to inspect them.\n"
+            "\n{omitted} additional Skills were omitted by the prompt catalog byte limit; call `skill_list` to inspect them.\n"
         )
         .expect("writing to a String cannot fail");
     }
@@ -1111,7 +1111,7 @@ mod tests {
         let content = &snapshot.catalog_contribution.content;
         assert!(content.len() <= 512);
         assert!(content.contains("additional Skills were omitted"));
-        assert!(content.contains("skills.list"));
+        assert!(content.contains("skill_list"));
         assert!(!content.contains("PRIVATE BODY"));
         assert_eq!(
             snapshot.catalog_contribution.version,

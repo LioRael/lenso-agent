@@ -41,7 +41,7 @@ Status: experimental direct-provider baseline.
   auth, network, rate limit, malformed SSE, truncation, and provider failure
   remain sanitized Runtime Failures.
 - **First behavior:** asks the direct provider to call
-  `workspace.read_text`, sends the Tool result in a second Responses request,
+  `read`, sends the Tool result in a second Responses request,
   and streams the final text and usage through the existing Agent Loop. The
   wire mapper replaces provider-invalid Tool-name characters and reverses that
   alias before dispatch; alias collisions fail closed.

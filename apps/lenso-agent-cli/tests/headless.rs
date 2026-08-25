@@ -159,7 +159,7 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
         .clone();
     provider["instance_key"] = "skills".into();
     provider["package_id"] = "lenso.agent.skills.filesystem".into();
-    provider["package_revision"] = "0.1.0".into();
+    provider["package_revision"] = "0.2.0".into();
     provider["configuration"] = serde_json::json!({
         "max_catalog_bytes": 8192,
         "catalog_contribution_id": "agents.skills.catalog",
@@ -871,7 +871,7 @@ fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
             .iter()
             .map(|request| request["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["workspace.list", "workspace.search", "workspace.read_text"]
+        ["list", "search", "read"]
     );
 }
 
@@ -920,11 +920,7 @@ fn opt_in_coding_profile_creates_edits_then_reads_back_one_file() {
             .iter()
             .map(|request| request["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        [
-            "workspace.write_text",
-            "workspace.edit_text",
-            "workspace.read_text",
-        ]
+        ["create_file", "edit", "read",]
     );
     let mutation_results = events
         .iter()
@@ -998,7 +994,7 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
             .iter()
             .map(|request| request["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["workspace.edit_text", "process.exec", "workspace.read_text"]
+        ["edit", "run_process", "read"]
     );
     let process_result = events
         .iter()
@@ -1048,7 +1044,7 @@ fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
         })
         .collect::<Vec<_>>();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0]["name"], "skills.read");
+    assert_eq!(requests[0]["name"], "skill");
 
     let results = events
         .iter()
@@ -1126,11 +1122,7 @@ fn skill_resources_are_listed_then_one_resource_is_read_without_executing_script
             .iter()
             .map(|request| request["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        [
-            "skills.read",
-            "skills.list_resources",
-            "skills.read_resource",
-        ]
+        ["skill", "skill_resources", "skill_resource",]
     );
     let read_result = events
         .iter()

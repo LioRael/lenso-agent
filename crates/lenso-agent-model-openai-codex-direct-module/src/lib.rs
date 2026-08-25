@@ -641,7 +641,7 @@ mod tests {
                     role: CompleteRequestMessagesItemRole::Assistant,
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
-                    tool_name: Some("workspace.read_text".to_owned()),
+                    tool_name: Some("read".to_owned()),
                     arguments_json: Some(r#"{"path":"README.md"}"#.to_owned()),
                 },
                 CompleteRequestMessagesItem {
@@ -653,7 +653,7 @@ mod tests {
                 },
             ],
             tools: vec![CompleteRequestToolsItem {
-                name: "workspace.read_text".to_owned(),
+                name: "read".to_owned(),
                 description: "Read text".to_owned(),
                 input_schema_json: r#"{"type":"object"}"#.to_owned(),
             }],
@@ -663,17 +663,15 @@ mod tests {
         let wire_request = responses_request(&request, "medium").unwrap();
         let body = wire_request.body;
         assert_eq!(body["input"][0]["type"], "function_call");
-        assert_eq!(body["input"][0]["name"], "workspace_read_text");
+        assert_eq!(body["input"][0]["name"], "read");
         assert_eq!(body["input"][1]["type"], "function_call_output");
-        assert_eq!(body["tools"][0]["name"], "workspace_read_text");
+        assert_eq!(body["tools"][0]["name"], "read");
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert!(body.get("temperature").is_none());
         assert!(body.get("max_output_tokens").is_none());
         assert_eq!(
-            wire_request
-                .provider_to_lenso_tool_names
-                .get("workspace_read_text"),
-            Some(&"workspace.read_text".to_owned())
+            wire_request.provider_to_lenso_tool_names.get("read"),
+            Some(&"read".to_owned())
         );
     }
 
@@ -684,12 +682,12 @@ mod tests {
             messages: Vec::new(),
             tools: vec![
                 CompleteRequestToolsItem {
-                    name: "workspace.read_text".to_owned(),
+                    name: "workspace.read".to_owned(),
                     description: "Read text".to_owned(),
                     input_schema_json: r#"{"type":"object"}"#.to_owned(),
                 },
                 CompleteRequestToolsItem {
-                    name: "workspace_read_text".to_owned(),
+                    name: "workspace_read".to_owned(),
                     description: "Read other text".to_owned(),
                     input_schema_json: r#"{"type":"object"}"#.to_owned(),
                 },
@@ -707,14 +705,11 @@ mod tests {
     fn decoder_streams_text_tool_call_and_usage() {
         let mut decoder = ResponsesDecoder::new(
             4096,
-            BTreeMap::from([(
-                "workspace_read_text".to_owned(),
-                "workspace.read_text".to_owned(),
-            )]),
+            BTreeMap::from([("read".to_owned(), "read".to_owned())]),
         );
         let frames = concat!(
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
-            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"workspace_read_text\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":3}}}\n\n"
         );
         let events = decoder.push(frames.as_bytes()).unwrap();

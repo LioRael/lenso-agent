@@ -123,10 +123,7 @@ impl FixtureModel {
                 .trim();
             return Ok(summary_response(first_line));
         }
-        let has_workspace_tool = request
-            .tools
-            .iter()
-            .any(|tool| tool.name == "workspace.read_text");
+        let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
         if !has_workspace_tool {
             return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
         }
@@ -138,17 +135,13 @@ fn text_plugin_response(
     request: &CompleteRequest,
     tool_results: &[&CompleteRequestMessagesItem],
 ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    if !request
-        .tools
-        .iter()
-        .any(|tool| tool.name == "text.uppercase")
-    {
+    if !request.tools.iter().any(|tool| tool.name == "uppercase") {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
         [] => Ok(named_tool_request(
             "call-text-uppercase",
-            "text.uppercase",
+            "uppercase",
             r#"{"text":"Lenso plugin"}"#,
         )),
         [result] if result.content == "LENSO PLUGIN" => Ok(text_plugin_result()),
@@ -160,7 +153,7 @@ fn skill_response(
     request: &CompleteRequest,
     tool_results: &[&CompleteRequestMessagesItem],
 ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_skill_tools = ["skills.list", "skills.read"]
+    let has_skill_tools = ["skill_list", "skill"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     let skill_catalog_in_prompt = request.messages.iter().any(|message| {
@@ -189,7 +182,7 @@ fn skill_response(
     match tool_results {
         [] => Ok(named_tool_request(
             "call-skills-read",
-            "skills.read",
+            "skill",
             r#"{"name":"rust-review"}"#,
         )),
         [skill] if skill.content.contains("RUST REVIEW INSTRUCTION") => {
@@ -203,14 +196,9 @@ fn resource_skill_response(
     request: &CompleteRequest,
     tool_results: &[&CompleteRequestMessagesItem],
 ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_skill_tools = [
-        "skills.list",
-        "skills.read",
-        "skills.list_resources",
-        "skills.read_resource",
-    ]
-    .iter()
-    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    let has_skill_tools = ["skill_list", "skill", "skill_resources", "skill_resource"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_skill_tools
         || !readonly_skill_tool_profile(request)
         || !request.messages.iter().any(|message| {
@@ -229,12 +217,12 @@ fn resource_skill_response(
     match tool_results {
         [] => Ok(named_tool_request(
             "call-resources-read-skill",
-            "skills.read",
+            "skill",
             r#"{"name":"rust-review"}"#,
         )),
         [skill] if skill.content.contains("references/checklist.md") => Ok(named_tool_request(
             "call-resources-list",
-            "skills.list_resources",
+            "skill_resources",
             r#"{"name":"rust-review"}"#,
         )),
         [_, manifest]
@@ -243,7 +231,7 @@ fn resource_skill_response(
         {
             Ok(named_tool_request(
                 "call-resource-read",
-                "skills.read_resource",
+                "skill_resource",
                 r#"{"name":"rust-review","path":"references/checklist.md"}"#,
             ))
         }
@@ -258,13 +246,13 @@ fn readonly_skill_tool_profile(request: &CompleteRequest) -> bool {
     request.tools.iter().all(|tool| {
         matches!(
             tool.name.as_str(),
-            "workspace.list"
-                | "workspace.search"
-                | "workspace.read_text"
-                | "skills.list"
-                | "skills.read"
-                | "skills.list_resources"
-                | "skills.read_resource"
+            "list"
+                | "search"
+                | "read"
+                | "skill_list"
+                | "skill"
+                | "skill_resources"
+                | "skill_resource"
         )
     })
 }
@@ -273,26 +261,22 @@ fn workspace_navigation_response(
     request: &CompleteRequest,
     tool_results: &[&CompleteRequestMessagesItem],
 ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_workspace_tools = ["workspace.list", "workspace.search", "workspace.read_text"]
+    let has_workspace_tools = ["list", "search", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_workspace_tools {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
-        [] => Ok(named_tool_request(
-            "call-workspace-list",
-            "workspace.list",
-            "{}",
-        )),
+        [] => Ok(named_tool_request("call-workspace-list", "list", "{}")),
         [listing] if listing.content.contains("docs") => Ok(named_tool_request(
             "call-workspace-search",
-            "workspace.search",
+            "search",
             r#"{"query":"NAVIGATION_TARGET"}"#,
         )),
         [_, search] if search.content.contains("docs/guide.md") => Ok(named_tool_request(
             "call-workspace-read",
-            "workspace.read_text",
+            "read",
             r#"{"path":"docs/guide.md"}"#,
         )),
         [_, _, document] if document.content.contains("NAVIGATION_TARGET") => {
@@ -336,30 +320,26 @@ fn workspace_mutation_response(
     request: &CompleteRequest,
     tool_results: &[&CompleteRequestMessagesItem],
 ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_mutation_tools = [
-        "workspace.write_text",
-        "workspace.edit_text",
-        "workspace.read_text",
-    ]
-    .iter()
-    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    let has_mutation_tools = ["create_file", "edit", "read"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_mutation_tools {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
         [] => Ok(named_tool_request(
             "call-workspace-write",
-            "workspace.write_text",
+            "create_file",
             r#"{"path":"note.txt","content":"before\n"}"#,
         )),
         [created] if created.content == "created note.txt" => Ok(named_tool_request(
             "call-workspace-edit",
-            "workspace.edit_text",
+            "edit",
             r#"{"path":"note.txt","old_text":"before","new_text":"after"}"#,
         )),
         [_, edited] if edited.content == "edited note.txt" => Ok(named_tool_request(
             "call-workspace-read-after-edit",
-            "workspace.read_text",
+            "read",
             r#"{"path":"note.txt"}"#,
         )),
         [_, _, document] if document.content == "after\n" => Ok(mutation_response()),
@@ -396,7 +376,7 @@ fn local_coding_response(
     request: &CompleteRequest,
     tool_results: &[&CompleteRequestMessagesItem],
 ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_coding_tools = ["workspace.edit_text", "process.exec", "workspace.read_text"]
+    let has_coding_tools = ["edit", "run_process", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_coding_tools {
@@ -405,17 +385,17 @@ fn local_coding_response(
     match tool_results {
         [] => Ok(named_tool_request(
             "call-local-coding-edit",
-            "workspace.edit_text",
+            "edit",
             r#"{"path":"src/lib.rs","old_text":"pub fn value() -> u32 { 1 }","new_text":"pub fn value() -> u32 { 2 }"}"#,
         )),
         [edited] if edited.content == "edited src/lib.rs" => Ok(named_tool_request(
             "call-local-coding-check",
-            "process.exec",
+            "run_process",
             r#"{"program":"cargo","arguments":["check","--quiet"]}"#,
         )),
         [_, checked] if checked.content.starts_with("exit_code: 0\n") => Ok(named_tool_request(
             "call-local-coding-read",
-            "workspace.read_text",
+            "read",
             r#"{"path":"src/lib.rs"}"#,
         )),
         [_, _, document] if document.content.contains("pub fn value() -> u32 { 2 }") => {
@@ -510,7 +490,7 @@ fn previous_response(previous: &str) -> Vec<CompleteResponse> {
 fn tool_request(index: usize) -> Vec<CompleteResponse> {
     named_tool_request(
         &format!("call-readme-{index}"),
-        "workspace.read_text",
+        "read",
         r#"{"path":"README.md"}"#,
     )
 }

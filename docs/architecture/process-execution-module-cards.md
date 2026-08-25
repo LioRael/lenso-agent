@@ -24,7 +24,7 @@ Status: implementation baseline for the higher-authority local-coding profile.
 
 ## `lenso.agent.process-tools`
 
-- **Deletion boundary:** removes `process.exec` from the Tool catalog while the
+- **Deletion boundary:** removes `run_process` from the Tool catalog while the
   underlying Process Capability can remain usable by another explicitly bound
   consumer.
 - **Owned facts:** Tool name, Model-facing JSON schema, default timeout, output
@@ -36,7 +36,7 @@ Status: implementation baseline for the higher-authority local-coding profile.
 - **Lifecycle/resources:** activation obtains the generated Process client and
   snapshots its catalog; deactivation drops the client and Tool catalog.
 - **First behavior:** project one provider-authorized process request into one
-  `process.exec` Tool call while forwarding the Kernel Invocation Context.
+  `run_process` Tool call while forwarding the Kernel Invocation Context.
 
 ## Composition and trust
 

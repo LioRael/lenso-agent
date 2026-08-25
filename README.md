@@ -96,12 +96,12 @@ registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
 entry closes the exact package, implementation authority, entrypoint, configuration Schema,
 Capability Descriptor and Operations, operation kinds, execution class, target,
 support/trust policy, canonical configuration, and one bounded attachment rule.
-The Catalog admits the linked `lenso.agent.text-tools@0.1.0` factory as a
+The Catalog admits the linked `lenso.agent.text-tools@0.2.0` factory as a
 stateless, permission-free append-to-`many` Tool Provider. It also admits one
 package-independent, isolated Wasm Tool Provider shape with the same exact
 Capability and attachment, empty configuration, no Host imports, permissions,
 state, Data mounts, or binding templates, and mandatory review evidence. It
-admits one restricted `lenso.agent.model.fixture@0.1.0` profile that replaces
+admits one restricted `lenso.agent.model.fixture@0.2.0` profile that replaces
 the fixture base Plan's exact `model` provider for the `agent` consumer. The
 experimental Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Experimental Artifact
@@ -171,7 +171,7 @@ cargo run -p lenso-agent-cli -- sessions provenance \
   --session <session-id>
 
 cargo run -p lenso-agent-cli -- \
-  "Use text.uppercase to uppercase Lenso plugin."
+  "Use uppercase to uppercase Lenso plugin."
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.text-tools
@@ -335,21 +335,21 @@ selected Skill prevents the App from becoming ready.
 progressive Skill disclosure. It snapshots the immediate
 `~/.agents/skills/<name>/SKILL.md` children and their readable resources during
 startup. Its bounded Prompt contribution contains only ordered Skill names and
-descriptions. When one matches the task, the Model can call `skills.read`
+descriptions. When one matches the task, the Model can call `skill`
 directly without a preliminary catalog Tool call. It also contributes four
 Tools:
 
-- `skills.list` returns only ordered names, descriptions, and SHA-256 content
+- `skill_list` returns only ordered names, descriptions, and SHA-256 content
   versions;
-- `skills.read` returns the full snapshotted document for one exact name;
-- `skills.list_resources` returns paths, sizes, and SHA-256 versions for one
+- `skill` returns the full snapshotted document for one exact name;
+- `skill_resources` returns paths, sizes, and SHA-256 versions for one
   Skill without returning resource contents;
-- `skills.read_resource` returns one snapshotted UTF-8 resource by exact Skill
+- `skill_resource` returns one snapshotted UTF-8 resource by exact Skill
   name and relative path.
 
-`skills.list` remains a diagnostic and overflow fallback. If the configured
+`skill_list` remains a diagnostic and overflow fallback. If the configured
 Prompt catalog byte budget cannot include every Skill, the deterministic
-catalog reports the omitted count and tells the Model to use `skills.list`.
+catalog reports the omitted count and tells the Model to use `skill_list`.
 Skill bodies and resource contents never enter the Prompt catalog.
 
 The Module enforces catalog/resource entry, per-file, aggregate content, and
@@ -379,8 +379,8 @@ Tool profiles are App Composition recipes, not Kernel modes or Tool Runtime
 switches. A profile expands to ordinary selected Tool Provider Module Instances
 and explicit bindings:
 
-- `readonly` selects rooted observation providers such as `workspace.list`,
-  `workspace.search`, `workspace.read_text`, and the filesystem Skills
+- `readonly` selects rooted observation providers such as `list`,
+  `search`, `read`, and the filesystem Skills
   provider;
 - `coding` adds the separate create-only/exact-edit workspace mutation Provider;
 - `local-coding` adds independently removable structured process Tools and a
@@ -390,8 +390,8 @@ and explicit bindings:
 
 The existing readonly Compositions still expose no generic shell, write, edit,
 delete, browser, or network Tool. The two opt-in coding Compositions add only
-`workspace.write_text` and `workspace.edit_text`. The two higher-authority
-local-coding Compositions additionally expose `process.exec` with an explicit
+`create_file` and `edit`. The two higher-authority
+local-coding Compositions additionally expose `run_process` with an explicit
 program catalog, workspace-relative cwd, cleared-and-allowlisted environment,
 timeout, argument, and combined-output limits. Removing Providers and bindings
 removes those Tool surfaces without changing the Agent Loop or Kernel. See
@@ -459,7 +459,7 @@ Resolved App Plan:
 export OPENAI_API_KEY="..."
 cargo run -p lenso-agent-cli -- \
   --app openai-readonly \
-  "Use workspace.read_text to read README.md, then summarize it."
+  "Use read to read README.md, then summarize it."
 ```
 
 The `openai-readonly` variant defaults to OpenAI's base URL and `gpt-4o-mini`. An App
