@@ -1110,7 +1110,7 @@ dependencies = [
  "lenso-capability-agent-session",
  "lenso-capability-agent-tools",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "lenso-native-adapter",
  "serde",
  "serde_json",
@@ -1359,7 +1359,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1372,7 +1372,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1386,7 +1386,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "schemars",
  "serde",
  "serde_json",
@@ -1400,7 +1400,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1413,7 +1413,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1426,7 +1426,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1439,7 +1439,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1453,7 +1453,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "schemars",
  "serde",
  "serde_json",
@@ -1467,7 +1467,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
- "lenso-module",
+ "lenso-module-authoring",
  "serde",
  "serde_json",
 ]
@@ -1488,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=a6e0726429be96666497fade6933189114da1071#a6e0726429be96666497fade6933189114da1071"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=b634d18d5e8617b982ba31e3cf76ef5c24dec721#b634d18d5e8617b982ba31e3cf76ef5c24dec721"
 dependencies = [
  "lenso-contract-authoring-macros",
  "schemars",
@@ -1498,7 +1498,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=a6e0726429be96666497fade6933189114da1071#a6e0726429be96666497fade6933189114da1071"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=b634d18d5e8617b982ba31e3cf76ef5c24dec721#b634d18d5e8617b982ba31e3cf76ef5c24dec721"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1518,7 +1518,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-codegen"
 version = "0.6.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=a6e0726429be96666497fade6933189114da1071#a6e0726429be96666497fade6933189114da1071"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=b634d18d5e8617b982ba31e3cf76ef5c24dec721#b634d18d5e8617b982ba31e3cf76ef5c24dec721"
 dependencies = [
  "lenso-contract-authoring",
  "semver",
@@ -1562,9 +1562,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "lenso-module"
+name = "lenso-module-authoring"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso?rev=2ba7930bc1fdf195219cfb36bd21ac19b9c9bf7c#2ba7930bc1fdf195219cfb36bd21ac19b9c9bf7c"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=b634d18d5e8617b982ba31e3cf76ef5c24dec721#b634d18d5e8617b982ba31e3cf76ef5c24dec721"
 
 [[package]]
 name = "lenso-native-adapter"

@@ -19,7 +19,7 @@ lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
 lenso-kernel.workspace = true
-lenso-module.workspace = true
+lenso-module-authoring.workspace = true
 lenso-native-adapter.workspace = true
 serde.workspace = true
 serde_json.workspace = true

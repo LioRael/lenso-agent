@@ -37,7 +37,7 @@ use lenso_kernel::{
     ModuleLifecycle, NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
     StreamEvent,
 };
-use lenso_module::Port;
+use lenso_module_authoring::Port;
 use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 

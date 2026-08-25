@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, RuntimeFailure, StreamCapability, StreamEvent};
 
-use lenso_module::CapabilityClient;
+use lenso_module_authoring::CapabilityClient;
 pub const CAPABILITY_ID: &str = "lenso.agent@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
