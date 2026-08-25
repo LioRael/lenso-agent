@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.process@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = false;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_process { () => { "{\"capability_id\":\"lenso.agen
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_process_client { () => { "{\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_process_client { () => { "{\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const RUN_OPERATION: &str = "run";
@@ -264,6 +268,9 @@ pub trait __LensoIntoProcessCatalogResult {
 impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, CatalogError> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoProcessCatalogResult for Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { self }
+}
 impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, lenso_module_authoring::ModuleError<CatalogError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
         match self {
@@ -289,6 +296,9 @@ pub trait __LensoIntoProcessRunResult {
 }
 impl __LensoIntoProcessRunResult for Result<RunResponse, RunError> {
     fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoProcessRunResult for Result<Result<RunResponse, RunError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> { self }
 }
 impl __LensoIntoProcessRunResult for Result<RunResponse, lenso_module_authoring::ModuleError<RunError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> {
@@ -475,6 +485,27 @@ impl CapabilityClient for ProcessClient {
         RuntimeFailure::ModuleFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
         }
+    }
+}
+
+impl CapabilityClientMany for ProcessClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    catalog: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<ProcessCatalog>()?,
+                    run: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<ProcessRun>()?,
+                    },
+                ))
+            })
+            .collect()
     }
 }
 

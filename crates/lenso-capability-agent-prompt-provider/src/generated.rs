@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.prompt-provider@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = true;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_prompt_provider { () => { "{\"capability_id\":\"le
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_prompt_provider_client { () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_prompt_provider_client { () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CONTRIBUTE_OPERATION: &str = "contribute";
 
@@ -149,6 +153,9 @@ pub trait __LensoIntoPromptProviderContributeResult {
 }
 impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, ContributeError> {
     fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPromptProviderContributeResult for Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> { self }
 }
 impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, lenso_module_authoring::ModuleError<ContributeError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> {
@@ -303,6 +310,26 @@ impl CapabilityClient for PromptProviderClient {
         RuntimeFailure::ModuleFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
         }
+    }
+}
+
+impl CapabilityClientMany for PromptProviderClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    contribute: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PromptProvider>()?,
+                    },
+                ))
+            })
+            .collect()
     }
 }
 

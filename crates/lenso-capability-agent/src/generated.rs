@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, RuntimeFailure, StreamCapability, StreamEvent};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
 
 pub const RUN_TURN_OPERATION: &str = "run_turn";
 
@@ -293,10 +297,47 @@ impl CapabilityClient for AgentClient {
     }
 }
 
+impl CapabilityClientMany for AgentClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    run_turn: binding.stream_handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<Agent>()?,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum AgentInvocationError {
     Domain(RunTurnError),
     Runtime(RuntimeFailure),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AgentGuestClient<'a, H: lenso_guest_sdk::HostImports> {
+    capability: lenso_guest_sdk::GuestCapability<'a, H>,
+}
+
+impl<'a, H: lenso_guest_sdk::HostImports> AgentGuestClient<'a, H> {
+    pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
+        context
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[], &[RUN_TURN_OPERATION])
+            .map(|capability| Self { capability })
+    }
+
+    pub fn run_turn(&self, request: &RunTurnRequest) -> Result<lenso_guest_sdk::GuestStream<H, RunTurnResponse, RunTurnError>, lenso_guest_sdk::GuestError<RunTurnError>> {
+        self.capability.open_stream(RUN_TURN_OPERATION, request)
+    }
 }
 
 #[derive(Debug, Default)]
