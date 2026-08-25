@@ -47,19 +47,19 @@ directories = "6.0"
 fs2 = "0.4"
 futures = "0.3"
 lenso-agent-module = { path = "crates/lenso-agent-module" }
-lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "b2f531e3e6a420d6e67b4fb4ff5128270cd2ba7c" }
+lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be774a6c08dd426fa0a476f85cccfa52bc966720" }
 lenso-app-plan = "0.1.4"
-lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "3a6282e63397a0b4270c1b7eb3bae48ebe1cf94e" }
-lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "efc47e16a340a3ab81e0e45048c21646c4861d2a" }
-lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "efc47e16a340a3ab81e0e45048c21646c4861d2a" }
+lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "08822e72d25cc4ffd5a0267b22c053aa3080d96d" }
+lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "16c4aff52c539e16f3024f6414de56e6c181b030" }
+lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "16c4aff52c539e16f3024f6414de56e6c181b030" }
 lenso-contract-runtime = "0.1.0"
 lenso-kernel = "0.1.8"
-lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "efc47e16a340a3ab81e0e45048c21646c4861d2a" }
-lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "3a6282e63397a0b4270c1b7eb3bae48ebe1cf94e" }
-lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "3a6282e63397a0b4270c1b7eb3bae48ebe1cf94e" }
-lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "3a6282e63397a0b4270c1b7eb3bae48ebe1cf94e" }
+lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "16c4aff52c539e16f3024f6414de56e6c181b030" }
+lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "08822e72d25cc4ffd5a0267b22c053aa3080d96d" }
+lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "08822e72d25cc4ffd5a0267b22c053aa3080d96d" }
+lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "08822e72d25cc4ffd5a0267b22c053aa3080d96d" }
 nix = { version = "0.31", features = ["process", "signal"] }
-lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "b2f531e3e6a420d6e67b4fb4ff5128270cd2ba7c" }
+lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "be774a6c08dd426fa0a476f85cccfa52bc966720" }
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }
 schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }
@@ -86,4 +86,4 @@ single_match_else = "allow"
 [patch.crates-io]
 # Keep external native Module packages on the exact Runtime trait identity used
 # by this host until the plugin Runtime revision is published as ordinary crates.
-lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "3a6282e63397a0b4270c1b7eb3bae48ebe1cf94e" }
+lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "08822e72d25cc4ffd5a0267b22c053aa3080d96d" }
