@@ -3,9 +3,8 @@
 use futures::future::{LocalBoxFuture, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CompleteError, CompleteRequest,
-    CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteResponse,
-    CompleteResponseKind, ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
 };
 use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
 
@@ -39,7 +38,7 @@ impl ModelProvider for FixtureModel {
     fn complete(
         &self,
         _context: InvocationContext,
-        request: CompleteRequest,
+        request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
         let result = self.complete_now(&request).map(|messages| {
             Box::new(FiniteOutputStream::successful(CAPABILITY_ID, messages))
@@ -52,8 +51,8 @@ impl ModelProvider for FixtureModel {
 impl FixtureModel {
     fn complete_now(
         &self,
-        request: &CompleteRequest,
-    ) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+        request: &CompleteOpen,
+    ) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
         if request.model != self.config.model || request.max_output_tokens <= 0 {
             return Err(ModelInvocationError::Domain(
                 CompleteError::UnsupportedModel,
@@ -62,18 +61,18 @@ impl FixtureModel {
         let current_user_index = request
             .messages
             .iter()
-            .rposition(|message| message.role == CompleteRequestMessagesItemRole::User)
+            .rposition(|message| message.role == CompleteMessageRole::User)
             .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
         let current_user = &request.messages[current_user_index].content;
         if current_user.starts_with("Answer directly:") {
             let plugin_prefix = request.messages.iter().any(|message| {
-                message.role == CompleteRequestMessagesItemRole::System
+                message.role == CompleteMessageRole::System
                     && message
                         .content
                         .contains("Prefix direct answers with `Plugin: `.")
             });
             let filesystem_prefix = request.messages.iter().any(|message| {
-                message.role == CompleteRequestMessagesItemRole::System
+                message.role == CompleteMessageRole::System
                     && message
                         .content
                         .contains("Prefix direct answers with `Filesystem: `.")
@@ -84,13 +83,13 @@ impl FixtureModel {
             let previous = request.messages[..current_user_index]
                 .iter()
                 .rev()
-                .find(|message| message.role == CompleteRequestMessagesItemRole::Assistant)
+                .find(|message| message.role == CompleteMessageRole::Assistant)
                 .map_or("Nothing yet.", |message| message.content.as_str());
             return Ok(previous_response(previous));
         }
         let tool_results = request.messages[current_user_index + 1..]
             .iter()
-            .filter(|message| message.role == CompleteRequestMessagesItemRole::Tool)
+            .filter(|message| message.role == CompleteMessageRole::Tool)
             .collect::<Vec<_>>();
         if current_user == "Use a Skill to review Rust." {
             return skill_response(request, &tool_results);
@@ -126,10 +125,7 @@ impl FixtureModel {
                 .trim();
             return Ok(summary_response(first_line));
         }
-        let has_workspace_tool = request
-            .tools
-            .iter()
-            .any(|tool| tool.name == "workspace.read_text");
+        let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
         if !has_workspace_tool {
             return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
         }
@@ -138,20 +134,16 @@ impl FixtureModel {
 }
 
 fn text_plugin_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    if !request
-        .tools
-        .iter()
-        .any(|tool| tool.name == "text.uppercase")
-    {
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "uppercase") {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
         [] => Ok(named_tool_request(
             "call-text-uppercase",
-            "text.uppercase",
+            "uppercase",
             r#"{"text":"Lenso plugin"}"#,
         )),
         [result] if result.content == "LENSO PLUGIN" => Ok(text_plugin_result()),
@@ -160,26 +152,26 @@ fn text_plugin_response(
 }
 
 fn workspace_plugin_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
     if !request
         .tools
         .iter()
-        .any(|tool| tool.name == "plugin.workspace_read_text")
+        .any(|tool| tool.name == "plugin_workspace_read_text")
     {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
         [] => Ok(named_tool_request(
             "call-plugin-workspace-read",
-            "plugin.workspace_read_text",
+            "plugin_workspace_read_text",
             r#"{"path":"README.md"}"#,
         )),
         [result] if result.content == "# Plugin Fixture\n" => Ok(vec![
             response(
                 "1",
-                CompleteResponseKind::TextDelta,
+                CompleteMessageKind::TextDelta,
                 "Workspace Plugin result: # Plugin Fixture",
                 "",
                 "",
@@ -189,7 +181,7 @@ fn workspace_plugin_response(
             ),
             response(
                 "2",
-                CompleteResponseKind::Usage,
+                CompleteMessageKind::Usage,
                 "",
                 "",
                 "",
@@ -203,14 +195,14 @@ fn workspace_plugin_response(
 }
 
 fn skill_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_skill_tools = ["skills.list", "skills.read"]
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_skill_tools = ["skill_list", "skill"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     let skill_catalog_in_prompt = request.messages.iter().any(|message| {
-        message.role == CompleteRequestMessagesItemRole::System
+        message.role == CompleteMessageRole::System
             && message.content.contains("`rust-review`")
             && message
                 .content
@@ -235,7 +227,7 @@ fn skill_response(
     match tool_results {
         [] => Ok(named_tool_request(
             "call-skills-read",
-            "skills.read",
+            "skill",
             r#"{"name":"rust-review"}"#,
         )),
         [skill] if skill.content.contains("RUST REVIEW INSTRUCTION") => {
@@ -246,21 +238,16 @@ fn skill_response(
 }
 
 fn resource_skill_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_skill_tools = [
-        "skills.list",
-        "skills.read",
-        "skills.list_resources",
-        "skills.read_resource",
-    ]
-    .iter()
-    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_skill_tools = ["skill_list", "skill", "skill_resources", "skill_resource"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_skill_tools
         || !readonly_skill_tool_profile(request)
         || !request.messages.iter().any(|message| {
-            message.role == CompleteRequestMessagesItemRole::System
+            message.role == CompleteMessageRole::System
                 && message.content.contains("`rust-review`")
                 && !message.content.contains("RUST REVIEW INSTRUCTION")
         })
@@ -275,12 +262,12 @@ fn resource_skill_response(
     match tool_results {
         [] => Ok(named_tool_request(
             "call-resources-read-skill",
-            "skills.read",
+            "skill",
             r#"{"name":"rust-review"}"#,
         )),
         [skill] if skill.content.contains("references/checklist.md") => Ok(named_tool_request(
             "call-resources-list",
-            "skills.list_resources",
+            "skill_resources",
             r#"{"name":"rust-review"}"#,
         )),
         [_, manifest]
@@ -289,7 +276,7 @@ fn resource_skill_response(
         {
             Ok(named_tool_request(
                 "call-resource-read",
-                "skills.read_resource",
+                "skill_resource",
                 r#"{"name":"rust-review","path":"references/checklist.md"}"#,
             ))
         }
@@ -300,45 +287,41 @@ fn resource_skill_response(
     }
 }
 
-fn readonly_skill_tool_profile(request: &CompleteRequest) -> bool {
+fn readonly_skill_tool_profile(request: &CompleteOpen) -> bool {
     request.tools.iter().all(|tool| {
         matches!(
             tool.name.as_str(),
-            "workspace.list"
-                | "workspace.search"
-                | "workspace.read_text"
-                | "skills.list"
-                | "skills.read"
-                | "skills.list_resources"
-                | "skills.read_resource"
+            "list"
+                | "search"
+                | "read"
+                | "skill_list"
+                | "skill"
+                | "skill_resources"
+                | "skill_resource"
         )
     })
 }
 
 fn workspace_navigation_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_workspace_tools = ["workspace.list", "workspace.search", "workspace.read_text"]
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_workspace_tools = ["list", "search", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_workspace_tools {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
-        [] => Ok(named_tool_request(
-            "call-workspace-list",
-            "workspace.list",
-            "{}",
-        )),
+        [] => Ok(named_tool_request("call-workspace-list", "list", "{}")),
         [listing] if listing.content.contains("docs") => Ok(named_tool_request(
             "call-workspace-search",
-            "workspace.search",
+            "search",
             r#"{"query":"NAVIGATION_TARGET"}"#,
         )),
         [_, search] if search.content.contains("docs/guide.md") => Ok(named_tool_request(
             "call-workspace-read",
-            "workspace.read_text",
+            "read",
             r#"{"path":"docs/guide.md"}"#,
         )),
         [_, _, document] if document.content.contains("NAVIGATION_TARGET") => {
@@ -353,11 +336,11 @@ fn workspace_navigation_response(
     }
 }
 
-fn navigation_response(first_line: &str) -> Vec<CompleteResponse> {
+fn navigation_response(first_line: &str) -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             format!("Navigation result: {first_line}"),
             "",
             "",
@@ -367,7 +350,7 @@ fn navigation_response(first_line: &str) -> Vec<CompleteResponse> {
         ),
         response(
             "2",
-            CompleteResponseKind::Usage,
+            CompleteMessageKind::Usage,
             "",
             "",
             "",
@@ -379,33 +362,29 @@ fn navigation_response(first_line: &str) -> Vec<CompleteResponse> {
 }
 
 fn workspace_mutation_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_mutation_tools = [
-        "workspace.write_text",
-        "workspace.edit_text",
-        "workspace.read_text",
-    ]
-    .iter()
-    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_mutation_tools = ["create_file", "edit", "read"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_mutation_tools {
         return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
     }
     match tool_results {
         [] => Ok(named_tool_request(
             "call-workspace-write",
-            "workspace.write_text",
+            "create_file",
             r#"{"path":"note.txt","content":"before\n"}"#,
         )),
         [created] if created.content == "created note.txt" => Ok(named_tool_request(
             "call-workspace-edit",
-            "workspace.edit_text",
+            "edit",
             r#"{"path":"note.txt","old_text":"before","new_text":"after"}"#,
         )),
         [_, edited] if edited.content == "edited note.txt" => Ok(named_tool_request(
             "call-workspace-read-after-edit",
-            "workspace.read_text",
+            "read",
             r#"{"path":"note.txt"}"#,
         )),
         [_, _, document] if document.content == "after\n" => Ok(mutation_response()),
@@ -413,11 +392,11 @@ fn workspace_mutation_response(
     }
 }
 
-fn mutation_response() -> Vec<CompleteResponse> {
+fn mutation_response() -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             "Workspace mutation result: after",
             "",
             "",
@@ -427,7 +406,7 @@ fn mutation_response() -> Vec<CompleteResponse> {
         ),
         response(
             "2",
-            CompleteResponseKind::Usage,
+            CompleteMessageKind::Usage,
             "",
             "",
             "",
@@ -439,10 +418,10 @@ fn mutation_response() -> Vec<CompleteResponse> {
 }
 
 fn local_coding_response(
-    request: &CompleteRequest,
-    tool_results: &[&CompleteRequestMessagesItem],
-) -> Result<Vec<CompleteResponse>, ModelInvocationError> {
-    let has_coding_tools = ["workspace.edit_text", "process.exec", "workspace.read_text"]
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_coding_tools = ["edit", "run_process", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_coding_tools {
@@ -451,17 +430,17 @@ fn local_coding_response(
     match tool_results {
         [] => Ok(named_tool_request(
             "call-local-coding-edit",
-            "workspace.edit_text",
+            "edit",
             r#"{"path":"src/lib.rs","old_text":"pub fn value() -> u32 { 1 }","new_text":"pub fn value() -> u32 { 2 }"}"#,
         )),
         [edited] if edited.content == "edited src/lib.rs" => Ok(named_tool_request(
             "call-local-coding-check",
-            "process.exec",
+            "run_process",
             r#"{"program":"cargo","arguments":["check","--quiet"]}"#,
         )),
         [_, checked] if checked.content.starts_with("exit_code: 0\n") => Ok(named_tool_request(
             "call-local-coding-read",
-            "workspace.read_text",
+            "read",
             r#"{"path":"src/lib.rs"}"#,
         )),
         [_, _, document] if document.content.contains("pub fn value() -> u32 { 2 }") => {
@@ -471,11 +450,11 @@ fn local_coding_response(
     }
 }
 
-fn local_coding_final_response() -> Vec<CompleteResponse> {
+fn local_coding_final_response() -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             "Local coding result: cargo check passed.",
             "",
             "",
@@ -485,7 +464,7 @@ fn local_coding_final_response() -> Vec<CompleteResponse> {
         ),
         response(
             "2",
-            CompleteResponseKind::Usage,
+            CompleteMessageKind::Usage,
             "",
             "",
             "",
@@ -496,7 +475,7 @@ fn local_coding_final_response() -> Vec<CompleteResponse> {
     ]
 }
 
-fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<CompleteResponse> {
+fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<CompleteMessage> {
     let prefix = match (filesystem_prefix, plugin_prefix) {
         (true, true) => "Filesystem: Plugin: ",
         (true, false) => "Filesystem: ",
@@ -506,7 +485,7 @@ fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<Complete
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             format!("{prefix}Direct "),
             "",
             "",
@@ -516,7 +495,7 @@ fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<Complete
         ),
         response(
             "2",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             "answer.",
             "",
             "",
@@ -524,15 +503,15 @@ fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<Complete
             "0",
             "0",
         ),
-        response("3", CompleteResponseKind::Usage, "", "", "", "{}", "8", "2"),
+        response("3", CompleteMessageKind::Usage, "", "", "", "{}", "8", "2"),
     ]
 }
 
-fn previous_response(previous: &str) -> Vec<CompleteResponse> {
+fn previous_response(previous: &str) -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             format!("Previous answer: {previous}"),
             "",
             "",
@@ -540,23 +519,14 @@ fn previous_response(previous: &str) -> Vec<CompleteResponse> {
             "0",
             "0",
         ),
-        response(
-            "2",
-            CompleteResponseKind::Usage,
-            "",
-            "",
-            "",
-            "{}",
-            "16",
-            "8",
-        ),
+        response("2", CompleteMessageKind::Usage, "", "", "", "{}", "16", "8"),
     ]
 }
 
-fn tool_request(index: usize) -> Vec<CompleteResponse> {
+fn tool_request(index: usize) -> Vec<CompleteMessage> {
     named_tool_request(
         &format!("call-readme-{index}"),
-        "workspace.read_text",
+        "read",
         r#"{"path":"README.md"}"#,
     )
 }
@@ -565,11 +535,11 @@ fn named_tool_request(
     call_id: &str,
     tool_name: &str,
     arguments_json: &str,
-) -> Vec<CompleteResponse> {
+) -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::ToolCall,
+            CompleteMessageKind::ToolCall,
             "",
             call_id,
             tool_name,
@@ -577,24 +547,15 @@ fn named_tool_request(
             "0",
             "0",
         ),
-        response(
-            "2",
-            CompleteResponseKind::Usage,
-            "",
-            "",
-            "",
-            "{}",
-            "24",
-            "8",
-        ),
+        response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
     ]
 }
 
-fn skill_applied_response() -> Vec<CompleteResponse> {
+fn skill_applied_response() -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             "Skill applied: Rust review used the selected instructions.",
             "",
             "",
@@ -604,7 +565,7 @@ fn skill_applied_response() -> Vec<CompleteResponse> {
         ),
         response(
             "2",
-            CompleteResponseKind::Usage,
+            CompleteMessageKind::Usage,
             "",
             "",
             "",
@@ -615,11 +576,11 @@ fn skill_applied_response() -> Vec<CompleteResponse> {
     ]
 }
 
-fn resource_applied_response() -> Vec<CompleteResponse> {
+fn resource_applied_response() -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             "Resource applied: Rust review used references/checklist.md.",
             "",
             "",
@@ -629,7 +590,7 @@ fn resource_applied_response() -> Vec<CompleteResponse> {
         ),
         response(
             "2",
-            CompleteResponseKind::Usage,
+            CompleteMessageKind::Usage,
             "",
             "",
             "",
@@ -640,11 +601,11 @@ fn resource_applied_response() -> Vec<CompleteResponse> {
     ]
 }
 
-fn summary_response(first_line: &str) -> Vec<CompleteResponse> {
+fn summary_response(first_line: &str) -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             format!("README summary: {first_line}"),
             "",
             "",
@@ -654,7 +615,7 @@ fn summary_response(first_line: &str) -> Vec<CompleteResponse> {
         ),
         response(
             "2",
-            CompleteResponseKind::Usage,
+            CompleteMessageKind::Usage,
             "",
             "",
             "",
@@ -665,11 +626,11 @@ fn summary_response(first_line: &str) -> Vec<CompleteResponse> {
     ]
 }
 
-fn text_plugin_result() -> Vec<CompleteResponse> {
+fn text_plugin_result() -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
-            CompleteResponseKind::TextDelta,
+            CompleteMessageKind::TextDelta,
             "Text Plugin result: LENSO PLUGIN",
             "",
             "",
@@ -677,31 +638,22 @@ fn text_plugin_result() -> Vec<CompleteResponse> {
             "0",
             "0",
         ),
-        response(
-            "2",
-            CompleteResponseKind::Usage,
-            "",
-            "",
-            "",
-            "{}",
-            "24",
-            "8",
-        ),
+        response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
     ]
 }
 
 #[allow(clippy::too_many_arguments)]
 fn response(
     sequence: &str,
-    kind: CompleteResponseKind,
+    kind: CompleteMessageKind,
     text: impl Into<String>,
     tool_call_id: &str,
     tool_name: &str,
     arguments_json: &str,
     input_tokens: &str,
     output_tokens: &str,
-) -> CompleteResponse {
-    CompleteResponse {
+) -> CompleteMessage {
+    CompleteMessage {
         sequence: sequence.to_owned(),
         kind,
         text: text.into(),

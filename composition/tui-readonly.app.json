@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "manifest": "../Cargo.toml",
+  "host_package": "lenso-agent-cli",
+  "packages": {
+    "lenso.agent.loop": "lenso-agent-loop-module",
+    "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
+    "lenso.agent.prompt": "lenso-agent-prompt-module",
+    "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
+    "lenso.agent.session.file": "lenso-agent-session-file-module",
+    "lenso.agent.tools": "lenso-agent-tools-module",
+    "lenso.agent.tui": "lenso-agent-tui-module",
+    "lenso.agent.tui.static": "lenso-agent-tui-static-module",
+    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
+  },
+  "app": {
+    "name": "tui-readonly",
+    "modules": [
+      {
+        "key": "agent",
+        "package": "lenso.agent.loop",
+        "configuration": {
+          "model": "fixture/readme-summary-v1",
+          "max_steps": 8,
+          "max_tool_calls": 4,
+          "max_output_tokens": 1024,
+          "max_history_events": 200
+        }
+      },
+      {
+        "key": "fixture-instructions",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "id": "fixture.behavior",
+              "version": "1.0.0",
+              "kind": "instruction",
+              "content": "Prefix direct answers with `Plugin: `."
+            }
+          ]
+        }
+      },
+      {
+        "key": "model",
+        "package": "lenso.agent.model.fixture",
+        "configuration": {
+          "model": "fixture/readme-summary-v1"
+        }
+      },
+      {
+        "key": "prompt",
+        "package": "lenso.agent.prompt",
+        "configuration": {
+          "max_contributions": 16,
+          "max_total_bytes": 65536
+        }
+      },
+      {
+        "key": "sessions",
+        "package": "lenso.agent.session.file",
+        "configuration": {
+          "directory": ".lenso/sessions"
+        }
+      },
+      {
+        "key": "summary-skill",
+        "package": "lenso.agent.prompt.static",
+        "configuration": {
+          "contributions": [
+            {
+              "id": "workspace.summary",
+              "version": "1.0.0",
+              "kind": "skill",
+              "content": "When summarizing a workspace file, ground the answer in the Tool result."
+            }
+          ]
+        }
+      },
+      {
+        "key": "tools",
+        "package": "lenso.agent.tools",
+        "configuration": {}
+      },
+      {
+        "key": "tui",
+        "package": "lenso.agent.tui",
+        "configuration": {}
+      },
+      {
+        "key": "tui-help",
+        "package": "lenso.agent.tui.static",
+        "configuration": {
+          "panels": [
+            {
+              "id": "agent.help",
+              "title": "Help",
+              "body": "Enter sends a message.\nEsc cancels the active Turn or exits while idle.\nCtrl-C exits immediately.\nTab cycles contributed panels."
+            }
+          ]
+        }
+      },
+      {
+        "key": "workspace-import-read",
+        "package": "lenso.agent.workspace-import-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576
+        }
+      },
+      {
+        "key": "workspace-read",
+        "package": "lenso.agent.workspace-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576,
+          "max_list_entries": 1000,
+          "max_search_entries": 10000,
+          "max_search_bytes": 16777216,
+          "max_search_matches": 1000
+        }
+      }
+    ],
+    "decisions": [],
+    "execution_lanes": [
+      {
+        "id": "main"
+      }
+    ]
+  }
+}

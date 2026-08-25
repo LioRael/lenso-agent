@@ -18,4 +18,6 @@
 - [0016 — Derive local Plugin governance from risk](0016-derive-local-plugin-governance-from-risk.md)
 - [0017 — Run the Host through durable Generation control](0017-run-the-host-through-durable-generation-control.md)
 - [0018 — Admit isolated third-party Wasm Tool Providers](0018-admit-isolated-third-party-wasm-tools.md)
-- [0019 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0019-bind-reviewed-wasm-tools-to-workspace-read.md)
+- [0019 — Use portable model-visible Tool names](0019-use-portable-model-visible-tool-names.md)
+- [0020 — Enter a composed TUI from the product entrypoint](0020-enter-a-composed-tui-from-the-product-entrypoint.md)
+- [0021 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0021-bind-reviewed-wasm-tools-to-workspace-read.md)

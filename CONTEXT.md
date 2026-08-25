@@ -5,8 +5,9 @@
 This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, composable Prompt/Skill
-contributions, a CLI Runner, and the
-checked `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
+and semantic TUI contributions, a CLI Runner, a no-subcommand `lenso-agent`
+TUI entrypoint, and the
+checked `tui-readonly`, `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
 `openai-codex-direct`, opt-in `openai-codex-direct-skills`, and opt-in
 `openai-codex-direct-coding` App Compositions, plus the higher-authority
 `headless-local-coding` and `openai-codex-direct-local-coding` Compositions.
@@ -40,11 +41,14 @@ Its configuration type derives the package-owned Schema, `Port<Client>` and
 implementations derive endpoints, and `#[module(lifecycle)]` exposes only the
 prepare, activate, and deactivate hooks that the Module actually owns. The
 former Harness-specific Module authoring and proc-macro crates are removed.
-The CLI Module remains the deliberate compatibility exception: it is a
-consumer-only identity used to anchor the CLI-to-Agent binding, while the
+The CLI and TUI Shell Modules remain deliberate compatibility exceptions: they
+are consumer-only identities used to anchor terminal-surface bindings, while the
 current source-first facade finalizes Module metadata from a Provider
 implementation and cannot yet describe a Module with no provided Capability.
-Adding a fake Provider would make the graph less accurate.
+Adding a fake Provider would make the graph less accurate. The TUI Shell binds
+one Agent plus explicit `many` semantic panel Contributions. The native Host
+surface snapshots those resolved providers and rejects cross-provider panel ID
+collisions before entering terminal raw mode.
 
 Source-derived Provider Descriptors use the standard fail-fast admission
 default (`max_concurrency: 1`, `queue_capacity: 0`). The regenerated canonical
@@ -81,18 +85,22 @@ root Invocation Context and the Agent Loop records it in `turn_started` Session
 events. Resumed Sessions can therefore cross Generations without losing which
 immutable graph owned each Turn.
 
-The Host now stores fenced Generation lifecycle authority under
-`.lenso/plugins/generation-control`. Startup either creates the initial durable
-Generation or recovers exact Active and Standby Generations from
-`.lenso/plugins/generation-authorities`. Recovery authority is separate from
-user-visible rollback history and GC roots. If committed Plugin authority
-changed while the CLI was stopped, startup performs a standard maintenance
-transition before routing. One shared authority fence covers resolve, recovery,
-Ready, and switch. Normal exit suspends process-local Kernel resources without
-retiring durable authority. The Controller owns terminal-failure maintenance,
-while the Turn route injects the Generation digest into Invocation Context. A
-later validated transition may reactivate the exact immutable digest of a
-retired Generation; live candidate duplication still fails closed.
+The Host now stores fenced Generation lifecycle authority under a stable
+product-surface namespace: `.lenso/plugins/generation-control` for the companion
+headless CLI and `.lenso/plugins/tui-generation-control` for `lenso-agent`.
+These distinct App Compositions share Plugin authority and immutable Generation
+records, but never recover each other's Controller lineage. Startup either
+creates the initial durable Generation or recovers exact Active and Standby
+Generations from `.lenso/plugins/generation-authorities`. Recovery authority is
+separate from user-visible rollback history and GC roots. If committed Plugin
+authority changed while the CLI was stopped, startup performs a standard
+maintenance transition before routing. One shared authority fence covers
+resolve, recovery, Ready, and switch. Normal exit suspends process-local Kernel
+resources without retiring durable authority. The Controller owns
+terminal-failure maintenance, while the Turn route injects the Generation
+digest into Invocation Context. A later validated transition may reactivate the
+exact immutable digest of a retired Generation; live candidate duplication
+still fails closed.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and
@@ -181,8 +189,13 @@ completed-turn history from the Session log.
   workspace-rooted cwd policy, environment projection, subprocess lifecycle,
   output and timeout bounds, and process-group cleanup. The Process Tool
   Provider owns only the Agent-facing projection.
-- **CLI Module** owns terminal input, streamed rendering, local cancellation,
-  and Session selection.
+- **CLI Module** owns headless terminal input, streamed rendering, local
+  cancellation, and Session selection.
+- **TUI Shell Module** owns interactive terminal layout, focus, input,
+  streamed rendering, cancellation, and semantic panel aggregation.
+- **TUI Contribution Modules** own bounded panel content. They do not own raw
+  terminal state, the event loop, arbitrary `ratatui` widgets, or ambient
+  Capability access.
 - **App Composition** owns exact Module Instances, configuration, bindings,
   execution classes, and admission limits.
 - **Agent Host control plane** owns the content-addressed Plugin Store, exact
@@ -210,6 +223,8 @@ completed-turn history from the Session log.
   children below an explicitly configured root. They snapshot at startup,
   enforce path and byte limits, and never execute Skill assets or scripts.
 - No Harness Module may discover dependencies through a global registry.
+- TUI panels come only from explicit `many` bindings in the immutable Plan;
+  providers cannot register widgets or mutate the running layout graph.
 - The generated native factory catalog is Host build availability, not Module
   dependency discovery; only the immutable Plan may activate and bind an entry.
 - Every invocation is bounded by Plan admission, deadlines, cancellation, and
@@ -243,6 +258,11 @@ Instances:
 - `workspace-read`
 - `sessions`
 
+The parallel `tui-readonly` profile replaces the `cli` consumer with `tui` and
+adds the removable `tui-help` semantic panel Contribution. Running
+`lenso-agent` with no arguments selects this TUI Plan and enters the terminal
+interface directly; the product entrypoint has no subcommands.
+
 The Prompt aggregate snapshots explicitly bound versioned contributions and
 records their IDs, versions, kinds, and SHA-256 digests in `model_requested`
 Session events. Contribution content becomes one system message and is not
@@ -273,9 +293,9 @@ to or read credentials from the Codex CLI.
 
 The opt-in `openai-codex-direct-skills` Composition adds one filesystem Skills
 Module to the `readonly` Tool profile. The same immutable startup snapshot
-provides a bounded name/description Prompt catalog plus `skills.list`,
-`skills.read`, `skills.list_resources`, and `skills.read_resource`. Normal
-selection reads the matching Skill directly; `skills.list` remains available
+provides a bounded name/description Prompt catalog plus `skill_list`,
+`skill`, `skill_resources`, and `skill_resource`. Normal
+selection reads the matching Skill directly; `skill_list` remains available
 for diagnostics and catalog overflow.
 
 The opt-in `headless-coding` and `openai-codex-direct-coding` Compositions add

@@ -4,11 +4,11 @@ use lenso_capability_agent::{
     CAPABILITY_ID as AGENT_CAPABILITY_ID, RunTurnError, RunTurnRequest, RunTurnResponse,
 };
 use lenso_capability_agent_model::{
-    CompleteRequest, CompleteRequestMessagesItem, CompleteRequestMessagesItemRole,
-    CompleteRequestToolsItem, CompleteResponse, CompleteResponseKind, ModelGuestClient,
+    CompleteMessage, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen,
+    CompleteTool, ModelGuestClient,
 };
 use lenso_capability_agent_prompt::{AssembleRequest, PromptGuestClient};
-use lenso_capability_agent_session::{OpenRequest, SessionGuestClient};
+use lenso_capability_agent_session::{OpenSessionRequest, SessionGuestClient};
 use lenso_capability_agent_tools::{CatalogRequest, ToolsGuestClient};
 use lenso_guest_sdk::{GuestContext, GuestStream, GuestStreamEvent};
 
@@ -17,17 +17,7 @@ wit_bindgen::generate!({
     world: "plugin",
 });
 
-lenso_guest_sdk::wasm_host! {
-    struct WasmHost {
-        bindings: host_bindings,
-        invoke: host_invoke,
-        stream_open: host_stream_open,
-        stream_send: host_stream_send,
-        stream_receive: host_stream_receive,
-        stream_close_send: host_stream_close_send,
-        stream_cancel: host_stream_cancel,
-    }
-}
+lenso_guest_sdk::wasm_host!(struct WasmHost);
 
 struct AgentContext<'a> {
     model: ModelGuestClient<'a, WasmHost>,
@@ -52,7 +42,7 @@ impl<'a> AgentContext<'a> {
 }
 
 struct TurnSession {
-    model: GuestStream<WasmHost, CompleteResponse, lenso_capability_agent_model::CompleteError>,
+    model: GuestStream<WasmHost, CompleteMessage, lenso_capability_agent_model::CompleteError>,
     session_id: String,
     sequence: u64,
 }
@@ -95,7 +85,7 @@ impl Guest for WasmAgent {
         let agent = AgentContext::load(&context)?;
         let opened = agent
             .session
-            .open(&OpenRequest {
+            .open(&OpenSessionRequest {
                 session_id: request.session_id,
             })
             .map_err(|error| format!("session.open: {error:?}"))?;
@@ -109,18 +99,18 @@ impl Guest for WasmAgent {
             .map_err(|error| format!("tools.catalog: {error:?}"))?;
         let model = agent
             .model
-            .complete(&CompleteRequest {
+            .complete(&CompleteOpen {
                 model: "fixture/readme-summary-v1".to_owned(),
                 messages: vec![
-                    CompleteRequestMessagesItem {
-                        role: CompleteRequestMessagesItemRole::System,
+                    CompleteMessageInput {
+                        role: CompleteMessageRole::System,
                         content: prompt.content,
                         arguments_json: None,
                         tool_call_id: None,
                         tool_name: None,
                     },
-                    CompleteRequestMessagesItem {
-                        role: CompleteRequestMessagesItemRole::User,
+                    CompleteMessageInput {
+                        role: CompleteMessageRole::User,
                         content: format!("Answer directly: {}", request.input),
                         arguments_json: None,
                         tool_call_id: None,
@@ -130,7 +120,7 @@ impl Guest for WasmAgent {
                 tools: tools
                     .tools
                     .into_iter()
-                    .map(|tool| CompleteRequestToolsItem {
+                    .map(|tool| CompleteTool {
                         name: tool.name,
                         description: tool.description,
                         input_schema_json: tool.input_schema_json,
@@ -179,7 +169,7 @@ impl Guest for WasmAgent {
                     .map_err(|error| format!("model.receive: {error:?}"))?
                 {
                     GuestStreamEvent::Message(message)
-                        if message.kind == CompleteResponseKind::TextDelta
+                        if message.kind == CompleteMessageKind::TextDelta
                             && !message.text.is_empty() =>
                     {
                         let response = RunTurnResponse {

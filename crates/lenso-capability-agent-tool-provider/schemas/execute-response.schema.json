@@ -4,8 +4,7 @@
   "required": ["content_type", "content", "metadata_json"],
   "properties": {
     "content_type": {
-      "type": "string",
-      "enum": ["text"]
+      "$ref": "#/$defs/ContentType"
     },
     "content": {
       "type": "string",
@@ -17,5 +16,12 @@
       "maxLength": 65536
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "ContentType": {
+      "type": "string",
+      "enum": ["text"]
+    }
+  },
+  "title": "ExecuteResponse"
 }

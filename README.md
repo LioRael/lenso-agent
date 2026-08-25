@@ -1,14 +1,27 @@
 # Lenso Agent Harness
 
-A headless-first Agent Harness for running a model with an explicitly selected
-set of Tools, Prompt instructions, and durable Sessions.
+A terminal-first Agent Harness for running a model with an explicitly selected
+set of Tools, Prompt instructions, durable Sessions, and composed UI panels.
 
 ## Try it
 
-Run the deterministic, read-only App from the repository root:
+Open the deterministic, read-only TUI from the repository root:
 
 ```sh
-cargo run -p lenso-agent-cli -- \
+cargo run -p lenso-agent-cli --bin lenso-agent
+```
+
+`lenso-agent` has no subcommands. Running it directly enters the TUI; use
+`--session`, repeated `--allow-tool`, `--no-tools`, or the advanced `--plan`
+flag to narrow that interactive session. Enter submits a Turn, Esc cancels an
+active Turn or exits while idle, and Tab cycles panels contributed by selected
+Modules.
+
+The existing companion binary remains available for headless automation and
+Host maintenance:
+
+```sh
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
@@ -17,20 +30,26 @@ only read the current workspace. Choose another reviewed App by name when you
 need a different Model or Tool authority:
 
 ```sh
-cargo run -p lenso-agent-cli -- \
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   --app headless-coding \
   "Create and edit a workspace note."
 ```
 
 Use `--session <id>` to resume a durable Session, `--no-tools` to remove Tool
 access for one Turn, or repeated `--allow-tool <name>` options to narrow the
-selected App's Tool set. Run `cargo run -p lenso-agent-cli -- --help` for the
-complete interface.
+selected App's Tool set.
+
+To build and run a removable Tool Provider from source, follow the
+[10-minute Tool Provider tutorial](docs/tutorials/10-minute-tool-provider.md).
+The [documentation map](docs/README.md) separates tutorials, operational
+how-to guides, reference material, and architecture explanations; the
+[glossary](docs/glossary.md) gives each control-plane term one stable meaning.
 
 ## Choose an App
 
 | App | Model | Workspace authority |
 | --- | --- | --- |
+| `tui-readonly` | deterministic fixture | read only, with composed TUI panels |
 | `headless-readonly` | deterministic fixture | read only |
 | `headless-coding` | deterministic fixture | read and edit |
 | `headless-local-coding` | deterministic fixture | read, edit, and reviewed processes |
@@ -65,14 +84,30 @@ lenso app resolve --definition composition/headless-readonly.app.json \
 tracked `composition/*/resolved-plan.json` files are review and release
 evidence; never edit them by hand. `scripts/check-removal.sh` proves that
 optional Prompt, Skill, workspace-edit, and process Modules can be removed
-while the remaining graph still resolves.
+while the remaining graph still resolves. The TUI removal proof additionally
+removes every panel Contribution while retaining the TUI Shell and Agent route.
+
+## Compose the TUI
+
+The `tui-readonly` App selects a `tui` Shell Module that requires exactly one
+`lenso.agent@1` provider and `many lenso.agent.tui-contribution@1` providers.
+The Shell owns terminal mode, layout, focus, input, streaming, cancellation,
+and cross-provider panel ID collision checks. Contribution Modules return
+bounded semantic panel snapshots; they do not receive `ratatui` widgets or a
+global registry.
+
+`composition/tui-readonly.app.json` includes one removable `tui-help` static
+Contribution. Another Module can contribute a panel by providing the same
+Capability and being explicitly selected in App Composition. Removing all
+Contribution providers leaves the Shell valid with only the conversation.
 
 ## Runtime baseline
 
-The host currently uses released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. `lenso-runner` and `lenso-native-adapter` are locked to
-`lenso-runtime-rust` commit
-`c56e4a01d14704eeae26e2121dbd87dbf380b1d3`, which closes the generic dynamic
+The host currently resolves `lenso-app-plan 0.1.5` and `lenso-kernel 0.1.11`.
+All runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
+`ffb07bc8dc7103b58c864b59225ca0f4609b6fdf`; all generated contracts and Module
+ports are locked to one `lenso-protocols` commit,
+`1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0`. This closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
@@ -96,17 +131,17 @@ registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
 entry closes the exact package, implementation authority, entrypoint, configuration Schema,
 Capability Descriptor and Operations, operation kinds, execution class, target,
 support/trust policy, canonical configuration, and one bounded attachment rule.
-The Catalog admits the linked `lenso.agent.text-tools@0.1.0` factory as a
+The Catalog admits the linked `lenso.agent.text-tools@0.2.0` factory as a
 stateless, permission-free append-to-`many` Tool Provider. It also admits one
 package-independent, isolated Wasm Tool Provider shape with the same exact
 Capability and attachment, empty configuration, no Host imports, permissions,
 state, Data mounts, or binding templates, and mandatory review evidence. It
 also admits one reviewed variant with exactly one generated
 `lenso.agent.workspace-read@1/read_text` Host import. The Host Profile fixes
-that binding to the dedicated base `workspace-import-read` Instance; the Bundle cannot select a
-provider or request workspace write, process, network, Secrets, state, or Data
-mount authority. It
-admits one restricted `lenso.agent.model.fixture@0.1.0` profile that replaces
+that binding to the dedicated base `workspace-import-read` Instance; the
+Bundle cannot select a provider or request workspace write, process, network,
+Secrets, state, or Data mount authority. It
+admits one restricted `lenso.agent.model.fixture@0.2.0` profile that replaces
 the fixture base Plan's exact `model` provider for the `agent` consumer. The
 experimental Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Experimental Artifact
@@ -176,7 +211,7 @@ cargo run -p lenso-agent-cli -- sessions provenance \
   --session <session-id>
 
 cargo run -p lenso-agent-cli -- \
-  "Use text.uppercase to uppercase Lenso plugin."
+  "Use uppercase to uppercase Lenso plugin."
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.text-tools
@@ -342,21 +377,21 @@ selected Skill prevents the App from becoming ready.
 progressive Skill disclosure. It snapshots the immediate
 `~/.agents/skills/<name>/SKILL.md` children and their readable resources during
 startup. Its bounded Prompt contribution contains only ordered Skill names and
-descriptions. When one matches the task, the Model can call `skills.read`
+descriptions. When one matches the task, the Model can call `skill`
 directly without a preliminary catalog Tool call. It also contributes four
 Tools:
 
-- `skills.list` returns only ordered names, descriptions, and SHA-256 content
+- `skill_list` returns only ordered names, descriptions, and SHA-256 content
   versions;
-- `skills.read` returns the full snapshotted document for one exact name;
-- `skills.list_resources` returns paths, sizes, and SHA-256 versions for one
+- `skill` returns the full snapshotted document for one exact name;
+- `skill_resources` returns paths, sizes, and SHA-256 versions for one
   Skill without returning resource contents;
-- `skills.read_resource` returns one snapshotted UTF-8 resource by exact Skill
+- `skill_resource` returns one snapshotted UTF-8 resource by exact Skill
   name and relative path.
 
-`skills.list` remains a diagnostic and overflow fallback. If the configured
+`skill_list` remains a diagnostic and overflow fallback. If the configured
 Prompt catalog byte budget cannot include every Skill, the deterministic
-catalog reports the omitted count and tells the Model to use `skills.list`.
+catalog reports the omitted count and tells the Model to use `skill_list`.
 Skill bodies and resource contents never enter the Prompt catalog.
 
 The Module enforces catalog/resource entry, per-file, aggregate content, and
@@ -386,8 +421,8 @@ Tool profiles are App Composition recipes, not Kernel modes or Tool Runtime
 switches. A profile expands to ordinary selected Tool Provider Module Instances
 and explicit bindings:
 
-- `readonly` selects rooted observation providers such as `workspace.list`,
-  `workspace.search`, `workspace.read_text`, and the filesystem Skills
+- `readonly` selects rooted observation providers such as `list`,
+  `search`, `read`, and the filesystem Skills
   provider;
 - `coding` adds the separate create-only/exact-edit workspace mutation Provider;
 - `local-coding` adds independently removable structured process Tools and a
@@ -397,8 +432,8 @@ and explicit bindings:
 
 The existing readonly Compositions still expose no generic shell, write, edit,
 delete, browser, or network Tool. The two opt-in coding Compositions add only
-`workspace.write_text` and `workspace.edit_text`. The two higher-authority
-local-coding Compositions additionally expose `process.exec` with an explicit
+`create_file` and `edit`. The two higher-authority
+local-coding Compositions additionally expose `run_process` with an explicit
 program catalog, workspace-relative cwd, cleared-and-allowlisted environment,
 timeout, argument, and combined-output limits. Removing Providers and bindings
 removes those Tool surfaces without changing the Agent Loop or Kernel. See
@@ -466,7 +501,7 @@ Resolved App Plan:
 export OPENAI_API_KEY="..."
 cargo run -p lenso-agent-cli -- \
   --app openai-readonly \
-  "Use workspace.read_text to read README.md, then summarize it."
+  "Use read to read README.md, then summarize it."
 ```
 
 The `openai-readonly` variant defaults to OpenAI's base URL and `gpt-4o-mini`. An App

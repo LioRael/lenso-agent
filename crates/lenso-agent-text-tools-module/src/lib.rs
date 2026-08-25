@@ -1,16 +1,14 @@
 //! Removable, stateless text Tool Provider Plugin Module.
 
-use futures::future::ready;
+use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
-    self as tool_provider_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
-    ExecuteError, ExecuteRequest, ExecuteResponse, ExecuteResponseContentType,
-    ToolProviderProvider,
+    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
+    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition,
 };
-use lenso_kernel::InvocationContext;
 use schemars::JsonSchema;
 
 /// Stable Tool name exposed only while the Plugin is active.
-pub const UPPERCASE_TOOL: &str = "text.uppercase";
+pub const UPPERCASE_TOOL: &str = "uppercase";
 
 const MAX_TEXT_BYTES: usize = 4_096;
 
@@ -32,7 +30,7 @@ fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteEr
     }
     Ok(ExecuteResponse {
         content,
-        content_type: ExecuteResponseContentType::Text,
+        content_type: ContentType::Text,
         metadata_json: r#"{"operation":"uppercase"}"#.to_owned(),
     })
 }
@@ -42,12 +40,12 @@ fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteEr
 struct TextTools {}
 
 #[lenso::provides(tool_provider_contract::ToolProvider)]
-impl ToolProviderProvider for TextTools {
-    fn catalog(
+impl TextTools {
+    async fn catalog(
         &self,
-        _context: InvocationContext,
+        _context: Ctx,
         _request: CatalogRequest,
-    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderCatalog> {
+    ) -> ModuleResult<CatalogResponse, CatalogError> {
         static INPUT_SCHEMA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
         let input_schema_json = INPUT_SCHEMA
             .get_or_init(|| {
@@ -55,28 +53,27 @@ impl ToolProviderProvider for TextTools {
                     .expect("derived Tool input Schema must serialize")
             })
             .clone();
-        Box::pin(ready(Ok(Ok(CatalogResponse {
-            tools: vec![CatalogResponseToolsItem {
+        Ok(CatalogResponse {
+            tools: vec![ToolDefinition {
                 name: UPPERCASE_TOOL.to_owned(),
                 description: "Convert one bounded UTF-8 string to uppercase.".to_owned(),
                 input_schema_json,
             }],
-        }))))
+        })
     }
 
-    fn execute(
+    async fn execute(
         &self,
-        _context: InvocationContext,
+        _context: Ctx,
         request: ExecuteRequest,
-    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
-        Box::pin(ready(if request.name == UPPERCASE_TOOL {
-            let Ok(arguments) = serde_json::from_str(&request.arguments_json) else {
-                return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
-            };
-            Ok(uppercase(arguments))
+    ) -> ModuleResult<ExecuteResponse, ExecuteError> {
+        if request.name == UPPERCASE_TOOL {
+            let arguments = serde_json::from_str(&request.arguments_json)
+                .map_err(|_| ModuleError::domain(ExecuteError::InvalidArguments))?;
+            uppercase(arguments).map_err(ModuleError::domain)
         } else {
-            Ok(Err(ExecuteError::NotFound))
-        }))
+            Err(ModuleError::domain(ExecuteError::NotFound))
+        }
     }
 }
 
@@ -102,41 +99,39 @@ mod tests {
 
     #[test]
     fn generated_provider_derives_schema_and_dispatches_safely() {
-        let context = || InvocationContext::new(1, None, CancellationToken::new());
-        let catalog = futures::executor::block_on(ToolProviderProvider::catalog(
-            &TextTools {},
-            context(),
-            CatalogRequest {},
-        ))
-        .unwrap()
-        .unwrap();
+        let context = || Ctx::new(1, None, CancellationToken::new());
+        let catalog =
+            futures::executor::block_on(TextTools {}.catalog(context(), CatalogRequest {}))
+                .unwrap();
         assert_eq!(catalog.tools.len(), 1);
         let schema: serde_json::Value =
             serde_json::from_str(&catalog.tools[0].input_schema_json).unwrap();
         assert_eq!(schema["properties"]["text"]["maxLength"], 4096);
         assert_eq!(schema["additionalProperties"], false);
 
-        let unknown = futures::executor::block_on(ToolProviderProvider::execute(
-            &TextTools {},
+        let unknown = futures::executor::block_on(TextTools {}.execute(
             context(),
             ExecuteRequest {
-                name: "text.unknown".to_owned(),
+                name: "missing_tool".to_owned(),
                 arguments_json: "{}".to_owned(),
             },
-        ))
-        .unwrap();
-        assert!(matches!(unknown, Err(ExecuteError::NotFound)));
+        ));
+        assert!(matches!(
+            unknown,
+            Err(ModuleError::Domain(ExecuteError::NotFound))
+        ));
 
-        let invalid = futures::executor::block_on(ToolProviderProvider::execute(
-            &TextTools {},
+        let invalid = futures::executor::block_on(TextTools {}.execute(
             context(),
             ExecuteRequest {
                 name: UPPERCASE_TOOL.to_owned(),
                 arguments_json: r#"{"extra":true,"text":"x"}"#.to_owned(),
             },
-        ))
-        .unwrap();
-        assert!(matches!(invalid, Err(ExecuteError::InvalidArguments)));
+        ));
+        assert!(matches!(
+            invalid,
+            Err(ModuleError::Domain(ExecuteError::InvalidArguments))
+        ));
     }
 
     #[test]

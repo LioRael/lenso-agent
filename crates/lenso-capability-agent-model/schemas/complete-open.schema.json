@@ -12,56 +12,14 @@
       "type": "array",
       "maxItems": 256,
       "items": {
-        "type": "object",
-        "required": ["role", "content"],
-        "properties": {
-          "role": {
-            "type": "string",
-            "enum": ["system", "user", "assistant", "tool"]
-          },
-          "content": {
-            "type": "string",
-            "maxLength": 1048576
-          },
-          "tool_call_id": {
-            "type": "string",
-            "maxLength": 128
-          },
-          "tool_name": {
-            "type": "string",
-            "maxLength": 128
-          },
-          "arguments_json": {
-            "type": "string",
-            "maxLength": 262144
-          }
-        },
-        "additionalProperties": false
+        "$ref": "#/$defs/CompleteMessageInput"
       }
     },
     "tools": {
       "type": "array",
       "maxItems": 256,
       "items": {
-        "type": "object",
-        "required": ["name", "description", "input_schema_json"],
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "description": {
-            "type": "string",
-            "maxLength": 4096
-          },
-          "input_schema_json": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 65536
-          }
-        },
-        "additionalProperties": false
+        "$ref": "#/$defs/CompleteTool"
       }
     },
     "temperature": {
@@ -75,5 +33,59 @@
       "maximum": 1000000
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "CompleteMessageInput": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/CompleteMessageRole"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "tool_call_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "tool_name": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "arguments_json": {
+          "type": "string",
+          "maxLength": 262144
+        }
+      },
+      "additionalProperties": false
+    },
+    "CompleteMessageRole": {
+      "type": "string",
+      "enum": ["system", "user", "assistant", "tool"]
+    },
+    "CompleteTool": {
+      "type": "object",
+      "required": ["name", "description", "input_schema_json"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "input_schema_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "CompleteOpen"
 }

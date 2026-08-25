@@ -8,8 +8,18 @@ publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "lenso-agent-cli"
+path = "src/main.rs"
+
+[[bin]]
+name = "lenso-agent"
+path = "src/tui_main.rs"
+
 [dependencies]
 lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
+lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
+lenso-agent-tui-static-module = { path = "../../crates/lenso-agent-tui-static-module" }
 lenso-agent-auth-openai-codex-module = { path = "../../crates/lenso-agent-auth-openai-codex-module" }
 lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
 lenso-agent-model-fixture-module = { path = "../../crates/lenso-agent-model-fixture-module" }
@@ -35,6 +45,9 @@ lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-s
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
 lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
 lenso-capability-agent-workspace-read = { path = "../../crates/lenso-capability-agent-workspace-read" }
+lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
+clap.workspace = true
+crossterm.workspace = true
 futures.workspace = true
 fs2.workspace = true
 lenso-app-plan.workspace = true
@@ -42,6 +55,7 @@ lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 lenso-plugin-control-plane.workspace = true
 lenso-runner.workspace = true
+ratatui.workspace = true
 lenso-secrets-env-module.workspace = true
 serde.workspace = true
 serde_json.workspace = true

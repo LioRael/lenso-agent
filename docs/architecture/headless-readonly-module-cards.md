@@ -42,8 +42,8 @@ Status: implementation baseline for the first executable slice.
 - **Configuration:** empty.
 - **Lifecycle/resources:** `activate` obtains only explicitly bound Provider
   handles and builds the catalog; no discovery or global registry.
-- **First behavior:** exposes and dispatches `workspace.list`,
-  `workspace.search`, and `workspace.read_text`.
+- **First behavior:** exposes and dispatches `list`,
+  `search`, and `read`.
 
 ## `lenso.agent.prompt.static`
 

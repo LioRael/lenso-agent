@@ -129,7 +129,7 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["workspace_list", "workspace_read_text", "workspace_search"]
+        ["list", "read", "search"]
     );
     assert_eq!(requests[1].body["input"][0]["type"], "message");
     assert_eq!(
@@ -154,7 +154,10 @@ fn missing_direct_credential_rejects_the_turn_without_starting_http() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("direct Codex authentication failed"));
+    assert!(
+        stderr.contains("direct Codex authentication failed"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("direct-access-secret"));
     assert!(!stderr.contains("direct-refresh-secret"));
 }
@@ -227,7 +230,7 @@ fn write_response(stream: &mut TcpStream, body: &[u8]) {
 
 fn tool_call_response() -> String {
     concat!(
-        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call-readme-1\",\"name\":\"workspace_read_text\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call-readme-1\",\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":6}}}\n\n"
     )
     .to_owned()

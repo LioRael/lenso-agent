@@ -17,8 +17,7 @@
       "format": "uint64"
     },
     "kind": {
-      "type": "string",
-      "enum": ["text_delta", "tool_call", "usage"]
+      "$ref": "#/$defs/CompleteMessageKind"
     },
     "text": {
       "type": "string",
@@ -45,5 +44,12 @@
       "format": "uint64"
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "CompleteMessageKind": {
+      "type": "string",
+      "enum": ["text_delta", "tool_call", "usage"]
+    }
+  },
+  "title": "CompleteMessage"
 }

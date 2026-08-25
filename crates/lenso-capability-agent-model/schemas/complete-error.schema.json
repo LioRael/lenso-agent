@@ -3,6 +3,35 @@
   "oneOf": [
     { "const": "invalid_request" },
     { "const": "unsupported_model" },
-    { "const": "content_rejected" }
+    { "const": "content_rejected" },
+    {
+      "type": "object",
+      "required": ["code", "payload"],
+      "properties": {
+        "code": { "const": "provider_failure" },
+        "payload": {
+          "type": "object",
+          "required": ["reason_code", "message", "retryable"],
+          "properties": {
+            "reason_code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "title": "ProviderFailurePayload"
+        }
+      },
+      "additionalProperties": false
+    }
   ]
 }

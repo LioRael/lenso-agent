@@ -23,7 +23,7 @@ Status: implementation baseline for the first real provider slice.
   events, and provider failure remain sanitized Runtime Failures. Provider
   bodies and credentials never enter errors or diagnostics.
 - **First behavior:** the Agent asks an OpenAI-compatible provider to call
-  `workspace.read_text`, returns the Tool result in a second completion, and
+  `read`, returns the Tool result in a second completion, and
   emits streamed text and usage.
 
 ## Secrets selection

@@ -20,8 +20,8 @@ Status: implementation baseline for the opt-in coding profile.
 - **Lifecycle/resources:** `prepare` verifies that the root exists and is a
   directory; each invocation owns only its temporary file and cleans it up on
   failure. There is no background work or durable private state.
-- **First behavior:** `workspace.write_text` atomically creates one new UTF-8
-  file below an existing directory; `workspace.edit_text` atomically replaces
+- **First behavior:** `create_file` atomically creates one new UTF-8
+  file below an existing directory; `edit` atomically replaces
   one unique, non-empty UTF-8 substring in one existing UTF-8 file while
   preserving its permissions.
 

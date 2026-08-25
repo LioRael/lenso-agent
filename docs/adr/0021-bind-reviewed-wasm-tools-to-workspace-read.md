@@ -1,4 +1,4 @@
-# ADR 0019: Bind reviewed Wasm Tools to one Host-selected workspace reader
+# ADR 0021: Bind reviewed Wasm Tools to one Host-selected workspace reader
 
 ## Status
 

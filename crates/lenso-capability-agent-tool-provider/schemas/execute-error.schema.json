@@ -29,7 +29,8 @@
               "maxLength": 65536
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "title": "ExecutionFailedPayload"
         }
       },
       "additionalProperties": false

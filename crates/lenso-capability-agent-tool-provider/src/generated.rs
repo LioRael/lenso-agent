@@ -38,11 +38,11 @@ pub struct CatalogRequest {
 pub struct CatalogResponse {
     #[serde(rename = "tools")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub tools: Vec<CatalogResponseToolsItem>,
+    pub tools: Vec<ToolDefinition>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CatalogResponseToolsItem {
+pub struct ToolDefinition {
     #[serde(rename = "description")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub description: String,
@@ -77,20 +77,20 @@ pub struct ExecuteResponse {
     pub content: String,
     #[serde(rename = "content_type")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub content_type: ExecuteResponseContentType,
+    pub content_type: ContentType,
     #[serde(rename = "metadata_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub metadata_json: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum ExecuteResponseContentType {
+pub enum ContentType {
     #[serde(rename = "text")]
     Text,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ExecuteErrorExecutionFailedPayload {
+pub struct ExecutionFailedPayload {
     #[serde(rename = "details_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub details_json: String,
@@ -104,7 +104,7 @@ pub struct ExecuteErrorExecutionFailedPayload {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ExecuteError {
-    ExecutionFailed { payload: ExecuteErrorExecutionFailedPayload },
+    ExecutionFailed { payload: ExecutionFailedPayload },
     InvalidArguments,
     NotFound,
     OutputLimitExceeded,

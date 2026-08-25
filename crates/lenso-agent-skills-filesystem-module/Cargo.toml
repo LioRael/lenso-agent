@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-skills-filesystem-module"
-version = "0.1.0"
+version = "0.2.0"
 description = "Bounded filesystem Skill catalog and progressive-disclosure Provider for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true

@@ -12,8 +12,11 @@ rust-version.workspace = true
 package-id = "lenso.agent.cli"
 
 [dependencies]
-lenso-kernel.workspace = true
-lenso-native-adapter.workspace = true
+lenso.workspace = true
+lenso-capability-agent = { path = "../lenso-capability-agent" }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

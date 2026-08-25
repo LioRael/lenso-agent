@@ -18,19 +18,19 @@ use lenso_capability_agent_prompt_provider::{
 };
 use lenso_capability_agent_tool_provider as tool_provider;
 use lenso_capability_agent_tool_provider::{
-    CatalogError, CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteRequest, ExecuteResponse, ExecuteResponseContentType,
+    CatalogError, CatalogRequest, CatalogResponse, ContentType, ExecuteError, ExecuteRequest,
+    ExecuteResponse, ToolDefinition,
 };
 use sha2::{Digest, Sha256};
 
 /// Lists metadata for the snapshotted Skills.
-pub const LIST_TOOL: &str = "skills.list";
+pub const LIST_TOOL: &str = "skill_list";
 /// Reads one full snapshotted Skill document.
-pub const READ_TOOL: &str = "skills.read";
+pub const READ_TOOL: &str = "skill";
 /// Lists readable resources snapshotted below one Skill directory.
-pub const LIST_RESOURCES_TOOL: &str = "skills.list_resources";
+pub const LIST_RESOURCES_TOOL: &str = "skill_resources";
 /// Reads one UTF-8 resource snapshotted below one Skill directory.
-pub const READ_RESOURCE_TOOL: &str = "skills.read_resource";
+pub const READ_RESOURCE_TOOL: &str = "skill_resource";
 
 const MAX_PROVIDER_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_DESCRIPTION_BYTES: usize = 4_096;
@@ -122,7 +122,7 @@ impl FilesystemSkillsProvider {
                     .map_err(|_| ExecuteError::InvalidArguments)?;
                 Ok(ExecuteResponse {
                     content: state.catalog_json,
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({ "skill_count": state.skills.len() })
                         .to_string(),
                 })
@@ -145,7 +145,7 @@ impl FilesystemSkillsProvider {
                     .ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: skill.content.clone(),
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
                         "name": skill.name,
                         "version": skill.version,
@@ -159,7 +159,7 @@ impl FilesystemSkillsProvider {
                 let skill = state.skills.get(&name).ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: skill.resource_manifest_json.clone(),
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
                         "name": skill.name,
                         "skill_version": skill.version,
@@ -192,7 +192,7 @@ impl FilesystemSkillsProvider {
                     .ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: resource.content.clone(),
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
                         "name": skill.name,
                         "skill_version": skill.version,
@@ -251,7 +251,7 @@ impl FilesystemSkillsModule {
     ) -> impl std::future::Future<Output = Result<CatalogResponse, CatalogError>> {
         std::future::ready(Ok(CatalogResponse {
             tools: vec![
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: LIST_TOOL.to_owned(),
                     description:
                         "List available Skills by name, description, and immutable content version."
@@ -259,21 +259,21 @@ impl FilesystemSkillsModule {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{},"type":"object"}"#
                         .to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: READ_TOOL.to_owned(),
                     description: "Read the full SKILL.md for one available Skill by exact name."
                         .to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
                         .to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: LIST_RESOURCES_TOOL.to_owned(),
                     description: "List readable snapshotted resources for one Skill without returning their contents."
                         .to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
                         .to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: READ_RESOURCE_TOOL.to_owned(),
                     description: "Read one UTF-8 snapshotted resource by Skill name and relative path. This never executes scripts."
                         .to_owned(),
@@ -686,7 +686,7 @@ fn prompt_catalog(
     skills: &BTreeMap<String, SkillSnapshot>,
     max_bytes: usize,
 ) -> Result<String, RuntimeFailure> {
-    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skills.read` with its exact name before following it. Use `skills.list` only when this catalog reports omissions or no visible Skill matches.\n\n";
+    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skill` with its exact name before following it. Use `skill_list` only when this catalog reports omissions or no visible Skill matches.\n\n";
     const EMPTY: &str = "No Skills are available.\n";
 
     if skills.is_empty() {
@@ -700,7 +700,7 @@ fn prompt_catalog(
     }
 
     let maximum_footer = format!(
-        "\n{} additional Skills were omitted by the prompt catalog byte limit; call `skills.list` to inspect them.\n",
+        "\n{} additional Skills were omitted by the prompt catalog byte limit; call `skill_list` to inspect them.\n",
         skills.len()
     );
     let mut content = String::from(HEADER);
@@ -724,7 +724,7 @@ fn prompt_catalog(
     if omitted > 0 {
         write!(
             &mut content,
-            "\n{omitted} additional Skills were omitted by the prompt catalog byte limit; call `skills.list` to inspect them.\n"
+            "\n{omitted} additional Skills were omitted by the prompt catalog byte limit; call `skill_list` to inspect them.\n"
         )
         .expect("writing to a String cannot fail");
     }
@@ -1111,7 +1111,7 @@ mod tests {
         let content = &snapshot.catalog_contribution.content;
         assert!(content.len() <= 512);
         assert!(content.contains("additional Skills were omitted"));
-        assert!(content.contains("skills.list"));
+        assert!(content.contains("skill_list"));
         assert!(!content.contains("PRIVATE BODY"));
         assert_eq!(
             snapshot.catalog_contribution.version,

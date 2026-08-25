@@ -118,7 +118,7 @@ make both the workspace root and model endpoint visible before execution.
 
 1. A deterministic Model fixture proves a composed Prompt behavior, direct
    streamed answer, one or more
-  sequential `workspace.list`, `workspace.search`, and `workspace.read_text`
+  sequential `list`, `search`, and `read`
   calls, and finite step/Tool-call limits.
 2. OpenAI-compatible and direct ChatGPT subscription smoke tests exercise the
    same logical turn without changing the Agent Loop.
@@ -140,7 +140,7 @@ make both the workspace root and model endpoint visible before execution.
     timeout, output overflow, cancellation, descendant cleanup, and root loss.
     Removing both Process Modules restores the coding graph.
 11. Installing the reviewed native text Tool Bundle adds one Plugin-owned
-    Instance and derived `tools` binding; the Agent invokes `text.uppercase`.
+    Instance and derived `tools` binding; the Agent invokes `uppercase`.
     Removing the Plugin deletes that Tool from the next Generation.
 12. Catalog tests prove deterministic multi-profile registration, reject
     duplicate profile/factory authority, and require an exact `many`

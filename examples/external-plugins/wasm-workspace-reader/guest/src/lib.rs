@@ -20,7 +20,7 @@ lenso_guest_sdk::wasm_host! {
 }
 
 const CAPABILITY: &str = "lenso.agent.tool-provider@1";
-const TOOL: &str = "plugin.workspace_read_text";
+const TOOL: &str = "plugin_workspace_read_text";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -15,9 +15,9 @@ use futures::{
 };
 use lenso::prelude::*;
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CompleteError, CompleteRequest,
-    CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteResponse,
-    CompleteResponseKind, ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
+    ProviderFailurePayload,
 };
 use lenso_capability_secrets::{self as secrets_contract, ResolveRequest};
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
@@ -87,7 +87,7 @@ impl ModelProvider for OpenAiCompatibleModel {
     fn complete(
         &self,
         context: InvocationContext,
-        request: CompleteRequest,
+        request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
         if request.model != self.config.model {
             return Box::pin(ready(Err(ModelInvocationError::Domain(
@@ -110,14 +110,22 @@ impl ModelProvider for OpenAiCompatibleModel {
                     },
                 )
                 .await
-                .map_err(|_| provider_failure("configured model credential is unavailable"))?;
+                .map_err(|_| {
+                    provider_failure(
+                        "authentication_required",
+                        "configured model credential is unavailable",
+                        false,
+                    )
+                })?;
             let response = client
                 .post(config.endpoint().map_err(ModelInvocationError::Runtime)?)
                 .bearer_auth(credential.value)
                 .json(&body)
                 .send()
                 .await
-                .map_err(|_| provider_failure("model provider request failed"))?;
+                .map_err(|_| {
+                    provider_failure("transport_error", "model provider request failed", true)
+                })?;
             if !response.status().is_success() {
                 return Err(map_status(response.status()));
             }
@@ -127,7 +135,7 @@ impl ModelProvider for OpenAiCompatibleModel {
     }
 }
 
-fn chat_request(request: &CompleteRequest) -> Result<serde_json::Value, CompleteError> {
+fn chat_request(request: &CompleteOpen) -> Result<serde_json::Value, CompleteError> {
     if request.max_output_tokens <= 0 {
         return Err(CompleteError::InvalidRequest);
     }
@@ -164,23 +172,23 @@ fn chat_request(request: &CompleteRequest) -> Result<serde_json::Value, Complete
     }))
 }
 
-fn chat_message(message: &CompleteRequestMessagesItem) -> Result<serde_json::Value, CompleteError> {
+fn chat_message(message: &CompleteMessageInput) -> Result<serde_json::Value, CompleteError> {
     match message.role {
-        CompleteRequestMessagesItemRole::System | CompleteRequestMessagesItemRole::User => {
+        CompleteMessageRole::System | CompleteMessageRole::User => {
             if message.tool_call_id.is_some()
                 || message.tool_name.is_some()
                 || message.arguments_json.is_some()
             {
                 return Err(CompleteError::InvalidRequest);
             }
-            let role = if message.role == CompleteRequestMessagesItemRole::System {
+            let role = if message.role == CompleteMessageRole::System {
                 "system"
             } else {
                 "user"
             };
             Ok(serde_json::json!({"role": role, "content": message.content}))
         }
-        CompleteRequestMessagesItemRole::Assistant => match (
+        CompleteMessageRole::Assistant => match (
             message.tool_call_id.as_deref(),
             message.tool_name.as_deref(),
             message.arguments_json.as_deref(),
@@ -205,7 +213,7 @@ fn chat_message(message: &CompleteRequestMessagesItem) -> Result<serde_json::Val
             }
             _ => Err(CompleteError::InvalidRequest),
         },
-        CompleteRequestMessagesItemRole::Tool => {
+        CompleteMessageRole::Tool => {
             let Some(id) = message.tool_call_id.as_deref().filter(|id| !id.is_empty()) else {
                 return Err(CompleteError::InvalidRequest);
             };
@@ -229,19 +237,31 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
         reqwest::StatusCode::NOT_FOUND => {
             ModelInvocationError::Domain(CompleteError::UnsupportedModel)
         }
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
-            provider_failure("model provider rejected its configured credential")
-        }
-        reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            provider_failure("model provider rate limit was exceeded")
-        }
-        _ => provider_failure("model provider returned an unsuccessful status"),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => provider_failure(
+            "credential_rejected",
+            "model provider rejected its configured credential",
+            false,
+        ),
+        reqwest::StatusCode::TOO_MANY_REQUESTS => provider_failure(
+            "rate_limited",
+            "model provider rate limit was exceeded",
+            true,
+        ),
+        _ => provider_failure(
+            "provider_error",
+            "model provider returned an unsuccessful status",
+            status.is_server_error(),
+        ),
     }
 }
 
-fn provider_failure(detail: &str) -> ModelInvocationError {
-    ModelInvocationError::Runtime(RuntimeFailure::ModuleFailure {
-        detail: detail.to_owned(),
+fn provider_failure(reason_code: &str, message: &str, retryable: bool) -> ModelInvocationError {
+    ModelInvocationError::Domain(CompleteError::ProviderFailure {
+        payload: ProviderFailurePayload {
+            message: message.to_owned(),
+            reason_code: reason_code.to_owned(),
+            retryable,
+        },
     })
 }
 
@@ -398,7 +418,7 @@ impl SseDecoder {
         for choice in chunk.choices {
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
                 output.push(self.message(
-                    CompleteResponseKind::TextDelta,
+                    CompleteMessageKind::TextDelta,
                     content,
                     "",
                     "",
@@ -435,7 +455,7 @@ impl SseDecoder {
         }
         if let Some(usage) = chunk.usage {
             output.push(self.message(
-                CompleteResponseKind::Usage,
+                CompleteMessageKind::Usage,
                 "",
                 "",
                 "",
@@ -468,7 +488,7 @@ impl SseDecoder {
                 return Err(provider_protocol_failure());
             }
             output.push(self.message(
-                CompleteResponseKind::ToolCall,
+                CompleteMessageKind::ToolCall,
                 "",
                 &call.id,
                 &call.name,
@@ -483,7 +503,7 @@ impl SseDecoder {
     #[allow(clippy::too_many_arguments)]
     fn message(
         &mut self,
-        kind: CompleteResponseKind,
+        kind: CompleteMessageKind,
         text: impl Into<String>,
         tool_call_id: &str,
         tool_name: &str,
@@ -492,7 +512,7 @@ impl SseDecoder {
         output_tokens: u64,
     ) -> NativeStreamItem {
         self.sequence = self.sequence.saturating_add(1);
-        NativeStreamItem::Message(Box::new(CompleteResponse {
+        NativeStreamItem::Message(Box::new(CompleteMessage {
             sequence: self.sequence.to_string(),
             kind,
             text: text.into(),
@@ -574,32 +594,30 @@ struct ToolCallAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lenso_capability_agent_model::{
-        CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteRequestToolsItem,
-    };
+    use lenso_capability_agent_model::{CompleteMessageInput, CompleteMessageRole, CompleteTool};
 
     #[test]
     fn chat_request_preserves_assistant_tool_call() {
-        let request = CompleteRequest {
+        let request = CompleteOpen {
             model: "test-model".to_owned(),
             messages: vec![
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::Assistant,
+                CompleteMessageInput {
+                    role: CompleteMessageRole::Assistant,
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
-                    tool_name: Some("workspace.read_text".to_owned()),
+                    tool_name: Some("read".to_owned()),
                     arguments_json: Some(r#"{"path":"README.md"}"#.to_owned()),
                 },
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::Tool,
+                CompleteMessageInput {
+                    role: CompleteMessageRole::Tool,
                     content: "# Fixture".to_owned(),
                     tool_call_id: Some("call-1".to_owned()),
                     tool_name: None,
                     arguments_json: None,
                 },
             ],
-            tools: vec![CompleteRequestToolsItem {
-                name: "workspace.read_text".to_owned(),
+            tools: vec![CompleteTool {
+                name: "read".to_owned(),
                 description: "Read a file".to_owned(),
                 input_schema_json: r#"{"type":"object"}"#.to_owned(),
             }],
@@ -610,7 +628,7 @@ mod tests {
         assert_eq!(body["messages"][0]["tool_calls"][0]["id"], "call-1");
         assert_eq!(
             body["messages"][0]["tool_calls"][0]["function"]["name"],
-            "workspace.read_text"
+            "read"
         );
         assert_eq!(body["messages"][1]["tool_call_id"], "call-1");
         assert_eq!(body["parallel_tool_calls"], false);
@@ -619,7 +637,7 @@ mod tests {
     #[test]
     fn decoder_assembles_fragmented_tool_call_and_usage() {
         let mut decoder = SseDecoder::default();
-        let first = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"workspace.read_text","arguments":"{\"path\":"}}]},"finish_reason":null}]}
+        let first = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":"{\"path\":"}}]},"finish_reason":null}]}
 
 "#;
         let second = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":4}}
@@ -633,14 +651,14 @@ data: [DONE]
         let messages = events
             .into_iter()
             .filter_map(|event| match event {
-                NativeStreamItem::Message(value) => value.downcast::<CompleteResponse>().ok(),
+                NativeStreamItem::Message(value) => value.downcast::<CompleteMessage>().ok(),
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].kind, CompleteResponseKind::ToolCall);
+        assert_eq!(messages[0].kind, CompleteMessageKind::ToolCall);
         assert_eq!(messages[0].arguments_json, r#"{"path":"README.md"}"#);
-        assert_eq!(messages[1].kind, CompleteResponseKind::Usage);
+        assert_eq!(messages[1].kind, CompleteMessageKind::Usage);
         assert_eq!(messages[1].input_tokens, "12");
     }
 

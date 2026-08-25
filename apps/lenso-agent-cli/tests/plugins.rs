@@ -701,7 +701,7 @@ fn write_tool_bundle_release(root: &Path, release_version: &str) -> String {
             "implementations": [{
                 "id": "native",
                 "artifact": null,
-                "built_in_factory": "lenso.agent.text-tools@0.1.0",
+                "built_in_factory": "lenso.agent.text-tools@0.2.0",
                 "entrypoint": "default",
                 "execution_class": "lenso.native-rust@1",
                 "targets": [target],

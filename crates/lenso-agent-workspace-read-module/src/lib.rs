@@ -3,9 +3,8 @@
 use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
-    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse,
-    CatalogResponseToolsItem, ExecuteError, ExecuteRequest, ExecuteResponse,
-    ExecuteResponseContentType, ToolProviderProvider,
+    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
+    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolProviderProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use std::{
@@ -14,11 +13,11 @@ use std::{
 };
 
 /// Stable Tool name for listing one workspace directory.
-pub const LIST_TOOL: &str = "workspace.list";
+pub const LIST_TOOL: &str = "list";
 /// Stable Tool name for bounded literal search.
-pub const SEARCH_TOOL: &str = "workspace.search";
+pub const SEARCH_TOOL: &str = "search";
 /// Stable Tool name for reading one UTF-8 file.
-pub const READ_TEXT_TOOL: &str = "workspace.read_text";
+pub const READ_TOOL: &str = "read";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -343,7 +342,7 @@ impl WorkspaceProvider {
             .map_err(|_| execution_failed("not_utf8", "workspace file is not valid UTF-8"))?;
         Ok(ExecuteResponse {
             content,
-            content_type: ExecuteResponseContentType::Text,
+            content_type: ContentType::Text,
             metadata_json: serde_json::json!({"path": arguments.path}).to_string(),
         })
     }
@@ -361,7 +360,7 @@ impl WorkspaceProvider {
         }
         Ok(ExecuteResponse {
             content,
-            content_type: ExecuteResponseContentType::Text,
+            content_type: ContentType::Text,
             metadata_json: metadata.to_string(),
         })
     }
@@ -377,18 +376,18 @@ impl ToolProviderProvider for WorkspaceProvider {
     {
         Box::pin(ready(Ok(Ok(CatalogResponse {
             tools: vec![
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: LIST_TOOL.to_owned(),
                     description: "List one directory below the selected workspace root. Hidden entries are omitted.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"}},"type":"object"}"#.to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: SEARCH_TOOL.to_owned(),
                     description: "Search UTF-8 workspace files recursively for a case-sensitive literal string. Hidden entries are omitted.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"},"query":{"minLength":1,"type":"string"}},"required":["query"],"type":"object"}"#.to_owned(),
                 },
-                CatalogResponseToolsItem {
-                    name: READ_TEXT_TOOL.to_owned(),
+                ToolDefinition {
+                    name: READ_TOOL.to_owned(),
                     description: "Read one UTF-8 text file below the selected workspace root.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"minLength":1,"type":"string"}},"required":["path"],"type":"object"}"#.to_owned(),
                 },
@@ -404,7 +403,7 @@ impl ToolProviderProvider for WorkspaceProvider {
         let result = match request.name.as_str() {
             LIST_TOOL => self.list(&request.arguments_json),
             SEARCH_TOOL => self.search(&request.arguments_json),
-            READ_TEXT_TOOL => self.read_text(&request.arguments_json),
+            READ_TOOL => self.read_text(&request.arguments_json),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {
@@ -436,7 +435,7 @@ fn map_path_error(error: &std::io::Error) -> ExecuteError {
 
 fn execution_failed(reason_code: &str, message: &str) -> WorkspaceReadFailure {
     WorkspaceReadFailure::Domain(ExecuteError::ExecutionFailed {
-        payload: lenso_capability_agent_tool_provider::ExecuteErrorExecutionFailedPayload {
+        payload: lenso_capability_agent_tool_provider::ExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: message.to_owned(),
             details_json: "{}".to_owned(),

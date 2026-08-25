@@ -27,8 +27,8 @@
   reject startup; invalid Tool arguments, missing resources, and output limits
   remain classified Domain Errors.
 - **First behavior:** Prompt assembly receives only ordered names and
-  descriptions. A matching task calls `skills.read` directly, then optionally
-  lists and reads one referenced resource. `skills.list` is retained for
+  descriptions. A matching task calls `skill` directly, then optionally
+  lists and reads one referenced resource. `skill_list` is retained for
   diagnostics and Prompt catalog overflow.
 
 ## Removal proof
