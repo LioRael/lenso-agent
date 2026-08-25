@@ -257,9 +257,67 @@ pub fn decode_run_response(wire: &str) -> Result<RunResponse, serde_json::Error>
 pub fn encode_run_error(value: &RunError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_run_error(wire: &str) -> Result<RunError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoProcessCatalogResult {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure>;
+}
+impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, CatalogError> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, ProcessCatalogInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(ProcessCatalogInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(ProcessCatalogInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoProcessRunResult {
+    fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure>;
+}
+impl __LensoIntoProcessRunResult for Result<RunResponse, RunError> {
+    fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoProcessRunResult for Result<RunResponse, ProcessRunInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(ProcessRunInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(ProcessRunInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
 pub trait ProcessProvider: fmt::Debug + 'static {
     fn catalog(&self, context: InvocationContext, request: CatalogRequest) -> NativeRequestFuture<ProcessCatalog>;
     fn run(&self, context: InvocationContext, request: RunRequest) -> NativeRequestFuture<ProcessRun>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_process {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportProcess;
+        impl $crate::ProcessProvider for $module {
+        fn catalog(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportProcess::NativeRequestFuture<$crate::ProcessCatalog> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::catalog(&module, context, request).await;
+                $crate::__LensoIntoProcessCatalogResult::__lenso_into_result(result)
+            })
+        }
+        fn run(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::RunRequest) -> __LensoNativeSupportProcess::NativeRequestFuture<$crate::ProcessRun> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::run(&module, context, request).await;
+                $crate::__LensoIntoProcessRunResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]

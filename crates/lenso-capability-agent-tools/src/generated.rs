@@ -277,9 +277,67 @@ pub fn decode_execute_response(wire: &str) -> Result<ExecuteResponse, serde_json
 pub fn encode_execute_error(value: &ExecuteError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_execute_error(wire: &str) -> Result<ExecuteError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoToolsCatalogResult {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure>;
+}
+impl __LensoIntoToolsCatalogResult for Result<CatalogResponse, CatalogError> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoToolsCatalogResult for Result<CatalogResponse, ToolsCatalogInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(ToolsCatalogInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(ToolsCatalogInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoToolsExecuteResult {
+    fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>;
+}
+impl __LensoIntoToolsExecuteResult for Result<ExecuteResponse, ExecuteError> {
+    fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoToolsExecuteResult for Result<ExecuteResponse, ToolsExecuteInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(ToolsExecuteInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(ToolsExecuteInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
 pub trait ToolsProvider: fmt::Debug + 'static {
     fn catalog(&self, context: InvocationContext, request: CatalogRequest) -> NativeRequestFuture<ToolsCatalog>;
     fn execute(&self, context: InvocationContext, request: ExecuteRequest) -> NativeRequestFuture<ToolsExecute>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_tools {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportTools;
+        impl $crate::ToolsProvider for $module {
+        fn catalog(&self, context: __LensoNativeSupportTools::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportTools::NativeRequestFuture<$crate::ToolsCatalog> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::catalog(&module, context, request).await;
+                $crate::__LensoIntoToolsCatalogResult::__lenso_into_result(result)
+            })
+        }
+        fn execute(&self, context: __LensoNativeSupportTools::InvocationContext, request: $crate::ExecuteRequest) -> __LensoNativeSupportTools::NativeRequestFuture<$crate::ToolsExecute> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::execute(&module, context, request).await;
+                $crate::__LensoIntoToolsExecuteResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]
