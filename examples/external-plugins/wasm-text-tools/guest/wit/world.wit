@@ -1,0 +1,6 @@
+package lenso:runtime@1.0.0;
+
+world plugin {
+  export describe: func() -> string;
+  export invoke: func(capability: string, operation: string, request-json: string) -> result<string, string>;
+}

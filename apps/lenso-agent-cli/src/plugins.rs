@@ -1871,8 +1871,8 @@ mod tests {
     };
 
     use crate::plugin_profiles::{
-        NATIVE_AUTH_PROFILE, NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, NATIVE_TOOL_PROFILE,
-        QUICKJS_EXECUTION_CLASS, WASM_EXECUTION_CLASS,
+        NATIVE_AUTH_PROFILE, NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, QUICKJS_EXECUTION_CLASS,
+        TOOL_PROVIDER_PROFILE, WASM_EXECUTION_CLASS,
     };
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
@@ -2516,7 +2516,10 @@ mod tests {
             vec!["extras".to_owned()],
         )
         .unwrap_err();
-        assert!(error.contains("undeclared file"));
+        assert!(
+            error.contains("do not exactly close over declared paths"),
+            "{error}"
+        );
 
         fs::remove_file(bundle.path().join("undeclared.txt")).unwrap();
         install(
@@ -2573,7 +2576,7 @@ mod tests {
                     entrypoint: "default".to_owned(),
                     execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
                     targets: vec![host_target()],
-                    profiles: vec![NATIVE_TOOL_PROFILE.to_owned()],
+                    profiles: vec![TOOL_PROVIDER_PROFILE.to_owned()],
                     support_channel: SupportChannel::Stable,
                     trust: TrustLevel::Trusted,
                 }],

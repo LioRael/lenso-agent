@@ -239,9 +239,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lenso-app-plan"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34dd8903d3180427d61784c9e07b229196cc6cb21618a83673153150398211b7"
+checksum = "923bf0bdbf82beee1f37a6f02ae087630b69cd007e19844d116c552fbf36f0a9"
 dependencies = [
  "serde",
  "serde_json",
@@ -369,7 +369,7 @@ dependencies = [
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=48cf37b6475a0dbbe4ad8492888ed7c6c17abae4#48cf37b6475a0dbbe4ad8492888ed7c6c17abae4"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=c56e4a01d14704eeae26e2121dbd87dbf380b1d3#c56e4a01d14704eeae26e2121dbd87dbf380b1d3"
 dependencies = [
  "serde",
  "serde_json",
@@ -377,9 +377,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-kernel"
-version = "0.1.9"
+version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d66c49832b0b5e825b4f746331a74fa943392db27bbe569365422dd468260fd"
+checksum = "4fde9a2f8cd4851b9b4a8288640e838690b4999e34f97d18e5045304fb52284b"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -393,7 +393,7 @@ source = "git+https://github.com/LioRael/lenso-protocols?rev=9a594895137b45a4298
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=48cf37b6475a0dbbe4ad8492888ed7c6c17abae4#48cf37b6475a0dbbe4ad8492888ed7c6c17abae4"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=c56e4a01d14704eeae26e2121dbd87dbf380b1d3#c56e4a01d14704eeae26e2121dbd87dbf380b1d3"
 dependencies = [
  "futures",
  "hex",

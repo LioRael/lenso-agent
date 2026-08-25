@@ -163,6 +163,11 @@ make both the workspace root and model endpoint visible before execution.
     Turn through the generated `lenso.agent@1` codec. The same product profile
     boundary admits reviewed Wasm Component Agent artifacts; Adapter-level
     tests execute a real Rust Component guest.
+18. A standalone external Wasm Tool source tree, with no Harness path
+    dependency, builds and verifies a Bundle, installs under mandatory review,
+    serves a real Agent Tool call, upgrades, rolls back to the exact retired
+    Generation, serves again, and disappears after removal without Host code
+    registration or recompilation.
 
 ## Deferred
 
@@ -173,6 +178,6 @@ shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding
 replacement, distributed coordination, automatic rollback, Generation deletion,
 Plugin Store collection, retention windows, and overlap replacement are
-separate slices. Guest imports are also separate: a non-native Agent provider
-can currently own the loop, but it cannot yet acquire Model, Prompt, Tools, or
-Session Capability clients from inside the guest.
+separate slices. General third-party Guest imports are also separate: the
+bounded Wasm Tool shape has no Host imports, while permissioned external
+Modules require their own reviewed product profiles and policy.

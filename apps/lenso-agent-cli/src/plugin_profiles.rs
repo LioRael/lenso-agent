@@ -51,7 +51,7 @@ use lenso_plugin_control_plane::{
 };
 
 pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
-pub(crate) const NATIVE_TOOL_PROFILE: &str = "agent-tool-provider-v1";
+pub(crate) const TOOL_PROVIDER_PROFILE: &str = "agent-tool-provider-v1";
 pub(crate) const NATIVE_MODEL_PROFILE: &str = "agent-model-provider-v1";
 pub(crate) const NATIVE_AUTH_PROFILE: &str = "agent-auth-provider-v1";
 pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
@@ -131,7 +131,7 @@ pub(crate) enum ResolvedAttachment {
 pub(crate) struct ExecutablePluginProfile {
     registration_id: String,
     adapter_profile: String,
-    package_id: String,
+    package: PackagePolicy,
     authority: ImplementationAuthority,
     configuration_schema_digest: String,
     configuration: String,
@@ -149,6 +149,12 @@ pub(crate) struct ExecutablePluginProfile {
 enum ImplementationAuthority {
     BuiltIn { factory_identity: String },
     Artifact,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PackagePolicy {
+    Exact(String),
+    AnyNonEmpty,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -475,7 +481,7 @@ impl ExecutablePluginProfile {
     fn validate(&self) -> Result<(), String> {
         if self.registration_id.is_empty()
             || self.adapter_profile.is_empty()
-            || self.package_id.is_empty()
+            || matches!(&self.package, PackagePolicy::Exact(package_id) if package_id.is_empty())
             || self.configuration_schema_digest.is_empty()
             || self.configuration.is_empty()
             || self.provides.is_empty()
@@ -562,7 +568,7 @@ impl ExecutablePluginProfile {
     }
 
     fn matches(&self, contribution: &ModuleContribution, target: &str) -> bool {
-        contribution.package_id == self.package_id
+        self.package.matches(&contribution.package_id)
             && contribution.configuration_schema_digest == self.configuration_schema_digest
             && requirements_match(&contribution.requires, &self.requires)
             && contribution.permission_request_ids.is_empty()
@@ -606,6 +612,15 @@ impl ExecutablePluginProfile {
     }
 }
 
+impl PackagePolicy {
+    fn matches(&self, package_id: &str) -> bool {
+        match self {
+            Self::Exact(expected) => package_id == expected,
+            Self::AnyNonEmpty => !package_id.is_empty(),
+        }
+    }
+}
+
 fn requirements_match(
     actual: &[CapabilityRequirement],
     expected: &[CapabilityRequirement],
@@ -636,14 +651,15 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
             WASM_EXECUTION_CLASS,
             "plugin",
             TrustLevel::Isolated,
-        ))
+        ))?
+        .register(third_party_wasm_tool_profile())
 }
 
 fn text_tools_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
         registration_id: "native-text-tools-v1".to_owned(),
-        adapter_profile: NATIVE_TOOL_PROFILE.to_owned(),
-        package_id: TEXT_TOOLS_PACKAGE_ID.to_owned(),
+        adapter_profile: TOOL_PROVIDER_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(TEXT_TOOLS_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
             factory_identity: TEXT_TOOLS_FACTORY_IDENTITY.to_owned(),
         },
@@ -673,11 +689,43 @@ fn text_tools_profile() -> ExecutablePluginProfile {
     }
 }
 
+fn third_party_wasm_tool_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "third-party-wasm-tool-provider-v1".to_owned(),
+        adapter_profile: TOOL_PROVIDER_PROFILE.to_owned(),
+        package: PackagePolicy::AnyNonEmpty,
+        authority: ImplementationAuthority::Artifact,
+        configuration_schema_digest: sha256_digest(EMPTY_CONFIGURATION_SCHEMA),
+        configuration: "{}".to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+            request_operations: vec![
+                TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: Vec::new(),
+        entrypoint: "plugin".to_owned(),
+        execution_class: WASM_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Isolated,
+        attachment: AttachmentProfile::AppendMany {
+            consumer_instance: "tools".to_owned(),
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+        },
+        inherit_displaced_requirements: false,
+    }
+}
+
 fn fixture_model_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
         registration_id: "native-fixture-model-v1".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
-        package_id: FIXTURE_MODEL_PACKAGE_ID.to_owned(),
+        package: PackagePolicy::Exact(FIXTURE_MODEL_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
             factory_identity: FIXTURE_MODEL_FACTORY_IDENTITY.to_owned(),
         },
@@ -714,7 +762,7 @@ fn codex_model_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
         registration_id: "native-codex-direct-model-v1".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
-        package_id: CODEX_MODEL_PACKAGE_ID.to_owned(),
+        package: PackagePolicy::Exact(CODEX_MODEL_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
             factory_identity: CODEX_MODEL_FACTORY_IDENTITY.to_owned(),
         },
@@ -760,7 +808,7 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
         registration_id: "native-codex-auth-v1".to_owned(),
         adapter_profile: NATIVE_AUTH_PROFILE.to_owned(),
-        package_id: CODEX_AUTH_PACKAGE_ID.to_owned(),
+        package: PackagePolicy::Exact(CODEX_AUTH_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
             factory_identity: CODEX_AUTH_FACTORY_IDENTITY.to_owned(),
         },
@@ -792,7 +840,7 @@ fn guest_agent_profile(
     ExecutablePluginProfile {
         registration_id: registration_id.to_owned(),
         adapter_profile: AGENT_PROVIDER_PROFILE.to_owned(),
-        package_id: GUEST_AGENT_PACKAGE_ID.to_owned(),
+        package: PackagePolicy::Exact(GUEST_AGENT_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::Artifact,
         configuration_schema_digest: sha256_digest(EMPTY_CONFIGURATION_SCHEMA),
         configuration: "{}".to_owned(),
@@ -1006,7 +1054,7 @@ mod tests {
     fn catalog_registers_multiple_distinct_profiles_deterministically() {
         let mut second = text_tools_profile();
         second.registration_id = "native-more-text-tools-v1".to_owned();
-        second.package_id = "example.more-text-tools".to_owned();
+        second.package = PackagePolicy::Exact("example.more-text-tools".to_owned());
         second.authority = ImplementationAuthority::BuiltIn {
             factory_identity: "example.more-text-tools@1.0.0".to_owned(),
         };
@@ -1028,7 +1076,7 @@ mod tests {
             [
                 NATIVE_AUTH_PROFILE,
                 NATIVE_MODEL_PROFILE,
-                NATIVE_TOOL_PROFILE
+                TOOL_PROVIDER_PROFILE
             ]
         );
         assert_eq!(
@@ -1073,10 +1121,49 @@ mod tests {
         assert!(catalog.register(duplicate_factory).is_err());
     }
 
+    #[test]
+    fn isolated_wasm_tool_profile_accepts_an_external_package_without_host_registration() {
+        let profile = third_party_wasm_tool_profile();
+        let mut contribution = contribution_for(&profile, "test-target");
+        contribution.package_id = "dev.example.reverse-tools".to_owned();
+
+        PluginProfileCatalog::default()
+            .register(profile)
+            .unwrap()
+            .validate_contribution(&contribution, "test-target")
+            .unwrap();
+    }
+
+    #[test]
+    fn isolated_wasm_tool_profile_rejects_authority_expansion() {
+        let profile = third_party_wasm_tool_profile();
+        let mut contribution = contribution_for(&profile, "test-target");
+        contribution.package_id = "dev.example.unsafe-tools".to_owned();
+        contribution.requires.push(CapabilityRequirement {
+            capability_id: "example.host@1".to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            cardinality: RequirementCardinality::One,
+        });
+
+        let error = PluginProfileCatalog::default()
+            .register(profile)
+            .unwrap()
+            .validate_contribution(&contribution, "test-target")
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not match a registered Plugin profile")
+        );
+    }
+
     fn contribution_for(profile: &ExecutablePluginProfile, target: &str) -> ModuleContribution {
         ModuleContribution {
             id: "more-text-tools".to_owned(),
-            package_id: profile.package_id.clone(),
+            package_id: match &profile.package {
+                PackagePolicy::Exact(package_id) => package_id.clone(),
+                PackagePolicy::AnyNonEmpty => "example.third-party".to_owned(),
+            },
             configuration_schema_digest: profile.configuration_schema_digest.clone(),
             provides: profile
                 .provides

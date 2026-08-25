@@ -1,0 +1,15 @@
+[package]
+name = "external-wasm-text-tools"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wit-bindgen = "0.60"
+
+[workspace]

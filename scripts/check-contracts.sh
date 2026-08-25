@@ -12,7 +12,7 @@ contracts=(
   "lenso-capability-agent-prompt-provider:rust"
   "lenso-capability-agent-process:rust"
   "lenso-capability-agent-tools:rust-runtime"
-  "lenso-capability-agent-tool-provider:rust"
+  "lenso-capability-agent-tool-provider:rust-runtime"
   "lenso-capability-agent-session:rust-runtime"
 )
 

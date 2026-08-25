@@ -72,7 +72,7 @@ while the remaining graph still resolves.
 The host currently uses released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.9`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`48cf37b6475a0dbbe4ad8492888ed7c6c17abae4`, which closes the generic dynamic
+`c56e4a01d14704eeae26e2121dbd87dbf380b1d3`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
@@ -98,9 +98,12 @@ Capability Descriptor and Operations, operation kinds, execution class, target,
 support/trust policy, canonical configuration, and one bounded attachment rule.
 The Catalog admits the linked `lenso.agent.text-tools@0.1.0` factory as a
 stateless, permission-free append-to-`many` Tool Provider. It also admits one
-restricted `lenso.agent.model.fixture@0.1.0` profile that replaces the fixture
-base Plan's exact `model` provider for the `agent` consumer. The experimental
-Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
+package-independent, isolated Wasm Tool Provider shape with the same exact
+Capability and attachment, empty configuration, no Host imports, permissions,
+state, Data mounts, or binding templates, and mandatory review evidence. It
+admits one restricted `lenso.agent.model.fixture@0.1.0` profile that replaces
+the fixture base Plan's exact `model` provider for the `agent` consumer. The
+experimental Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Experimental Artifact
 profiles additionally allow a reviewed QuickJS or Wasm Component Module to
 replace the exact native Agent Loop through the generated `AgentJsonCodec`.
@@ -108,8 +111,8 @@ Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
 automatic rollback, distributed coordination, Generation deletion, Plugin
-Store garbage collection, native-dylib product acceptance, and guest access to
-required Host Capabilities remain deferred.
+Store garbage collection, native-dylib product acceptance, and third-party Host
+Capability permissions remain deferred.
 
 ## Install, upgrade, roll back, and remove a Plugin release
 
@@ -132,6 +135,19 @@ cargo run -p lenso-agent-cli -- plugins status
 
 cargo run -p lenso-agent-cli -- plugins install \
   --bundle examples/plugins/text-tools
+
+# Build and install the standalone third-party Wasm Tool example.
+cargo build \
+  --manifest-path examples/external-plugins/wasm-text-tools/guest/Cargo.toml \
+  --release --target wasm32-unknown-unknown
+lenso plugin build \
+  --manifest examples/external-plugins/wasm-text-tools/lenso-plugin.template.json \
+  --artifact tool-wasm=examples/external-plugins/wasm-text-tools/guest/target/wasm32-unknown-unknown/release/external_wasm_text_tools.wasm \
+  --output dist/external-wasm-text-tools
+lenso plugin verify --bundle dist/external-wasm-text-tools
+cargo run -p lenso-agent-cli -- plugins install \
+  --bundle dist/external-wasm-text-tools \
+  --evidence local-review
 
 # The Host reads the active Manifest CAS under its authority fence.
 cargo run -p lenso-agent-cli -- plugins upgrade \
@@ -222,8 +238,9 @@ history and inspection commands validate every selected canonical record and
 its closure; Session provenance reports each Turn's Spec as available, missing,
 or invalid without rendering the stored input. The local filesystem fence is
 not a distributed lease or network-filesystem portability claim. Adding another
-Catalog entry is a Host code and review change, not runtime discovery or general
-permission to replace a `one` binding.
+executable shape remains a Host code and review change. The one
+package-independent Wasm Tool shape is not runtime discovery or general
+permission to import Host Capabilities or replace a `one` binding.
 
 ## Run the deterministic slice
 
