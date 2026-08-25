@@ -40,7 +40,11 @@ Its configuration type derives the package-owned Schema, `Port<Client>` and
 `ManyPort<Client>` fields derive exact requirements, annotated Provider
 implementations derive endpoints, and `#[module(lifecycle)]` exposes only the
 prepare, activate, and deactivate hooks that the Module actually owns. The
-former Harness-specific Module authoring and proc-macro crates are removed.
+former Harness-specific Module authoring and proc-macro crates are removed. The focused
+`lenso-agent-tool-sdk` is not a second Module authoring authority: it wraps the public
+`lenso::provides` facade and derives only Agent Tool catalog, Schema, argument decoding, and
+dispatch boilerplate. Capability contracts, Module Descriptors, factories, endpoints, and Host
+registration remain source-first and package-owned.
 The CLI and TUI Shell Modules remain deliberate compatibility exceptions: they
 are consumer-only identities used to anchor terminal-surface bindings, while the
 current source-first facade finalizes Module metadata from a Provider

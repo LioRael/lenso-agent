@@ -1599,11 +1599,35 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-tool-sdk",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-tool-sdk"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-agent-tool-sdk-macros",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-tool-sdk-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
