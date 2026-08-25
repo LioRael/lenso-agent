@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use lenso_agent_auth_openai_codex_module::{
     FACTORY_IDENTITY as CODEX_AUTH_FACTORY_IDENTITY, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
 };
+use lenso_agent_http_fetch_module::PACKAGE_ID as HTTP_FETCH_PACKAGE_ID;
 use lenso_agent_loop_module::PACKAGE_ID as AGENT_LOOP_PACKAGE_ID;
 use lenso_agent_model_fixture_module::{
     FACTORY_IDENTITY as FIXTURE_MODEL_FACTORY_IDENTITY, MODEL_ID as FIXTURE_MODEL_ID,
@@ -39,6 +40,9 @@ use lenso_capability_agent::{
 use lenso_capability_agent_auth_openai_codex::{
     ACCESS_OPERATION as CODEX_AUTH_ACCESS_OPERATION, CAPABILITY_ID as CODEX_AUTH_CAPABILITY_ID,
     DESCRIPTOR_VERSION as CODEX_AUTH_DESCRIPTOR_VERSION,
+};
+use lenso_capability_agent_http_fetch::{
+    CAPABILITY_ID as HTTP_FETCH_CAPABILITY_ID, DESCRIPTOR_VERSION as HTTP_FETCH_DESCRIPTOR_VERSION,
 };
 use lenso_capability_agent_model::{
     CAPABILITY_ID as MODEL_CAPABILITY_ID, COMPLETE_OPERATION as MODEL_COMPLETE_OPERATION,
@@ -77,9 +81,9 @@ use lenso_capability_secrets::{
     RESOLVE_OPERATION as SECRETS_RESOLVE_OPERATION,
 };
 use lenso_plugin_control_plane::{
-    BindingTemplate, CapabilityDeclaration, CapabilityRequirement, ControlPlaneError,
-    ModuleContribution, PluginManifest, RequirementCardinality, SupportChannel, TrustLevel,
-    sha256_digest,
+    ApprovedGrant, BindingTemplate, CapabilityDeclaration, CapabilityRequirement,
+    ControlPlaneError, EnforcementKind, ModuleContribution, PermissionRequest, PluginManifest,
+    RequirementCardinality, SupportChannel, TrustLevel, sha256_digest,
 };
 
 pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
@@ -126,6 +130,7 @@ const AGENT_DESCRIPTOR: &[u8] =
 const GUEST_AGENT_PACKAGE_ID: &str = "lenso.agent.guest";
 const WORKSPACE_READ_PACKAGE_ID: &str = "lenso.agent.workspace-import-read";
 const WORKSPACE_READ_INSTANCE: &str = "workspace-import-read";
+const HTTP_FETCH_INSTANCE: &str = "http-fetch";
 const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"model":"fixture/readme-summary-v1","max_steps":8,"max_tool_calls":4,"max_output_tokens":1024,"max_history_events":200}"#;
 const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#;
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
@@ -218,6 +223,7 @@ pub(crate) struct ExecutablePluginProfile {
     support_channel: SupportChannel,
     trust: TrustLevel,
     attachment: AttachmentProfile,
+    permission_requests: Vec<PermissionProfile>,
     fixed_host_imports: Vec<FixedHostImport>,
     inherit_displaced_requirements: bool,
 }
@@ -228,6 +234,22 @@ struct FixedHostImport {
     descriptor_version: String,
     provider_instance: String,
     allowed_provider_packages: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PermissionProfile {
+    request_id: String,
+    resource_kind: String,
+    required: bool,
+    scope_policy: PermissionScopePolicy,
+    enforcement_kind: EnforcementKind,
+    enforcer_identity: String,
+    provider_instance: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PermissionScopePolicy {
+    HttpOrigins,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -337,8 +359,28 @@ impl PluginProfileCatalog {
                 .map_err(|detail| ControlPlaneError::AdmissionRejected { detail })?;
         }
         let mut replaced_instances = BTreeSet::new();
+        let mut expected_permission_ids = BTreeSet::new();
         for contribution in &manifest.module_contributions {
             let profile = self.matching_profile(contribution, target)?;
+            for permission in &profile.permission_requests {
+                if !expected_permission_ids.insert(permission.request_id.as_str()) {
+                    return rejected(format!(
+                        "permission request `{}` is assigned to more than one contribution",
+                        permission.request_id
+                    ));
+                }
+                let request = manifest
+                    .permission_requests
+                    .iter()
+                    .find(|request| request.id == permission.request_id)
+                    .ok_or_else(|| ControlPlaneError::AdmissionRejected {
+                        detail: format!(
+                            "Plugin contribution `{}` is missing permission request `{}`",
+                            contribution.id, permission.request_id
+                        ),
+                    })?;
+                permission.validate_request(request)?;
+            }
             match &profile.attachment {
                 AttachmentProfile::ReplaceOne {
                     displaced_provider_instance,
@@ -385,6 +427,107 @@ impl PluginProfileCatalog {
                     ));
                 }
             }
+        }
+        let actual_permission_ids = manifest
+            .permission_requests
+            .iter()
+            .map(|request| request.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if actual_permission_ids != expected_permission_ids
+            || actual_permission_ids.len() != manifest.permission_requests.len()
+        {
+            return rejected(
+                "Plugin permission requests must exactly match registered contribution profiles",
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn approved_grants_for(
+        &self,
+        manifest: &PluginManifest,
+        selected_contribution_ids: &[String],
+        target: &str,
+    ) -> Result<Vec<ApprovedGrant>, ControlPlaneError> {
+        let mut grants = Vec::new();
+        for contribution_id in selected_contribution_ids {
+            let contribution = manifest
+                .module_contributions
+                .iter()
+                .find(|contribution| &contribution.id == contribution_id)
+                .ok_or_else(|| ControlPlaneError::AdmissionRejected {
+                    detail: format!("selected contribution `{contribution_id}` is missing"),
+                })?;
+            let profile = self.matching_profile(contribution, target)?;
+            for permission in &profile.permission_requests {
+                let request = manifest
+                    .permission_requests
+                    .iter()
+                    .find(|request| request.id == permission.request_id)
+                    .ok_or_else(|| ControlPlaneError::AdmissionRejected {
+                        detail: format!(
+                            "permission request `{}` is missing",
+                            permission.request_id
+                        ),
+                    })?;
+                permission.validate_request(request)?;
+                grants.push(ApprovedGrant {
+                    instance_key: plugin_instance_key(&manifest.plugin_id, contribution_id),
+                    permission_request_id: request.id.clone(),
+                    scope: request.scope.clone(),
+                    enforcement_kind: permission.enforcement_kind,
+                    enforcer_identity: permission.enforcer_identity.clone(),
+                });
+            }
+        }
+        grants.sort_by(|left, right| {
+            (&left.instance_key, &left.permission_request_id)
+                .cmp(&(&right.instance_key, &right.permission_request_id))
+        });
+        Ok(grants)
+    }
+
+    pub(crate) fn validate_permission_enforcement(
+        &self,
+        contribution: &ModuleContribution,
+        target: &str,
+        consumer_instance: &str,
+        grants: &[ApprovedGrant],
+        base_plan: &ResolvedAppPlan,
+    ) -> Result<(), String> {
+        let profile = self
+            .matching_profile(contribution, target)
+            .map_err(|error| format!("Plugin profile selection failed: {error}"))?;
+        for permission in &profile.permission_requests {
+            let matching = grants
+                .iter()
+                .filter(|grant| {
+                    grant.instance_key == consumer_instance
+                        && grant.permission_request_id == permission.request_id
+                })
+                .collect::<Vec<_>>();
+            let [grant] = matching.as_slice() else {
+                return Err(format!(
+                    "Plugin Instance `{consumer_instance}` does not have exactly one effective `{}` grant",
+                    permission.request_id
+                ));
+            };
+            if grant.enforcement_kind != permission.enforcement_kind
+                || grant.enforcer_identity != permission.enforcer_identity
+            {
+                return Err(format!(
+                    "Plugin Instance `{consumer_instance}` permission grant has the wrong enforcer"
+                ));
+            }
+            let provider = base_plan
+                .module_instance(&permission.provider_instance)
+                .ok_or_else(|| {
+                    format!(
+                        "permission enforcer Instance `{}` is absent from the App",
+                        permission.provider_instance
+                    )
+                })?;
+            permission.validate_provider_configuration(provider.configuration(), &grant.scope)?;
         }
         Ok(())
     }
@@ -651,6 +794,10 @@ impl ExecutablePluginProfile {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one profile invariant audit keeps all executable authority checks together"
+    )]
     fn validate(&self) -> Result<(), String> {
         if self.registration_id.is_empty()
             || self.adapter_profile.is_empty()
@@ -673,6 +820,10 @@ impl ExecutablePluginProfile {
         self.validate_configuration()
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one profile invariant audit keeps all attachment authority checks together"
+    )]
     fn validate_attachment(&self) -> Result<(), String> {
         if let Some((consumer, attachment_capability_id, attachment_descriptor_version)) =
             self.attachment.capability_edge()
@@ -749,6 +900,23 @@ impl ExecutablePluginProfile {
             ));
         }
         self.validate_host_import_policy()?;
+        let mut permission_ids = BTreeSet::new();
+        for permission in &self.permission_requests {
+            if permission.request_id.is_empty()
+                || permission.resource_kind.is_empty()
+                || permission.enforcer_identity.is_empty()
+                || permission.provider_instance.is_empty()
+                || !permission_ids.insert(permission.request_id.as_str())
+                || !self.fixed_host_imports.iter().any(|host_import| {
+                    host_import.provider_instance == permission.provider_instance
+                })
+            {
+                return Err(format!(
+                    "Plugin profile `{}` permission policy is invalid",
+                    self.registration_id
+                ));
+            }
+        }
         if let AttachmentProfile::ReplaceOne {
             base_configuration_replacements,
             ..
@@ -820,7 +988,10 @@ impl ExecutablePluginProfile {
         self.package.matches(&contribution.package_id)
             && contribution.configuration_schema_digest == self.configuration_schema_digest
             && requirements_match(&contribution.requires, &self.requires)
-            && contribution.permission_request_ids.is_empty()
+            && permission_ids_match(
+                &contribution.permission_request_ids,
+                &self.permission_requests,
+            )
             && contribution.state.is_none()
             && contribution.provides.len() == self.provides.len()
             && contribution
@@ -879,6 +1050,117 @@ impl PackagePolicy {
     }
 }
 
+impl PermissionProfile {
+    fn validate_request(&self, request: &PermissionRequest) -> Result<(), ControlPlaneError> {
+        if request.id != self.request_id
+            || request.resource_kind != self.resource_kind
+            || request.required != self.required
+            || request.explanation_key.trim().is_empty()
+        {
+            return rejected(format!(
+                "permission request `{}` does not match its registered Host policy",
+                request.id
+            ));
+        }
+        match self.scope_policy {
+            PermissionScopePolicy::HttpOrigins => {
+                http_origins(&request.scope).map_err(|detail| {
+                    ControlPlaneError::AdmissionRejected {
+                        detail: format!("permission request `{}` {detail}", request.id),
+                    }
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_provider_configuration(
+        &self,
+        configuration: &str,
+        approved_scope: &serde_json::Value,
+    ) -> Result<(), String> {
+        match self.scope_policy {
+            PermissionScopePolicy::HttpOrigins => {
+                let requested = http_origins(approved_scope)?;
+                let configuration = serde_json::from_str::<serde_json::Value>(configuration)
+                    .map_err(|error| format!("permission enforcer config is invalid: {error}"))?;
+                let allowed = configuration
+                    .get("allowed_origins")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| {
+                        "permission enforcer does not declare allowed_origins".to_owned()
+                    })?
+                    .iter()
+                    .map(|value| {
+                        value
+                            .as_str()
+                            .ok_or_else(|| "permission enforcer origin is not a string".to_owned())
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()?;
+                if requested
+                    .iter()
+                    .any(|origin| !allowed.contains(origin.as_str()))
+                {
+                    return Err(
+                        "approved network scope exceeds the App HTTP enforcer allowlist".to_owned(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn http_origins(scope: &serde_json::Value) -> Result<Vec<String>, String> {
+    let object = scope
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .ok_or_else(|| "scope must contain only `origins`".to_owned())?;
+    let origins = object
+        .get("origins")
+        .and_then(serde_json::Value::as_array)
+        .filter(|origins| !origins.is_empty() && origins.len() <= 8)
+        .ok_or_else(|| "scope must contain between 1 and 8 origins".to_owned())?;
+    let mut normalized = Vec::with_capacity(origins.len());
+    for origin in origins {
+        let origin = origin
+            .as_str()
+            .ok_or_else(|| "origin must be a string".to_owned())?;
+        let url = reqwest::Url::parse(origin)
+            .map_err(|_| format!("origin `{origin}` is not a valid URL origin"))?;
+        if !matches!(url.scheme(), "http" | "https")
+            || url.host_str().is_none()
+            || url.path() != "/"
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.origin().ascii_serialization() != origin
+        {
+            return Err(format!(
+                "origin `{origin}` is not normalized HTTP authority"
+            ));
+        }
+        normalized.push(origin.to_owned());
+    }
+    if normalized.windows(2).any(|pair| pair[0] >= pair[1]) {
+        return Err("origins must be sorted and unique".to_owned());
+    }
+    Ok(normalized)
+}
+
+fn permission_ids_match(actual: &[String], expected: &[PermissionProfile]) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| actual == &expected.request_id)
+}
+
+pub(crate) fn plugin_instance_key(plugin_id: &str, contribution_id: &str) -> String {
+    format!("plugin:{}:{plugin_id}:{contribution_id}", plugin_id.len())
+}
+
 fn requirements_match(
     actual: &[CapabilityRequirement],
     expected: &[CapabilityRequirement],
@@ -917,7 +1199,8 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
             TrustLevel::Isolated,
         ))?
         .register(third_party_wasm_tool_profile())?
-        .register(third_party_wasm_workspace_read_tool_profile())
+        .register(third_party_wasm_workspace_read_tool_profile())?
+        .register(third_party_wasm_http_fetch_tool_profile())
 }
 
 fn skills_profile() -> ExecutablePluginProfile {
@@ -968,6 +1251,7 @@ fn skills_profile() -> ExecutablePluginProfile {
                 },
             ],
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -999,6 +1283,7 @@ fn process_native_profile() -> ExecutablePluginProfile {
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
         attachment: AttachmentProfile::IntraPluginOnly,
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1038,6 +1323,7 @@ fn process_tools_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1085,6 +1371,7 @@ fn openai_model_profile() -> ExecutablePluginProfile {
                 replacement_configuration: OPENAI_AGENT_CONFIGURATION.to_owned(),
             }],
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1113,6 +1400,7 @@ fn secrets_profile() -> ExecutablePluginProfile {
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
         attachment: AttachmentProfile::IntraPluginOnly,
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1148,6 +1436,7 @@ fn workspace_edit_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1183,6 +1472,7 @@ fn text_tools_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1216,6 +1506,7 @@ fn third_party_wasm_tool_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1234,6 +1525,32 @@ fn third_party_wasm_workspace_read_tool_profile() -> ExecutablePluginProfile {
         descriptor_version: WORKSPACE_READ_DESCRIPTOR_VERSION.to_owned(),
         provider_instance: WORKSPACE_READ_INSTANCE.to_owned(),
         allowed_provider_packages: BTreeSet::from([WORKSPACE_READ_PACKAGE_ID.to_owned()]),
+    }];
+    profile
+}
+
+fn third_party_wasm_http_fetch_tool_profile() -> ExecutablePluginProfile {
+    let mut profile = third_party_wasm_tool_profile();
+    "third-party-wasm-http-fetch-tool-provider-v1".clone_into(&mut profile.registration_id);
+    profile.requires = vec![CapabilityRequirement {
+        capability_id: HTTP_FETCH_CAPABILITY_ID.to_owned(),
+        descriptor_version: HTTP_FETCH_DESCRIPTOR_VERSION.to_owned(),
+        cardinality: RequirementCardinality::One,
+    }];
+    profile.permission_requests = vec![PermissionProfile {
+        request_id: "network".to_owned(),
+        resource_kind: "network".to_owned(),
+        required: true,
+        scope_policy: PermissionScopePolicy::HttpOrigins,
+        enforcement_kind: EnforcementKind::Capability,
+        enforcer_identity: HTTP_FETCH_PACKAGE_ID.to_owned(),
+        provider_instance: HTTP_FETCH_INSTANCE.to_owned(),
+    }];
+    profile.fixed_host_imports = vec![FixedHostImport {
+        capability_id: HTTP_FETCH_CAPABILITY_ID.to_owned(),
+        descriptor_version: HTTP_FETCH_DESCRIPTOR_VERSION.to_owned(),
+        provider_instance: HTTP_FETCH_INSTANCE.to_owned(),
+        allowed_provider_packages: BTreeSet::from([HTTP_FETCH_PACKAGE_ID.to_owned()]),
     }];
     profile
 }
@@ -1271,6 +1588,7 @@ fn fixture_model_profile() -> ExecutablePluginProfile {
             allowed_displaced_packages: BTreeSet::from([FIXTURE_MODEL_PACKAGE_ID.to_owned()]),
             base_configuration_replacements: Vec::new(),
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1318,6 +1636,7 @@ fn codex_model_profile() -> ExecutablePluginProfile {
                 replacement_configuration: CODEX_AGENT_CONFIGURATION.to_owned(),
             }],
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1346,6 +1665,7 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
         attachment: AttachmentProfile::IntraPluginOnly,
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
@@ -1408,6 +1728,7 @@ fn guest_agent_profile(
             allowed_displaced_packages: BTreeSet::from([AGENT_LOOP_PACKAGE_ID.to_owned()]),
             base_configuration_replacements: Vec::new(),
         },
+        permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: true,
     }
@@ -1580,7 +1901,9 @@ fn rejected<T>(detail: impl Into<String>) -> Result<T, ControlPlaneError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lenso_plugin_control_plane::{CapabilityDeclaration, ImplementationVariant};
+    use lenso_plugin_control_plane::{
+        CapabilityDeclaration, ImplementationVariant, PermissionRequest,
+    };
 
     #[test]
     fn catalog_registers_multiple_distinct_profiles_deterministically() {
@@ -1713,6 +2036,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn network_wasm_profile_closes_one_capability_enforced_grant() {
+        let profile = third_party_wasm_http_fetch_tool_profile();
+        let contribution = contribution_for(&profile, "test-target");
+        let mut manifest = PluginManifest {
+            schema_version: 1,
+            plugin_id: "dev.example.network-tool".to_owned(),
+            release_version: "1.0.0".to_owned(),
+            artifacts: Vec::new(),
+            module_contributions: vec![contribution],
+            data_contributions: Vec::new(),
+            permission_requests: vec![PermissionRequest {
+                id: "network".to_owned(),
+                resource_kind: "network".to_owned(),
+                required: true,
+                scope: serde_json::json!({"origins": ["https://api.example.com"]}),
+                explanation_key: "network.api-example".to_owned(),
+            }],
+            features: Vec::new(),
+            binding_templates: Vec::new(),
+            product_metadata: Vec::new(),
+        };
+        let catalog = PluginProfileCatalog::default().register(profile).unwrap();
+        catalog
+            .validate_manifest_topology(&manifest, "test-target")
+            .unwrap();
+        let grants = catalog
+            .approved_grants_for(&manifest, &["more-text-tools".to_owned()], "test-target")
+            .unwrap();
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].enforcement_kind, EnforcementKind::Capability);
+        assert_eq!(
+            grants[0].scope,
+            serde_json::json!({"origins": ["https://api.example.com"]})
+        );
+
+        manifest.permission_requests[0].scope =
+            serde_json::json!({"origins": ["https://api.example.com/path"]});
+        assert!(
+            catalog
+                .validate_manifest_topology(&manifest, "test-target")
+                .unwrap_err()
+                .to_string()
+                .contains("not normalized HTTP authority")
+        );
+    }
+
     fn contribution_for(profile: &ExecutablePluginProfile, target: &str) -> ModuleContribution {
         ModuleContribution {
             id: "more-text-tools".to_owned(),
@@ -1745,7 +2115,11 @@ mod tests {
                 support_channel: profile.support_channel,
                 trust: profile.trust,
             }],
-            permission_request_ids: Vec::new(),
+            permission_request_ids: profile
+                .permission_requests
+                .iter()
+                .map(|permission| permission.request_id.clone())
+                .collect(),
             state: None,
         }
     }

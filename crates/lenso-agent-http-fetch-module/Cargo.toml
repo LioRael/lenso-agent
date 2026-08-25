@@ -1,0 +1,28 @@
+[package]
+name = "lenso-agent-http-fetch-module"
+version = "0.1.0"
+description = "Host-selected HTTP GET provider for reviewed Lenso Agent Plugins."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+package-id = "lenso.agent.http-fetch"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-http-fetch = { path = "../lenso-capability-agent-http-fetch" }
+lenso-kernel.workspace = true
+lenso-native-adapter.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

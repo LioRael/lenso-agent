@@ -4,6 +4,7 @@
   "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
+    "lenso.agent.http-fetch": "lenso-agent-http-fetch-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
     "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
     "lenso.agent.prompt": "lenso-agent-prompt-module",
@@ -46,6 +47,15 @@
               "content": "Prefix direct answers with `Plugin: `."
             }
           ]
+        }
+      },
+      {
+        "key": "http-fetch",
+        "package": "lenso.agent.http-fetch",
+        "configuration": {
+          "allowed_origins": [],
+          "max_response_bytes": 262144,
+          "timeout_ms": 10000
         }
       },
       {
