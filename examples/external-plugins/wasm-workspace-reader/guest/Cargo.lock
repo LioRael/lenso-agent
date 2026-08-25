@@ -261,7 +261,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-agent-workspace-read"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-agent-harness.git?rev=2f1b9f19b604a52316b8039baadda724b519ec16#2f1b9f19b604a52316b8039baadda724b519ec16"
+source = "git+https://github.com/LioRael/lenso-agent-harness.git?rev=752903cd78a6f76a616a15d8fcf183ae54c4547e#752903cd78a6f76a616a15d8fcf183ae54c4547e"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
@@ -277,8 +277,8 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-authoring"
-version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+version = "0.1.1"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "lenso-contract-authoring-macros",
  "schemars",
@@ -288,7 +288,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -297,8 +297,8 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-codegen"
-version = "0.6.2"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+version = "0.6.3"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=8a9b2482278224973417aaac1fd925ba1cfa5370#8a9b2482278224973417aaac1fd925ba1cfa5370"
 dependencies = [
  "lenso-contract-authoring",
  "semver",
@@ -307,9 +307,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-runtime"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f56bfb2aaaa51297547762092ff859e774908a05737c4d7d44a2064e8a29c83"
+checksum = "bfe0fcb14bdeab759dbba8263142b387a70690597974dc1ae219d8cc95b06571"
 dependencies = [
  "base64",
  "bytes",
@@ -320,7 +320,7 @@ dependencies = [
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=ffb07bc8dc7103b58c864b59225ca0f4609b6fdf#ffb07bc8dc7103b58c864b59225ca0f4609b6fdf"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=61502d0b575dca5102fbf7625dbab45a8389180d#61502d0b575dca5102fbf7625dbab45a8389180d"
 dependencies = [
  "serde",
  "serde_json",
@@ -344,7 +344,7 @@ source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=ffb07bc8dc7103b58c864b59225ca0f4609b6fdf#ffb07bc8dc7103b58c864b59225ca0f4609b6fdf"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=61502d0b575dca5102fbf7625dbab45a8389180d#61502d0b575dca5102fbf7625dbab45a8389180d"
 dependencies = [
  "futures",
  "hex",

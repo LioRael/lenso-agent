@@ -72,11 +72,13 @@ adds only catalog-reviewed Plugin contributions from Desired State before
 staging a new Generation. Test-only provider fixtures live beside integration
 tests and have no product composition authority.
 
-The current host baseline selects released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
-`lenso-plugin-control-plane` to `lenso-runtime-rust` revision
-`c56e4a01d14704eeae26e2121dbd87dbf380b1d3` and its standalone Plugin Bundle
-builder from the same revision. That Runtime includes the durable
+The current host baseline selects released `lenso-app-plan 0.1.5` and
+`lenso-kernel 0.1.11`. Every Runtime package is pinned to
+`lenso-runtime-rust` revision
+`61502d0b575dca5102fbf7625dbab45a8389180d`; the external Secrets packages are
+pinned to `lenso-secrets-module` revision
+`7c7126d7584195fd33da5c82491321a9043a14c1`, which resolves the same native
+Adapter revision. That Runtime includes injected `ManagedTasks`, the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native
 dylib Adapter, and the source-derived native Module factory catalog. The catalog
