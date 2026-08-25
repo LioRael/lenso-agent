@@ -109,6 +109,9 @@ impl FixtureModel {
         if current_user == "Use the text Plugin to uppercase Lenso plugin." {
             return text_plugin_response(request, &tool_results);
         }
+        if current_user == "Use the workspace Plugin to read README.md." {
+            return workspace_plugin_response(request, &tool_results);
+        }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
         }
@@ -144,6 +147,49 @@ fn text_plugin_response(
             r#"{"text":"Lenso plugin"}"#,
         )),
         [result] if result.content == "LENSO PLUGIN" => Ok(text_plugin_result()),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn workspace_plugin_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request
+        .tools
+        .iter()
+        .any(|tool| tool.name == "plugin_workspace_read_text")
+    {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-plugin-workspace-read",
+            "plugin_workspace_read_text",
+            r#"{"path":"README.md"}"#,
+        )),
+        [result] if result.content == "# Plugin Fixture\n" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Workspace Plugin result: # Plugin Fixture",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "28",
+                "10",
+            ),
+        ]),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }

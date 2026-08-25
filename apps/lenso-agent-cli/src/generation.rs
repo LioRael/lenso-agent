@@ -26,6 +26,7 @@ use lenso_agent_tools_module as _;
 use lenso_agent_tui_module as _;
 use lenso_agent_tui_static_module as _;
 use lenso_agent_workspace_edit_module as _;
+use lenso_agent_workspace_import_read_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::{Agent, AgentJsonCodec};
@@ -38,6 +39,7 @@ use lenso_capability_agent_tui_contribution::{
     SNAPSHOT_OPERATION, SnapshotRequest, SnapshotResponsePanelsItem, TuiContribution,
     validate_snapshot_panels,
 };
+use lenso_capability_agent_workspace_read::WorkspaceReadJsonCodec;
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
 };
@@ -771,11 +773,13 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(SessionJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
+        .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
+        .with_quickjs_codec(WorkspaceReadJsonCodec)
 }
 
 fn now_unix_nanos() -> Result<u128, String> {

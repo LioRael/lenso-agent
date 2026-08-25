@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["content", "metadata_json"],
+  "properties": {
+    "content": { "type": "string", "maxLength": 1048576 },
+    "metadata_json": { "type": "string", "minLength": 2, "maxLength": 65536 }
+  },
+  "additionalProperties": false
+}
