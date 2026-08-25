@@ -148,8 +148,9 @@ fn chat_request(request: &CompleteOpen) -> Result<serde_json::Value, CompleteErr
         .tools
         .iter()
         .map(|tool| {
-            let parameters = serde_json::from_str::<serde_json::Value>(&tool.input_schema_json)
-                .map_err(|_| CompleteError::InvalidRequest)?;
+            let parameters =
+                serde_json::from_str::<serde_json::Value>(tool.input_schema_json.as_str())
+                    .map_err(|_| CompleteError::InvalidRequest)?;
             Ok(serde_json::json!({
                 "type": "function",
                 "function": {
@@ -518,7 +519,10 @@ impl SseDecoder {
             text: text.into(),
             tool_call_id: tool_call_id.to_owned(),
             tool_name: tool_name.to_owned(),
-            arguments_json: arguments_json.to_owned(),
+            arguments_json: arguments_json
+                .to_owned()
+                .try_into()
+                .expect("provider Tool arguments must be valid JSON"),
             input_tokens: input_tokens.to_string(),
             output_tokens: output_tokens.to_string(),
         }))
@@ -606,7 +610,7 @@ mod tests {
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
                     tool_name: Some("read".to_owned()),
-                    arguments_json: Some(r#"{"path":"README.md"}"#.to_owned()),
+                    arguments_json: Some(r#"{"path":"README.md"}"#.to_owned().try_into().unwrap()),
                 },
                 CompleteMessageInput {
                     role: CompleteMessageRole::Tool,
@@ -619,7 +623,7 @@ mod tests {
             tools: vec![CompleteTool {
                 name: "read".to_owned(),
                 description: "Read a file".to_owned(),
-                input_schema_json: r#"{"type":"object"}"#.to_owned(),
+                input_schema_json: r#"{"type":"object"}"#.to_owned().try_into().unwrap(),
             }],
             temperature: 0.0,
             max_output_tokens: 128,
@@ -657,7 +661,10 @@ data: [DONE]
             .collect::<Vec<_>>();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].kind, CompleteMessageKind::ToolCall);
-        assert_eq!(messages[0].arguments_json, r#"{"path":"README.md"}"#);
+        assert_eq!(
+            messages[0].arguments_json.as_str(),
+            r#"{"path":"README.md"}"#
+        );
         assert_eq!(messages[1].kind, CompleteMessageKind::Usage);
         assert_eq!(messages[1].input_tokens, "12");
     }

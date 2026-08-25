@@ -158,7 +158,7 @@ fn convert_execute_error(error: provider_contract::ExecuteError) -> ExecuteError
         ProviderError::ExecutionFailed { payload } => tool_error(
             &payload.reason_code,
             &payload.message,
-            &payload.details_json,
+            payload.details_json.as_str(),
         ),
         ProviderError::Unknown(unknown) => tool_error(
             &unknown.code,
@@ -175,7 +175,10 @@ fn tool_error(code: &str, message: &str, details_json: &str) -> ExecuteError {
         payload: ExecuteErrorToolErrorPayload {
             provider_code: code.to_owned(),
             message: message.to_owned(),
-            details_json: details_json.to_owned(),
+            details_json: details_json
+                .to_owned()
+                .try_into()
+                .expect("Tool error details must be valid JSON"),
         },
     }
 }

@@ -25,7 +25,7 @@ macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"
 
 pub const COMPLETE_OPERATION: &str = "complete";
 
-pub use lenso_contract_runtime::{Uint64, UnknownDomainError};
+pub use lenso_contract_runtime::{RawJson, Uint64, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -51,7 +51,7 @@ pub struct CompleteOpen {
 pub struct CompleteMessageInput {
     #[serde(rename = "arguments_json")]
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub arguments_json: Option<String>,
+    pub arguments_json: Option<RawJson>,
     #[serde(rename = "content")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content: String,
@@ -85,7 +85,7 @@ pub struct CompleteTool {
     pub description: String,
     #[serde(rename = "input_schema_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub input_schema_json: String,
+    pub input_schema_json: RawJson,
     #[serde(rename = "name")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub name: String,
@@ -95,7 +95,7 @@ pub struct CompleteTool {
 pub struct CompleteMessage {
     #[serde(rename = "arguments_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub arguments_json: String,
+    pub arguments_json: RawJson,
     #[serde(rename = "input_tokens")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub input_tokens: Uint64,

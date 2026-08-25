@@ -343,7 +343,10 @@ impl WorkspaceProvider {
         Ok(ExecuteResponse {
             content,
             content_type: ContentType::Text,
-            metadata_json: serde_json::json!({"path": arguments.path}).to_string(),
+            metadata_json: serde_json::json!({"path": arguments.path})
+                .to_string()
+                .try_into()
+                .expect("serde_json values must produce valid JSON"),
         })
     }
 
@@ -361,7 +364,10 @@ impl WorkspaceProvider {
         Ok(ExecuteResponse {
             content,
             content_type: ContentType::Text,
-            metadata_json: metadata.to_string(),
+            metadata_json: metadata
+                .to_string()
+                .try_into()
+                .expect("serde_json values must produce valid JSON"),
         })
     }
 }
@@ -379,17 +385,17 @@ impl ToolProviderProvider for WorkspaceProvider {
                 ToolDefinition {
                     name: LIST_TOOL.to_owned(),
                     description: "List one directory below the selected workspace root. Hidden entries are omitted.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"}},"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"}},"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
                 },
                 ToolDefinition {
                     name: SEARCH_TOOL.to_owned(),
                     description: "Search UTF-8 workspace files recursively for a case-sensitive literal string. Hidden entries are omitted.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"},"query":{"minLength":1,"type":"string"}},"required":["query"],"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"},"query":{"minLength":1,"type":"string"}},"required":["query"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
                 },
                 ToolDefinition {
                     name: READ_TOOL.to_owned(),
                     description: "Read one UTF-8 text file below the selected workspace root.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"minLength":1,"type":"string"}},"required":["path"],"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"minLength":1,"type":"string"}},"required":["path"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
                 },
             ],
         }))))
@@ -401,9 +407,9 @@ impl ToolProviderProvider for WorkspaceProvider {
     ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
     {
         let result = match request.name.as_str() {
-            LIST_TOOL => self.list(&request.arguments_json),
-            SEARCH_TOOL => self.search(&request.arguments_json),
-            READ_TOOL => self.read_text(&request.arguments_json),
+            LIST_TOOL => self.list(request.arguments_json.as_str()),
+            SEARCH_TOOL => self.search(request.arguments_json.as_str()),
+            READ_TOOL => self.read_text(request.arguments_json.as_str()),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {
@@ -438,7 +444,10 @@ fn execution_failed(reason_code: &str, message: &str) -> WorkspaceReadFailure {
         payload: lenso_capability_agent_tool_provider::ExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: message.to_owned(),
-            details_json: "{}".to_owned(),
+            details_json: "{}"
+                .to_owned()
+                .try_into()
+                .expect("static details must be valid JSON"),
         },
     })
 }

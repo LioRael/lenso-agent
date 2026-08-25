@@ -478,7 +478,7 @@ fn validate_event(
 ) -> Result<StoredEvent, AppendError> {
     if event.event_id.is_empty()
         || event.event_id.len() > 128
-        || serde_json::from_str::<serde_json::Value>(&event.payload_json).is_err()
+        || serde_json::from_str::<serde_json::Value>(event.payload_json.as_str()).is_err()
     {
         return Err(AppendError::InvalidEvent);
     }
@@ -495,7 +495,7 @@ fn validate_event(
         kind: event_kind(&event.kind).to_owned(),
         turn_id: event.turn_id,
         occurred_at: event.occurred_at,
-        payload_json: event.payload_json,
+        payload_json: event.payload_json.into_string(),
     })
 }
 
@@ -506,7 +506,10 @@ fn read_event(event: StoredEvent) -> Result<ReadSessionResponseEventsItem, ReadE
         kind: read_event_kind(&event.kind).ok_or(ReadError::InvalidCursor)?,
         turn_id: event.turn_id,
         occurred_at: event.occurred_at,
-        payload_json: event.payload_json,
+        payload_json: event
+            .payload_json
+            .try_into()
+            .map_err(|_| ReadError::InvalidCursor)?,
     })
 }
 
@@ -607,7 +610,9 @@ mod tests {
             payload_json: format!(
                 r#"{{"generation_spec_digest":"sha256:{}","input":"hello"}}"#,
                 "a".repeat(64)
-            ),
+            )
+            .try_into()
+            .unwrap(),
         }
     }
 

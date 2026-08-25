@@ -26,7 +26,7 @@ macro_rules! __lenso_required_many_tool_provider_client { () => { "{\"capability
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const EXECUTE_OPERATION: &str = "execute";
 
-pub use lenso_contract_runtime::{UnknownDomainError};
+pub use lenso_contract_runtime::{RawJson, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -48,7 +48,7 @@ pub struct ToolDefinition {
     pub description: String,
     #[serde(rename = "input_schema_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub input_schema_json: String,
+    pub input_schema_json: RawJson,
     #[serde(rename = "name")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub name: String,
@@ -64,7 +64,7 @@ pub enum CatalogError {
 pub struct ExecuteRequest {
     #[serde(rename = "arguments_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub arguments_json: String,
+    pub arguments_json: RawJson,
     #[serde(rename = "name")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub name: String,
@@ -80,7 +80,7 @@ pub struct ExecuteResponse {
     pub content_type: ContentType,
     #[serde(rename = "metadata_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub metadata_json: String,
+    pub metadata_json: RawJson,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -93,7 +93,7 @@ pub enum ContentType {
 pub struct ExecutionFailedPayload {
     #[serde(rename = "details_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub details_json: String,
+    pub details_json: RawJson,
     #[serde(rename = "message")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub message: String,

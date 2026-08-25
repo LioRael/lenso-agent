@@ -56,9 +56,9 @@ futures = "0.3"
 lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "a783eef6a7426a55a218c9e44335324d640061a4" }
 lenso-app-plan = "0.1.5"
 lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "ffb07bc8dc7103b58c864b59225ca0f4609b6fdf" }
-lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0" }
-lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0" }
-lenso-contract-runtime = "0.1.0"
+lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "8a9b2482278224973417aaac1fd925ba1cfa5370" }
+lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "8a9b2482278224973417aaac1fd925ba1cfa5370" }
+lenso-contract-runtime = "0.1.3"
 lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "ffb07bc8dc7103b58c864b59225ca0f4609b6fdf" }
 lenso-kernel = "0.1.11"
 lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0" }

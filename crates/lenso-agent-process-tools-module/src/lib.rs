@@ -88,7 +88,8 @@ impl ToolProviderProvider for ProcessToolsModule {
         if request.name != EXEC_TOOL {
             return Box::pin(futures::future::ready(Ok(Err(ExecuteError::NotFound))));
         }
-        let Ok(arguments) = serde_json::from_str::<ExecArguments>(&request.arguments_json) else {
+        let Ok(arguments) = serde_json::from_str::<ExecArguments>(request.arguments_json.as_str())
+        else {
             return Box::pin(futures::future::ready(Ok(Err(
                 ExecuteError::InvalidArguments,
             ))));
@@ -127,7 +128,9 @@ impl ToolProviderProvider for ProcessToolsModule {
                             "exit_code": response.exit_code,
                             "duration_ms": response.duration_ms,
                         })
-                        .to_string(),
+                        .to_string()
+                        .try_into()
+                        .expect("serde_json values must produce valid JSON"),
                     }))
                 }
                 Err(ProcessRunInvocationError::Domain(error)) => Ok(Err(map_process_error(error))),
@@ -169,7 +172,9 @@ impl Lifecycle for ProcessToolsModule {
                 },
                 "required": ["program", "arguments"]
             })
-            .to_string();
+            .to_string()
+            .try_into()
+            .expect("Tool input schema must be valid JSON");
         self.state.replace(Some(ProcessToolsState {
                 catalog: CatalogResponse {
                     tools: vec![ToolDefinition {
@@ -223,7 +228,10 @@ fn execution_failed(reason_code: &str, message: &str) -> ExecuteError {
         payload: ExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: message.to_owned(),
-            details_json: "{}".to_owned(),
+            details_json: "{}"
+                .to_owned()
+                .try_into()
+                .expect("static Tool error details must be valid JSON"),
         },
     }
 }

@@ -712,7 +712,10 @@ fn response(
         text: text.into(),
         tool_call_id: tool_call_id.to_owned(),
         tool_name: tool_name.to_owned(),
-        arguments_json: arguments_json.to_owned(),
+        arguments_json: arguments_json
+            .to_owned()
+            .try_into()
+            .expect("fixture Tool arguments must be valid JSON"),
         input_tokens: input_tokens.to_owned(),
         output_tokens: output_tokens.to_owned(),
     }

@@ -288,12 +288,12 @@ impl ToolProviderProvider for WorkspaceEditProvider {
                 ToolDefinition {
                     name: EDIT_TOOL.to_owned(),
                     description: "Replace one unique, exact UTF-8 string in an existing workspace file. The call fails if old_text is absent or not unique.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
                 },
                 ToolDefinition {
                     name: CREATE_FILE_TOOL.to_owned(),
                     description: "Create one new UTF-8 workspace file below an existing directory. Existing targets are never overwritten.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
                 },
             ],
         }))))
@@ -306,8 +306,8 @@ impl ToolProviderProvider for WorkspaceEditProvider {
     ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
     {
         let result = match request.name.as_str() {
-            EDIT_TOOL => self.edit_text(&request.arguments_json),
-            CREATE_FILE_TOOL => self.write_text(&request.arguments_json),
+            EDIT_TOOL => self.edit_text(request.arguments_json.as_str()),
+            CREATE_FILE_TOOL => self.write_text(request.arguments_json.as_str()),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {
@@ -341,7 +341,9 @@ fn success_response(
             "bytes_written": content.len(),
             "sha256": format!("{:x}", Sha256::digest(content)),
         })
-        .to_string(),
+        .to_string()
+        .try_into()
+        .expect("serde_json values must produce valid JSON"),
     }
 }
 
@@ -358,7 +360,10 @@ fn execution_failed(reason_code: &str, message: &str) -> WorkspaceEditFailure {
         payload: lenso_capability_agent_tool_provider::ExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: message.to_owned(),
-            details_json: "{}".to_owned(),
+            details_json: "{}"
+                .to_owned()
+                .try_into()
+                .expect("static details must be valid JSON"),
         },
     })
 }
@@ -435,7 +440,7 @@ mod tests {
             fs::read_to_string(temporary.path().join("notes/new.txt")).unwrap(),
             "first\n"
         );
-        assert!(response.metadata_json.contains("sha256"));
+        assert!(response.metadata_json.as_str().contains("sha256"));
         assert!(matches!(
             provider.write_text(r#"{"path":"notes/new.txt","content":"second\n"}"#),
             Err(WorkspaceEditFailure::Domain(
@@ -461,7 +466,8 @@ mod tests {
             fs::read_to_string(target).unwrap(),
             "before updated after\n"
         );
-        let metadata: serde_json::Value = serde_json::from_str(&response.metadata_json).unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(response.metadata_json.as_str()).unwrap();
         assert_eq!(metadata["operation"], "edited");
         assert_eq!(metadata["previous_bytes"], 20);
     }
