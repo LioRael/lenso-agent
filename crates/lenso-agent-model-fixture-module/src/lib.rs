@@ -112,6 +112,12 @@ impl FixtureModel {
         if current_user == "Use the workspace Plugin to read README.md." {
             return workspace_plugin_response(request, &tool_results);
         }
+        if let Some(url) = current_user
+            .strip_prefix("Use the network Plugin to fetch ")
+            .and_then(|value| value.strip_suffix('.'))
+        {
+            return network_plugin_response(request, &tool_results, url);
+        }
         if current_user == "Read README.md twice." && tool_results.len() < 2 {
             return Ok(tool_request(tool_results.len() + 1));
         }
@@ -173,6 +179,53 @@ fn workspace_plugin_response(
                 "1",
                 CompleteMessageKind::TextDelta,
                 "Workspace Plugin result: # Plugin Fixture",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "28",
+                "10",
+            ),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn network_plugin_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+    url: &str,
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request
+        .tools
+        .iter()
+        .any(|tool| tool.name == "plugin_http_get")
+    {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => {
+            let arguments = serde_json::json!({ "url": url }).to_string();
+            Ok(named_tool_request(
+                "call-plugin-http-get",
+                "plugin_http_get",
+                &arguments,
+            ))
+        }
+        [result] if result.content == "network fixture" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Network Plugin result: network fixture",
                 "",
                 "",
                 "{}",

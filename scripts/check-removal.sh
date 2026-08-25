@@ -32,3 +32,6 @@ remove_modules lenso.app.json \
 remove_modules lenso.app.json \
   "${proof_root}/tui-without-panels.app.json" \
   tui-help
+remove_modules lenso.app.json \
+  "${proof_root}/headless-without-http-fetch.app.json" \
+  http-fetch

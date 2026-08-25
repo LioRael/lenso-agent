@@ -127,9 +127,13 @@ Contribution providers leaves the Shell valid with only the conversation.
 
 The host currently resolves `lenso-app-plan 0.1.5` and `lenso-kernel 0.1.11`.
 All runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
-`ffb07bc8dc7103b58c864b59225ca0f4609b6fdf`; all generated contracts and Module
-ports are locked to one `lenso-protocols` commit,
-`1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0`. This closes the generic dynamic
+`61502d0b575dca5102fbf7625dbab45a8389180d`; contract authoring and codegen are
+locked to `lenso-protocols` revision
+`8a9b2482278224973417aaac1fd925ba1cfa5370`, while Module authoring remains on
+`1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0`. Secrets packages are locked to
+`lenso-secrets-module` revision
+`7c7126d7584195fd33da5c82491321a9043a14c1`, which uses the same native-adapter
+revision as the Host. This closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
@@ -163,15 +167,20 @@ state, Data mounts, or binding templates, and mandatory review evidence. It
 also admits one reviewed variant with exactly one generated
 `lenso.agent.workspace-read@1/read_text` Host import. The Host Profile fixes
 that binding to the dedicated base `workspace-import-read` Instance; the
-Bundle cannot select a provider or request workspace write, process, network,
-Secrets, state, or Data mount authority. It
+Bundle cannot select a provider or request workspace write, process, Secrets,
+state, or Data mount authority. A separate reviewed Wasm Tool shape imports
+exactly `lenso.agent.http-fetch@1/get` and requests one canonical `network`
+Permission scope. The reviewed origin set becomes an immutable approved grant,
+must be contained by the App-selected HTTP Provider allowlist, and is enforced
+again for every request. Redirects, credentials, non-UTF-8 responses, and
+oversized bodies fail closed. It
 admits one restricted fixture Model profile that replaces the base Plan's exact
-`model` provider for the `agent` consumer. The experimental Codex Direct profile
-admits one atomic Model/Auth pair, its exact intra-Plugin
+`model` provider for the `agent` consumer. The
+experimental Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Experimental Artifact
 profiles additionally allow a reviewed QuickJS or Wasm Component Module to
 replace the exact native Agent Loop through the generated `AgentJsonCodec`.
-Other Data mounts, permission requests, arbitrary binding templates, extra
+Other Data mounts, Permission shapes, arbitrary binding templates, extra
 Capability requirements, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
 automatic rollback, distributed coordination, Generation deletion, Plugin
@@ -215,6 +224,13 @@ lenso plugin verify --bundle dist/external-wasm-text-tools
 cargo run -p lenso-agent-cli -- plugins install \
   --bundle dist/external-wasm-text-tools \
   --evidence local-review
+
+# The network example follows the same build flow. Its Manifest must request
+# exact origins, and the base App must select those same origins in
+# the lenso.agent.http-fetch Provider configuration before Ready succeeds.
+cargo build \
+  --manifest-path examples/external-plugins/wasm-http-fetch/guest/Cargo.toml \
+  --release --target wasm32-unknown-unknown
 
 # The Host reads the active Manifest CAS under its authority fence.
 cargo run -p lenso-agent-cli -- plugins upgrade \
@@ -276,6 +292,12 @@ explicit `--expected-manifest` remains available for automation that already
 owns a prior CAS value. Upgrade and rollback use the root base definition by
 default. `LENSO_APP_DEFINITION`, `LENSO_RESOLVED_PLAN`, and `--plan <path>`
 remain advanced overrides for automation and exact Plan replay.
+
+Review evidence does not itself create runtime authority. For the network
+profile, the publisher's exact origin request is admitted as an
+`ApprovedGrant`; the App must also select `lenso.agent.http-fetch` and configure
+an allowlist containing that scope. The checked-in `lenso.app.json` keeps
+the allowlist empty by default, so it grants no ambient network access.
 
 Admission stores immutable objects and its receipt under
 `.lenso/plugins/store`. Activation atomically writes

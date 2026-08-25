@@ -72,11 +72,13 @@ adds only catalog-reviewed Plugin contributions from Desired State before
 staging a new Generation. Test-only provider fixtures live beside integration
 tests and have no product composition authority.
 
-The current host baseline selects released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
-`lenso-plugin-control-plane` to `lenso-runtime-rust` revision
-`c56e4a01d14704eeae26e2121dbd87dbf380b1d3` and its standalone Plugin Bundle
-builder from the same revision. That Runtime includes the durable
+The current host baseline selects released `lenso-app-plan 0.1.5` and
+`lenso-kernel 0.1.11`. Every Runtime package is pinned to
+`lenso-runtime-rust` revision
+`61502d0b575dca5102fbf7625dbab45a8389180d`; the external Secrets packages are
+pinned to `lenso-secrets-module` revision
+`7c7126d7584195fd33da5c82491321a9043a14c1`, which resolves the same native
+Adapter revision. That Runtime includes injected `ManagedTasks`, the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native
 dylib Adapter, and the source-derived native Module factory catalog. The catalog
@@ -109,6 +111,13 @@ exact immutable digest of a retired Generation; live candidate duplication
 still fails closed. Each startup or offline transition hashes the exact Host
 executable once and reuses that immutable build identity across every initial,
 retained, current, and candidate Generation resolution in the operation.
+Clean suspension commits a durable marker only after every process-local
+Generation resource is released. When a replacement Host executable cannot
+restage the old executable-bound Generation, that marker authorizes a fenced
+cold replacement: the old control records are retained with
+`host_build_replaced`, a new Supervisor and routing epoch are opened, and the
+current exact Generation passes the ordinary initial Ready Gate. Missing clean
+suspension evidence still fails closed instead of resetting Controller state.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and
@@ -148,19 +157,22 @@ entry plus reviewed workspace-edit, Skills, local-process, and Model Profiles;
 one package-independent isolated Wasm Tool Provider shape with the same
 bounded attachment, one restricted fixture Model Provider replace-`one` entry,
 one package-independent reviewed Wasm Tool variant with a fixed
-`lenso.agent.workspace-read@1/read_text` Host import, and one experimental
-Codex Direct replacement set. The pure Wasm Tool shape fixes
+`lenso.agent.workspace-read@1/read_text` Host import, one reviewed network
+variant with a fixed `lenso.agent.http-fetch@1/get` import and exact-origin
+approved grant, and one experimental Codex Direct replacement set. The pure Wasm Tool shape fixes
 the Capability, operations, execution class, empty configuration, and absence
 of Host imports, permissions, state, Data mounts, and binding templates; it
 still requires review evidence. The workspace-reader variant has the same
 limits except for its single exact requirement, which the Host Profile binds
 to the dedicated base `workspace-import-read` Instance; the Bundle cannot select the provider
-or add another requirement. The Codex set closes exact Model and Auth
+or add another requirement. The network variant additionally requires its
+reviewed scope to fit the base App's HTTP Provider allowlist, which is empty by
+default and enforced again for every request. The Codex set closes exact Model and Auth
 contributions, their intra-Plugin `one` binding, and the compatible base Agent
 model configuration. Replacement requires the exact base edge and allowlisted
 displaced package; removal restores the base Plan for the next Generation.
 Package presence or Catalog extensibility is not a claim that arbitrary
-executable Plugins, general permissioned Host imports, general provider replacement,
+executable Plugins, other permissioned Host imports, general provider replacement,
 Generation deletion, or Plugin Store collection are ready. The CLI exposes
 bundled `plugins enable` and `plugins disable` selection and persists the exact
 result in the Active Set without another App Definition.

@@ -173,6 +173,11 @@ make both the workspace root and model endpoint visible before execution.
     `lenso.agent.workspace-read@1/read_text` client through one immutable
     Host-selected binding. Tests reject an added process requirement and prove
     a real workspace read across install, upgrade, rollback, and removal.
+20. A reviewed network Wasm Tool shape imports only
+    `lenso.agent.http-fetch@1/get`. Its exact origin request is promoted to an
+    immutable grant, must fit inside the App-selected Provider allowlist, and
+    is enforced on every bounded HTTP request. The base App has an empty
+    allowlist.
 
 ## Deferred
 
@@ -185,5 +190,6 @@ replacement, distributed coordination, automatic rollback, Generation deletion,
 Plugin Store collection, retention windows, and overlap replacement are
 separate slices. General third-party Guest imports are also separate: the
 bounded pure Wasm Tool shape has no Host imports, while the workspace-reader
-shape admits only one Host-selected read Capability. Other permissioned
+shape admits only one Host-selected read Capability and the network shape only
+one exact-origin HTTP GET Capability. Other permissioned
 external Modules require their own reviewed product profiles and policy.

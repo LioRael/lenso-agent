@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["allowed_origins", "max_response_bytes", "timeout_ms"],
+  "properties": {
+    "allowed_origins": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 8, "maxLength": 2048 }
+    },
+    "max_response_bytes": { "type": "integer" },
+    "timeout_ms": { "type": "integer" }
+  },
+  "additionalProperties": false
+}
