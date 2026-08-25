@@ -5,8 +5,9 @@
 This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, composable Prompt/Skill
-contributions, a CLI Runner, and the
-checked `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
+and semantic TUI contributions, a CLI Runner, a no-subcommand `lenso-agent`
+TUI entrypoint, and the
+checked `tui-readonly`, `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
 `openai-codex-direct`, opt-in `openai-codex-direct-skills`, and opt-in
 `openai-codex-direct-coding` App Compositions, plus the higher-authority
 `headless-local-coding` and `openai-codex-direct-local-coding` Compositions.
@@ -40,11 +41,14 @@ Its configuration type derives the package-owned Schema, `Port<Client>` and
 implementations derive endpoints, and `#[module(lifecycle)]` exposes only the
 prepare, activate, and deactivate hooks that the Module actually owns. The
 former Harness-specific Module authoring and proc-macro crates are removed.
-The CLI Module remains the deliberate compatibility exception: it is a
-consumer-only identity used to anchor the CLI-to-Agent binding, while the
+The CLI and TUI Shell Modules remain deliberate compatibility exceptions: they
+are consumer-only identities used to anchor terminal-surface bindings, while the
 current source-first facade finalizes Module metadata from a Provider
 implementation and cannot yet describe a Module with no provided Capability.
-Adding a fake Provider would make the graph less accurate.
+Adding a fake Provider would make the graph less accurate. The TUI Shell binds
+one Agent plus explicit `many` semantic panel Contributions. The native Host
+surface snapshots those resolved providers and rejects cross-provider panel ID
+collisions before entering terminal raw mode.
 
 Source-derived Provider Descriptors use the standard fail-fast admission
 default (`max_concurrency: 1`, `queue_capacity: 0`). The regenerated canonical
@@ -176,8 +180,13 @@ completed-turn history from the Session log.
   workspace-rooted cwd policy, environment projection, subprocess lifecycle,
   output and timeout bounds, and process-group cleanup. The Process Tool
   Provider owns only the Agent-facing projection.
-- **CLI Module** owns terminal input, streamed rendering, local cancellation,
-  and Session selection.
+- **CLI Module** owns headless terminal input, streamed rendering, local
+  cancellation, and Session selection.
+- **TUI Shell Module** owns interactive terminal layout, focus, input,
+  streamed rendering, cancellation, and semantic panel aggregation.
+- **TUI Contribution Modules** own bounded panel content. They do not own raw
+  terminal state, the event loop, arbitrary `ratatui` widgets, or ambient
+  Capability access.
 - **App Composition** owns exact Module Instances, configuration, bindings,
   execution classes, and admission limits.
 - **Agent Host control plane** owns the content-addressed Plugin Store, exact
@@ -205,6 +214,8 @@ completed-turn history from the Session log.
   children below an explicitly configured root. They snapshot at startup,
   enforce path and byte limits, and never execute Skill assets or scripts.
 - No Harness Module may discover dependencies through a global registry.
+- TUI panels come only from explicit `many` bindings in the immutable Plan;
+  providers cannot register widgets or mutate the running layout graph.
 - The generated native factory catalog is Host build availability, not Module
   dependency discovery; only the immutable Plan may activate and bind an entry.
 - Every invocation is bounded by Plan admission, deadlines, cancellation, and
@@ -237,6 +248,11 @@ Instances:
 - `tools`
 - `workspace-read`
 - `sessions`
+
+The parallel `tui-readonly` profile replaces the `cli` consumer with `tui` and
+adds the removable `tui-help` semantic panel Contribution. Running
+`lenso-agent` with no arguments selects this TUI Plan and enters the terminal
+interface directly; the product entrypoint has no subcommands.
 
 The Prompt aggregate snapshots explicitly bound versioned contributions and
 records their IDs, versions, kinds, and SHA-256 digests in `model_requested`

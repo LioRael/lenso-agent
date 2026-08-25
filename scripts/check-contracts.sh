@@ -14,6 +14,7 @@ contracts=(
   "lenso-capability-agent-tools:rust-runtime"
   "lenso-capability-agent-tool-provider:rust-runtime"
   "lenso-capability-agent-session:rust-runtime"
+  "lenso-capability-agent-tui-contribution:rust"
 )
 
 for contract in "${contracts[@]}"; do

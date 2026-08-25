@@ -30,6 +30,9 @@ remove_modules composition/headless-readonly.app.json \
 remove_modules composition/headless-readonly.app.json \
   "${proof_root}/headless-without-prompt-providers.app.json" \
   fixture-instructions summary-skill
+remove_modules composition/tui-readonly.app.json \
+  "${proof_root}/tui-without-panels.app.json" \
+  tui-help
 remove_modules composition/openai-codex-direct-skills.app.json \
   "${proof_root}/codex-without-skills.app.json" \
   skills

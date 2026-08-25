@@ -1,14 +1,27 @@
 # Lenso Agent Harness
 
-A headless-first Agent Harness for running a model with an explicitly selected
-set of Tools, Prompt instructions, and durable Sessions.
+A terminal-first Agent Harness for running a model with an explicitly selected
+set of Tools, Prompt instructions, durable Sessions, and composed UI panels.
 
 ## Try it
 
-Run the deterministic, read-only App from the repository root:
+Open the deterministic, read-only TUI from the repository root:
 
 ```sh
-cargo run -p lenso-agent-cli -- \
+cargo run -p lenso-agent-cli --bin lenso-agent
+```
+
+`lenso-agent` has no subcommands. Running it directly enters the TUI; use
+`--session`, repeated `--allow-tool`, `--no-tools`, or the advanced `--plan`
+flag to narrow that interactive session. Enter submits a Turn, Esc cancels an
+active Turn or exits while idle, and Tab cycles panels contributed by selected
+Modules.
+
+The existing companion binary remains available for headless automation and
+Host maintenance:
+
+```sh
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
@@ -17,20 +30,20 @@ only read the current workspace. Choose another reviewed App by name when you
 need a different Model or Tool authority:
 
 ```sh
-cargo run -p lenso-agent-cli -- \
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   --app headless-coding \
   "Create and edit a workspace note."
 ```
 
 Use `--session <id>` to resume a durable Session, `--no-tools` to remove Tool
 access for one Turn, or repeated `--allow-tool <name>` options to narrow the
-selected App's Tool set. Run `cargo run -p lenso-agent-cli -- --help` for the
-complete interface.
+selected App's Tool set.
 
 ## Choose an App
 
 | App | Model | Workspace authority |
 | --- | --- | --- |
+| `tui-readonly` | deterministic fixture | read only, with composed TUI panels |
 | `headless-readonly` | deterministic fixture | read only |
 | `headless-coding` | deterministic fixture | read and edit |
 | `headless-local-coding` | deterministic fixture | read, edit, and reviewed processes |
@@ -65,7 +78,22 @@ lenso app resolve --definition composition/headless-readonly.app.json \
 tracked `composition/*/resolved-plan.json` files are review and release
 evidence; never edit them by hand. `scripts/check-removal.sh` proves that
 optional Prompt, Skill, workspace-edit, and process Modules can be removed
-while the remaining graph still resolves.
+while the remaining graph still resolves. The TUI removal proof additionally
+removes every panel Contribution while retaining the TUI Shell and Agent route.
+
+## Compose the TUI
+
+The `tui-readonly` App selects a `tui` Shell Module that requires exactly one
+`lenso.agent@1` provider and `many lenso.agent.tui-contribution@1` providers.
+The Shell owns terminal mode, layout, focus, input, streaming, cancellation,
+and cross-provider panel ID collision checks. Contribution Modules return
+bounded semantic panel snapshots; they do not receive `ratatui` widgets or a
+global registry.
+
+`composition/tui-readonly.app.json` includes one removable `tui-help` static
+Contribution. Another Module can contribute a panel by providing the same
+Capability and being explicitly selected in App Composition. Removing all
+Contribution providers leaves the Shell valid with only the conversation.
 
 ## Runtime baseline
 

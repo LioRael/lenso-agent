@@ -23,6 +23,8 @@ use lenso_agent_prompt_static_module as _;
 use lenso_agent_session_file_module as _;
 use lenso_agent_skills_filesystem_module as _;
 use lenso_agent_tools_module as _;
+use lenso_agent_tui_module as _;
+use lenso_agent_tui_static_module as _;
 use lenso_agent_workspace_edit_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
@@ -32,6 +34,10 @@ use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::SessionJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::ToolsJsonCodec;
+use lenso_capability_agent_tui_contribution::{
+    SNAPSHOT_OPERATION, SnapshotRequest, SnapshotResponsePanelsItem, TuiContribution,
+    validate_snapshot_panels,
+};
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
 };
@@ -57,6 +63,9 @@ const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
+const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_TUI_PANELS: usize = 64;
+const MAX_TUI_PANEL_BYTES: usize = 262_144;
 
 static NEXT_ROOT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -170,14 +179,60 @@ impl AgentApp {
     }
 
     pub async fn lease_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("cli").await
+    }
+
+    /// Pins one TUI-submitted Agent Turn to the active App Generation.
+    pub async fn lease_tui_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("tui").await
+    }
+
+    async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
         let route = self.client.route().await.map_err(control_error)?;
         let handle = Rc::new(
             route
                 .target()
-                .stream_handle::<Agent>("cli")
+                .stream_handle::<Agent>(consumer_instance)
                 .map_err(|error| format!("leased Generation has no Agent route: {error:?}"))?,
         );
         Ok(TurnGeneration { route, handle })
+    }
+
+    /// Snapshots every TUI panel provider in deterministic resolved order.
+    pub async fn tui_panels(&self) -> Result<Vec<SnapshotResponsePanelsItem>, String> {
+        let route = self.client.route().await.map_err(control_error)?;
+        let handle = route
+            .target()
+            .many_handle::<TuiContribution>("tui")
+            .map_err(|error| {
+                format!("leased Generation has no TUI contribution route: {error:?}")
+            })?;
+        let cancellation = CancellationToken::new();
+        let context = route
+            .target()
+            .invocation_context_after(TUI_SNAPSHOT_TIMEOUT, cancellation.clone());
+        let invocation =
+            handle.invoke_many_with_context(SNAPSHOT_OPERATION, context, SnapshotRequest {});
+        let responses = match tokio::time::timeout(TUI_SNAPSHOT_TIMEOUT, invocation).await {
+            Ok(result) => {
+                result.map_err(|error| format!("TUI contribution snapshot failed: {error:?}"))?
+            }
+            Err(_) => {
+                cancellation.cancel();
+                return Err("TUI contribution snapshot timed out".to_owned());
+            }
+        };
+        let mut panels = Vec::new();
+        for response in responses {
+            let response = response
+                .map_err(|error| format!("TUI contribution rejected its snapshot: {error:?}"))?;
+            validate_snapshot_panels(&response.panels).map_err(|error| {
+                format!("TUI contribution returned an invalid snapshot: {error}")
+            })?;
+            panels.extend(response.panels);
+        }
+        validate_tui_panels(&panels)?;
+        Ok(panels)
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
@@ -195,6 +250,32 @@ impl AgentApp {
         }
         Ok(())
     }
+}
+
+fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), String> {
+    if panels.len() > MAX_TUI_PANELS {
+        return Err(format!(
+            "TUI contributions exceed the {MAX_TUI_PANELS}-panel aggregate limit"
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for panel in panels {
+        if !ids.insert(panel.id.as_str()) {
+            return Err(format!("duplicate TUI panel id `{}`", panel.id));
+        }
+        total_bytes = total_bytes
+            .checked_add(panel.id.len())
+            .and_then(|total| total.checked_add(panel.title.len()))
+            .and_then(|total| total.checked_add(panel.body.len()))
+            .ok_or_else(|| "TUI contribution size overflowed".to_owned())?;
+        if total_bytes > MAX_TUI_PANEL_BYTES {
+            return Err(format!(
+                "TUI contributions exceed the {MAX_TUI_PANEL_BYTES}-byte aggregate limit"
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -660,8 +741,11 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
+    use lenso_kernel::StreamEvent;
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
+    const TUI_PLAN: &[u8] = include_bytes!("../../../composition/tui-readonly/resolved-plan.json");
 
     #[test]
     fn initial_generation_preserves_the_approved_plan() {
@@ -688,6 +772,85 @@ mod tests {
         fs::write(&record, b"{}").unwrap();
         let error = record_generation_spec(directory.path(), &generation.spec).unwrap_err();
         assert!(error.contains("does not match its digest"));
+    }
+
+    #[test]
+    fn duplicate_tui_panel_ids_fail_closed() {
+        let panel = SnapshotResponsePanelsItem {
+            id: "agent.help".to_owned(),
+            title: "Help".to_owned(),
+            body: "Esc quits".to_owned(),
+        };
+        let error = validate_tui_panels(&[panel.clone(), panel]).unwrap_err();
+        assert_eq!(error, "duplicate TUI panel id `agent.help`");
+    }
+
+    #[test]
+    fn aggregate_tui_panels_are_bounded() {
+        let panels = (0..=MAX_TUI_PANELS)
+            .map(|index| SnapshotResponsePanelsItem {
+                id: format!("agent.panel-{index}"),
+                title: format!("Panel {index}"),
+                body: "Content".to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let error = validate_tui_panels(&panels).unwrap_err();
+        assert!(error.contains("aggregate limit"));
+
+        let oversized = SnapshotResponsePanelsItem {
+            id: "agent.large".to_owned(),
+            title: "Large".to_owned(),
+            body: "x".repeat(MAX_TUI_PANEL_BYTES),
+        };
+        let error = validate_tui_panels(&[oversized]).unwrap_err();
+        assert!(error.contains("byte aggregate limit"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tui_composition_snapshots_panels_and_streams_one_turn() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut app = AgentApp::start_with_store(TUI_PLAN, directory.path())
+                    .await
+                    .unwrap();
+                let panels = app.tui_panels().await.unwrap();
+                assert_eq!(panels.len(), 1);
+                assert_eq!(panels[0].id, "agent.help");
+
+                let turn = app.lease_tui_turn().await.unwrap();
+                let stream = turn
+                    .handle()
+                    .open_with_context(
+                        RUN_TURN_OPERATION,
+                        turn.invocation_context().unwrap(),
+                        RunTurnRequest {
+                            input: "Answer directly: hello".to_owned(),
+                            session_id: None,
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                stream.close_send().await.unwrap();
+                let mut output = String::new();
+                loop {
+                    match stream.receive().await.unwrap() {
+                        StreamEvent::Message(message) => output.push_str(&message.text),
+                        StreamEvent::PeerHalfClosed => {}
+                        StreamEvent::Terminal(Ok(())) => break,
+                        StreamEvent::Terminal(Err(error)) => {
+                            panic!("TUI Agent Turn failed: {error:?}")
+                        }
+                    }
+                }
+                assert_eq!(output, "Plugin: Direct answer.");
+                drop(stream);
+                drop(turn);
+                app.shutdown().await.unwrap();
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "current_thread")]

@@ -5,16 +5,11 @@ use std::{
     process::{Command, ExitCode},
 };
 
-mod authority;
-mod generation;
-mod plugin_profiles;
-mod plugins;
-mod provenance;
-
 use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
+use lenso_agent_cli::{generation, plugins, provenance};
 use lenso_agent_loop_module::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
