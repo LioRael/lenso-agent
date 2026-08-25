@@ -70,6 +70,7 @@ tempfile = "3.23"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt", "signal", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
+wit-component = "0.254"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

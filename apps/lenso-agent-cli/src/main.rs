@@ -15,11 +15,13 @@ use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
+use lenso_agent_loop_module::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
 
 #[derive(Debug)]
 struct Args {
+    allowed_tools: Option<Vec<String>>,
     plan: PathBuf,
     prompt: String,
     session: Option<String>,
@@ -74,7 +76,10 @@ async fn run() -> Result<(), String> {
 }
 
 async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), String> {
-    let context = turn.invocation_context()?;
+    let mut context = turn.invocation_context()?;
+    if let Some(allowed_tools) = args.allowed_tools.clone() {
+        context = RunScope::new(allowed_tools)?.attach(context)?;
+    }
     let stream = turn
         .handle()
         .open_with_context(
@@ -144,6 +149,8 @@ fn parse_args() -> Result<CliCommand, String> {
     );
     let mut prompt = None;
     let mut session = None;
+    let mut allowed_tools = None::<Vec<String>>;
+    let mut no_tools = false;
     let mut arguments = raw.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -168,15 +175,33 @@ fn parse_args() -> Result<CliCommand, String> {
                         .ok_or_else(|| "--session requires an ID".to_owned())?,
                 );
             }
+            "--allow-tool" => {
+                if no_tools {
+                    return Err("--allow-tool conflicts with --no-tools".to_owned());
+                }
+                allowed_tools.get_or_insert_with(Vec::new).push(
+                    arguments
+                        .next()
+                        .ok_or_else(|| "--allow-tool requires a Tool name".to_owned())?,
+                );
+            }
+            "--no-tools" => {
+                if allowed_tools.is_some() {
+                    return Err("--no-tools conflicts with --allow-tool".to_owned());
+                }
+                no_tools = true;
+                allowed_tools = Some(Vec::new());
+            }
             "--help" | "-h" => {
                 return Err(
-                    "usage: lenso-agent-cli <plugins|generations|sessions|auth> ... | --prompt <text> [--session <id>] [--plan <path>]".to_owned(),
+                    "usage: lenso-agent-cli <plugins|generations|sessions|auth> ... | --prompt <text> [--session <id>] [--allow-tool <name> ... | --no-tools] [--plan <path>]".to_owned(),
                 );
             }
             unknown => return Err(format!("unknown argument `{unknown}`")),
         }
     }
     Ok(CliCommand::Run(Args {
+        allowed_tools,
         plan,
         prompt: prompt.ok_or_else(|| "--prompt is required".to_owned())?,
         session,

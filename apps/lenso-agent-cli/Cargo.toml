@@ -51,3 +51,4 @@ workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+wit-component.workspace = true
