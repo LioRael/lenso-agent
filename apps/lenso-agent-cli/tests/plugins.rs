@@ -1,5 +1,6 @@
 use std::{fs, path::Path, process::Command};
 
+use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
 use lenso_plugin_control_plane::sha256_digest;
 
 fn plan_path() -> std::path::PathBuf {
@@ -140,6 +141,97 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
         .args(["--prompt", "Use the text Plugin to uppercase Lenso plugin."])
         .output()
         .unwrap();
+    assert!(!after_remove.status.success());
+    assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one external Plugin scenario proves the complete release lifecycle"
+)]
+fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
+    let workspace = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    copy_external_wasm_tool_source(external.path());
+    let artifact = build_external_wasm_tool(external.path());
+    let release_one = build_external_wasm_tool_bundle(
+        external.path(),
+        bundles.path().join("v1"),
+        &artifact,
+        "1.0.0",
+    );
+    let release_two = build_external_wasm_tool_bundle(
+        external.path(),
+        bundles.path().join("v2"),
+        &artifact,
+        "2.0.0",
+    );
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(&release_one)
+        .args(["--evidence", "external-plugin-review-v1"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let install_stdout = String::from_utf8(install.stdout).unwrap();
+    assert!(install_stdout.contains("installed: dev.example.wasm-text-tools@1.0.0"));
+    assert!(install_stdout.contains("governance: reviewed"));
+    assert_external_text_tool_runs(workspace.path(), "after install");
+
+    let upgrade = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "upgrade", "--bundle"])
+        .arg(&release_two)
+        .args(["--evidence", "external-plugin-review-v2", "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        upgrade.status.success(),
+        "{}",
+        String::from_utf8_lossy(&upgrade.stderr)
+    );
+    let upgrade_stdout = String::from_utf8(upgrade.stdout).unwrap();
+    assert!(upgrade_stdout.contains("upgraded: dev.example.wasm-text-tools@2.0.0"));
+    let previous = output_value(&upgrade_stdout, "previous-active-set: ");
+    assert_external_text_tool_runs(workspace.path(), "after upgrade");
+
+    let rollback = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "rollback", "--to", previous, "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        rollback.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rollback.stderr)
+    );
+    assert!(String::from_utf8_lossy(&rollback.stdout).contains("rolled-back-to:"));
+    assert_external_text_tool_runs(workspace.path(), "after rollback");
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args([
+            "plugins",
+            "remove",
+            "--plugin",
+            "dev.example.wasm-text-tools",
+        ])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+
+    let after_remove = run_external_text_tool(workspace.path());
     assert!(!after_remove.status.success());
     assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
 }
@@ -517,6 +609,93 @@ fn write_tool_bundle_release(root: &Path, release_version: &str) -> String {
     let bytes = serde_json::to_vec(&manifest).unwrap();
     fs::write(root.join("lenso-plugin.json"), &bytes).unwrap();
     sha256_digest(&bytes)
+}
+
+fn copy_external_wasm_tool_source(destination: &Path) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/external-plugins/wasm-text-tools");
+    fs::create_dir_all(destination.join("guest/src")).unwrap();
+    fs::create_dir_all(destination.join("guest/wit")).unwrap();
+    for relative in [
+        "guest/Cargo.toml",
+        "guest/Cargo.lock",
+        "guest/src/lib.rs",
+        "guest/wit/world.wit",
+        "lenso-plugin.template.json",
+    ] {
+        fs::copy(source.join(relative), destination.join(relative)).unwrap();
+    }
+}
+
+fn build_external_wasm_tool(source: &Path) -> std::path::PathBuf {
+    let target = source.join("target");
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--locked",
+            "--release",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--manifest-path",
+        ])
+        .arg(source.join("guest/Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    target.join("wasm32-unknown-unknown/release/external_wasm_text_tools.wasm")
+}
+
+fn build_external_wasm_tool_bundle(
+    source: &Path,
+    output: std::path::PathBuf,
+    artifact: &Path,
+    release_version: &str,
+) -> std::path::PathBuf {
+    let mut template: serde_json::Value =
+        serde_json::from_slice(&fs::read(source.join("lenso-plugin.template.json")).unwrap())
+            .unwrap();
+    template["release_version"] = release_version.into();
+    let template_path = source.join(format!("lenso-plugin-{release_version}.template.json"));
+    fs::write(&template_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    build_bundle(&BundleBuild {
+        template: template_path,
+        output: output.clone(),
+        artifact_sources: vec![ArtifactSource {
+            artifact_id: "tool-wasm".to_owned(),
+            path: artifact.to_owned(),
+        }],
+    })
+    .unwrap();
+    output
+}
+
+fn run_external_text_tool(workspace: &Path) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace)
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Use the text Plugin to uppercase Lenso plugin."])
+        .output()
+        .unwrap()
+}
+
+fn assert_external_text_tool_runs(workspace: &Path, stage: &str) {
+    let run = run_external_text_tool(workspace);
+    assert!(
+        run.status.success(),
+        "{stage}: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Text Plugin result: LENSO PLUGIN\n"
+    );
 }
 
 fn output_value<'a>(stdout: &'a str, prefix: &str) -> &'a str {

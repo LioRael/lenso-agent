@@ -65,8 +65,8 @@ remaining authority and are removed.
 The current host baseline selects released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
 `lenso-plugin-control-plane` to `lenso-runtime-rust` revision
-`48cf37b6475a0dbbe4ad8492888ed7c6c17abae4` and its standalone Plugin Bundle
-builder to revision `6d504b530b268fe6b08b5b4253956af05697f733`. That Runtime includes the durable
+`c56e4a01d14704eeae26e2121dbd87dbf380b1d3` and its standalone Plugin Bundle
+builder from the same revision. That Runtime includes the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native
 dylib Adapter, and the source-derived native Module factory catalog. The catalog
@@ -90,7 +90,9 @@ changed while the CLI was stopped, startup performs a standard maintenance
 transition before routing. One shared authority fence covers resolve, recovery,
 Ready, and switch. Normal exit suspends process-local Kernel resources without
 retiring durable authority. The Controller owns terminal-failure maintenance,
-while the Turn route injects the Generation digest into Invocation Context.
+while the Turn route injects the Generation digest into Invocation Context. A
+later validated transition may reactivate the exact immutable digest of a
+retired Generation; live candidate duplication still fails closed.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and
@@ -126,15 +128,18 @@ authorization; deletion, time-based retention, and Plugin Store collection
 remain deferred.
 
 The Catalog currently contains one exact native Tool Provider append-to-`many`
-entry, one restricted fixture Model Provider replace-`one` entry, and one
-experimental Codex Direct replacement set. The Codex set closes exact Model and
-Auth contributions, their intra-Plugin `one` binding, and the compatible base
-Agent model configuration. Replacement requires the exact base edge and
-allowlisted displaced package; removal restores the base Plan for the next
-Generation. The non-native Adapter crates remain unselected. Package presence
-or Catalog extensibility is not a claim that arbitrary executable Plugins,
-permissions, general provider replacement, Generation deletion, Plugin Store
-collection, or non-native execution classes are ready.
+entry, one package-independent isolated Wasm Tool Provider shape with the same
+bounded attachment, one restricted fixture Model Provider replace-`one` entry,
+and one experimental Codex Direct replacement set. The Wasm Tool shape fixes
+the Capability, operations, execution class, empty configuration, and absence
+of Host imports, permissions, state, Data mounts, and binding templates; it
+still requires review evidence. The Codex set closes exact Model and Auth
+contributions, their intra-Plugin `one` binding, and the compatible base Agent
+model configuration. Replacement requires the exact base edge and allowlisted
+displaced package; removal restores the base Plan for the next Generation.
+Package presence or Catalog extensibility is not a claim that arbitrary
+executable Plugins, permissioned Host imports, general provider replacement,
+Generation deletion, or Plugin Store collection are ready.
 
 ## Product outcome
 
@@ -290,7 +295,8 @@ installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
 scheduling, sandboxed Code Mode, Creator experiments, additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
-replacement, publisher-selected provider configuration, automatic rollback,
+replacement, publisher-selected provider configuration, third-party Host
+Capability permissions, automatic rollback,
 Generation retention windows and deletion, Plugin Store garbage collection,
 distributed coordination, and overlap replacement require their own product
 slices. Replacement

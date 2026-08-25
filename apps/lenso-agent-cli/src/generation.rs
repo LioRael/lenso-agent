@@ -30,6 +30,7 @@ use lenso_capability_agent::{Agent, AgentJsonCodec};
 use lenso_capability_agent_model::ModelJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::SessionJsonCodec;
+use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::ToolsJsonCodec;
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
@@ -635,6 +636,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(ModelJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)
+        .with_wasm_codec(ToolProviderJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)

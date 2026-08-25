@@ -4,6 +4,7 @@
 - Date: 2026-08-24
 - Refines: ADR 0007
 - Refined by: ADR 0009
+- Refined by: ADR 0018
 
 ## Context
 

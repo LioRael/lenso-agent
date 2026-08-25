@@ -17,3 +17,4 @@
 - [0015 — Plan Generation retention without deleting](0015-plan-generation-retention-without-deleting.md)
 - [0016 — Derive local Plugin governance from risk](0016-derive-local-plugin-governance-from-risk.md)
 - [0017 — Run the Host through durable Generation control](0017-run-the-host-through-durable-generation-control.md)
+- [0018 — Admit isolated third-party Wasm Tool Providers](0018-admit-isolated-third-party-wasm-tools.md)

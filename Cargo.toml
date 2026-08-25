@@ -44,24 +44,24 @@ base64 = "0.22"
 directories = "6.0"
 fs2 = "0.4"
 futures = "0.3"
-lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "687f1abc28adf052607010a4f5f100f6208bf454" }
+lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "68d4cf19ca1020dcd64be75d8fad69868d821e99" }
 lenso-app-plan = "0.1.4"
-lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
+lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
 lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "9a594895137b45a429876b34d8b7cfff008aa335" }
 lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "9a594895137b45a429876b34d8b7cfff008aa335" }
 lenso-contract-runtime = "0.1.0"
-lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
+lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
 lenso-kernel = "0.1.8"
 lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "9a594895137b45a429876b34d8b7cfff008aa335" }
-lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
-lenso-plugin-bundle = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "6d504b530b268fe6b08b5b4253956af05697f733" }
-lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
-lenso-quickjs-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
-lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
-lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
-lenso-wasm-component-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "48cf37b6475a0dbbe4ad8492888ed7c6c17abae4" }
+lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-plugin-bundle = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-quickjs-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-wasm-component-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
 nix = { version = "0.31", features = ["process", "signal"] }
-lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "687f1abc28adf052607010a4f5f100f6208bf454" }
+lenso-secrets-env-module = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "68d4cf19ca1020dcd64be75d8fad69868d821e99" }
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }
 schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }
