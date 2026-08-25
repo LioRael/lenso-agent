@@ -18,8 +18,8 @@ use lenso_capability_agent_prompt_provider::{
 };
 use lenso_capability_agent_tool_provider as tool_provider;
 use lenso_capability_agent_tool_provider::{
-    CatalogError, CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteRequest, ExecuteResponse, ExecuteResponseContentType,
+    CatalogError, CatalogRequest, CatalogResponse, ContentType, ExecuteError, ExecuteRequest,
+    ExecuteResponse, ToolDefinition,
 };
 use sha2::{Digest, Sha256};
 
@@ -122,7 +122,7 @@ impl FilesystemSkillsProvider {
                     .map_err(|_| ExecuteError::InvalidArguments)?;
                 Ok(ExecuteResponse {
                     content: state.catalog_json,
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({ "skill_count": state.skills.len() })
                         .to_string(),
                 })
@@ -145,7 +145,7 @@ impl FilesystemSkillsProvider {
                     .ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: skill.content.clone(),
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
                         "name": skill.name,
                         "version": skill.version,
@@ -159,7 +159,7 @@ impl FilesystemSkillsProvider {
                 let skill = state.skills.get(&name).ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: skill.resource_manifest_json.clone(),
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
                         "name": skill.name,
                         "skill_version": skill.version,
@@ -192,7 +192,7 @@ impl FilesystemSkillsProvider {
                     .ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
                     content: resource.content.clone(),
-                    content_type: ExecuteResponseContentType::Text,
+                    content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
                         "name": skill.name,
                         "skill_version": skill.version,
@@ -251,7 +251,7 @@ impl FilesystemSkillsModule {
     ) -> impl std::future::Future<Output = Result<CatalogResponse, CatalogError>> {
         std::future::ready(Ok(CatalogResponse {
             tools: vec![
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: LIST_TOOL.to_owned(),
                     description:
                         "List available Skills by name, description, and immutable content version."
@@ -259,21 +259,21 @@ impl FilesystemSkillsModule {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{},"type":"object"}"#
                         .to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: READ_TOOL.to_owned(),
                     description: "Read the full SKILL.md for one available Skill by exact name."
                         .to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
                         .to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: LIST_RESOURCES_TOOL.to_owned(),
                     description: "List readable snapshotted resources for one Skill without returning their contents."
                         .to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#
                         .to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: READ_RESOURCE_TOOL.to_owned(),
                     description: "Read one UTF-8 snapshotted resource by Skill name and relative path. This never executes scripts."
                         .to_owned(),

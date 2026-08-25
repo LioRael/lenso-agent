@@ -18,9 +18,9 @@ use lenso_capability_agent_auth_openai_codex::{
     self as auth_contract, AccessRequest, OpenaiCodexInvocationError,
 };
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CompleteError, CompleteRequest,
-    CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteResponse,
-    CompleteResponseKind, ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
+    ProviderFailurePayload,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
@@ -96,7 +96,7 @@ impl ModelProvider for DirectModel {
     fn complete(
         &self,
         context: InvocationContext,
-        request: CompleteRequest,
+        request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
         if request.model != self.config.model {
             return Box::pin(ready(Err(ModelInvocationError::Domain(
@@ -126,7 +126,9 @@ impl ModelProvider for DirectModel {
                 .json(&wire_request.body)
                 .send()
                 .await
-                .map_err(|_| provider_failure("direct Codex request failed"))?;
+                .map_err(|_| {
+                    provider_failure("transport_error", "direct Codex request failed", true)
+                })?;
             if !response.status().is_success() {
                 return Err(map_status(response.status()));
             }
@@ -146,7 +148,7 @@ struct ResponsesRequest {
 }
 
 fn responses_request(
-    request: &CompleteRequest,
+    request: &CompleteOpen,
     reasoning_effort: &str,
 ) -> Result<ResponsesRequest, CompleteError> {
     if request.max_output_tokens <= 0 || !request.temperature.is_finite() {
@@ -167,14 +169,14 @@ fn responses_request(
     let instructions = request
         .messages
         .iter()
-        .filter(|message| message.role == CompleteRequestMessagesItemRole::System)
+        .filter(|message| message.role == CompleteMessageRole::System)
         .map(|message| message.content.as_str())
         .collect::<Vec<_>>()
         .join("\n\n");
     let input = request
         .messages
         .iter()
-        .filter(|message| message.role != CompleteRequestMessagesItemRole::System)
+        .filter(|message| message.role != CompleteMessageRole::System)
         .map(|message| responses_message(message, &lenso_to_provider_tool_names))
         .collect::<Result<Vec<_>, _>>()?;
     let tools = request
@@ -235,11 +237,11 @@ fn provider_tool_name(name: &str) -> Result<String, CompleteError> {
 }
 
 fn responses_message(
-    message: &CompleteRequestMessagesItem,
+    message: &CompleteMessageInput,
     lenso_to_provider_tool_names: &BTreeMap<String, String>,
 ) -> Result<serde_json::Value, CompleteError> {
     match message.role {
-        CompleteRequestMessagesItemRole::User => {
+        CompleteMessageRole::User => {
             require_no_tool_fields(message)?;
             Ok(serde_json::json!({
                 "type": "message",
@@ -247,7 +249,7 @@ fn responses_message(
                 "content": [{ "type": "input_text", "text": message.content }]
             }))
         }
-        CompleteRequestMessagesItemRole::Assistant => match (
+        CompleteMessageRole::Assistant => match (
             message.tool_call_id.as_deref(),
             message.tool_name.as_deref(),
             message.arguments_json.as_deref(),
@@ -274,7 +276,7 @@ fn responses_message(
             }
             _ => Err(CompleteError::InvalidRequest),
         },
-        CompleteRequestMessagesItemRole::Tool => {
+        CompleteMessageRole::Tool => {
             let Some(call_id) = message.tool_call_id.as_deref().filter(|id| !id.is_empty()) else {
                 return Err(CompleteError::InvalidRequest);
             };
@@ -287,11 +289,11 @@ fn responses_message(
                 "output": message.content
             }))
         }
-        CompleteRequestMessagesItemRole::System => Err(CompleteError::InvalidRequest),
+        CompleteMessageRole::System => Err(CompleteError::InvalidRequest),
     }
 }
 
-fn require_no_tool_fields(message: &CompleteRequestMessagesItem) -> Result<(), CompleteError> {
+fn require_no_tool_fields(message: &CompleteMessageInput) -> Result<(), CompleteError> {
     if message.tool_call_id.is_some()
         || message.tool_name.is_some()
         || message.arguments_json.is_some()
@@ -303,7 +305,11 @@ fn require_no_tool_fields(message: &CompleteRequestMessagesItem) -> Result<(), C
 }
 
 fn map_auth_error(_error: OpenaiCodexInvocationError) -> ModelInvocationError {
-    provider_failure("direct Codex authentication failed; run direct login")
+    provider_failure(
+        "authentication_required",
+        "direct Codex authentication failed; run direct login",
+        false,
+    )
 }
 
 fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
@@ -314,19 +320,31 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
         reqwest::StatusCode::NOT_FOUND => {
             ModelInvocationError::Domain(CompleteError::UnsupportedModel)
         }
-        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
-            provider_failure("direct Codex credential was rejected")
-        }
-        reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            provider_failure("ChatGPT subscription rate limit was exceeded")
-        }
-        _ => provider_failure("direct Codex provider returned an unsuccessful status"),
+        reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => provider_failure(
+            "credential_rejected",
+            "direct Codex credential was rejected",
+            false,
+        ),
+        reqwest::StatusCode::TOO_MANY_REQUESTS => provider_failure(
+            "rate_limited",
+            "ChatGPT subscription rate limit was exceeded",
+            true,
+        ),
+        _ => provider_failure(
+            "provider_error",
+            "direct Codex provider returned an unsuccessful status",
+            status.is_server_error(),
+        ),
     }
 }
 
-fn provider_failure(detail: &str) -> ModelInvocationError {
-    ModelInvocationError::Runtime(RuntimeFailure::ModuleFailure {
-        detail: detail.to_owned(),
+fn provider_failure(reason_code: &str, message: &str, retryable: bool) -> ModelInvocationError {
+    ModelInvocationError::Domain(CompleteError::ProviderFailure {
+        payload: ProviderFailurePayload {
+            message: message.to_owned(),
+            reason_code: reason_code.to_owned(),
+            retryable,
+        },
     })
 }
 
@@ -503,7 +521,7 @@ impl ResponsesDecoder {
                     && !delta.is_empty()
                 {
                     output.push(self.message(
-                        CompleteResponseKind::TextDelta,
+                        CompleteMessageKind::TextDelta,
                         delta,
                         "",
                         "",
@@ -530,7 +548,7 @@ impl ResponsesDecoder {
                         protocol_failure("direct Codex emitted invalid Tool arguments")
                     })?;
                     output.push(self.message(
-                        CompleteResponseKind::ToolCall,
+                        CompleteMessageKind::ToolCall,
                         "",
                         call_id,
                         &name,
@@ -547,7 +565,7 @@ impl ResponsesDecoder {
                 if let Some(usage) = usage {
                     output.push(
                         self.message(
-                            CompleteResponseKind::Usage,
+                            CompleteMessageKind::Usage,
                             "",
                             "",
                             "",
@@ -578,7 +596,7 @@ impl ResponsesDecoder {
     #[allow(clippy::too_many_arguments)]
     fn message(
         &mut self,
-        kind: CompleteResponseKind,
+        kind: CompleteMessageKind,
         text: &str,
         tool_call_id: &str,
         tool_name: &str,
@@ -587,7 +605,7 @@ impl ResponsesDecoder {
         output_tokens: u64,
     ) -> NativeStreamItem {
         self.sequence = self.sequence.saturating_add(1);
-        NativeStreamItem::Message(Box::new(CompleteResponse {
+        NativeStreamItem::Message(Box::new(CompleteMessage {
             sequence: self.sequence.to_string(),
             kind,
             text: text.to_owned(),
@@ -630,29 +648,29 @@ fn protocol_failure(detail: &str) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lenso_capability_agent_model::CompleteRequestToolsItem;
+    use lenso_capability_agent_model::CompleteTool;
 
     #[test]
     fn request_preserves_tool_call_and_result() {
-        let request = CompleteRequest {
+        let request = CompleteOpen {
             model: "gpt-test".to_owned(),
             messages: vec![
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::Assistant,
+                CompleteMessageInput {
+                    role: CompleteMessageRole::Assistant,
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
                     tool_name: Some("read".to_owned()),
                     arguments_json: Some(r#"{"path":"README.md"}"#.to_owned()),
                 },
-                CompleteRequestMessagesItem {
-                    role: CompleteRequestMessagesItemRole::Tool,
+                CompleteMessageInput {
+                    role: CompleteMessageRole::Tool,
                     content: "fixture".to_owned(),
                     tool_call_id: Some("call-1".to_owned()),
                     tool_name: None,
                     arguments_json: None,
                 },
             ],
-            tools: vec![CompleteRequestToolsItem {
+            tools: vec![CompleteTool {
                 name: "read".to_owned(),
                 description: "Read text".to_owned(),
                 input_schema_json: r#"{"type":"object"}"#.to_owned(),
@@ -677,16 +695,16 @@ mod tests {
 
     #[test]
     fn request_rejects_provider_tool_name_collisions() {
-        let request = CompleteRequest {
+        let request = CompleteOpen {
             model: "gpt-test".to_owned(),
             messages: Vec::new(),
             tools: vec![
-                CompleteRequestToolsItem {
+                CompleteTool {
                     name: "workspace.read".to_owned(),
                     description: "Read text".to_owned(),
                     input_schema_json: r#"{"type":"object"}"#.to_owned(),
                 },
-                CompleteRequestToolsItem {
+                CompleteTool {
                     name: "workspace_read".to_owned(),
                     description: "Read other text".to_owned(),
                     input_schema_json: r#"{"type":"object"}"#.to_owned(),

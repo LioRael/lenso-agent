@@ -8,9 +8,8 @@ use lenso_capability_agent_process::{
     RunError, RunRequest,
 };
 use lenso_capability_agent_tool_provider::{
-    self as tool_provider_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
-    ExecuteError, ExecuteErrorExecutionFailedPayload, ExecuteRequest, ExecuteResponse,
-    ExecuteResponseContentType, ToolProviderProvider,
+    self as tool_provider_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
+    ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolProviderProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -122,7 +121,7 @@ impl ToolProviderProvider for ProcessToolsModule {
                     }
                     Ok(Ok(ExecuteResponse {
                         content: output,
-                        content_type: ExecuteResponseContentType::Text,
+                        content_type: ContentType::Text,
                         metadata_json: serde_json::json!({
                             "program": arguments.program,
                             "exit_code": response.exit_code,
@@ -173,7 +172,7 @@ impl Lifecycle for ProcessToolsModule {
             .to_string();
         self.state.replace(Some(ProcessToolsState {
                 catalog: CatalogResponse {
-                    tools: vec![CatalogResponseToolsItem {
+                    tools: vec![ToolDefinition {
                         name: EXEC_TOOL.to_owned(),
                         description: "Run one explicitly allowed executable without shell parsing. The command can still execute trusted project code and is not a sandbox.".to_owned(),
                         input_schema_json,
@@ -221,7 +220,7 @@ fn map_process_error(error: RunError) -> ExecuteError {
 
 fn execution_failed(reason_code: &str, message: &str) -> ExecuteError {
     ExecuteError::ExecutionFailed {
-        payload: ExecuteErrorExecutionFailedPayload {
+        payload: ExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: message.to_owned(),
             details_json: "{}".to_owned(),

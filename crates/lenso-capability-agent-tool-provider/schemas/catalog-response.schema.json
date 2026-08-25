@@ -7,27 +7,33 @@
       "type": "array",
       "maxItems": 256,
       "items": {
-        "type": "object",
-        "required": ["name", "description", "input_schema_json"],
-        "properties": {
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 128
-          },
-          "description": {
-            "type": "string",
-            "maxLength": 4096
-          },
-          "input_schema_json": {
-            "type": "string",
-            "minLength": 2,
-            "maxLength": 65536
-          }
-        },
-        "additionalProperties": false
+        "$ref": "#/$defs/ToolDefinition"
       }
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "ToolDefinition": {
+      "type": "object",
+      "required": ["name", "description", "input_schema_json"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "input_schema_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "CatalogResponse"
 }

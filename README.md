@@ -39,6 +39,12 @@ Use `--session <id>` to resume a durable Session, `--no-tools` to remove Tool
 access for one Turn, or repeated `--allow-tool <name>` options to narrow the
 selected App's Tool set.
 
+To build and run a removable Tool Provider from source, follow the
+[10-minute Tool Provider tutorial](docs/tutorials/10-minute-tool-provider.md).
+The [documentation map](docs/README.md) separates tutorials, operational
+how-to guides, reference material, and architecture explanations; the
+[glossary](docs/glossary.md) gives each control-plane term one stable meaning.
+
 ## Choose an App
 
 | App | Model | Workspace authority |
@@ -97,10 +103,11 @@ Contribution providers leaves the Shell valid with only the conversation.
 
 ## Runtime baseline
 
-The host currently uses released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. `lenso-runner` and `lenso-native-adapter` are locked to
-`lenso-runtime-rust` commit
-`c56e4a01d14704eeae26e2121dbd87dbf380b1d3`, which closes the generic dynamic
+The host currently resolves `lenso-app-plan 0.1.5` and `lenso-kernel 0.1.11`.
+All runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
+`ffb07bc8dc7103b58c864b59225ca0f4609b6fdf`; all generated contracts and Module
+ports are locked to one `lenso-protocols` commit,
+`1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0`. This closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.

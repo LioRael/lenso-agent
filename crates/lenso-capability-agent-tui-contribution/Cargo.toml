@@ -9,6 +9,11 @@ repository.workspace = true
 rust-version.workspace = true
 build = "build.rs"
 
+[package.metadata.lenso.contract]
+descriptor = "capability.json"
+projection = "rust"
+output = "src/generated.rs"
+
 [dependencies]
 futures.workspace = true
 lenso-contract-runtime.workspace = true

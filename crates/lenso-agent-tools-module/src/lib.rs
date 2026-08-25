@@ -138,7 +138,7 @@ fn convert_execute_response(response: provider_contract::ExecuteResponse) -> Exe
     ExecuteResponse {
         content: response.content,
         content_type: match response.content_type {
-            provider_contract::ExecuteResponseContentType::Text => ExecuteResponseContentType::Text,
+            provider_contract::ContentType::Text => ExecuteResponseContentType::Text,
         },
         metadata_json: response.metadata_json,
     }

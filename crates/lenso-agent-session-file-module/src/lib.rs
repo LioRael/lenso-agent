@@ -11,10 +11,11 @@ use std::{
 use futures::future::ready;
 use lenso::prelude::*;
 use lenso_capability_agent_session::{
-    self as session_contract, AppendError, AppendErrorRevisionConflictPayload, AppendRequest,
-    AppendRequestEventsItem, AppendResponse, OpenError, OpenRequest, OpenResponse, ReadError,
-    ReadRequest, ReadResponse, ReadResponseEventsItem, ReadResponseEventsItemKind, SessionAppend,
-    SessionOpen, SessionProvider, SessionRead,
+    self as session_contract, AppendError, AppendErrorRevisionConflictPayload,
+    AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, OpenError,
+    OpenSessionRequest, OpenSessionResponse, ReadError, ReadSessionRequest, ReadSessionResponse,
+    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionOpen,
+    SessionProvider, SessionRead,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -240,7 +241,10 @@ impl FileSessionProvider {
             .map_err(|error| storage_failure("commit", &error))
     }
 
-    fn open_now(&self, request: OpenRequest) -> Result<OpenResponse, OperationFailure<OpenError>> {
+    fn open_now(
+        &self,
+        request: OpenSessionRequest,
+    ) -> Result<OpenSessionResponse, OperationFailure<OpenError>> {
         let _operation = self.operation_lock.borrow_mut();
         if let Some(session_id) = request.session_id {
             if !valid_session_id(&session_id) {
@@ -249,7 +253,7 @@ impl FileSessionProvider {
             let Some(session) = self.load(&session_id).map_err(OperationFailure::Runtime)? else {
                 return Err(OpenError::NotFound.into());
             };
-            return Ok(OpenResponse {
+            return Ok(OpenSessionResponse {
                 created: false,
                 revision: session.revision.to_string(),
                 session_id,
@@ -263,7 +267,7 @@ impl FileSessionProvider {
             events: Vec::new(),
         };
         self.persist(&session).map_err(OperationFailure::Runtime)?;
-        Ok(OpenResponse {
+        Ok(OpenSessionResponse {
             created: true,
             revision: "0".to_owned(),
             session_id,
@@ -272,8 +276,8 @@ impl FileSessionProvider {
 
     fn append_now(
         &self,
-        request: AppendRequest,
-    ) -> Result<AppendResponse, OperationFailure<AppendError>> {
+        request: AppendSessionRequest,
+    ) -> Result<AppendSessionResponse, OperationFailure<AppendError>> {
         let _operation = self.operation_lock.borrow_mut();
         if !valid_session_id(&request.session_id) || request.events.is_empty() {
             return Err(AppendError::InvalidEvent.into());
@@ -314,7 +318,7 @@ impl FileSessionProvider {
             }
         }
         if duplicate_count == proposed.len() {
-            return Ok(AppendResponse {
+            return Ok(AppendSessionResponse {
                 revision: session.revision.to_string(),
             });
         }
@@ -335,12 +339,15 @@ impl FileSessionProvider {
             .ok_or(AppendError::InvalidEvent)?;
         session.events.extend(proposed);
         self.persist(&session).map_err(OperationFailure::Runtime)?;
-        Ok(AppendResponse {
+        Ok(AppendSessionResponse {
             revision: session.revision.to_string(),
         })
     }
 
-    fn read_now(&self, request: ReadRequest) -> Result<ReadResponse, OperationFailure<ReadError>> {
+    fn read_now(
+        &self,
+        request: ReadSessionRequest,
+    ) -> Result<ReadSessionResponse, OperationFailure<ReadError>> {
         let _operation = self.operation_lock.borrow();
         if !valid_session_id(&request.session_id) || !(1..=1000).contains(&request.limit) {
             return Err(ReadError::InvalidCursor.into());
@@ -366,7 +373,7 @@ impl FileSessionProvider {
             .take(limit)
             .map(read_event)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ReadResponse {
+        Ok(ReadSessionResponse {
             session_id: request.session_id,
             revision: session.revision.to_string(),
             events,
@@ -378,7 +385,7 @@ impl SessionProvider for FileSessionProvider {
     fn append(
         &self,
         _context: InvocationContext,
-        request: AppendRequest,
+        request: AppendSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionAppend> {
         Box::pin(ready(native_result(self.append_now(request))))
     }
@@ -386,7 +393,7 @@ impl SessionProvider for FileSessionProvider {
     fn open(
         &self,
         _context: InvocationContext,
-        request: OpenRequest,
+        request: OpenSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
         Box::pin(ready(native_result(self.open_now(request))))
     }
@@ -394,7 +401,7 @@ impl SessionProvider for FileSessionProvider {
     fn read(
         &self,
         _context: InvocationContext,
-        request: ReadRequest,
+        request: ReadSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
         Box::pin(ready(native_result(self.read_now(request))))
     }
@@ -405,7 +412,7 @@ impl SessionProvider for FileSessionModule {
     fn append(
         &self,
         _context: InvocationContext,
-        request: AppendRequest,
+        request: AppendSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionAppend> {
         let result = self
             .provider
@@ -421,7 +428,7 @@ impl SessionProvider for FileSessionModule {
     fn open(
         &self,
         _context: InvocationContext,
-        request: OpenRequest,
+        request: OpenSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
         let result = self
             .provider
@@ -437,7 +444,7 @@ impl SessionProvider for FileSessionModule {
     fn read(
         &self,
         _context: InvocationContext,
-        request: ReadRequest,
+        request: ReadSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
         let result = self
             .provider
@@ -465,7 +472,7 @@ impl Lifecycle for FileSessionModule {
 }
 
 fn validate_event(
-    event: AppendRequestEventsItem,
+    event: AppendSessionRequestEventsItem,
     expected_revision: u64,
     offset: usize,
 ) -> Result<StoredEvent, AppendError> {
@@ -492,8 +499,8 @@ fn validate_event(
     })
 }
 
-fn read_event(event: StoredEvent) -> Result<ReadResponseEventsItem, ReadError> {
-    Ok(ReadResponseEventsItem {
+fn read_event(event: StoredEvent) -> Result<ReadSessionResponseEventsItem, ReadError> {
+    Ok(ReadSessionResponseEventsItem {
         revision: event.revision.to_string(),
         event_id: event.event_id,
         kind: read_event_kind(&event.kind).ok_or(ReadError::InvalidCursor)?,
@@ -503,8 +510,10 @@ fn read_event(event: StoredEvent) -> Result<ReadResponseEventsItem, ReadError> {
     })
 }
 
-fn event_kind(kind: &lenso_capability_agent_session::AppendRequestEventsItemKind) -> &'static str {
-    use lenso_capability_agent_session::AppendRequestEventsItemKind as Kind;
+fn event_kind(
+    kind: &lenso_capability_agent_session::AppendSessionRequestEventsItemKind,
+) -> &'static str {
+    use lenso_capability_agent_session::AppendSessionRequestEventsItemKind as Kind;
     match kind {
         Kind::SessionCreated => "session_created",
         Kind::TurnStarted => "turn_started",
@@ -518,17 +527,17 @@ fn event_kind(kind: &lenso_capability_agent_session::AppendRequestEventsItemKind
     }
 }
 
-fn read_event_kind(kind: &str) -> Option<ReadResponseEventsItemKind> {
+fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
     Some(match kind {
-        "session_created" => ReadResponseEventsItemKind::SessionCreated,
-        "turn_started" => ReadResponseEventsItemKind::TurnStarted,
-        "model_requested" => ReadResponseEventsItemKind::ModelRequested,
-        "model_output" => ReadResponseEventsItemKind::ModelOutput,
-        "tool_requested" => ReadResponseEventsItemKind::ToolRequested,
-        "tool_result" => ReadResponseEventsItemKind::ToolResult,
-        "turn_completed" => ReadResponseEventsItemKind::TurnCompleted,
-        "turn_failed" => ReadResponseEventsItemKind::TurnFailed,
-        "turn_cancelled" => ReadResponseEventsItemKind::TurnCancelled,
+        "session_created" => ReadSessionResponseEventsItemKind::SessionCreated,
+        "turn_started" => ReadSessionResponseEventsItemKind::TurnStarted,
+        "model_requested" => ReadSessionResponseEventsItemKind::ModelRequested,
+        "model_output" => ReadSessionResponseEventsItemKind::ModelOutput,
+        "tool_requested" => ReadSessionResponseEventsItemKind::ToolRequested,
+        "tool_result" => ReadSessionResponseEventsItemKind::ToolResult,
+        "turn_completed" => ReadSessionResponseEventsItemKind::TurnCompleted,
+        "turn_failed" => ReadSessionResponseEventsItemKind::TurnFailed,
+        "turn_cancelled" => ReadSessionResponseEventsItemKind::TurnCancelled,
         _ => return None,
     })
 }
@@ -587,12 +596,12 @@ fn native_result<T, D>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lenso_capability_agent_session::AppendRequestEventsItemKind;
+    use lenso_capability_agent_session::AppendSessionRequestEventsItemKind;
 
-    fn event(id: &str) -> AppendRequestEventsItem {
-        AppendRequestEventsItem {
+    fn event(id: &str) -> AppendSessionRequestEventsItem {
+        AppendSessionRequestEventsItem {
             event_id: id.to_owned(),
-            kind: AppendRequestEventsItemKind::TurnStarted,
+            kind: AppendSessionRequestEventsItemKind::TurnStarted,
             turn_id: Some("turn-1".to_owned()),
             occurred_at: "2026-08-24T00:00:00Z".to_owned(),
             payload_json: format!(
@@ -610,9 +619,11 @@ mod tests {
             operation_lock: Rc::new(RefCell::new(())),
         };
         provider.prepare_store().unwrap();
-        let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
         let appended = provider
-            .append_now(AppendRequest {
+            .append_now(AppendSessionRequest {
                 session_id: opened.session_id.clone(),
                 expected_revision: "0".to_owned(),
                 events: vec![event("event-1")],
@@ -625,14 +636,14 @@ mod tests {
             operation_lock: Rc::new(RefCell::new(())),
         };
         let reopened = fresh_generation
-            .open_now(OpenRequest {
+            .open_now(OpenSessionRequest {
                 session_id: Some(opened.session_id.clone()),
             })
             .unwrap();
         assert!(!reopened.created);
         assert_eq!(reopened.revision, "1");
         let read = fresh_generation
-            .read_now(ReadRequest {
+            .read_now(ReadSessionRequest {
                 session_id: opened.session_id,
                 after_revision: "0".to_owned(),
                 limit: 10,
@@ -650,8 +661,10 @@ mod tests {
             operation_lock: Rc::new(RefCell::new(())),
         };
         provider.prepare_store().unwrap();
-        let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
-        let request = AppendRequest {
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
+        let request = AppendSessionRequest {
             session_id: opened.session_id.clone(),
             expected_revision: "0".to_owned(),
             events: vec![event("event-1")],
@@ -659,7 +672,7 @@ mod tests {
         provider.append_now(request.clone()).unwrap();
         assert_eq!(provider.append_now(request).unwrap().revision, "1");
         let conflict = provider
-            .append_now(AppendRequest {
+            .append_now(AppendSessionRequest {
                 session_id: opened.session_id,
                 expected_revision: "0".to_owned(),
                 events: vec![event("event-2")],
@@ -680,11 +693,13 @@ mod tests {
             operation_lock: Rc::new(RefCell::new(())),
         };
         provider.prepare_store().unwrap();
-        let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
         fs::remove_dir_all(&directory).unwrap();
         fs::write(&directory, b"not a directory").unwrap();
         let failure = provider
-            .read_now(ReadRequest {
+            .read_now(ReadSessionRequest {
                 session_id: opened.session_id,
                 after_revision: "0".to_owned(),
                 limit: 1,
@@ -702,9 +717,11 @@ mod tests {
             operation_lock: Rc::new(RefCell::new(())),
         };
         provider.prepare_store().unwrap();
-        let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
         provider
-            .append_now(AppendRequest {
+            .append_now(AppendSessionRequest {
                 session_id: opened.session_id.clone(),
                 expected_revision: "0".to_owned(),
                 events: vec![event("event-1")],
@@ -736,9 +753,11 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         for _ in 0..2 {
-            let opened = provider.open_now(OpenRequest { session_id: None }).unwrap();
+            let opened = provider
+                .open_now(OpenSessionRequest { session_id: None })
+                .unwrap();
             provider
-                .append_now(AppendRequest {
+                .append_now(AppendSessionRequest {
                     session_id: opened.session_id,
                     expected_revision: "0".to_owned(),
                     events: vec![event("event-1")],

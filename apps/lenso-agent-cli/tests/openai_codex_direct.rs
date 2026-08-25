@@ -154,7 +154,10 @@ fn missing_direct_credential_rejects_the_turn_without_starting_http() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("direct Codex authentication failed"));
+    assert!(
+        stderr.contains("direct Codex authentication failed"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("direct-access-secret"));
     assert!(!stderr.contains("direct-refresh-secret"));
 }
