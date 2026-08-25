@@ -535,10 +535,11 @@ impl<P: SessionProvider> NativeRequestEndpoint for SessionEndpoint<P> {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_native_provide_session {
-    ($provider:expr, $lifecycle:expr) => {{
+    ($provider:expr, $lifecycle:expr, $support:path) => {{
+        use $support as __LensoNativeSupport;
         let endpoint = ::std::rc::Rc::new($crate::SessionEndpoint::new($provider));
-        ::lenso_native_adapter::NativeModuleInstance::with_all_endpoints(
-            vec![endpoint.clone() as ::std::rc::Rc<dyn ::lenso_kernel::NativeRequestEndpoint>],
+        __LensoNativeSupport::NativeModuleInstance::with_all_endpoints(
+            vec![endpoint.clone() as ::std::rc::Rc<dyn __LensoNativeSupport::NativeRequestEndpoint>],
             vec![],
             vec![],
             $lifecycle,
