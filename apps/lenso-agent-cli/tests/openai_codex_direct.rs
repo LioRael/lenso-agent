@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+mod support;
+
 #[derive(Debug)]
 struct CapturedRequest {
     headers: String,
@@ -15,8 +17,7 @@ struct CapturedRequest {
 }
 
 fn canonical_plan_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/openai-codex-direct/resolved-plan.json")
+    support::plan("openai-codex-direct")
 }
 
 fn test_plan(root: &Path, base_url: &str, credential_file: &Path) -> PathBuf {

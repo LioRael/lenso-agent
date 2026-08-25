@@ -3,7 +3,10 @@
 use std::{io, time::Duration};
 
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
+        KeyEventKind, KeyModifiers, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -20,7 +23,10 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
+    widgets::{
+        Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
 };
 
 use crate::generation::{AgentApp, TurnGeneration};
@@ -28,6 +34,7 @@ use crate::generation::{AgentApp, TurnGeneration};
 const EVENT_TICK: Duration = Duration::from_millis(250);
 const MAX_INPUT_CHARACTERS: usize = 262_144;
 const PANEL_BREAKPOINT: u16 = 96;
+const WHEEL_SCROLL_LINES: usize = 3;
 
 struct Palette;
 
@@ -91,6 +98,75 @@ struct TranscriptEntry {
 }
 
 #[derive(Debug)]
+struct ScrollState {
+    top: usize,
+    max_top: usize,
+    viewport_rows: usize,
+    follow_tail: bool,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self {
+            top: 0,
+            max_top: 0,
+            viewport_rows: 1,
+            follow_tail: true,
+        }
+    }
+}
+
+impl ScrollState {
+    fn update_metrics(&mut self, content_rows: usize, viewport_rows: usize) {
+        self.viewport_rows = viewport_rows.max(1);
+        self.max_top = content_rows.saturating_sub(self.viewport_rows);
+        if self.follow_tail {
+            self.top = self.max_top;
+        } else {
+            self.top = self.top.min(self.max_top);
+            if self.top == self.max_top {
+                self.follow_tail = true;
+            }
+        }
+    }
+
+    fn scroll_up(&mut self, rows: usize) {
+        if self.max_top == 0 {
+            return;
+        }
+        self.top = self.top.saturating_sub(rows.max(1));
+        self.follow_tail = false;
+    }
+
+    fn scroll_down(&mut self, rows: usize) {
+        self.top = self.top.saturating_add(rows.max(1)).min(self.max_top);
+        self.follow_tail = self.top == self.max_top;
+    }
+
+    fn page_rows(&self) -> usize {
+        self.viewport_rows.saturating_sub(1).max(1)
+    }
+
+    fn half_page_rows(&self) -> usize {
+        self.viewport_rows.saturating_div(2).max(1)
+    }
+
+    fn goto_top(&mut self) {
+        self.top = 0;
+        self.follow_tail = self.max_top == 0;
+    }
+
+    fn goto_bottom(&mut self) {
+        self.top = self.max_top;
+        self.follow_tail = true;
+    }
+
+    fn rows_below(&self) -> usize {
+        self.max_top.saturating_sub(self.top)
+    }
+}
+
+#[derive(Debug)]
 struct TuiState {
     input: String,
     input_characters: usize,
@@ -101,6 +177,7 @@ struct TuiState {
     phase: UiPhase,
     active: Option<ActiveTurn>,
     tool_scope: String,
+    scroll: ScrollState,
 }
 
 impl TuiState {
@@ -119,6 +196,7 @@ impl TuiState {
                 Some(tools) if tools.is_empty() => "no tools".to_owned(),
                 Some(tools) => format!("{} scoped tools", tools.len()),
             },
+            scroll: ScrollState::default(),
         }
     }
 
@@ -144,8 +222,8 @@ impl TuiState {
 
     fn append_input(&mut self, text: &str) {
         let remaining = MAX_INPUT_CHARACTERS.saturating_sub(self.input_characters);
-        let sanitized = text.replace(['\r', '\n'], " ");
-        let accepted: String = sanitized.chars().take(remaining).collect();
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let accepted: String = normalized.chars().take(remaining).collect();
         self.input_characters += accepted.chars().count();
         self.input.push_str(&accepted);
     }
@@ -238,6 +316,14 @@ fn handle_terminal_event(
             state.append_input(&text);
             Ok(false)
         }
+        Event::Mouse(mouse) => {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => state.scroll.scroll_up(WHEEL_SCROLL_LINES),
+                MouseEventKind::ScrollDown => state.scroll.scroll_down(WHEEL_SCROLL_LINES),
+                _ => {}
+            }
+            Ok(false)
+        }
         _ => Ok(false),
     }
 }
@@ -247,7 +333,33 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
         state.active = None;
         return true;
     }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        match key.code {
+            KeyCode::Char('k') => state.scroll.scroll_up(1),
+            KeyCode::Char('j') => state.scroll.scroll_down(1),
+            KeyCode::Char('u') => state.scroll.scroll_up(state.scroll.half_page_rows()),
+            KeyCode::Char('d') => state.scroll.scroll_down(state.scroll.half_page_rows()),
+            _ => return false,
+        }
+        return false;
+    }
     match key.code {
+        KeyCode::PageUp => {
+            state.scroll.scroll_up(state.scroll.page_rows());
+            false
+        }
+        KeyCode::PageDown => {
+            state.scroll.scroll_down(state.scroll.page_rows());
+            false
+        }
+        KeyCode::Home => {
+            state.scroll.goto_top();
+            false
+        }
+        KeyCode::End => {
+            state.scroll.goto_bottom();
+            false
+        }
         KeyCode::Esc => {
             if state.active.take().is_some() {
                 state.push_system("Turn cancelled.");
@@ -256,6 +368,15 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
             } else {
                 true
             }
+        }
+        KeyCode::Enter
+            if state.active.is_none()
+                && key
+                    .modifiers
+                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+        {
+            state.append_input("\n");
+            false
         }
         KeyCode::Enter if state.active.is_none() && !state.input.trim().is_empty() => {
             state.phase = UiPhase::SubmitRequested;
@@ -300,6 +421,7 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         text: String::new(),
     });
     state.phase = UiPhase::Active;
+    state.scroll.goto_bottom();
 
     let lease = app.lease_tui_turn().await?;
     let mut context = lease.invocation_context()?;
@@ -376,10 +498,17 @@ fn runtime_failure_message(error: lenso_kernel::RuntimeFailure) -> String {
     }
 }
 
-fn render(frame: &mut Frame<'_>, state: &TuiState) {
+fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let area = content_area(frame.area());
     let compact = area.height <= 16;
-    let composer_height = if compact { 3 } else { 4 };
+    let input_rows = state.input.split('\n').count();
+    let composer_height = if compact {
+        3
+    } else {
+        u16::try_from(input_rows.saturating_add(2))
+            .unwrap_or(7)
+            .clamp(4, 7)
+    };
     let [header, body, activity, composer, shortcuts] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(4),
@@ -449,7 +578,7 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     );
 }
 
-fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     let transcript_area = Block::default()
         .padding(Padding::new(1, 1, 1, 0))
         .inner(area);
@@ -491,12 +620,28 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         .iter()
         .map(|line| line.width().max(1).div_ceil(wrap_width))
         .sum::<usize>();
+    state
+        .scroll
+        .update_metrics(rendered_line_count, usize::from(transcript_area.height));
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    let scroll = rendered_line_count
-        .saturating_sub(usize::from(transcript_area.height))
-        .try_into()
-        .unwrap_or(u16::MAX);
+    let scroll = state.scroll.top.try_into().unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((scroll, 0)), transcript_area);
+    if state.scroll.max_top > 0 {
+        let mut scrollbar_state = ScrollbarState::new(rendered_line_count)
+            .position(state.scroll.top)
+            .viewport_content_length(usize::from(transcript_area.height));
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .track_style(Style::default().fg(Palette::QUIET))
+                .thumb_symbol("┃")
+                .thumb_style(Style::default().fg(Palette::MUTED)),
+            transcript_area,
+            &mut scrollbar_state,
+        );
+    }
 }
 
 fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
@@ -528,21 +673,43 @@ fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
 }
 
 fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
-    let Some((label, color)) = state.phase.activity() else {
-        return;
-    };
-    let suffix = if state.phase == UiPhase::Active {
-        "  Esc cancel"
-    } else {
-        ""
-    };
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(label, Style::default().fg(color)),
-            Span::styled(suffix, Style::default().fg(Palette::QUIET)),
-        ])),
-        area,
-    );
+    let history = (!state.scroll.follow_tail).then(|| {
+        format!(
+            "↑ reading history · {} lines below · End follow",
+            state.scroll.rows_below()
+        )
+    });
+    let history_width = history.as_ref().map_or(0, |label| {
+        u16::try_from(label.chars().count()).unwrap_or(u16::MAX)
+    });
+    let [phase_area, history_area] = Layout::horizontal([
+        Constraint::Min(0),
+        Constraint::Length(history_width.min(area.width)),
+    ])
+    .areas(area);
+
+    if let Some((label, color)) = state.phase.activity() {
+        let suffix = if state.phase == UiPhase::Active {
+            "  Esc cancel"
+        } else {
+            ""
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(label, Style::default().fg(color)),
+                Span::styled(suffix, Style::default().fg(Palette::QUIET)),
+            ])),
+            phase_area,
+        );
+    }
+    if let Some(history) = history {
+        frame.render_widget(
+            Paragraph::new(history)
+                .alignment(ratatui::layout::Alignment::Right)
+                .style(Style::default().fg(Palette::MUTED)),
+            history_area,
+        );
+    }
 }
 
 fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
@@ -556,30 +723,62 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border))
+        .title_bottom(Span::styled(
+            format!(" {} · ask ", state.tool_scope),
+            Style::default().fg(Palette::QUIET),
+        ))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let input = if state.input.is_empty() {
-        Line::from(vec![
+        vec![Line::from(vec![
             Span::styled("❯ ", Style::default().fg(border)),
             Span::styled("Ask Lenso Agent…", Style::default().fg(Palette::QUIET)),
-        ])
+        ])]
     } else {
-        Line::from(vec![
-            Span::styled("❯ ", Style::default().fg(border)),
-            Span::raw(state.input.as_str()),
-        ])
+        state
+            .input
+            .split('\n')
+            .enumerate()
+            .map(|(index, line)| {
+                Line::from(vec![
+                    Span::styled(
+                        if index == 0 { "❯ " } else { "  " },
+                        Style::default().fg(border),
+                    ),
+                    Span::raw(line.to_owned()),
+                ])
+            })
+            .collect::<Vec<_>>()
     };
-    frame.render_widget(Paragraph::new(input), inner);
+    let hidden_rows = input.len().saturating_sub(usize::from(inner.height));
+    frame.render_widget(
+        Paragraph::new(Text::from(input)).scroll((hidden_rows.try_into().unwrap_or(u16::MAX), 0)),
+        inner,
+    );
 
     if focused {
+        let last_line = state.input.rsplit('\n').next().unwrap_or_default();
         let cursor_x = inner
             .x
             .saturating_add(2)
-            .saturating_add(u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX))
+            .saturating_add(u16::try_from(Line::from(last_line).width()).unwrap_or(u16::MAX))
             .min(inner.right().saturating_sub(1));
-        frame.set_cursor_position((cursor_x, inner.y));
+        let cursor_y = inner
+            .y
+            .saturating_add(
+                u16::try_from(
+                    state
+                        .input
+                        .split('\n')
+                        .count()
+                        .saturating_sub(1 + hidden_rows),
+                )
+                .unwrap_or(u16::MAX),
+            )
+            .min(inner.bottom().saturating_sub(1));
+        frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
 
@@ -587,6 +786,10 @@ fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let mut spans = Vec::new();
     if state.active.is_none() {
         spans.extend(shortcut("enter", "send"));
+        if area.width >= 50 {
+            spans.push(Span::raw("   "));
+            spans.extend(shortcut("shift+enter", "newline"));
+        }
         spans.push(Span::raw("   "));
     }
     spans.extend(shortcut(
@@ -601,13 +804,14 @@ fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         spans.push(Span::raw("   "));
         spans.extend(shortcut("tab", "panels"));
     }
-    spans.extend([
-        Span::raw("   "),
-        Span::styled(
-            state.tool_scope.as_str(),
-            Style::default().fg(Palette::QUIET),
-        ),
-    ]);
+    if state.scroll.max_top > 0 && area.width >= 58 {
+        spans.push(Span::raw("   "));
+        if state.scroll.follow_tail {
+            spans.extend(shortcut("pgup/pgdn", "scroll"));
+        } else {
+            spans.extend(shortcut("end", "follow"));
+        }
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -637,12 +841,17 @@ impl TerminalSession {
             let _ = disable_raw_mode();
             return Err(format!("failed to enter alternate screen: {error}"));
         }
+        if let Err(error) = execute!(stdout, EnableMouseCapture) {
+            let _ = execute!(stdout, LeaveAlternateScreen);
+            let _ = disable_raw_mode();
+            return Err(format!("failed to enable terminal mouse capture: {error}"));
+        }
         let terminal = match Terminal::new(CrosstermBackend::new(stdout)) {
             Ok(terminal) => terminal,
             Err(error) => {
                 let _ = disable_raw_mode();
                 let mut stdout = io::stdout();
-                let _ = execute!(stdout, LeaveAlternateScreen);
+                let _ = execute!(stdout, DisableMouseCapture, LeaveAlternateScreen);
                 return Err(format!("failed to initialize terminal: {error}"));
             }
         };
@@ -657,11 +866,13 @@ impl TerminalSession {
             return Ok(());
         }
         let raw_mode = disable_raw_mode();
+        let mouse = execute!(self.terminal.backend_mut(), DisableMouseCapture);
         let alternate_screen = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         let cursor = self.terminal.show_cursor();
         self.restored = true;
 
         raw_mode.map_err(|error| format!("failed to disable terminal raw mode: {error}"))?;
+        mouse.map_err(|error| format!("failed to disable terminal mouse capture: {error}"))?;
         alternate_screen.map_err(|error| format!("failed to leave alternate screen: {error}"))?;
         cursor.map_err(|error| format!("failed to restore terminal cursor: {error}"))
     }
@@ -671,6 +882,7 @@ impl Drop for TerminalSession {
     fn drop(&mut self) {
         if !self.restored {
             let _ = disable_raw_mode();
+            let _ = execute!(self.terminal.backend_mut(), DisableMouseCapture);
             let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
             let _ = self.terminal.show_cursor();
         }
@@ -679,6 +891,7 @@ impl Drop for TerminalSession {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::MouseEvent;
     use ratatui::backend::TestBackend;
 
     use super::*;
@@ -696,7 +909,7 @@ mod tests {
             }],
         );
         state.input = "hello".to_owned();
-        terminal.draw(|frame| render(frame, &state)).unwrap();
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("LENSO  agent"));
         assert!(content.contains("What do you want to work on?"));
@@ -710,7 +923,7 @@ mod tests {
     fn compact_layout_keeps_the_conversation_and_composer_primary() {
         let backend = TestBackend::new(80, 16);
         let mut terminal = Terminal::new(backend).unwrap();
-        let state = TuiState::new(
+        let mut state = TuiState::new(
             &TuiOptions::default(),
             vec![SnapshotResponsePanelsItem {
                 id: "agent.help".to_owned(),
@@ -718,7 +931,7 @@ mod tests {
                 body: "Esc quits".to_owned(),
             }],
         );
-        terminal.draw(|frame| render(frame, &state)).unwrap();
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("What do you want to work on?"));
         assert!(content.contains("Ask Lenso Agent…"));
@@ -744,6 +957,20 @@ mod tests {
     }
 
     #[test]
+    fn multiline_input_is_preserved_and_shift_enter_adds_a_line() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.append_input("first\r\nsecond\rthird");
+        assert_eq!(state.input, "first\nsecond\nthird");
+
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT),
+            &mut state,
+        ));
+        assert_eq!(state.input, "first\nsecond\nthird\n");
+        assert_eq!(state.phase, UiPhase::Idle);
+    }
+
+    #[test]
     fn runtime_failure_stays_inline_and_keeps_the_tui_available() {
         let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
         handle_stream_event(
@@ -761,5 +988,80 @@ mod tests {
                 text,
             }) if text.contains("fixture failure")
         ));
+    }
+
+    #[test]
+    fn page_navigation_leaves_and_restores_tail_following() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.scroll.viewport_rows = 8;
+        state.scroll.max_top = 40;
+        state.scroll.top = 40;
+
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+            &mut state,
+        ));
+        assert!(state.scroll.top < state.scroll.max_top);
+        assert!(!state.scroll.follow_tail);
+
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::End, KeyModifiers::NONE),
+            &mut state,
+        ));
+        assert_eq!(state.scroll.top, state.scroll.max_top);
+        assert!(state.scroll.follow_tail);
+    }
+
+    #[test]
+    fn mouse_wheel_scrolls_without_leaving_the_prompt() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.input = "draft stays here".to_owned();
+        state.input_characters = state.input.chars().count();
+        state.scroll.viewport_rows = 8;
+        state.scroll.max_top = 40;
+        state.scroll.top = 40;
+
+        assert!(
+            !handle_terminal_event(
+                Some(Ok(Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column: 12,
+                    row: 4,
+                    modifiers: KeyModifiers::NONE,
+                }))),
+                &mut state,
+            )
+            .unwrap()
+        );
+        assert_eq!(state.scroll.top, 40 - WHEEL_SCROLL_LINES);
+        assert!(!state.scroll.follow_tail);
+        assert_eq!(state.input, "draft stays here");
+    }
+
+    #[test]
+    fn rendered_history_exposes_scroll_position_and_follow_control() {
+        let backend = TestBackend::new(80, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        for index in 0..24 {
+            state.transcript.push(TranscriptEntry {
+                speaker: Speaker::System,
+                text: format!("event {index}"),
+            });
+        }
+
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        assert!(state.scroll.max_top > 0);
+        assert!(state.scroll.follow_tail);
+
+        handle_key(
+            KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE),
+            &mut state,
+        );
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let content = terminal.backend().to_string();
+        assert!(content.contains("reading history"));
+        assert!(content.contains("End follow"));
+        assert!(content.contains("end follow"));
     }
 }

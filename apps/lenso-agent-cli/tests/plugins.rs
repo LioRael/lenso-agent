@@ -10,9 +10,109 @@ use std::{
 use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
 use lenso_plugin_control_plane::sha256_digest;
 
+mod support;
+
 fn plan_path() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/headless-readonly/resolved-plan.json")
+    support::plan("base")
+}
+
+#[test]
+fn bundled_plugin_catalog_is_visible_without_product_app_variants() {
+    let available = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .args(["plugins", "available"])
+        .output()
+        .unwrap();
+
+    assert!(available.status.success());
+    let stdout = String::from_utf8(available.stdout).unwrap();
+    assert!(stdout.contains("text-tools       stable"));
+    assert!(stdout.contains("workspace-edit   experimental"));
+    assert!(stdout.contains("skills           experimental"));
+    assert!(stdout.contains("local-process    experimental"));
+    assert!(stdout.contains("openai-compatible experimental"));
+}
+
+#[test]
+fn skills_plugin_closes_prompt_and_tool_bindings_from_one_selection() {
+    let workspace = tempfile::tempdir().unwrap();
+    let skill = workspace.path().join(".agents/skills/fixture");
+    fs::create_dir_all(&skill).unwrap();
+    fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: fixture\ndescription: Fixture skill\n---\n\nUse this fixture skill.\n",
+    )
+    .unwrap();
+
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("HOME", workspace.path())
+        .args(["plugins", "enable", "skills", "--evidence"])
+        .arg("reviewed local Skills catalog")
+        .arg("--plan")
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    let active: serde_json::Value = serde_json::from_slice(
+        &fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(active["lock"]["instances"].as_array().unwrap().len(), 1);
+
+    let disable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("HOME", workspace.path())
+        .args(["plugins", "disable", "skills", "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        disable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disable.stderr)
+    );
+}
+
+#[test]
+fn openai_compatible_plugin_replaces_model_and_closes_secrets() {
+    let workspace = tempfile::tempdir().unwrap();
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("OPENAI_API_KEY", "ready-gate-fixture")
+        .args(["plugins", "enable", "openai-compatible", "--evidence"])
+        .arg("reviewed OpenAI-compatible provider")
+        .arg("--plan")
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    let active: serde_json::Value = serde_json::from_slice(
+        &fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(active["lock"]["instances"].as_array().unwrap().len(), 2);
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .arg("Answer directly: hello")
+        .output()
+        .unwrap();
+    assert!(!run.status.success());
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("configured secret reference"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 }
 
 fn fixture_model_bundle_path() -> std::path::PathBuf {
@@ -155,6 +255,120 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
         String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"),
         "{}",
         String::from_utf8_lossy(&after_remove.stderr)
+    );
+}
+
+#[test]
+fn reviewed_workspace_edit_plugin_composes_with_another_enabled_tool_plugin() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+
+    let text_install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "enable", "text-tools"])
+        .args(["--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        text_install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&text_install.stderr)
+    );
+
+    let edit_install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "enable", "workspace-edit"])
+        .args(["--evidence", "reviewed-workspace-mutation"])
+        .args(["--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        edit_install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&edit_install.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&edit_install.stdout)
+            .contains("release: lenso.workspace-edit@1.0.0")
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status_stdout = String::from_utf8(status.stdout).unwrap();
+    assert!(status_stdout.contains("example.text-tools@1.0.0"));
+    assert!(status_stdout.contains("lenso.workspace-edit@1.0.0"));
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Create and edit a workspace note."])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Workspace mutation result: after\n"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("note.txt")).unwrap(),
+        "after\n"
+    );
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "disable", "workspace-edit"])
+        .args(["--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+
+    let status_after = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    let status_after_stdout = String::from_utf8(status_after.stdout).unwrap();
+    assert!(status_after_stdout.contains("example.text-tools@1.0.0"));
+    assert!(!status_after_stdout.contains("lenso.workspace-edit@1.0.0"));
+}
+
+#[test]
+fn bundled_plugin_enable_keeps_active_state_unchanged_when_ready_check_fails() {
+    let workspace = tempfile::tempdir().unwrap();
+    let invalid_plan = workspace.path().join("invalid-plan.json");
+    fs::write(&invalid_plan, b"{}\n").unwrap();
+
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "enable", "workspace-edit"])
+        .args(["--evidence", "reviewed-workspace-mutation", "--plan"])
+        .arg(&invalid_plan)
+        .output()
+        .unwrap();
+
+    assert!(!enable.status.success());
+    assert!(String::from_utf8_lossy(&enable.stderr).contains("resolved Plan"));
+    assert!(
+        !workspace
+            .path()
+            .join(".lenso/plugins/active-set.json")
+            .exists()
     );
 }
 
@@ -516,12 +730,6 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
     let release_one = tempfile::tempdir().unwrap();
     let release_two = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
-    let app_directory = workspace
-        .path()
-        .join("composition")
-        .join("headless-readonly");
-    fs::create_dir_all(&app_directory).unwrap();
-    fs::copy(plan_path(), app_directory.join("resolved-plan.json")).unwrap();
     let manifest_one = write_tool_bundle_release(release_one.path(), "1.0.0");
     let manifest_two = write_tool_bundle_release(release_two.path(), "2.0.0");
 
@@ -589,14 +797,10 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
 
     let upgrade = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
-        .args([
-            "plugins",
-            "upgrade",
-            "--app",
-            "headless-readonly",
-            "--bundle",
-        ])
+        .args(["plugins", "upgrade", "--bundle"])
         .arg(release_two.path())
+        .arg("--plan")
+        .arg(plan_path())
         .output()
         .unwrap();
     assert!(
@@ -1153,9 +1357,8 @@ fn assert_external_workspace_reader_runs(workspace: &Path, stage: &str) {
 }
 
 fn write_network_plan(workspace: &Path, origin: &str) -> std::path::PathBuf {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/headless-network/resolved-plan.json");
-    let mut plan: serde_json::Value = serde_json::from_slice(&fs::read(source).unwrap()).unwrap();
+    let mut plan: serde_json::Value =
+        serde_json::from_slice(&fs::read(plan_path()).unwrap()).unwrap();
     let modules = plan["module_instances"].as_array_mut().unwrap();
     let provider = modules
         .iter_mut()

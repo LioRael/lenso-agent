@@ -133,12 +133,13 @@ make both the workspace root and model endpoint visible before execution.
    occurs.
 8. Budget exhaustion produces a declared terminal Domain Error and a durable
    failure event.
-9. The opt-in coding fixture proves atomic create, unique exact edit, and
-   read-back; removing the mutation Provider restores the readonly graph.
-10. The local-coding fixture proves edit, structured `cargo check`, and
-    read-back. Provider tests prove nonzero exit capture, policy rejection,
-    timeout, output overflow, cancellation, descendant cleanup, and root loss.
-    Removing both Process Modules restores the coding graph.
+9. The opt-in workspace-edit Plugin proves atomic create, unique exact edit,
+   and read-back; disabling it restores the readonly graph.
+10. The local-process plus workspace-edit Plugins prove edit, structured
+    `cargo check`, and read-back. Provider tests prove nonzero exit capture,
+    policy rejection, timeout, output overflow, cancellation, descendant
+    cleanup, and root loss. Removing both Process Modules restores the readonly
+    graph.
 11. Installing the reviewed native text Tool Bundle adds one Plugin-owned
     Instance and derived `tools` binding; the Agent invokes `uppercase`.
     Removing the Plugin deletes that Tool from the next Generation.
@@ -175,8 +176,8 @@ make both the workspace root and model endpoint visible before execution.
 20. A reviewed network Wasm Tool shape imports only
     `lenso.agent.http-fetch@1/get`. Its exact origin request is promoted to an
     immutable grant, must fit inside the App-selected Provider allowlist, and
-    is enforced on every bounded HTTP request. The default network Composition
-    has an empty allowlist.
+    is enforced on every bounded HTTP request. The base App has an empty
+    allowlist.
 
 ## Deferred
 

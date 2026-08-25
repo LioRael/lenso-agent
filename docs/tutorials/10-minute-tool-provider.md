@@ -20,7 +20,8 @@ From the repository root:
 ```sh
 ./scripts/generate-contracts.sh
 ./scripts/check-contracts.sh
-lenso app check --definition composition/text-tools.app.json
+lenso app check --definition lenso.app.json
+jq empty examples/plugins/text-tools/lenso-plugin.json
 ```
 
 The workspace command discovers Capability packages through Cargo metadata, so
@@ -30,22 +31,23 @@ adding a contract does not require editing a shell-script crate list.
 
 ```sh
 lenso app resolve \
-  --definition composition/text-tools.app.json \
-  --output .lenso/text-tools/resolved-plan.json
+  --definition lenso.app.json \
+  --output .lenso/resolved-plan.json
 ```
 
-Review the source App Definition for intent and the Plan for the exact locked
-graph. Do not edit the Plan by hand.
+Review the root source App Definition for base intent and the Plugin Manifest
+for the optional contribution. The generated Plan is Host state; do not edit it
+by hand.
 
 ## 4. Run it
 
 ```sh
+cargo run -p lenso-agent-cli -- plugins enable text-tools
 cargo run -p lenso-agent-cli -- \
-  --app text-tools \
-  "Use text.uppercase on: Lenso modules are replaceable."
+  "Use uppercase on: Lenso modules are replaceable."
 ```
 
-The normal run selects the App by name and resolves its cached Plan as needed;
+The normal run resolves the root App plus the persisted Plugin Active Set;
 `--plan` is reserved for exact replay.
 
 ## 5. Prove removal

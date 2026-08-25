@@ -5,12 +5,13 @@
 This repository is the product owner for a headless-first Agent Harness built
 as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, composable Prompt/Skill
-and semantic TUI contributions, a CLI Runner, a no-subcommand `lenso-agent`
-TUI entrypoint, and the
-checked `tui-readonly`, `headless-readonly`, `headless-coding`, `openai-readonly`, experimental
-`openai-codex-direct`, opt-in `openai-codex-direct-skills`, and opt-in
-`openai-codex-direct-coding` App Compositions, plus the higher-authority
-`headless-local-coding` and `openai-codex-direct-local-coding` Compositions.
+contributions, semantic TUI panels, a CLI Runner, a no-subcommand `lenso-agent`
+TUI entrypoint, and one checked read-only base definition at
+`lenso.app.json`. Optional text Tools, workspace mutation, filesystem Skills,
+local process execution, OpenAI-compatible Models, and experimental Codex
+Direct access are selected independently through the Host's persisted Plugin
+Active Set. The Host generates ignored `.lenso/resolved-plan.json`; no product
+`composition/` directory or named App variants remain.
 
 The Harness depends inward on released Lenso Plan, Kernel, protocol, and
 optional Module packages. It temporarily pins the host Runtime and Adapter to
@@ -56,15 +57,15 @@ Plans therefore replace the old hand-written per-Module queue capacities while
 preserving the same Module Instances, Capability requirements, bindings, and
 configuration.
 
-All eight executable variants are now authored by source-derived
-`composition/*.app.json` definitions. Their Module packages derive package
-identity, configuration Schema, Capability endpoints and requirements,
-execution policy, factory, and link-time registration into Cargo artifacts.
-Each definition selects only keyed Instances and configuration values; the CLI
-builds the declared Host package, discovers both workspace and external Module
-artifacts without executing Module code, derives bindings, and emits the
-existing canonical Plan byte-for-byte. Legacy Composition fragments have no
-remaining authority and are removed.
+The root `lenso.app.json` is the sole product App Definition and selects only
+the small read-only base. Module packages derive package identity,
+configuration Schema, Capability endpoints and requirements, execution policy,
+factory, and link-time registration into Cargo artifacts. The CLI builds the
+declared Host package, discovers workspace and external Module artifacts
+without executing Module code, then derives the immutable base Plan. The Host
+adds only catalog-reviewed Plugin contributions from Desired State before
+staging a new Generation. Test-only provider fixtures live beside integration
+tests and have no product composition authority.
 
 The current host baseline selects released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
@@ -138,23 +139,29 @@ authorization; deletion, time-based retention, and Plugin Store collection
 remain deferred.
 
 The Catalog currently contains one exact native Tool Provider append-to-`many`
-entry, one package-independent isolated Wasm Tool Provider shape with the same
+entry plus reviewed workspace-edit, Skills, local-process, and Model Profiles;
+one package-independent isolated Wasm Tool Provider shape with the same
 bounded attachment, one restricted fixture Model Provider replace-`one` entry,
 one package-independent reviewed Wasm Tool variant with a fixed
-`lenso.agent.workspace-read@1/read_text` Host import, and one experimental
-Codex Direct replacement set. The pure Wasm Tool shape fixes
+`lenso.agent.workspace-read@1/read_text` Host import, one reviewed network
+variant with a fixed `lenso.agent.http-fetch@1/get` import and exact-origin
+approved grant, and one experimental Codex Direct replacement set. The pure Wasm Tool shape fixes
 the Capability, operations, execution class, empty configuration, and absence
 of Host imports, permissions, state, Data mounts, and binding templates; it
 still requires review evidence. The workspace-reader variant has the same
 limits except for its single exact requirement, which the Host Profile binds
 to the dedicated base `workspace-import-read` Instance; the Bundle cannot select the provider
-or add another requirement. The Codex set closes exact Model and Auth
+or add another requirement. The network variant additionally requires its
+reviewed scope to fit the base App's HTTP Provider allowlist, which is empty by
+default and enforced again for every request. The Codex set closes exact Model and Auth
 contributions, their intra-Plugin `one` binding, and the compatible base Agent
 model configuration. Replacement requires the exact base edge and allowlisted
 displaced package; removal restores the base Plan for the next Generation.
 Package presence or Catalog extensibility is not a claim that arbitrary
-executable Plugins, general permissioned Host imports, general provider replacement,
-Generation deletion, or Plugin Store collection are ready.
+executable Plugins, other permissioned Host imports, general provider replacement,
+Generation deletion, or Plugin Store collection are ready. The CLI exposes
+bundled `plugins enable` and `plugins disable` selection and persists the exact
+result in the Active Set without another App Definition.
 
 ## Product outcome
 
@@ -238,8 +245,7 @@ completed-turn history from the Session log.
 - Secret values never enter App Composition, Session events, errors, Debug
   output, or Runtime Diagnostics.
 - Default Tool access is read-only and rooted in an explicitly selected
-  workspace. Workspace mutation exists only in explicitly selected coding
-  Compositions.
+  workspace. Workspace mutation exists only when its Plugin is enabled.
 - The coding profile has create-only and unique exact-edit Tools. Process
   execution exists only in the higher-authority local-coding profile, with no
   shell-string parsing, generic overwrite/delete, approval workflow, subagents,
@@ -247,8 +253,7 @@ completed-turn history from the Session log.
 
 ## First executable slice
 
-The deterministic `headless-readonly` profile selects these keyed Module
-Instances:
+The deterministic root base selects these keyed Module Instances:
 
 - `cli`
 - `agent`
@@ -257,13 +262,16 @@ Instances:
 - `fixture-instructions`
 - `summary-skill`
 - `tools`
+- `tui`
+- `tui-help`
+- `workspace-import-read`
 - `workspace-read`
 - `sessions`
 
-The parallel `tui-readonly` profile replaces the `cli` consumer with `tui` and
-adds the removable `tui-help` semantic panel Contribution. Running
-`lenso-agent` with no arguments selects this TUI Plan and enters the terminal
-interface directly; the product entrypoint has no subcommands.
+The same base includes the removable `tui-help` semantic panel Contribution.
+Running `lenso-agent` with no arguments resolves this root Plan and enters the
+terminal interface directly; the product entrypoint has no subcommands. The CLI
+and TUI keep separate durable Controller namespaces despite sharing the Plan.
 
 The Prompt aggregate snapshots explicitly bound versioned contributions and
 records their IDs, versions, kinds, and SHA-256 digests in `model_requested`
@@ -278,7 +286,7 @@ proves direct answers, sequential Tool calls, budget failures, and
 completed-turn context after restart. Unavailable durable Session storage keeps
 the App from becoming ready.
 
-The `openai-readonly` profile replaces the fixture `model` Instance with
+The `openai-compatible` Plugin replaces the fixture `model` Instance with
 `lenso.agent.model.openai-compatible` and adds a `secrets` Instance from the
 external `lenso.secrets.env` package. It maps Chat Completions request/Tool
 shapes and incremental SSE events behind the same Model Capability. Missing
@@ -293,27 +301,27 @@ Capability to call the Codex Responses backend. Tokens never enter the App
 Plan, Session log, or diagnostic output. This integration does not shell out
 to or read credentials from the Codex CLI.
 
-The opt-in `openai-codex-direct-skills` Composition adds one filesystem Skills
-Module to the `readonly` Tool profile. The same immutable startup snapshot
-provides a bounded name/description Prompt catalog plus `skill_list`,
-`skill`, `skill_resources`, and `skill_resource`. Normal
-selection reads the matching Skill directly; `skill_list` remains available
+The opt-in `skills` Plugin adds one filesystem Skills Module to both the Prompt
+and Tool aggregates. The same immutable startup snapshot
+provides a bounded name/description Prompt catalog plus `skill_list`, `skill`,
+`skill_resources`, and `skill_resource`. Normal selection reads the matching
+Skill directly; `skill_list` remains available
 for diagnostics and catalog overflow.
 
-The opt-in `headless-coding` and `openai-codex-direct-coding` Compositions add
-the independent `lenso.agent.workspace-edit` Tool Provider. It atomically
+The independently enabled `workspace-edit` Plugin contributes
+`lenso.agent.workspace-edit` without another App Definition. It atomically
 creates absent UTF-8 files and performs one unique exact replacement in an
-existing UTF-8 file. Existing readonly Compositions remain unchanged.
+existing UTF-8 file. Disabling it restores the exact root base.
 
-The opt-in `headless-local-coding` and
-`openai-codex-direct-local-coding` Compositions add
-`lenso.agent.process-tools` and `lenso.agent.process.native`. The Tool projection
+The opt-in `local-process` Plugin adds `lenso.agent.process-tools` and
+`lenso.agent.process.native`. The Tool projection
 requires exactly one private `lenso.agent.process@1` provider. That provider
-resolves only Composition-allowed executable basenames, preserves shim names,
+resolves only Profile-allowed executable basenames, preserves shim names,
 rechecks executable identity, contains cwd below the workspace, clears and
 selectively projects environment variables, bounds arguments/time/output, and
 kills the whole Unix process group on timeout, cancellation, output overflow,
 or dropped invocation.
+Users enable `workspace-edit` separately when both authorities are required.
 
 ## Deferred direction
 

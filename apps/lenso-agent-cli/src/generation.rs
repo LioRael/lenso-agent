@@ -803,14 +803,12 @@ mod tests {
     use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
     use lenso_kernel::StreamEvent;
 
-    const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
-    const TUI_PLAN: &[u8] = include_bytes!("../../../composition/tui-readonly/resolved-plan.json");
-
     #[test]
     fn initial_generation_preserves_the_approved_plan() {
         let directory = tempfile::tempdir().unwrap();
-        let generation = resolve_initial_generation(PLAN, directory.path()).unwrap();
-        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        let plan = crate::test_support::headless_plan();
+        let generation = resolve_initial_generation(plan, directory.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(plan).unwrap();
         assert_eq!(generation.plan, approved);
         assert!(generation.artifact_set.value().releases.is_empty());
         assert!(generation.artifact_set.value().instances.is_empty());
@@ -819,7 +817,9 @@ mod tests {
     #[test]
     fn generation_spec_is_content_addressed_and_tampering_fails_closed() {
         let directory = tempfile::tempdir().unwrap();
-        let generation = resolve_initial_generation(PLAN, directory.path()).unwrap();
+        let generation =
+            resolve_initial_generation(crate::test_support::headless_plan(), directory.path())
+                .unwrap();
         record_generation_spec(directory.path(), &generation.spec).unwrap();
         let digest = generation.spec.digest().strip_prefix("sha256:").unwrap();
         let record = directory
@@ -871,9 +871,12 @@ mod tests {
         local
             .run_until(async {
                 let directory = tempfile::tempdir().unwrap();
-                let mut app = AgentApp::start_with_store(TUI_PLAN, directory.path())
-                    .await
-                    .unwrap();
+                let mut app = AgentApp::start_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
                 let panels = app.tui_panels().await.unwrap();
                 assert_eq!(panels.len(), 1);
                 assert_eq!(panels[0].id, "agent.help");
@@ -918,9 +921,12 @@ mod tests {
         local
             .run_until(async {
                 let directory = tempfile::tempdir().unwrap();
-                let mut app = AgentApp::start_with_store(PLAN, directory.path())
-                    .await
-                    .unwrap();
+                let mut app = AgentApp::start_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
                 let turn = app.lease_turn().await.unwrap();
                 assert_eq!(turn.handle().binding_count(), 1);
                 assert!(!turn.generation_spec_digest().is_empty());
@@ -934,9 +940,12 @@ mod tests {
                 app.shutdown().await.unwrap();
                 drop(app);
 
-                let mut recovered = AgentApp::start_with_store(PLAN, directory.path())
-                    .await
-                    .unwrap();
+                let mut recovered = AgentApp::start_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
                 let recovered_turn = recovered.lease_turn().await.unwrap();
                 assert_eq!(recovered_turn.handle().binding_count(), 1);
                 drop(recovered_turn);
@@ -951,14 +960,20 @@ mod tests {
         local
             .run_until(async {
                 let directory = tempfile::tempdir().unwrap();
-                let mut headless = AgentApp::start_with_store(PLAN, directory.path())
-                    .await
-                    .unwrap();
+                let mut headless = AgentApp::start_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
                 headless.shutdown().await.unwrap();
 
-                let mut tui = AgentApp::start_tui_with_store(TUI_PLAN, directory.path())
-                    .await
-                    .unwrap();
+                let mut tui = AgentApp::start_tui_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
                 tui.shutdown().await.unwrap();
             })
             .await;

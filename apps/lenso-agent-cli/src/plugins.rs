@@ -54,6 +54,18 @@ const CODEX_AUTH_DESCRIPTOR: &[u8] =
 
 #[derive(Debug)]
 pub enum PluginCommand {
+    Enable {
+        bundled: String,
+        evidence: Option<String>,
+        plan: PathBuf,
+        root: PathBuf,
+    },
+    Disable {
+        plugin_id: String,
+        plan: PathBuf,
+        root: PathBuf,
+    },
+    Available,
     Install {
         bundle: PathBuf,
         evidence: Option<String>,
@@ -94,6 +106,9 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
         return Err(usage());
     };
     match command.as_str() {
+        "enable" => parse_enable(&arguments[1..]),
+        "disable" => parse_disable(&arguments[1..]),
+        "available" if arguments.len() == 1 => Ok(PluginCommand::Available),
         "install" => parse_install(&arguments[1..]),
         "remove" => parse_remove(&arguments[1..]),
         "upgrade" => parse_upgrade(&arguments[1..]),
@@ -107,6 +122,21 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
 
 pub async fn run(command: PluginCommand) -> Result<(), String> {
     match command {
+        PluginCommand::Enable {
+            bundled,
+            evidence,
+            plan,
+            root,
+        } => run_enable(&bundled, evidence.as_deref(), &plan, &root).await,
+        PluginCommand::Disable {
+            plugin_id,
+            plan,
+            root,
+        } => run_disable(&plugin_id, &plan, &root).await,
+        PluginCommand::Available => {
+            print_available();
+            Ok(())
+        }
         PluginCommand::Install {
             bundle,
             evidence,
@@ -189,6 +219,48 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             root,
         } => print_active_set(&root, &active_set_digest),
     }
+}
+
+async fn run_enable(
+    bundled: &str,
+    evidence: Option<&str>,
+    plan: &Path,
+    root: &Path,
+) -> Result<(), String> {
+    let outcome = enable_loaded(root, bundled_plugin(bundled)?, evidence, plan).await?;
+    println!("enabled: {bundled}");
+    println!("release: {}@{}", outcome.plugin_id, outcome.release_version);
+    println!("manifest: {}", outcome.manifest_digest);
+    println!("receipt: {}", outcome.receipt_digest);
+    println!("plugin-set: {}", outcome.plugin_set_digest);
+    println!("active-set: {}", outcome.active_set_digest);
+    println!("generation: {}", outcome.generation_spec_digest);
+    println!("governance: {}", outcome.governance);
+    Ok(())
+}
+
+async fn run_disable(plugin: &str, plan: &Path, root: &Path) -> Result<(), String> {
+    let plugin_id = bundled_plugin_id(plugin).unwrap_or(plugin);
+    let outcome = disable(root, plugin_id, plan).await?;
+    println!("disabled: {plugin_id}");
+    println!("plugin-set: {}", outcome.plugin_set);
+    println!("active-set: {}", outcome.active_set);
+    println!("generation: {}", outcome.generation_spec);
+    Ok(())
+}
+
+fn print_available() {
+    println!("text-tools       stable        adds text transformation Tools");
+    println!("workspace-edit   experimental  adds workspace mutation Tools; review required");
+    println!(
+        "skills           experimental  adds filesystem Skills to Prompt and Tools; review required"
+    );
+    println!("local-process    experimental  adds reviewed local process Tools; review required");
+    println!(
+        "openai-compatible experimental replaces the Model and adds environment Secrets; review required"
+    );
+    println!("fixture-model    stable        replaces the fixture Model; review required");
+    println!("codex-direct     experimental  replaces Model and Auth; review required");
 }
 
 fn print_active_set_history(root: &Path) -> Result<(), String> {
@@ -278,6 +350,61 @@ fn parse_install(arguments: &[String]) -> Result<PluginCommand, String> {
     })
 }
 
+fn parse_enable(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut bundled = None;
+    let mut evidence = None;
+    let mut plan = None;
+    let mut root = default_root();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--evidence" => evidence = Some(arguments.next().ok_or_else(usage)?.clone()),
+            "--plan" => {
+                plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?));
+            }
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
+            value if !value.starts_with('-') && bundled.is_none() => {
+                bundled = Some(value.to_owned());
+            }
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Enable {
+        bundled: bundled.ok_or_else(usage)?,
+        evidence,
+        plan: match plan {
+            Some(plan) => plan,
+            None => default_plan()?,
+        },
+        root,
+    })
+}
+
+fn parse_disable(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut plugin = None;
+    let mut plan = None;
+    let mut root = default_root();
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--plan" => {
+                plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?));
+            }
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
+            value if !value.starts_with('-') && plugin.is_none() => plugin = Some(value.to_owned()),
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Disable {
+        plugin_id: plugin.ok_or_else(usage)?,
+        plan: match plan {
+            Some(plan) => plan,
+            None => default_plan()?,
+        },
+        root,
+    })
+}
+
 fn parse_status(arguments: &[String]) -> Result<PluginCommand, String> {
     let root = match arguments {
         [] => default_root(),
@@ -339,7 +466,6 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
     let mut features = Vec::new();
     let mut expected_manifest = None;
     let mut plan = None;
-    let mut plan_source = None;
     let mut root = default_root();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
@@ -350,19 +476,8 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
             "--expected-manifest" => {
                 expected_manifest = Some(arguments.next().ok_or_else(usage)?.clone());
             }
-            "--app" => {
-                if let Some(source) = plan_source {
-                    return Err(format!("--app conflicts with {source}"));
-                }
-                plan = Some(crate::app_plan(arguments.next().ok_or_else(usage)?)?);
-                plan_source = Some("--app");
-            }
             "--plan" => {
-                if let Some(source) = plan_source {
-                    return Err(format!("--plan conflicts with {source}"));
-                }
                 plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?));
-                plan_source = Some("--plan");
             }
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
             _ => return Err(usage()),
@@ -373,7 +488,10 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
         evidence,
         features,
         expected_manifest,
-        plan: plan.unwrap_or_else(default_plan),
+        plan: match plan {
+            Some(plan) => plan,
+            None => default_plan()?,
+        },
         root,
     })
 }
@@ -381,25 +499,13 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
 fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
     let mut to = None;
     let mut plan = None;
-    let mut plan_source = None;
     let mut root = default_root();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--to" => to = Some(arguments.next().ok_or_else(usage)?.clone()),
-            "--app" => {
-                if let Some(source) = plan_source {
-                    return Err(format!("--app conflicts with {source}"));
-                }
-                plan = Some(crate::app_plan(arguments.next().ok_or_else(usage)?)?);
-                plan_source = Some("--app");
-            }
             "--plan" => {
-                if let Some(source) = plan_source {
-                    return Err(format!("--plan conflicts with {source}"));
-                }
                 plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?));
-                plan_source = Some("--plan");
             }
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
             _ => return Err(usage()),
@@ -407,20 +513,23 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Rollback {
         to: to.ok_or_else(usage)?,
-        plan: plan.unwrap_or_else(default_plan),
+        plan: match plan {
+            Some(plan) => plan,
+            None => default_plan()?,
+        },
         root,
     })
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--app <name> | --plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--app <name> | --plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <available|enable <text-tools|workspace-edit|skills|local-process|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
     PathBuf::from(".lenso/plugins")
 }
 
-fn default_plan() -> PathBuf {
+fn default_plan() -> Result<PathBuf, String> {
     crate::default_plan()
 }
 
@@ -480,6 +589,25 @@ struct InstallOutcome {
     receipt_digest: String,
     plugin_set_digest: String,
     governance: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct EnableOutcome {
+    plugin_id: String,
+    release_version: String,
+    manifest_digest: String,
+    receipt_digest: String,
+    plugin_set_digest: String,
+    active_set_digest: String,
+    generation_spec_digest: String,
+    governance: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct DisableOutcome {
+    plugin_set: String,
+    active_set: String,
+    generation_spec: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -551,6 +679,19 @@ fn install(
     root: &Path,
     bundle_root: &Path,
     evidence: Option<&str>,
+    features: Vec<String>,
+) -> Result<InstallOutcome, String> {
+    install_loaded(root, load_bundle(bundle_root)?, evidence, features)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one fenced transition keeps loaded Plugin installation authority atomic"
+)]
+fn install_loaded(
+    root: &Path,
+    bundle: LoadedBundle,
+    evidence: Option<&str>,
     mut features: Vec<String>,
 ) -> Result<InstallOutcome, String> {
     let profiles = harness_plugin_profiles()?;
@@ -558,7 +699,6 @@ fn install(
     let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let mut active = validate_active_set(load_active_set(root)?, &store, &profiles)?.into_value();
-    let bundle = load_bundle(bundle_root)?;
     let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
         .map_err(control_error)?;
     validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
@@ -662,6 +802,136 @@ fn install(
     })
 }
 
+async fn enable_loaded(
+    root: &Path,
+    bundle: LoadedBundle,
+    evidence: Option<&str>,
+    plan_path: &Path,
+) -> Result<EnableOutcome, String> {
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+        .map_err(control_error)?;
+    validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
+    if let Some(existing) = current
+        .value()
+        .lock
+        .plugins
+        .iter()
+        .find(|plugin| plugin.plugin_id == manifest.value().plugin_id)
+    {
+        return Err(if existing.manifest_digest == manifest.digest() {
+            format!("Plugin `{}` is already enabled", existing.plugin_id)
+        } else {
+            format!(
+                "Plugin `{}` is enabled at another Release; use `plugins upgrade`",
+                existing.plugin_id
+            )
+        });
+    }
+    let selected = validate_selection(manifest.value(), &[], &profiles).map_err(control_error)?;
+    let (evidence, governance) = admission_evidence(
+        evidence,
+        &profiles,
+        manifest.value(),
+        &selected.module_contribution_ids,
+    )?;
+    let receipt = store
+        .admit(
+            &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
+            &LocalReviewPolicy {
+                evidence: &evidence,
+                profiles: &profiles,
+            },
+        )
+        .map_err(control_error)?;
+    let candidate = replacement_active_set(
+        &current,
+        &manifest,
+        receipt.digest(),
+        Vec::new(),
+        &store,
+        &profiles,
+    )?;
+    let plan = fs::read(plan_path)
+        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
+    let current_authority = generation_authority_from_active(root, current.value().clone())?;
+    let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
+    let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
+        &plan,
+        current_authority,
+        candidate_authority,
+        root,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)?;
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", candidate.value().lock.clone())
+            .map_err(control_error)?;
+    Ok(EnableOutcome {
+        plugin_id: manifest.value().plugin_id.clone(),
+        release_version: manifest.value().release_version.clone(),
+        manifest_digest: manifest.digest().to_owned(),
+        receipt_digest: receipt.digest().to_owned(),
+        plugin_set_digest: lock.digest().to_owned(),
+        active_set_digest: candidate.digest().to_owned(),
+        generation_spec_digest,
+        governance,
+    })
+}
+
+fn bundled_plugin(name: &str) -> Result<LoadedBundle, String> {
+    let manifest = match name {
+        "text-tools" => {
+            include_bytes!("../../../examples/plugins/text-tools/lenso-plugin.json").as_slice()
+        }
+        "workspace-edit" => {
+            include_bytes!("../../../examples/plugins/workspace-edit/lenso-plugin.json").as_slice()
+        }
+        "skills" => include_bytes!("../../../examples/plugins/skills/lenso-plugin.json").as_slice(),
+        "local-process" => {
+            include_bytes!("../../../examples/plugins/local-process/lenso-plugin.json").as_slice()
+        }
+        "openai-compatible" => {
+            include_bytes!("../../../examples/plugins/openai-compatible/lenso-plugin.json")
+                .as_slice()
+        }
+        "fixture-model" => {
+            include_bytes!("../../../examples/plugins/model-fixture/lenso-plugin.json").as_slice()
+        }
+        "codex-direct" => {
+            include_bytes!("../../../examples/plugins/codex-direct/lenso-plugin.json").as_slice()
+        }
+        _ => {
+            return Err(format!(
+                "unknown bundled Plugin `{name}`; choose one of: text-tools, workspace-edit, skills, local-process, openai-compatible, fixture-model, codex-direct"
+            ));
+        }
+    };
+    Ok(LoadedBundle {
+        manifest: manifest.to_vec(),
+        files: BTreeMap::new(),
+    })
+}
+
+fn bundled_plugin_id(name: &str) -> Option<&'static str> {
+    match name {
+        "text-tools" => Some("example.text-tools"),
+        "workspace-edit" => Some("lenso.workspace-edit"),
+        "skills" => Some("lenso.skills-filesystem"),
+        "local-process" => Some("lenso.local-process"),
+        "openai-compatible" => Some("lenso.openai-compatible"),
+        "fixture-model" => Some("example.fixture-model"),
+        "codex-direct" => Some("example.codex-direct"),
+        _ => None,
+    }
+}
+
 fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
@@ -704,6 +974,58 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
         CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
             .map_err(control_error)?;
     Ok(lock.digest().to_owned())
+}
+
+async fn disable(root: &Path, plugin_id: &str, plan_path: &Path) -> Result<DisableOutcome, String> {
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    if !current
+        .value()
+        .lock
+        .plugins
+        .iter()
+        .any(|plugin| plugin.plugin_id == plugin_id)
+    {
+        return Err(format!("Plugin `{plugin_id}` is not enabled"));
+    }
+    let mut candidate = current.value().clone();
+    candidate
+        .lock
+        .plugins
+        .retain(|plugin| plugin.plugin_id != plugin_id);
+    candidate
+        .lock
+        .instances
+        .retain(|instance| instance.plugin_id != plugin_id);
+    candidate
+        .releases
+        .retain(|release| release.plugin_id != plugin_id);
+    let candidate = validate_active_set(candidate, &store, &profiles)?;
+    let plan = fs::read(plan_path)
+        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
+    let current_authority = generation_authority_from_active(root, current.value().clone())?;
+    let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
+    let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
+        &plan,
+        current_authority,
+        candidate_authority,
+        root,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)?;
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", candidate.value().lock.clone())
+            .map_err(control_error)?;
+    Ok(DisableOutcome {
+        plugin_set: lock.digest().to_owned(),
+        active_set: candidate.digest().to_owned(),
+        generation_spec: generation_spec_digest,
+    })
 }
 
 async fn upgrade(
@@ -1071,16 +1393,13 @@ pub(crate) fn generation_composition(
         )?);
         match profiles.attachment_for(contribution, &target, &instance.instance_key, base_plan)? {
             ResolvedAttachment::AppendMany(binding) => plugin_bindings.push(binding),
+            ResolvedAttachment::AppendManySet(bindings) => plugin_bindings.extend(bindings),
             ResolvedAttachment::ReplaceOne {
                 binding,
                 displaced_provider_instance,
                 base_configuration_replacements,
             } => {
-                if !displaced_instances.insert(displaced_provider_instance.clone()) {
-                    return Err(format!(
-                        "more than one Plugin replacement targets Instance `{displaced_provider_instance}`"
-                    ));
-                }
+                reserve_displaced_instance(&mut displaced_instances, &displaced_provider_instance)?;
                 plugin_bindings.extend(inherited_host_bindings(
                     manifest.value(),
                     contribution,
@@ -1088,6 +1407,12 @@ pub(crate) fn generation_composition(
                     &displaced_provider_instance,
                     &instance.instance_key,
                 )?);
+                plugin_bindings.extend(redirected_provider_bindings(
+                    &preserved_base_bindings,
+                    &displaced_provider_instance,
+                    binding.consumer_instance(),
+                    &instance.instance_key,
+                ));
                 base_instances
                     .retain(|candidate| candidate.instance_key() != displaced_provider_instance);
                 preserved_base_bindings.retain(|candidate| {
@@ -1135,6 +1460,42 @@ pub(crate) fn generation_composition(
         bindings,
         preserved_base_bindings,
     })
+}
+
+fn reserve_displaced_instance(
+    displaced_instances: &mut BTreeSet<String>,
+    instance: &str,
+) -> Result<(), String> {
+    if displaced_instances.insert(instance.to_owned()) {
+        Ok(())
+    } else {
+        Err(format!(
+            "more than one Plugin replacement targets Instance `{instance}`"
+        ))
+    }
+}
+
+fn redirected_provider_bindings(
+    bindings: &[CapabilityBinding],
+    displaced_provider: &str,
+    primary_consumer: &str,
+    replacement_provider: &str,
+) -> Vec<CapabilityBinding> {
+    bindings
+        .iter()
+        .filter(|binding| {
+            binding.provider_instance() == displaced_provider
+                && binding.consumer_instance() != primary_consumer
+        })
+        .map(|binding| {
+            CapabilityBinding::new(
+                binding.consumer_instance(),
+                binding.capability_id(),
+                binding.descriptor_version(),
+                replacement_provider,
+            )
+        })
+        .collect()
 }
 
 fn fixed_host_bindings(
@@ -1994,9 +2355,9 @@ mod tests {
         TOOL_PROVIDER_PROFILE, WASM_EXECUTION_CLASS,
     };
 
-    const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
-    const OPENAI_PLAN: &[u8] =
-        include_bytes!("../../../composition/openai-codex-direct/resolved-plan.json");
+    fn plan() -> &'static [u8] {
+        crate::test_support::headless_plan()
+    }
 
     #[test]
     fn passive_release_uses_automatic_local_admission() {
@@ -2014,8 +2375,9 @@ mod tests {
             authority.lock.value().plugins[0].selected_features,
             ["extras"]
         );
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
-        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(plan()).unwrap();
         assert_eq!(generation.plan, approved);
         assert_eq!(generation.artifact_set.value().releases.len(), 1);
         assert_eq!(generation.artifact_set.value().artifacts.len(), 1);
@@ -2079,7 +2441,7 @@ mod tests {
         let authority = load_generation_authority(root.path()).unwrap();
         assert_eq!(authority.lock.value().instances.len(), 1);
         let instance_key = authority.lock.value().instances[0].instance_key.clone();
-        let mut one_plan_value: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+        let mut one_plan_value: serde_json::Value = serde_json::from_slice(plan()).unwrap();
         let tools = one_plan_value["module_instances"]
             .as_array_mut()
             .unwrap()
@@ -2092,7 +2454,8 @@ mod tests {
         let error = generation_composition(&authority, &one_plan).unwrap_err();
         assert!(error.contains("as a Many Capability"));
 
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
         assert_eq!(
             generation
                 .plan
@@ -2114,8 +2477,9 @@ mod tests {
         assert_eq!(generation.artifact_set.value().instances.len(), 1);
 
         remove(root.path(), "example.text-tools").unwrap();
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
-        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(plan()).unwrap();
         assert_eq!(generation.plan, approved);
         assert!(generation.artifact_set.value().instances.is_empty());
     }
@@ -2136,7 +2500,7 @@ mod tests {
                 )
                 .unwrap();
 
-                let mut plan_value: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+                let mut plan_value: serde_json::Value = serde_json::from_slice(plan()).unwrap();
                 let sessions = plan_value["module_instances"]
                     .as_array_mut()
                     .unwrap()
@@ -2161,6 +2525,10 @@ mod tests {
                     .unwrap();
                 assert_eq!(guest.execution_class().as_str(), QUICKJS_EXECUTION_CLASS);
                 assert_eq!(guest.required_capabilities().len(), 4);
+                assert!(generation.plan.capability_bindings().iter().any(|binding| {
+                    binding.consumer_instance() == "tui"
+                        && binding.provider_instance() == guest.instance_key()
+                }));
                 assert_eq!(
                     generation
                         .plan
@@ -2260,7 +2628,7 @@ mod tests {
                 )
                 .unwrap();
 
-                let mut plan_value: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+                let mut plan_value: serde_json::Value = serde_json::from_slice(plan()).unwrap();
                 let sessions = plan_value["module_instances"]
                     .as_array_mut()
                     .unwrap()
@@ -2285,6 +2653,10 @@ mod tests {
                     .unwrap();
                 assert_eq!(guest.execution_class().as_str(), WASM_EXECUTION_CLASS);
                 assert_eq!(guest.required_capabilities().len(), 4);
+                assert!(generation.plan.capability_bindings().iter().any(|binding| {
+                    binding.consumer_instance() == "tui"
+                        && binding.provider_instance() == guest.instance_key()
+                }));
                 assert_eq!(
                     generation
                         .plan
@@ -2352,7 +2724,7 @@ mod tests {
         let authority = load_generation_authority(root.path()).unwrap();
         let instance_key = authority.lock.value().instances[0].instance_key.clone();
         let composition =
-            generation_composition(&authority, &serde_json::from_slice(PLAN).unwrap()).unwrap();
+            generation_composition(&authority, &serde_json::from_slice(plan()).unwrap()).unwrap();
         assert!(
             composition
                 .base_instances
@@ -2363,7 +2735,8 @@ mod tests {
             binding.consumer_instance() != "model" && binding.provider_instance() != "model"
         }));
 
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
         assert!(generation.plan.module_instance("model").is_none());
         let replacement = generation.plan.module_instance(&instance_key).unwrap();
         assert_eq!(replacement.package_id(), FIXTURE_MODEL_PACKAGE_ID);
@@ -2388,8 +2761,9 @@ mod tests {
         assert_eq!(binding.provider_order(), 0);
 
         remove(root.path(), "example.fixture-model").unwrap();
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
-        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(plan()).unwrap();
         assert_eq!(generation.plan, approved);
     }
 
@@ -2406,8 +2780,16 @@ mod tests {
         )
         .unwrap();
 
+        let mut incompatible: serde_json::Value = serde_json::from_slice(plan()).unwrap();
+        incompatible["module_instances"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|instance| instance["instance_key"] == "model")
+            .unwrap()["package_id"] = "lenso.agent.model.openai-codex-direct".into();
+        let incompatible = serde_json::to_vec(&incompatible).unwrap();
         let error =
-            crate::generation::resolve_initial_generation(OPENAI_PLAN, root.path()).unwrap_err();
+            crate::generation::resolve_initial_generation(&incompatible, root.path()).unwrap_err();
         assert!(error.contains("cannot displace package `lenso.agent.model.openai-codex-direct`"));
     }
 
@@ -2433,7 +2815,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap_err();
+        let error = crate::generation::resolve_initial_generation(plan(), root.path()).unwrap_err();
         assert!(error.contains("more than one Plugin replacement targets Instance `model`"));
     }
 
@@ -2475,7 +2857,7 @@ mod tests {
             .instance_key
             .clone();
 
-        let mut incompatible_base: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+        let mut incompatible_base: serde_json::Value = serde_json::from_slice(plan()).unwrap();
         let agent = incompatible_base["module_instances"]
             .as_array_mut()
             .unwrap()
@@ -2491,7 +2873,8 @@ mod tests {
         let error = generation_composition(&authority, &incompatible_base).unwrap_err();
         assert!(error.contains("cannot configure base Instance `agent`"));
 
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
         assert!(generation.plan.module_instance("model").is_none());
         assert_eq!(
             generation
@@ -2546,8 +2929,9 @@ mod tests {
         assert_eq!(generation.artifact_set.value().instances.len(), 2);
 
         remove(root.path(), "example.codex-direct").unwrap();
-        let generation = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
-        let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
+        let generation =
+            crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
+        let approved: ResolvedAppPlan = serde_json::from_slice(plan()).unwrap();
         assert_eq!(generation.plan, approved);
     }
 

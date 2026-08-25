@@ -2,6 +2,7 @@
 name = "lenso-agent-cli"
 version = "0.1.0"
 description = "Headless CLI Runner for the Lenso Agent Harness."
+default-run = "lenso-agent-cli"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -43,11 +44,14 @@ lenso-capability-agent-auth-openai-codex = { path = "../../crates/lenso-capabili
 lenso-capability-agent-http-fetch = { path = "../../crates/lenso-capability-agent-http-fetch" }
 lenso-capability-agent-model = { path = "../../crates/lenso-capability-agent-model" }
 lenso-capability-agent-prompt = { path = "../../crates/lenso-capability-agent-prompt" }
+lenso-capability-agent-prompt-provider = { path = "../../crates/lenso-capability-agent-prompt-provider" }
+lenso-capability-agent-process = { path = "../../crates/lenso-capability-agent-process" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
 lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
 lenso-capability-agent-workspace-read = { path = "../../crates/lenso-capability-agent-workspace-read" }
 lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
+lenso-capability-secrets.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 futures.workspace = true

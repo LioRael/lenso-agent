@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "plugin_id": "lenso.local-process",
+  "release_version": "1.0.0",
+  "artifacts": [],
+  "module_contributions": [
+    {
+      "id": "native-process",
+      "package_id": "lenso.agent.process.native",
+      "configuration_schema_digest": "sha256:96a79237664c1ba4fc241c55a40e1079e301467b98402168ecbe920155cd4202",
+      "provides": [
+        {
+          "capability_id": "lenso.agent.process@1",
+          "descriptor_version": "1.0.0",
+          "descriptor_digest": "sha256:a717cff3e24066078c04f7e6dd3247a6dbfe4c09a2a1dd055e2f4dc77eeaa695",
+          "request_operations": ["catalog", "run"]
+        }
+      ],
+      "requires": [],
+      "implementations": [
+        {
+          "id": "native",
+          "artifact": null,
+          "built_in_factory": "lenso.agent.process.native@0.1.0",
+          "entrypoint": "default",
+          "execution_class": "lenso.native-rust@1",
+          "targets": ["aarch64-linux", "aarch64-macos", "x86_64-linux", "x86_64-macos"],
+          "profiles": ["agent-process-provider-v1"],
+          "support_channel": "experimental",
+          "trust": "trusted"
+        }
+      ],
+      "permission_request_ids": [],
+      "state": null
+    },
+    {
+      "id": "process-tools",
+      "package_id": "lenso.agent.process-tools",
+      "configuration_schema_digest": "sha256:e0264152926e6aba1352941ca08687260cfcc45957d23f76fb4646da3a55a212",
+      "provides": [
+        {
+          "capability_id": "lenso.agent.tool-provider@1",
+          "descriptor_version": "1.0.0",
+          "descriptor_digest": "sha256:b726d7dd7bffaf07e48e0a55013f8d1b55d29d613f22b4e41e693fafd76c6fb4",
+          "request_operations": ["catalog", "execute"]
+        }
+      ],
+      "requires": [
+        {
+          "capability_id": "lenso.agent.process@1",
+          "descriptor_version": "1.0.0",
+          "cardinality": "one"
+        }
+      ],
+      "implementations": [
+        {
+          "id": "native",
+          "artifact": null,
+          "built_in_factory": "lenso.agent.process-tools@0.2.0",
+          "entrypoint": "default",
+          "execution_class": "lenso.native-rust@1",
+          "targets": ["aarch64-linux", "aarch64-macos", "x86_64-linux", "x86_64-macos"],
+          "profiles": ["agent-tool-provider-v1"],
+          "support_channel": "experimental",
+          "trust": "trusted"
+        }
+      ],
+      "permission_request_ids": [],
+      "state": null
+    }
+  ],
+  "data_contributions": [],
+  "permission_requests": [],
+  "features": [],
+  "binding_templates": [
+    {
+      "consumer_contribution_id": "process-tools",
+      "provider_contribution_id": "native-process",
+      "capability_id": "lenso.agent.process@1"
+    }
+  ],
+  "product_metadata": []
+}

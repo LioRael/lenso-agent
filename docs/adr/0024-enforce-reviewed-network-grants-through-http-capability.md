@@ -1,4 +1,4 @@
-# ADR 0022: Enforce reviewed network grants through one HTTP Capability
+# ADR 0024: Enforce reviewed network grants through one HTTP Capability
 
 ## Status
 
@@ -37,7 +37,7 @@ Host grant set through the existing control plane, and the Provider enforces the
 same origin boundary on every call. Install, upgrade, rollback, and removal
 replace or remove grants together with the release authority.
 
-The checked-in `headless-network` Composition selects the Provider with an empty
+The checked-in base `lenso.app.json` selects the Provider with an empty
 allowlist, so it grants no network access until App intent explicitly names an
 origin. Kernel and Wasm Adapter policy remain unchanged; they receive resolved
 bindings and effective grants rather than a mutable Plugin registry.
