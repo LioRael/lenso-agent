@@ -100,7 +100,9 @@ resources without retiring durable authority. The Controller owns
 terminal-failure maintenance, while the Turn route injects the Generation
 digest into Invocation Context. A later validated transition may reactivate the
 exact immutable digest of a retired Generation; live candidate duplication
-still fails closed.
+still fails closed. Each startup or offline transition hashes the exact Host
+executable once and reuses that immutable build identity across every initial,
+retained, current, and candidate Generation resolution in the operation.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and

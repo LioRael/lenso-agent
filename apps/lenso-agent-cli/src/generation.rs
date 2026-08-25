@@ -84,6 +84,27 @@ impl CatalogFactory for HarnessCatalogFactory {
 }
 
 #[derive(Debug)]
+struct HostBuildIdentity {
+    executable_digest: String,
+}
+
+impl HostBuildIdentity {
+    fn current() -> Result<Self, String> {
+        let executable = env::current_exe()
+            .map_err(|error| format!("failed to locate Host executable: {error}"))?;
+        let executable_bytes = fs::read(&executable).map_err(|error| {
+            format!(
+                "failed to read Host executable {}: {error}",
+                executable.display()
+            )
+        })?;
+        Ok(Self {
+            executable_digest: sha256_digest(&executable_bytes),
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct AgentApp {
     client: GenerationControllerClient<NativeApp>,
     controller: Option<tokio::task::JoinHandle<Result<DurableControlState, ControlPlaneError>>>,
@@ -118,7 +139,8 @@ impl AgentApp {
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
         let _authority_fence = authority.snapshot()?;
-        let generation = resolve_initial_generation(plan_bytes, store_root)?;
+        let host_build = HostBuildIdentity::current()?;
+        let generation = resolve_initial_generation_for_host(plan_bytes, store_root, &host_build)?;
         record_generation_spec(store_root, &generation.spec)?;
         crate::plugins::record_current_generation_authority(store_root)?;
         let store = FileControlStateStore::open(store_root.join(control_directory))
@@ -147,7 +169,7 @@ impl AgentApp {
                 })
                 .map(|record| record.generation_spec_digest.as_str())
                 .collect::<BTreeSet<_>>();
-            let recoverable = resolve_retained_generations(plan_bytes, store_root)?;
+            let recoverable = resolve_retained_generations(plan_bytes, store_root, &host_build)?;
             let missing = live_digests
                 .iter()
                 .filter(|digest| !recoverable.contains_key(**digest))
@@ -178,7 +200,8 @@ impl AgentApp {
         let task = tokio::task::spawn_local(controller.run());
         if recovered_active.as_deref() != Some(generation.spec.digest()) {
             let transition = if let Some(active) = recovered_active.as_deref() {
-                let recoverable = resolve_retained_generations(plan_bytes, store_root)?;
+                let recoverable =
+                    resolve_retained_generations(plan_bytes, store_root, &host_build)?;
                 let previous = recoverable.get(active).ok_or_else(|| {
                     "recovered Generation lost its retained Plugin authority".to_owned()
                 })?;
@@ -405,22 +428,33 @@ fn record_generation_spec(
     write_result
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_initial_generation(
     plan_bytes: &[u8],
     store_root: &Path,
 ) -> Result<ResolvedGeneration, String> {
+    let host_build = HostBuildIdentity::current()?;
+    resolve_initial_generation_for_host(plan_bytes, store_root, &host_build)
+}
+
+fn resolve_initial_generation_for_host(
+    plan_bytes: &[u8],
+    store_root: &Path,
+    host_build: &HostBuildIdentity,
+) -> Result<ResolvedGeneration, String> {
     let authority = crate::plugins::load_generation_authority(store_root)?;
-    resolve_generation_with_authority(plan_bytes, &authority)
+    resolve_generation_with_authority(plan_bytes, &authority, host_build)
 }
 
 fn resolve_retained_generations(
     plan_bytes: &[u8],
     store_root: &Path,
+    host_build: &HostBuildIdentity,
 ) -> Result<BTreeMap<String, ResolvedGeneration>, String> {
     crate::plugins::recovery_generation_authorities(store_root)?
         .into_iter()
         .map(|authority| {
-            let generation = resolve_generation_with_authority(plan_bytes, &authority)?;
+            let generation = resolve_generation_with_authority(plan_bytes, &authority, host_build)?;
             Ok((generation.spec.digest().to_owned(), generation))
         })
         .collect()
@@ -429,6 +463,7 @@ fn resolve_retained_generations(
 fn resolve_generation_with_authority(
     plan_bytes: &[u8],
     authority: &crate::plugins::GenerationPluginAuthority,
+    host_build: &HostBuildIdentity,
 ) -> Result<ResolvedGeneration, String> {
     let plan = serde_json::from_slice::<ResolvedAppPlan>(plan_bytes)
         .map_err(|error| format!("resolved Plan is invalid JSON: {error}"))?;
@@ -442,14 +477,6 @@ fn resolve_generation_with_authority(
     }
 
     let target = crate::plugins::host_target();
-    let executable =
-        env::current_exe().map_err(|error| format!("failed to locate Host executable: {error}"))?;
-    let executable_bytes = fs::read(&executable).map_err(|error| {
-        format!(
-            "failed to read Host executable {}: {error}",
-            executable.display()
-        )
-    })?;
     let (_, built_in_modules) = native_host_build();
     let plugin_profiles = harness_plugin_profiles()?;
     let execution_classes = [
@@ -471,7 +498,7 @@ fn resolve_generation_with_authority(
         HostBuildManifest {
             schema_version: 1,
             app_id: APP_ID.to_owned(),
-            host_executable_digest: sha256_digest(&executable_bytes),
+            host_executable_digest: host_build.executable_digest.clone(),
             target: target.clone(),
             built_in_modules,
             adapter_profiles,
@@ -524,8 +551,10 @@ pub(crate) async fn ready_check_maintenance_transition(
     candidate_authority: crate::plugins::GenerationPluginAuthority,
     store_root: &Path,
 ) -> Result<String, String> {
-    let current = resolve_generation_with_authority(plan_bytes, &current_authority)?;
-    let candidate = resolve_generation_with_authority(plan_bytes, &candidate_authority)?;
+    let host_build = HostBuildIdentity::current()?;
+    let current = resolve_generation_with_authority(plan_bytes, &current_authority, &host_build)?;
+    let candidate =
+        resolve_generation_with_authority(plan_bytes, &candidate_authority, &host_build)?;
     if current.spec.digest() == candidate.spec.digest() {
         return Err("candidate Plugin authority resolves to the current Generation".to_owned());
     }
