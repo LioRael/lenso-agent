@@ -31,6 +31,15 @@ interaction kind without a duplicated string annotation. The migration keeps
 the existing stream Descriptor, open/message/error Schemas, generated clients
 and providers, and plugin digest byte-identical.
 
+Generated Rust Capability Clients now implement the product-neutral
+`CapabilityClient` contract. The Agent Loop is the first deep Module to hold
+its Model, Prompt, Tools, and Session requirements as lifecycle-bound
+`Port<Client>` fields; activation connects those Ports only from the
+Plan-owned `ModuleDependencies`. Descriptor derivation and provider endpoint
+generation for a struct-level `#[lenso::module]` Interface remain follow-up
+work, so this is a foundation milestone rather than the completed authoring
+shape.
+
 All eight executable variants are now authored by source-derived
 `composition/*.app.json` definitions. Their Module packages derive package
 identity, configuration Schema, Capability endpoints and requirements,
@@ -42,7 +51,7 @@ existing canonical Plan byte-for-byte. Legacy Composition fragments have no
 remaining authority and are removed.
 
 The current host baseline selects released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.8`. It pins `lenso-runner` and `lenso-native-adapter` to
+`lenso-kernel 0.1.9`. It pins `lenso-runner` and `lenso-native-adapter` to
 `lenso-runtime-rust` revision
 `13906bb13f959450dfd9f30920dccd58901fefd6`, the merged Runtime revision
 that also contains `lenso-plugin-control-plane`, the preview Wasm Component,

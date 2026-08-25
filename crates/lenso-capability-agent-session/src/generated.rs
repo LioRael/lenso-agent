@@ -3,6 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
+use lenso_module::CapabilityClient;
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
@@ -531,11 +532,7 @@ pub struct SessionClient {
 }
 impl SessionClient {
     pub fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
-        Ok(Self {
-            append: dependencies.one::<SessionAppend>()?,
-            open: dependencies.one::<SessionOpen>()?,
-            read: dependencies.one::<SessionRead>()?,
-        })
+        <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
     pub async fn append(&self, request: AppendRequest) -> Result<AppendResponse, SessionAppendInvocationError> {
@@ -572,6 +569,28 @@ impl SessionClient {
         self.read.invoke_with_context(READ_OPERATION, context, request).await
             .map_err(SessionReadInvocationError::Runtime)?
             .map_err(SessionReadInvocationError::Domain)
+    }
+}
+
+impl CapabilityClient for SessionClient {
+    type Dependencies = ModuleDependencies;
+    type Error = RuntimeFailure;
+
+    const CAPABILITY_ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
+        Ok(Self {
+            append: dependencies.one::<SessionAppend>()?,
+            open: dependencies.one::<SessionOpen>()?,
+            read: dependencies.one::<SessionRead>()?,
+        })
+    }
+
+    fn already_connected() -> RuntimeFailure {
+        RuntimeFailure::ModuleFailure {
+            detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
+        }
     }
 }
 

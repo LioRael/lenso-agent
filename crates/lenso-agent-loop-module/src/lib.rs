@@ -37,6 +37,7 @@ use lenso_kernel::{
     ModuleLifecycle, NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
     StreamEvent,
 };
+use lenso_module::Port;
 use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -123,7 +124,7 @@ fn instantiate(
     {
         return Err(invalid_plan("Agent Loop model or limits are invalid"));
     }
-    let clients = Rc::new(RefCell::new(None));
+    let clients = Rc::new(AgentClients::default());
     let active = Rc::new(Cell::new(false));
     let endpoint = Rc::new(AgentEndpoint::new(AgentLoop {
         config,
@@ -138,17 +139,41 @@ fn instantiate(
 
 #[derive(Debug)]
 struct AgentClients {
-    model: ModelClient,
-    prompt: PromptClient,
-    tools: ToolsClient,
-    session: SessionClient,
-    tasks: ManagedTaskScope,
+    model: Port<ModelClient>,
+    prompt: Port<PromptClient>,
+    tools: Port<ToolsClient>,
+    session: Port<SessionClient>,
+    tasks: RefCell<Option<ManagedTaskScope>>,
+}
+
+impl Default for AgentClients {
+    fn default() -> Self {
+        Self {
+            model: Port::new(),
+            prompt: Port::new(),
+            tools: Port::new(),
+            session: Port::new(),
+            tasks: RefCell::new(None),
+        }
+    }
+}
+
+impl AgentClients {
+    fn connect(
+        &self,
+        dependencies: &lenso_kernel::ModuleDependencies,
+    ) -> Result<(), RuntimeFailure> {
+        self.model.connect(dependencies)?;
+        self.prompt.connect(dependencies)?;
+        self.tools.connect(dependencies)?;
+        self.session.connect(dependencies)
+    }
 }
 
 #[derive(Clone, Debug)]
 struct AgentLoop {
     config: AgentConfig,
-    clients: Rc<RefCell<Option<Rc<AgentClients>>>>,
+    clients: Rc<AgentClients>,
     active: Rc<Cell<bool>>,
 }
 
@@ -168,7 +193,7 @@ impl AgentProvider for AgentLoop {
                 RunTurnError::ConcurrentTurn,
             ))));
         }
-        let Some(clients) = self.clients.borrow().clone() else {
+        let Some(tasks) = self.clients.tasks.borrow().clone() else {
             self.active.set(false);
             return Box::pin(futures::future::ready(Err(AgentInvocationError::Runtime(
                 RuntimeFailure::Unavailable {
@@ -180,7 +205,7 @@ impl AgentProvider for AgentLoop {
         let active = self.active.clone();
         let cancellation = context.cancellation();
         let (sender, receiver) = mpsc::channel(1);
-        let tasks = clients.tasks.clone();
+        let clients = self.clients.clone();
         let task = tasks.spawn_local(Box::pin(async move {
             let _turn = ActiveTurn(active);
             produce_turn(clients, config, context, request, sender).await;
@@ -282,31 +307,15 @@ impl NativeStreamSession for AgentTurnStream {
 
 #[derive(Debug)]
 struct AgentLifecycle {
-    clients: Rc<RefCell<Option<Rc<AgentClients>>>>,
+    clients: Rc<AgentClients>,
 }
 
 impl ModuleLifecycle for AgentLifecycle {
     fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        let clients = AgentClients {
-            model: match ModelClient::from_dependencies(context.dependencies()) {
-                Ok(client) => client,
-                Err(error) => return Box::pin(futures::future::ready(Err(error))),
-            },
-            prompt: match PromptClient::from_dependencies(context.dependencies()) {
-                Ok(client) => client,
-                Err(error) => return Box::pin(futures::future::ready(Err(error))),
-            },
-            tools: match ToolsClient::from_dependencies(context.dependencies()) {
-                Ok(client) => client,
-                Err(error) => return Box::pin(futures::future::ready(Err(error))),
-            },
-            session: match SessionClient::from_dependencies(context.dependencies()) {
-                Ok(client) => client,
-                Err(error) => return Box::pin(futures::future::ready(Err(error))),
-            },
-            tasks: context.tasks().clone(),
-        };
-        self.clients.replace(Some(Rc::new(clients)));
+        if let Err(error) = self.clients.connect(context.dependencies()) {
+            return Box::pin(futures::future::ready(Err(error)));
+        }
+        self.clients.tasks.replace(Some(context.tasks().clone()));
         Box::pin(futures::future::ready(Ok(())))
     }
 }

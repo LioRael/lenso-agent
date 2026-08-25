@@ -3,6 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, RuntimeFailure, StreamCapability, StreamEvent};
 
+use lenso_module::CapabilityClient;
 pub const CAPABILITY_ID: &str = "lenso.agent@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
@@ -167,9 +168,7 @@ impl AgentClient {
     }
 
     pub fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
-        Ok(Self {
-            run_turn: dependencies.one_stream::<Agent>()?,
-        })
+        <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
     pub async fn run_turn(&self, request: RunTurnRequest) -> Result<NativeStream<Agent>, AgentInvocationError> {
@@ -182,6 +181,26 @@ impl AgentClient {
         self.run_turn.open_with_context(RUN_TURN_OPERATION, context, request).await
             .map_err(AgentInvocationError::Runtime)?
             .map_err(AgentInvocationError::Domain)
+    }
+}
+
+impl CapabilityClient for AgentClient {
+    type Dependencies = ModuleDependencies;
+    type Error = RuntimeFailure;
+
+    const CAPABILITY_ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
+        Ok(Self {
+            run_turn: dependencies.one_stream::<Agent>()?,
+        })
+    }
+
+    fn already_connected() -> RuntimeFailure {
+        RuntimeFailure::ModuleFailure {
+            detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
+        }
     }
 }
 

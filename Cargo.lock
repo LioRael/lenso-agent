@@ -37,7 +37,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -431,7 +431,7 @@ checksum = "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -594,7 +594,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -1110,6 +1110,7 @@ dependencies = [
  "lenso-capability-agent-session",
  "lenso-capability-agent-tools",
  "lenso-kernel",
+ "lenso-module",
  "lenso-native-adapter",
  "serde",
  "serde_json",
@@ -1358,6 +1359,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1370,6 +1372,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1383,6 +1386,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "schemars",
  "serde",
  "serde_json",
@@ -1396,6 +1400,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1408,6 +1413,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1420,6 +1426,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1432,6 +1439,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1445,6 +1453,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "schemars",
  "serde",
  "serde_json",
@@ -1458,6 +1467,7 @@ dependencies = [
  "lenso-contract-codegen 0.6.0",
  "lenso-contract-runtime",
  "lenso-kernel",
+ "lenso-module",
  "serde",
  "serde_json",
 ]
@@ -1478,7 +1488,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=858a11ffcb02fd3b9de92c1d6520d600e1e9a102#858a11ffcb02fd3b9de92c1d6520d600e1e9a102"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=a6e0726429be96666497fade6933189114da1071#a6e0726429be96666497fade6933189114da1071"
 dependencies = [
  "lenso-contract-authoring-macros",
  "schemars",
@@ -1488,7 +1498,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=858a11ffcb02fd3b9de92c1d6520d600e1e9a102#858a11ffcb02fd3b9de92c1d6520d600e1e9a102"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=a6e0726429be96666497fade6933189114da1071#a6e0726429be96666497fade6933189114da1071"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1508,7 +1518,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-codegen"
 version = "0.6.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=858a11ffcb02fd3b9de92c1d6520d600e1e9a102#858a11ffcb02fd3b9de92c1d6520d600e1e9a102"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=a6e0726429be96666497fade6933189114da1071#a6e0726429be96666497fade6933189114da1071"
 dependencies = [
  "lenso-contract-authoring",
  "semver",
@@ -1543,13 +1553,18 @@ dependencies = [
 
 [[package]]
 name = "lenso-kernel"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f4b8317ef63cf113b1d78dbe5af52ddb15c053eb9937b7393f7d17b02683a4a"
+checksum = "2d66c49832b0b5e825b4f746331a74fa943392db27bbe569365422dd468260fd"
 dependencies = [
  "futures",
  "lenso-app-plan",
 ]
+
+[[package]]
+name = "lenso-module"
+version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso?rev=2ba7930bc1fdf195219cfb36bd21ac19b9c9bf7c#2ba7930bc1fdf195219cfb36bd21ac19b9c9bf7c"
 
 [[package]]
 name = "lenso-native-adapter"
@@ -1997,7 +2012,7 @@ checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2269,7 +2284,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2332,7 +2347,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2343,7 +2358,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2474,9 +2489,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2548,7 +2563,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2630,7 +2645,7 @@ checksum = "78773a2a397f451582ce068015985c33193cf6dea8b74d2a639fe457b2f07b0e"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -3416,7 +3431,7 @@ checksum = "34df6fc39dbd26ddc9c10e6a2984476e13acce22e64e4487636ef494369225da"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]

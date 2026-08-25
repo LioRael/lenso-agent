@@ -3,6 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
+use lenso_module::CapabilityClient;
 pub const CAPABILITY_ID: &str = "lenso.agent.prompt-provider@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = true;
@@ -188,9 +189,7 @@ impl PromptProviderClient {
     }
 
     pub fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
-        Ok(Self {
-            contribute: dependencies.one::<PromptProvider>()?,
-        })
+        <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
     pub async fn contribute(&self, request: ContributeRequest) -> Result<ContributeResponse, PromptProviderInvocationError> {
@@ -203,6 +202,26 @@ impl PromptProviderClient {
         self.contribute.invoke_with_context(CONTRIBUTE_OPERATION, context, request).await
             .map_err(PromptProviderInvocationError::Runtime)?
             .map_err(PromptProviderInvocationError::Domain)
+    }
+}
+
+impl CapabilityClient for PromptProviderClient {
+    type Dependencies = ModuleDependencies;
+    type Error = RuntimeFailure;
+
+    const CAPABILITY_ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
+        Ok(Self {
+            contribute: dependencies.one::<PromptProvider>()?,
+        })
+    }
+
+    fn already_connected() -> RuntimeFailure {
+        RuntimeFailure::ModuleFailure {
+            detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
+        }
     }
 }
 
