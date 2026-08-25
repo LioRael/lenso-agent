@@ -1,6 +1,7 @@
 //! Native, workspace-rooted process execution provider.
 
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::{Component, Path, PathBuf},
@@ -10,12 +11,12 @@ use std::{
 };
 
 use futures::future::ready;
+use lenso::prelude::*;
 use lenso_capability_agent_process::{
-    CatalogRequest, CatalogResponse, CatalogResponseProgramsItem, ProcessEndpoint, ProcessProvider,
-    ProcessRun, RunError, RunRequest, RunResponse,
+    self as process_contract, CatalogRequest, CatalogResponse, CatalogResponseProgramsItem,
+    ProcessProvider, ProcessRun, RunError, RunRequest, RunResponse,
 };
-use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 use tokio::{io::AsyncReadExt, process::Child};
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -43,38 +44,16 @@ struct ResolvedProgram {
     canonical_target: PathBuf,
 }
 
-/// Instantiates one explicitly configured process authority.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.process@1","descriptor_version":"1.0.0","operations":["catalog","run"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
 )]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported native-process entrypoint"));
-    }
-    let config = serde_json::from_str::<ProcessConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid native-process configuration: {error}")))?;
-    validate_config(&config)?;
-    let root = fs::canonicalize(&config.root)
-        .map_err(|error| invalid_plan(format!("process root is unavailable: {error}")))?;
-    if !root.is_dir() {
-        return Err(invalid_plan("process root is not a directory"));
-    }
-    let programs = resolve_programs(&config.allowed_programs)?;
-    let environment = config
-        .environment_allowlist
-        .iter()
-        .filter_map(|name| env::var(name).ok().map(|value| (name.clone(), value)))
-        .collect();
-    let endpoint = Rc::new(ProcessEndpoint::new(NativeProcessProvider {
-        config,
-        root,
-        programs,
-        environment,
-    })) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::new(vec![endpoint]))
+#[derive(Clone, Debug)]
+struct NativeProcessModule {
+    #[config]
+    config: ProcessConfig,
+    provider: Rc<RefCell<Option<NativeProcessProvider>>>,
 }
 
 fn validate_config(config: &ProcessConfig) -> Result<(), RuntimeFailure> {
@@ -171,6 +150,62 @@ impl ProcessProvider for NativeProcessProvider {
     ) -> lenso_kernel::NativeRequestFuture<ProcessRun> {
         let provider = self.clone();
         Box::pin(async move { Box::pin(provider.run_process(context, request)).await })
+    }
+}
+
+#[lenso::provides(process_contract::Process)]
+impl ProcessProvider for NativeProcessModule {
+    fn catalog(
+        &self,
+        context: InvocationContext,
+        request: CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<process_contract::ProcessCatalog> {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => provider.catalog(context, request),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
+                capability: process_contract::CAPABILITY_ID,
+            }))),
+        }
+    }
+
+    fn run(
+        &self,
+        context: InvocationContext,
+        request: RunRequest,
+    ) -> lenso_kernel::NativeRequestFuture<ProcessRun> {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => provider.run(context, request),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
+                capability: process_contract::CAPABILITY_ID,
+            }))),
+        }
+    }
+}
+
+impl Lifecycle for NativeProcessModule {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
+        let root = fs::canonicalize(&self.config.root)
+            .map_err(|error| invalid_plan(format!("process root is unavailable: {error}")))?;
+        if !root.is_dir() {
+            return Err(invalid_plan("process root is not a directory"));
+        }
+        let programs = resolve_programs(&self.config.allowed_programs)?;
+        let environment = self
+            .config
+            .environment_allowlist
+            .iter()
+            .filter_map(|name| env::var(name).ok().map(|value| (name.clone(), value)))
+            .collect();
+        self.provider.replace(Some(NativeProcessProvider {
+            config: self.config.clone(),
+            root,
+            programs,
+            environment,
+        }));
+        Ok(())
     }
 }
 

@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.prompt@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = true;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_prompt { () => { "{\"capability_id\":\"lenso.agent
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_prompt_client { () => { "{\"capability_id\":\"lenso.agent.prompt@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_prompt_client { () => { "{\"capability_id\":\"lenso.agent.prompt@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const ASSEMBLE_OPERATION: &str = "assemble";
 
@@ -152,6 +156,9 @@ pub trait __LensoIntoPromptAssembleResult {
 }
 impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, AssembleError> {
     fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPromptAssembleResult for Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> { self }
 }
 impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, lenso_module_authoring::ModuleError<AssembleError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> {
@@ -309,10 +316,47 @@ impl CapabilityClient for PromptClient {
     }
 }
 
+impl CapabilityClientMany for PromptClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    assemble: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<Prompt>()?,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PromptInvocationError {
     Domain(AssembleError),
     Runtime(RuntimeFailure),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PromptGuestClient<'a, H: lenso_guest_sdk::HostImports> {
+    capability: lenso_guest_sdk::GuestCapability<'a, H>,
+}
+
+impl<'a, H: lenso_guest_sdk::HostImports> PromptGuestClient<'a, H> {
+    pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
+        context
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[ASSEMBLE_OPERATION], &[])
+            .map(|capability| Self { capability })
+    }
+
+    pub fn assemble(&self, request: &AssembleRequest) -> Result<AssembleResponse, lenso_guest_sdk::GuestError<AssembleError>> {
+        self.capability.request(ASSEMBLE_OPERATION, request)
+    }
 }
 
 #[derive(Debug, Default)]

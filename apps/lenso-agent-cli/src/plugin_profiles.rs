@@ -75,7 +75,7 @@ const CODEX_AUTH_DESCRIPTOR: &[u8] =
 const AGENT_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent/capability.json");
 const GUEST_AGENT_PACKAGE_ID: &str = "lenso.agent.guest";
-const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"fixture/readme-summary-v1"}"#;
+const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"model":"fixture/readme-summary-v1","max_steps":8,"max_tool_calls":4,"max_output_tokens":1024,"max_history_events":200}"#;
 const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#;
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
 const CODEX_AUTH_CONFIGURATION: &str =

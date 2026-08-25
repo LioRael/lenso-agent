@@ -12,6 +12,7 @@ build = "build.rs"
 [dependencies]
 futures.workspace = true
 lenso-contract-runtime.workspace = true
+lenso-guest-sdk.workspace = true
 lenso-kernel.workspace = true
 lenso-module-authoring.workspace = true
 lenso-runtime-codec.workspace = true

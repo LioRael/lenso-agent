@@ -2,53 +2,30 @@
 
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
+use lenso::prelude::*;
 use lenso_capability_agent_tool_provider as provider_contract;
 use lenso_capability_agent_tools::{
-    CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteErrorToolErrorPayload, ExecuteRequest, ExecuteResponse, ExecuteResponseContentType,
-    ToolsCatalog, ToolsEndpoint, ToolsExecute, ToolsProvider,
+    self as tools_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
+    ExecuteError, ExecuteErrorToolErrorPayload, ExecuteRequest, ExecuteResponse,
+    ExecuteResponseContentType, ToolsCatalog, ToolsExecute, ToolsProvider,
 };
-use lenso_kernel::{
-    ActivateContext, InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint,
-    NativeRequestHandle, RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 
-/// Instantiates deterministic Tool aggregation and dispatch.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tools@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","cardinality":"many"}]}"#
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" || context.configuration() != "{}" {
-        return Err(RuntimeFailure::InvalidResolvedPlan {
-            detail: "Tools Module requires entrypoint `default` and empty configuration".to_owned(),
-        });
-    }
-    let state = Rc::new(RefCell::new(None));
-    let endpoint = Rc::new(ToolsEndpoint::new(AggregateTools {
-        state: state.clone(),
-    })) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![endpoint],
-        ToolsLifecycle { state },
-    ))
+#[lenso::module(lifecycle)]
+#[derive(Clone, Debug)]
+struct ToolsModule {
+    providers: ManyPort<provider_contract::ToolProviderClient>,
+    state: Rc<RefCell<Option<ToolRuntimeState>>>,
 }
 
 #[derive(Debug)]
 struct ToolRuntimeState {
     catalog: Vec<CatalogResponseToolsItem>,
     routes: BTreeMap<String, usize>,
-    execute_handles: Vec<Rc<NativeRequestHandle<provider_contract::ToolProviderExecute>>>,
 }
 
-#[derive(Clone, Debug)]
-struct AggregateTools {
-    state: Rc<RefCell<Option<ToolRuntimeState>>>,
-}
-
-impl ToolsProvider for AggregateTools {
+#[lenso::provides(tools_contract::Tools)]
+impl ToolsProvider for ToolsModule {
     fn catalog(
         &self,
         _context: InvocationContext,
@@ -72,95 +49,71 @@ impl ToolsProvider for AggregateTools {
         context: InvocationContext,
         request: ExecuteRequest,
     ) -> lenso_kernel::NativeRequestFuture<ToolsExecute> {
-        let route = self.state.borrow().as_ref().and_then(|state| {
-            state
-                .routes
-                .get(&request.name)
-                .and_then(|index| state.execute_handles.get(*index))
-                .cloned()
-        });
-        let Some(handle) = route else {
+        let route = self
+            .state
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.routes.get(&request.name).copied());
+        let Some(index) = route else {
             return Box::pin(futures::future::ready(Ok(Err(ExecuteError::UnknownTool))));
         };
+        let providers = self.providers.clone();
         Box::pin(async move {
-            let result = handle
-                .invoke_with_context(
-                    provider_contract::EXECUTE_OPERATION,
+            match providers[index]
+                .execute_with_context(
                     context,
                     provider_contract::ExecuteRequest {
                         name: request.name,
                         arguments_json: request.arguments_json,
                     },
                 )
-                .await?;
-            Ok(result
-                .map(convert_execute_response)
-                .map_err(convert_execute_error))
+                .await
+            {
+                Ok(response) => Ok(Ok(convert_execute_response(response))),
+                Err(provider_contract::ToolProviderExecuteInvocationError::Domain(error)) => {
+                    Ok(Err(convert_execute_error(error)))
+                }
+                Err(provider_contract::ToolProviderExecuteInvocationError::Runtime(error)) => {
+                    Err(error)
+                }
+            }
         })
     }
 }
 
-#[derive(Debug)]
-struct ToolsLifecycle {
-    state: Rc<RefCell<Option<ToolRuntimeState>>>,
-}
-
-impl ModuleLifecycle for ToolsLifecycle {
-    fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        let state = self.state.clone();
-        let catalog_handles = match context
-            .dependencies()
-            .many::<provider_contract::ToolProviderCatalog>()
-        {
-            Ok(handles) => handles,
-            Err(error) => return Box::pin(futures::future::ready(Err(error))),
-        };
-        let execute_handles = match context
-            .dependencies()
-            .many::<provider_contract::ToolProviderExecute>()
-        {
-            Ok(handles) => handles,
-            Err(error) => return Box::pin(futures::future::ready(Err(error))),
-        };
-        Box::pin(async move {
-            if catalog_handles.len() != execute_handles.len() {
-                return Err(RuntimeFailure::InvalidResolvedPlan {
-                    detail: "Tool Provider catalog/execute bindings are inconsistent".to_owned(),
-                });
-            }
-            let mut catalog = Vec::new();
-            let mut routes = BTreeMap::new();
-            for (index, handle) in catalog_handles.iter().enumerate() {
-                let response = handle
-                    .invoke(
-                        provider_contract::CATALOG_OPERATION,
-                        provider_contract::CatalogRequest {},
-                    )
-                    .await?
-                    .map_err(|_| RuntimeFailure::ModuleFailure {
-                        detail: format!("Tool Provider {index} returned an invalid catalog"),
-                    })?;
-                for tool in response.tools {
-                    if routes.insert(tool.name.clone(), index).is_some() {
-                        return Err(RuntimeFailure::InvalidResolvedPlan {
-                            detail: format!("duplicate Tool name `{}`", tool.name),
-                        });
+impl Lifecycle for ToolsModule {
+    async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
+        let mut catalog = Vec::new();
+        let mut routes = BTreeMap::new();
+        for (index, provider) in self.providers.iter().enumerate() {
+            let response = provider
+                .catalog(provider_contract::CatalogRequest {})
+                .await
+                .map_err(|error| match error {
+                    provider_contract::ToolProviderCatalogInvocationError::Domain(_) => {
+                        RuntimeFailure::ModuleFailure {
+                            detail: format!("Tool Provider {index} returned an invalid catalog"),
+                        }
                     }
-                    catalog.push(CatalogResponseToolsItem {
-                        name: tool.name,
-                        description: tool.description,
-                        input_schema_json: tool.input_schema_json,
+                    provider_contract::ToolProviderCatalogInvocationError::Runtime(error) => error,
+                })?;
+            for tool in response.tools {
+                if routes.insert(tool.name.clone(), index).is_some() {
+                    return Err(RuntimeFailure::InvalidResolvedPlan {
+                        detail: format!("duplicate Tool name `{}`", tool.name),
                     });
                 }
+                catalog.push(CatalogResponseToolsItem {
+                    name: tool.name,
+                    description: tool.description,
+                    input_schema_json: tool.input_schema_json,
+                });
             }
-            catalog.sort_by(|left, right| left.name.cmp(&right.name));
-            state.replace(Some(ToolRuntimeState {
-                catalog,
-                routes,
-                execute_handles: execute_handles.into_iter().map(Rc::new).collect(),
-            }));
-            Ok(())
-        })
+        }
+        catalog.sort_by(|left, right| left.name.cmp(&right.name));
+        self.state
+            .replace(Some(ToolRuntimeState { catalog, routes }));
+        Ok(())
     }
 }
 

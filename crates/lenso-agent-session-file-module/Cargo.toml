@@ -13,6 +13,7 @@ package-id = "lenso.agent.session.file"
 
 [dependencies]
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true

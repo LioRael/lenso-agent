@@ -13,19 +13,16 @@ use futures::{
     future::{LocalBoxFuture, ready},
     stream::LocalBoxStream,
 };
+use lenso::prelude::*;
 use lenso_capability_agent_auth_openai_codex::{
-    AccessRequest, OpenaiCodexClient, OpenaiCodexInvocationError,
+    self as auth_contract, AccessRequest, OpenaiCodexInvocationError,
 };
 use lenso_capability_agent_model::{
-    CAPABILITY_ID, CompleteError, CompleteRequest, CompleteRequestMessagesItem,
-    CompleteRequestMessagesItemRole, CompleteResponse, CompleteResponseKind, ModelEndpoint,
-    ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CompleteError, CompleteRequest,
+    CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteResponse,
+    CompleteResponseKind, ModelInvocationError, ModelProvider,
 };
-use lenso_kernel::{
-    ActivateContext, DeactivateContext, InvocationContext, ModuleFuture, ModuleLifecycle,
-    NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
@@ -81,62 +78,20 @@ impl DirectModelConfig {
     }
 }
 
-/// Instantiates one direct `OpenAI` Codex Model generation.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","operations":["complete"],"operation_kinds":{"complete":"stream"},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.auth.openai-codex@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported direct Codex Model entrypoint"));
-    }
-    let config = serde_json::from_str::<DirectModelConfig>(context.configuration())
-        .map_err(|error| {
-            invalid_plan(format!("invalid direct Codex Model configuration: {error}"))
-        })?
-        .validate()?;
-    let auth = Rc::new(RefCell::new(None));
-    let endpoint = Rc::new(ModelEndpoint::new(DirectModel {
-        config,
-        client: reqwest::Client::new(),
-        auth: auth.clone(),
-    })) as Rc<dyn NativeStreamEndpoint>;
-    Ok(NativeModuleInstance::with_stream_endpoints(
-        vec![endpoint],
-        DirectModelLifecycle { auth },
-    ))
+fn validate_config(config: &DirectModelConfig) -> Result<(), RuntimeFailure> {
+    config.clone().validate().map(|_| ())
 }
 
-#[derive(Debug)]
-struct DirectModelLifecycle {
-    auth: Rc<RefCell<Option<Rc<OpenaiCodexClient>>>>,
-}
-
-impl ModuleLifecycle for DirectModelLifecycle {
-    fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        let client = match OpenaiCodexClient::from_dependencies(context.dependencies()) {
-            Ok(client) => client,
-            Err(error) => return Box::pin(ready(Err(error))),
-        };
-        self.auth.replace(Some(Rc::new(client)));
-        Box::pin(ready(Ok(())))
-    }
-
-    fn deactivate(&self, _context: DeactivateContext) -> ModuleFuture {
-        self.auth.replace(None);
-        Box::pin(ready(Ok(())))
-    }
-}
-
+#[lenso::module(configuration_schema = "config.schema.json", validate = validate_config)]
 #[derive(Clone, Debug)]
 struct DirectModel {
+    #[config]
     config: DirectModelConfig,
     client: reqwest::Client,
-    auth: Rc<RefCell<Option<Rc<OpenaiCodexClient>>>>,
+    auth: Port<auth_contract::OpenaiCodexClient>,
 }
 
+#[lenso::provides(model_contract::Model)]
 impl ModelProvider for DirectModel {
     fn complete(
         &self,
@@ -152,11 +107,7 @@ impl ModelProvider for DirectModel {
             Ok(body) => body,
             Err(error) => return Box::pin(ready(Err(ModelInvocationError::Domain(error)))),
         };
-        let Some(auth) = self.auth.borrow().clone() else {
-            return Box::pin(ready(Err(provider_failure(
-                "direct Codex authentication is unavailable",
-            ))));
-        };
+        let auth = self.auth.clone();
         let config = self.config.clone();
         let client = self.client.clone();
         Box::pin(async move {

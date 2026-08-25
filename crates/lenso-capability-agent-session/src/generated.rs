@@ -3,7 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
-use lenso_module_authoring::CapabilityClient;
+use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
@@ -18,6 +18,10 @@ macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agen
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
 
 pub const APPEND_OPERATION: &str = "append";
 pub const OPEN_OPERATION: &str = "open";
@@ -465,6 +469,9 @@ pub trait __LensoIntoSessionAppendResult {
 impl __LensoIntoSessionAppendResult for Result<AppendResponse, AppendError> {
     fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoSessionAppendResult for Result<Result<AppendResponse, AppendError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> { self }
+}
 impl __LensoIntoSessionAppendResult for Result<AppendResponse, lenso_module_authoring::ModuleError<AppendError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> {
         match self {
@@ -491,6 +498,9 @@ pub trait __LensoIntoSessionOpenResult {
 impl __LensoIntoSessionOpenResult for Result<OpenResponse, OpenError> {
     fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoSessionOpenResult for Result<Result<OpenResponse, OpenError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> { self }
+}
 impl __LensoIntoSessionOpenResult for Result<OpenResponse, lenso_module_authoring::ModuleError<OpenError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> {
         match self {
@@ -516,6 +526,9 @@ pub trait __LensoIntoSessionReadResult {
 }
 impl __LensoIntoSessionReadResult for Result<ReadResponse, ReadError> {
     fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoSessionReadResult for Result<Result<ReadResponse, ReadError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> { self }
 }
 impl __LensoIntoSessionReadResult for Result<ReadResponse, lenso_module_authoring::ModuleError<ReadError, RuntimeFailure>> {
     fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> {
@@ -741,6 +754,28 @@ impl CapabilityClient for SessionClient {
     }
 }
 
+impl CapabilityClientMany for SessionClient {
+    fn many_from_dependencies(
+        dependencies: &ModuleDependencies,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        dependencies
+            .bindings()
+            .iter()
+            .filter(|binding| binding.capability_id() == CAPABILITY_ID)
+            .map(|binding| {
+                Ok(BoundCapabilityClient::new(
+                    binding.provider_instance(),
+                    Self {
+                    append: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionAppend>()?,
+                    open: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionOpen>()?,
+                    read: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionRead>()?,
+                    },
+                ))
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionAppendInvocationError {
     Domain(AppendError),
@@ -755,6 +790,31 @@ pub enum SessionOpenInvocationError {
 pub enum SessionReadInvocationError {
     Domain(ReadError),
     Runtime(RuntimeFailure),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SessionGuestClient<'a, H: lenso_guest_sdk::HostImports> {
+    capability: lenso_guest_sdk::GuestCapability<'a, H>,
+}
+
+impl<'a, H: lenso_guest_sdk::HostImports> SessionGuestClient<'a, H> {
+    pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
+        context
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[APPEND_OPERATION, OPEN_OPERATION, READ_OPERATION], &[])
+            .map(|capability| Self { capability })
+    }
+
+    pub fn append(&self, request: &AppendRequest) -> Result<AppendResponse, lenso_guest_sdk::GuestError<AppendError>> {
+        self.capability.request(APPEND_OPERATION, request)
+    }
+
+    pub fn open(&self, request: &OpenRequest) -> Result<OpenResponse, lenso_guest_sdk::GuestError<OpenError>> {
+        self.capability.request(OPEN_OPERATION, request)
+    }
+
+    pub fn read(&self, request: &ReadRequest) -> Result<ReadResponse, lenso_guest_sdk::GuestError<ReadError>> {
+        self.capability.request(READ_OPERATION, request)
+    }
 }
 
 #[derive(Debug, Default)]

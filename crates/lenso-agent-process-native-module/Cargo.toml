@@ -13,6 +13,7 @@ package-id = "lenso.agent.process.native"
 
 [dependencies]
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true

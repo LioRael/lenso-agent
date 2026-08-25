@@ -52,6 +52,15 @@ bytes identical to each reviewed Plan. The smaller
 [`composition/text-tools.app.json`](composition/text-tools.app.json) remains a
 single-Module authoring fixture.
 
+All Provider Modules use the source-first `#[lenso::module]` facade. Modules
+with lifecycle work opt in with `#[lenso::module(lifecycle)]`; one-to-one and
+one-to-many dependencies use typed `Port<Client>` and `ManyPort<Client>` fields.
+The CLI Module is intentionally the only low-level factory because it is a
+consumer-only binding anchor with no provided Capability, a shape the current
+source-first facade cannot yet finalize without inventing a false Provider.
+Source-derived Provider admission is fail-fast (`queue_capacity: 0`), which is
+recorded in the reviewed canonical Plans.
+
 ## Select an App variant
 
 Choose one definition, resolve it, and pass only the reviewed immutable Plan to
@@ -79,7 +88,7 @@ Modules can be removed while the remaining graph still resolves.
 The host currently uses released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.9`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`12fd7934ddc72d9d32d647c931be3de00b6fe334`, which closes the generic dynamic
+`48cf37b6475a0dbbe4ad8492888ed7c6c17abae4`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.

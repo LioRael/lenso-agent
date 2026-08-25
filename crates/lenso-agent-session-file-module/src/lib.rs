@@ -9,17 +9,14 @@ use std::{
 };
 
 use futures::future::ready;
+use lenso::prelude::*;
 use lenso_capability_agent_session::{
-    AppendError, AppendErrorRevisionConflictPayload, AppendRequest, AppendRequestEventsItem,
-    AppendResponse, OpenError, OpenRequest, OpenResponse, ReadError, ReadRequest, ReadResponse,
-    ReadResponseEventsItem, ReadResponseEventsItemKind, SessionAppend, SessionEndpoint,
+    self as session_contract, AppendError, AppendErrorRevisionConflictPayload, AppendRequest,
+    AppendRequestEventsItem, AppendResponse, OpenError, OpenRequest, OpenResponse, ReadError,
+    ReadRequest, ReadResponse, ReadResponseEventsItem, ReadResponseEventsItemKind, SessionAppend,
     SessionOpen, SessionProvider, SessionRead,
 };
-use lenso_kernel::{
-    InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
-    RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 
 /// One validated `turn_started` event projected from the private file store.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -136,31 +133,23 @@ struct FileSessionConfig {
     directory: PathBuf,
 }
 
-/// Instantiates a durable file-backed Session store.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.session@1","descriptor_version":"1.1.0","operations":["append","open","read"],"operation_kinds":{},"default_admission":{"queue_capacity":8,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported file Session entrypoint"));
-    }
-    let config = serde_json::from_str::<FileSessionConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid file Session configuration: {error}")))?;
+fn validate_config(config: &FileSessionConfig) -> Result<(), RuntimeFailure> {
     if config.directory.as_os_str().is_empty() {
         return Err(invalid_plan("Session directory must not be empty"));
     }
-    let provider = FileSessionProvider {
-        directory: config.directory,
-        operation_lock: Rc::new(RefCell::new(())),
-    };
-    let endpoint = Rc::new(SessionEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![endpoint],
-        FileSessionLifecycle { provider },
-    ))
+    Ok(())
+}
+
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
+)]
+#[derive(Clone, Debug)]
+struct FileSessionModule {
+    #[config]
+    config: FileSessionConfig,
+    provider: Rc<RefCell<Option<FileSessionProvider>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -411,14 +400,67 @@ impl SessionProvider for FileSessionProvider {
     }
 }
 
-#[derive(Debug)]
-struct FileSessionLifecycle {
-    provider: FileSessionProvider,
+#[lenso::provides(session_contract::Session)]
+impl SessionProvider for FileSessionModule {
+    fn append(
+        &self,
+        _context: InvocationContext,
+        request: AppendRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionAppend> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.append_now(request)));
+        Box::pin(ready(result))
+    }
+
+    fn open(
+        &self,
+        _context: InvocationContext,
+        request: OpenRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.open_now(request)));
+        Box::pin(ready(result))
+    }
+
+    fn read(
+        &self,
+        _context: InvocationContext,
+        request: ReadRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.read_now(request)));
+        Box::pin(ready(result))
+    }
 }
 
-impl ModuleLifecycle for FileSessionLifecycle {
-    fn prepare(&self, _context: PrepareContext) -> ModuleFuture {
-        Box::pin(ready(self.provider.prepare_store()))
+impl Lifecycle for FileSessionModule {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
+        let provider = FileSessionProvider {
+            directory: self.config.directory.clone(),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider.prepare_store()?;
+        self.provider.replace(Some(provider));
+        Ok(())
     }
 }
 

@@ -2,16 +2,13 @@
 
 use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
+use lenso::prelude::*;
 use lenso_capability_agent_prompt::{
-    AssembleRequest, AssembleResponse, AssembleResponseContributionsItem,
-    AssembleResponseContributionsItemKind, PromptEndpoint, PromptProvider,
+    self as prompt_contract, AssembleRequest, AssembleResponse, AssembleResponseContributionsItem,
+    AssembleResponseContributionsItemKind, PromptProvider,
 };
 use lenso_capability_agent_prompt_provider as provider_contract;
-use lenso_kernel::{
-    ActivateContext, InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint,
-    RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -21,40 +18,30 @@ struct PromptConfig {
     max_total_bytes: usize,
 }
 
-/// Instantiates deterministic Prompt aggregation.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.prompt@1","descriptor_version":"1.0.0","operations":["assemble"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","cardinality":"many"}]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported Prompt aggregate entrypoint"));
-    }
-    let config = serde_json::from_str::<PromptConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid Prompt configuration: {error}")))?;
+fn validate_config(config: &PromptConfig) -> Result<(), RuntimeFailure> {
     if !(1..=256).contains(&config.max_contributions)
         || !(1..=262_144).contains(&config.max_total_bytes)
     {
         return Err(invalid_plan("Prompt aggregate limits are invalid"));
     }
-    let state = Rc::new(RefCell::new(None));
-    let endpoint = Rc::new(PromptEndpoint::new(AggregatePrompt {
-        state: state.clone(),
-    })) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![endpoint],
-        PromptLifecycle { config, state },
-    ))
+    Ok(())
 }
 
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
+)]
 #[derive(Clone, Debug)]
-struct AggregatePrompt {
+struct PromptModule {
+    #[config]
+    config: PromptConfig,
+    providers: ManyPort<provider_contract::PromptProviderClient>,
     state: Rc<RefCell<Option<AssembleResponse>>>,
 }
 
-impl PromptProvider for AggregatePrompt {
+#[lenso::provides(prompt_contract::Prompt)]
+impl PromptProvider for PromptModule {
     fn assemble(
         &self,
         _context: InvocationContext,
@@ -71,45 +58,30 @@ impl PromptProvider for AggregatePrompt {
     }
 }
 
-#[derive(Debug)]
-struct PromptLifecycle {
-    config: PromptConfig,
-    state: Rc<RefCell<Option<AssembleResponse>>>,
-}
-
-impl ModuleLifecycle for PromptLifecycle {
-    fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        let handles = match context
-            .dependencies()
-            .many::<provider_contract::PromptProvider>()
-        {
-            Ok(handles) => handles,
-            Err(error) => return Box::pin(futures::future::ready(Err(error))),
-        };
-        let config = self.config.clone();
-        let state = self.state.clone();
-        Box::pin(async move {
-            let mut provider_contributions = Vec::with_capacity(handles.len());
-            for (index, handle) in handles.into_iter().enumerate() {
-                let response = handle
-                    .invoke(
-                        provider_contract::CONTRIBUTE_OPERATION,
-                        provider_contract::ContributeRequest {},
-                    )
-                    .await?
-                    .map_err(|error| RuntimeFailure::ModuleFailure {
-                        detail: format!(
-                            "Prompt Provider {index} rejected its contributions: {error:?}"
-                        ),
-                    })?;
-                provider_contributions.push(response.contributions);
-            }
-            state.replace(Some(assemble_contributions(
-                provider_contributions,
-                &config,
-            )?));
-            Ok(())
-        })
+impl Lifecycle for PromptModule {
+    async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
+        let mut provider_contributions = Vec::with_capacity(self.providers.len());
+        for (index, provider) in self.providers.iter().enumerate() {
+            let response = provider
+                .contribute(provider_contract::ContributeRequest {})
+                .await
+                .map_err(|error| match error {
+                    provider_contract::PromptProviderInvocationError::Domain(error) => {
+                        RuntimeFailure::ModuleFailure {
+                            detail: format!(
+                                "Prompt Provider {index} rejected its contributions: {error:?}"
+                            ),
+                        }
+                    }
+                    provider_contract::PromptProviderInvocationError::Runtime(error) => error,
+                })?;
+            provider_contributions.push(response.contributions);
+        }
+        self.state.replace(Some(assemble_contributions(
+            provider_contributions,
+            &self.config,
+        )?));
+        Ok(())
     }
 }
 

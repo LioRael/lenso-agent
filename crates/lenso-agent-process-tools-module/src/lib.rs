@@ -2,20 +2,17 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use lenso::prelude::*;
 use lenso_capability_agent_process::{
-    CatalogRequest as ProcessCatalogRequest, ProcessClient, ProcessRunInvocationError, RunError,
-    RunRequest,
+    self as process_contract, CatalogRequest as ProcessCatalogRequest, ProcessRunInvocationError,
+    RunError, RunRequest,
 };
 use lenso_capability_agent_tool_provider::{
-    CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteErrorExecutionFailedPayload, ExecuteRequest, ExecuteResponse,
-    ExecuteResponseContentType, ToolProviderEndpoint, ToolProviderProvider,
+    self as tool_provider_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
+    ExecuteError, ExecuteErrorExecutionFailedPayload, ExecuteRequest, ExecuteResponse,
+    ExecuteResponseContentType, ToolProviderProvider,
 };
-use lenso_kernel::{
-    ActivateContext, DeactivateContext, InvocationContext, ModuleFuture, ModuleLifecycle,
-    NativeRequestEndpoint, RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 
 /// Stable structured process Tool name.
 pub const EXEC_TOOL: &str = "process.exec";
@@ -39,47 +36,33 @@ struct ExecArguments {
 
 #[derive(Debug)]
 struct ProcessToolsState {
-    client: Rc<ProcessClient>,
     catalog: CatalogResponse,
 }
 
-/// Instantiates the Agent-facing process Tool projection.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":2,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.process@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported process-tools entrypoint"));
-    }
-    let config = serde_json::from_str::<ProcessToolsConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid process-tools configuration: {error}")))?;
+fn validate_config(config: &ProcessToolsConfig) -> Result<(), RuntimeFailure> {
     if config.default_timeout_ms == 0 || config.default_timeout_ms > 3_600_000 {
         return Err(invalid_plan(
             "default_timeout_ms must be between 1 and 3600000",
         ));
     }
-    let state = Rc::new(RefCell::new(None));
-    let provider = ProcessToolsProvider {
-        config,
-        state: state.clone(),
-    };
-    let endpoint = Rc::new(ToolProviderEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![endpoint],
-        ProcessToolsLifecycle { state },
-    ))
+    Ok(())
 }
 
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
+)]
 #[derive(Clone, Debug)]
-struct ProcessToolsProvider {
+struct ProcessToolsModule {
+    #[config]
     config: ProcessToolsConfig,
+    process: Port<process_contract::ProcessClient>,
     state: Rc<RefCell<Option<ProcessToolsState>>>,
 }
 
-impl ToolProviderProvider for ProcessToolsProvider {
+#[lenso::provides(tool_provider_contract::ToolProvider)]
+impl ToolProviderProvider for ProcessToolsModule {
     fn catalog(
         &self,
         _context: InvocationContext,
@@ -111,21 +94,12 @@ impl ToolProviderProvider for ProcessToolsProvider {
                 ExecuteError::InvalidArguments,
             ))));
         };
-        let client = self
-            .state
-            .borrow()
-            .as_ref()
-            .map(|state| state.client.clone());
-        let Some(client) = client else {
-            return Box::pin(futures::future::ready(Err(RuntimeFailure::Unavailable {
-                capability: lenso_capability_agent_process::CAPABILITY_ID,
-            })));
-        };
+        let process = self.process.clone();
         let timeout_ms = arguments
             .timeout_ms
             .unwrap_or(self.config.default_timeout_ms);
         Box::pin(async move {
-            match client
+            match process
                 .run_with_context(
                     context,
                     RunRequest {
@@ -164,35 +138,24 @@ impl ToolProviderProvider for ProcessToolsProvider {
     }
 }
 
-#[derive(Debug)]
-struct ProcessToolsLifecycle {
-    state: Rc<RefCell<Option<ProcessToolsState>>>,
-}
-
-impl ModuleLifecycle for ProcessToolsLifecycle {
-    fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        let client = match ProcessClient::from_dependencies(context.dependencies()) {
-            Ok(client) => Rc::new(client),
-            Err(error) => return Box::pin(futures::future::ready(Err(error))),
-        };
-        let state = self.state.clone();
-        Box::pin(async move {
-            let process_catalog =
-                client
-                    .catalog(ProcessCatalogRequest {})
-                    .await
-                    .map_err(|error| RuntimeFailure::ModuleFailure {
-                        detail: format!("process catalog is unavailable: {error:?}"),
-                    })?;
-            let program_names = process_catalog
-                .programs
-                .into_iter()
-                .map(|program| program.name)
-                .collect::<Vec<_>>();
-            if program_names.is_empty() {
-                return Err(invalid_plan("process catalog cannot be empty"));
-            }
-            let input_schema_json = serde_json::json!({
+impl Lifecycle for ProcessToolsModule {
+    async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
+        let process_catalog = self
+            .process
+            .catalog(ProcessCatalogRequest {})
+            .await
+            .map_err(|error| RuntimeFailure::ModuleFailure {
+                detail: format!("process catalog is unavailable: {error:?}"),
+            })?;
+        let program_names = process_catalog
+            .programs
+            .into_iter()
+            .map(|program| program.name)
+            .collect::<Vec<_>>();
+        if program_names.is_empty() {
+            return Err(invalid_plan("process catalog cannot be empty"));
+        }
+        let input_schema_json = serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -208,8 +171,7 @@ impl ModuleLifecycle for ProcessToolsLifecycle {
                 "required": ["program", "arguments"]
             })
             .to_string();
-            state.replace(Some(ProcessToolsState {
-                client,
+        self.state.replace(Some(ProcessToolsState {
                 catalog: CatalogResponse {
                     tools: vec![CatalogResponseToolsItem {
                         name: EXEC_TOOL.to_owned(),
@@ -218,13 +180,13 @@ impl ModuleLifecycle for ProcessToolsLifecycle {
                     }],
                 },
             }));
-            Ok(())
-        })
+        Ok(())
     }
 
-    fn deactivate(&self, _context: DeactivateContext) -> ModuleFuture {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn deactivate(&self, _context: DeactivateContext) -> Result<(), RuntimeFailure> {
         self.state.replace(None);
-        Box::pin(futures::future::ready(Ok(())))
+        Ok(())
     }
 }
 

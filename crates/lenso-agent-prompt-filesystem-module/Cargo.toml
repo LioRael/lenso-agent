@@ -14,6 +14,7 @@ package-id = "lenso.agent.prompt.filesystem"
 [dependencies]
 directories.workspace = true
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true

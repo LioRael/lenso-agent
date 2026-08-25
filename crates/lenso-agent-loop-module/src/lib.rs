@@ -6,7 +6,6 @@ use std::{
     rc::Rc,
 };
 
-use futures::future::ready;
 use lenso::prelude::*;
 use lenso_capability_agent::{
     self as agent_capability, CAPABILITY_ID, RunTurnError, RunTurnRequest, RunTurnResponse,
@@ -94,7 +93,7 @@ struct AgentConfig {
     max_history_events: i64,
 }
 
-#[lenso::module(validate = validate_agent_config, activate = activate_agent_loop)]
+#[lenso::module(lifecycle, validate = validate_agent_config)]
 #[derive(Clone, Debug)]
 struct AgentLoop {
     #[config]
@@ -120,9 +119,12 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
     Ok(())
 }
 
-fn activate_agent_loop(module: &AgentLoop, context: &ActivateContext) -> ModuleFuture {
-    module.tasks.replace(Some(context.tasks().clone()));
-    Box::pin(ready(Ok(())))
+impl Lifecycle for AgentLoop {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn activate(&self, context: ActivateContext) -> Result<(), RuntimeFailure> {
+        self.tasks.replace(Some(context.tasks().clone()));
+        Ok(())
+    }
 }
 
 #[lenso::provides(agent_capability::Agent)]

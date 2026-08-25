@@ -13,6 +13,7 @@ package-id = "lenso.agent.prompt"
 
 [dependencies]
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
 lenso-kernel.workspace = true
