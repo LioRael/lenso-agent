@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "plugin_id": "lenso.workspace-edit",
+  "release_version": "1.0.0",
+  "artifacts": [],
+  "module_contributions": [
+    {
+      "id": "workspace-edit",
+      "package_id": "lenso.agent.workspace-edit",
+      "configuration_schema_digest": "sha256:d2b447209100b456568d95792dad33c9344737f022dd919626efa74c2f3cac4e",
+      "provides": [
+        {
+          "capability_id": "lenso.agent.tool-provider@1",
+          "descriptor_version": "1.0.0",
+          "descriptor_digest": "sha256:b726d7dd7bffaf07e48e0a55013f8d1b55d29d613f22b4e41e693fafd76c6fb4",
+          "request_operations": ["catalog", "execute"]
+        }
+      ],
+      "requires": [],
+      "implementations": [
+        {
+          "id": "native",
+          "artifact": null,
+          "built_in_factory": "lenso.agent.workspace-edit@0.2.0",
+          "entrypoint": "default",
+          "execution_class": "lenso.native-rust@1",
+          "targets": [
+            "aarch64-linux",
+            "aarch64-macos",
+            "x86_64-linux",
+            "x86_64-macos"
+          ],
+          "profiles": ["agent-tool-provider-v1"],
+          "support_channel": "experimental",
+          "trust": "trusted"
+        }
+      ],
+      "permission_request_ids": [],
+      "state": null
+    }
+  ],
+  "data_contributions": [],
+  "permission_requests": [],
+  "features": [],
+  "binding_templates": [],
+  "product_metadata": []
+}

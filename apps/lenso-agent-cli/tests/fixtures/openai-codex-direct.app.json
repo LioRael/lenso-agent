@@ -1,33 +1,40 @@
 {
   "schema_version": 1,
-  "manifest": "../Cargo.toml",
+  "manifest": "../../../../Cargo.toml",
   "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
-    "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
+    "lenso.agent.model.openai-codex-direct": "lenso-agent-model-openai-codex-direct-module",
     "lenso.agent.prompt": "lenso-agent-prompt-module",
     "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
     "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module",
-    "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
-    "lenso.agent.process-tools": "lenso-agent-process-tools-module",
-    "lenso.agent.process.native": "lenso-agent-process-native-module"
+    "lenso.agent.auth.openai-codex": "lenso-agent-auth-openai-codex-module"
   },
   "app": {
-    "name": "headless-local-coding",
+    "name": "openai-codex-direct",
     "modules": [
       {
         "key": "agent",
         "package": "lenso.agent.loop",
         "configuration": {
           "max_history_events": 200,
-          "max_output_tokens": 1024,
+          "max_output_tokens": 4096,
           "max_steps": 8,
           "max_tool_calls": 4,
-          "model": "fixture/readme-summary-v1"
+          "model": "gpt-5.6-luna"
+        }
+      },
+      {
+        "key": "auth",
+        "package": "lenso.agent.auth.openai-codex",
+        "configuration": {
+          "issuer": "https://auth.openai.com",
+          "profile": "default",
+          "refresh_margin_seconds": 60
         }
       },
       {
@@ -36,13 +43,13 @@
         "configuration": {}
       },
       {
-        "key": "fixture-instructions",
+        "key": "default-instructions",
         "package": "lenso.agent.prompt.static",
         "configuration": {
           "contributions": [
             {
-              "content": "Prefix direct answers with `Plugin: `.",
-              "id": "fixture.behavior",
+              "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App.",
+              "id": "harness.default",
               "kind": "instruction",
               "version": "1.0.0"
             }
@@ -51,38 +58,12 @@
       },
       {
         "key": "model",
-        "package": "lenso.agent.model.fixture",
+        "package": "lenso.agent.model.openai-codex-direct",
         "configuration": {
-          "model": "fixture/readme-summary-v1"
-        }
-      },
-      {
-        "key": "native-process",
-        "package": "lenso.agent.process.native",
-        "configuration": {
-          "allowed_programs": [
-            "cargo"
-          ],
-          "environment_allowlist": [
-            "PATH",
-            "HOME",
-            "CARGO_HOME",
-            "RUSTUP_HOME",
-            "TMPDIR",
-            "LANG",
-            "LC_ALL"
-          ],
-          "max_argument_bytes": 131072,
-          "max_output_bytes": 262144,
-          "max_timeout_ms": 600000,
-          "root": "."
-        }
-      },
-      {
-        "key": "process-tools",
-        "package": "lenso.agent.process-tools",
-        "configuration": {
-          "default_timeout_ms": 120000
+          "base_url": "https://chatgpt.com/backend-api",
+          "max_event_bytes": 1048576,
+          "model": "gpt-5.6-luna",
+          "reasoning_effort": "medium"
         }
       },
       {
@@ -118,15 +99,6 @@
         "key": "tools",
         "package": "lenso.agent.tools",
         "configuration": {}
-      },
-      {
-        "key": "workspace-edit",
-        "package": "lenso.agent.workspace-edit",
-        "configuration": {
-          "max_edit_bytes": 131072,
-          "max_file_bytes": 1048576,
-          "root": "."
-        }
       },
       {
         "key": "workspace-import-read",

@@ -1,41 +1,32 @@
 {
   "schema_version": 1,
-  "manifest": "../Cargo.toml",
+  "manifest": "Cargo.toml",
   "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
-    "lenso.agent.model.openai-codex-direct": "lenso-agent-model-openai-codex-direct-module",
+    "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
     "lenso.agent.prompt": "lenso-agent-prompt-module",
     "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
+    "lenso.agent.tui": "lenso-agent-tui-module",
+    "lenso.agent.tui.static": "lenso-agent-tui-static-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
-    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module",
-    "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
-    "lenso.agent.auth.openai-codex": "lenso-agent-auth-openai-codex-module"
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
   },
   "app": {
-    "name": "openai-codex-direct-coding",
+    "name": "lenso-agent",
     "modules": [
       {
         "key": "agent",
         "package": "lenso.agent.loop",
         "configuration": {
-          "max_history_events": 200,
-          "max_output_tokens": 4096,
+          "model": "fixture/readme-summary-v1",
           "max_steps": 8,
           "max_tool_calls": 4,
-          "model": "gpt-5.6-luna"
-        }
-      },
-      {
-        "key": "auth",
-        "package": "lenso.agent.auth.openai-codex",
-        "configuration": {
-          "issuer": "https://auth.openai.com",
-          "profile": "default",
-          "refresh_margin_seconds": 60
+          "max_output_tokens": 1024,
+          "max_history_events": 200
         }
       },
       {
@@ -44,27 +35,24 @@
         "configuration": {}
       },
       {
-        "key": "default-instructions",
+        "key": "fixture-instructions",
         "package": "lenso.agent.prompt.static",
         "configuration": {
           "contributions": [
             {
-              "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App.",
-              "id": "harness.default",
+              "id": "fixture.behavior",
+              "version": "1.0.0",
               "kind": "instruction",
-              "version": "1.0.0"
+              "content": "Prefix direct answers with `Plugin: `."
             }
           ]
         }
       },
       {
         "key": "model",
-        "package": "lenso.agent.model.openai-codex-direct",
+        "package": "lenso.agent.model.fixture",
         "configuration": {
-          "base_url": "https://chatgpt.com/backend-api",
-          "max_event_bytes": 1048576,
-          "model": "gpt-5.6-luna",
-          "reasoning_effort": "medium"
+          "model": "fixture/readme-summary-v1"
         }
       },
       {
@@ -88,10 +76,10 @@
         "configuration": {
           "contributions": [
             {
-              "content": "When summarizing a workspace file, ground the answer in the Tool result.",
               "id": "workspace.summary",
+              "version": "1.0.0",
               "kind": "skill",
-              "version": "1.0.0"
+              "content": "When summarizing a workspace file, ground the answer in the Tool result."
             }
           ]
         }
@@ -102,12 +90,21 @@
         "configuration": {}
       },
       {
-        "key": "workspace-edit",
-        "package": "lenso.agent.workspace-edit",
+        "key": "tui",
+        "package": "lenso.agent.tui",
+        "configuration": {}
+      },
+      {
+        "key": "tui-help",
+        "package": "lenso.agent.tui.static",
         "configuration": {
-          "max_edit_bytes": 131072,
-          "max_file_bytes": 1048576,
-          "root": "."
+          "panels": [
+            {
+              "id": "agent.help",
+              "title": "Help",
+              "body": "Enter sends a message.\nEsc cancels the active Turn or exits while idle.\nCtrl-C exits immediately.\nTab cycles contributed panels."
+            }
+          ]
         }
       },
       {
@@ -122,12 +119,12 @@
         "key": "workspace-read",
         "package": "lenso.agent.workspace-read",
         "configuration": {
-          "max_list_entries": 1000,
+          "root": ".",
           "max_output_bytes": 1048576,
-          "max_search_bytes": 16777216,
+          "max_list_entries": 1000,
           "max_search_entries": 10000,
-          "max_search_matches": 1000,
-          "root": "."
+          "max_search_bytes": 16777216,
+          "max_search_matches": 1000
         }
       }
     ],

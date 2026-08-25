@@ -25,13 +25,14 @@ cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
-The default `headless-readonly` App uses a deterministic fixture Model and can
-only read the current workspace. Choose another reviewed App by name when you
-need a different Model or Tool authority:
+The base App in `lenso.app.json` uses a deterministic fixture Model and can only
+read the current workspace. Enable workspace mutation without creating or
+selecting another App definition:
 
 ```sh
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- plugins enable workspace-edit \
+  --evidence "reviewed workspace mutation"
 cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
-  --app headless-coding \
   "Create and edit a workspace note."
 ```
 
@@ -45,58 +46,79 @@ The [documentation map](docs/README.md) separates tutorials, operational
 how-to guides, reference material, and architecture explanations; the
 [glossary](docs/glossary.md) gives each control-plane term one stable meaning.
 
-## Choose an App
+## Choose capabilities
 
-| App | Model | Workspace authority |
-| --- | --- | --- |
-| `tui-readonly` | deterministic fixture | read only, with composed TUI panels |
-| `headless-readonly` | deterministic fixture | read only |
-| `headless-coding` | deterministic fixture | read and edit |
-| `headless-local-coding` | deterministic fixture | read, edit, and reviewed processes |
-| `openai-readonly` | OpenAI-compatible API | read only |
-| `openai-codex-direct` | ChatGPT subscription | read only |
-| `openai-codex-direct-skills` | ChatGPT subscription | read only, plus selected local Skills |
-| `openai-codex-direct-coding` | ChatGPT subscription | read and edit |
-| `openai-codex-direct-local-coding` | ChatGPT subscription | read, edit, and reviewed processes |
+Start from the default read-only App, then enable independently shipped Plugin
+contributions by name. The selection persists in
+`.lenso/plugins/active-set.json`; there is no Composition file for each
+combination:
 
-The coding Apps can mutate the selected workspace. The local-coding Apps also
-run an explicit program catalog and are trusted-code profiles, not sandboxes.
+```sh
+# See the exact Releases bundled with this Host.
+cargo run -p lenso-agent-cli -- plugins available
+
+# Low-risk append-to-many Tool Provider: automatic local admission.
+cargo run -p lenso-agent-cli -- plugins enable text-tools
+
+# Workspace mutation changes authority and therefore requires review evidence.
+cargo run -p lenso-agent-cli -- plugins enable workspace-edit \
+  --evidence "reviewed workspace mutation"
+
+# Add local Skills to both the Prompt and Tool aggregates.
+cargo run -p lenso-agent-cli -- plugins enable skills \
+  --evidence "reviewed local skills"
+
+# Add the reviewed process catalog (cargo, git, and rg).
+cargo run -p lenso-agent-cli -- plugins enable local-process \
+  --evidence "reviewed local process execution"
+
+cargo run -p lenso-agent-cli -- plugins status
+cargo run -p lenso-agent-cli -- \
+  "Create and edit a workspace note."
+
+cargo run -p lenso-agent-cli -- plugins disable workspace-edit
+```
+
+The catalog also includes `openai-compatible` and experimental `codex-direct`
+Model replacements. `workspace-edit`, `text-tools`, `skills`, and
+`local-process` become independently selected Module Instances. Startup resolves
+the persisted Plugin Set into a new immutable App Generation; the running Kernel
+never discovers packages or mutates its graph. High-authority selections require
+explicit review evidence.
 
 ## How Apps are composed
 
-Each executable variant has one source `composition/<variant>.app.json` App
-Definition. It selects locked Module packages, configuration, and bindings. The
-authoring tool validates that definition and materializes an immutable Resolved
-App Plan before boot; the Kernel never discovers packages or mutates the
-running graph.
+The repository has one source App Definition: `lenso.app.json`. It describes the
+small read-only base. Optional Modules are selected through the persisted Plugin
+Active Set, so combinations do not create more App files.
 
-Normal runs select the reviewed App by name, so callers do not need to manage
-Plan files. App authors and release automation can reproduce the exact derived
-artifact explicitly:
+Before boot, the Host validates the definition and selected Plugins, then
+materializes one immutable Resolved App Plan in ignored Host state. App authors
+can check or reproduce that artifact:
 
 ```sh
-lenso app check --definition composition/headless-readonly.app.json
-lenso app resolve --definition composition/headless-readonly.app.json \
-  --output .lenso/headless-readonly/resolved-plan.json
+lenso app check --definition lenso.app.json
+lenso app resolve --definition lenso.app.json \
+  --output .lenso/resolved-plan.json
 ```
 
-`--plan <path>` remains an advanced escape hatch for exact Plan replay. The
-tracked `composition/*/resolved-plan.json` files are review and release
-evidence; never edit them by hand. `scripts/check-removal.sh` proves that
-optional Prompt, Skill, workspace-edit, and process Modules can be removed
-while the remaining graph still resolves. The TUI removal proof additionally
-removes every panel Contribution while retaining the TUI Shell and Agent route.
+`--plan <path>` remains an advanced escape hatch for exact Plan replay.
+Resolved Plans are generated Host input and are never hand-edited or committed.
+`scripts/check-removal.sh` proves static optional providers can be removed while
+the remaining graph still resolves; Plugin tests prove independent Skills,
+process, and workspace-edit removal. The TUI proof additionally removes every
+panel Contribution while retaining the TUI Shell and Agent route.
 
 ## Compose the TUI
 
-The `tui-readonly` App selects a `tui` Shell Module that requires exactly one
+The root App selects a `tui` Shell Module that requires exactly one
 `lenso.agent@1` provider and `many lenso.agent.tui-contribution@1` providers.
 The Shell owns terminal mode, layout, focus, input, streaming, cancellation,
 and cross-provider panel ID collision checks. Contribution Modules return
 bounded semantic panel snapshots; they do not receive `ratatui` widgets or a
 global registry.
 
-`composition/tui-readonly.app.json` includes one removable `tui-help` static
+`lenso.app.json` includes one removable `tui-help` static
 Contribution. Another Module can contribute a panel by providing the same
 Capability and being explicitly selected in App Composition. Removing all
 Contribution providers leaves the Shell valid with only the conversation.
@@ -132,7 +154,9 @@ entry closes the exact package, implementation authority, entrypoint, configurat
 Capability Descriptor and Operations, operation kinds, execution class, target,
 support/trust policy, canonical configuration, and one bounded attachment rule.
 The Catalog admits the linked `lenso.agent.text-tools@0.2.0` factory as a
-stateless, permission-free append-to-`many` Tool Provider. It also admits one
+stateless, permission-free append-to-`many` Tool Provider. It also admits
+reviewed workspace-edit, Skills, local-process, and Model replacement Profiles.
+One
 package-independent, isolated Wasm Tool Provider shape with the same exact
 Capability and attachment, empty configuration, no Host imports, permissions,
 state, Data mounts, or binding templates, and mandatory review evidence. It
@@ -141,9 +165,9 @@ also admits one reviewed variant with exactly one generated
 that binding to the dedicated base `workspace-import-read` Instance; the
 Bundle cannot select a provider or request workspace write, process, network,
 Secrets, state, or Data mount authority. It
-admits one restricted `lenso.agent.model.fixture@0.2.0` profile that replaces
-the fixture base Plan's exact `model` provider for the `agent` consumer. The
-experimental Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
+admits one restricted fixture Model profile that replaces the base Plan's exact
+`model` provider for the `agent` consumer. The experimental Codex Direct profile
+admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Experimental Artifact
 profiles additionally allow a reviewed QuickJS or Wasm Component Module to
 replace the exact native Agent Loop through the generated `AgentJsonCodec`.
@@ -160,6 +184,9 @@ A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
 declared by that Manifest. Admission rejects undeclared files, symlinks, digest
 or size mismatches, unsupported selected targets, unregistered executable
 factories, privileged or stateful contributions, and unbounded review evidence.
+For exact Releases bundled with this Host, prefer `plugins enable <name>` and
+`plugins disable <name>`; the Bundle path commands remain the third-party and
+upgrade surface.
 
 ```sh
 cargo run -p lenso-agent-cli -- plugins install \
@@ -246,9 +273,9 @@ records that derived decision and the CLI prints it as `governance`.
 Replacement, state, permissions, dependencies, Artifact-backed execution, and
 preview or experimental Profiles still require explicit `--evidence`. An
 explicit `--expected-manifest` remains available for automation that already
-owns a prior CAS value. Upgrade and rollback accept `--app <name>` and default
-to `headless-readonly`. `LENSO_RESOLVED_PLAN` and `--plan <path>` remain
-advanced overrides for automation and exact Plan replay.
+owns a prior CAS value. Upgrade and rollback use the root base definition by
+default. `LENSO_APP_DEFINITION`, `LENSO_RESOLVED_PLAN`, and `--plan <path>`
+remain advanced overrides for automation and exact Plan replay.
 
 Admission stores immutable objects and its receipt under
 `.lenso/plugins/store`. Activation atomically writes
@@ -308,9 +335,9 @@ content-addressed Generation Spec and Session events.
 
 ## Compose Prompt and Skill plugins
 
-Prompt and Skill plugins are ordinary Modules selected before boot. The
-checked fixture Composition binds `fixture-instructions` and `summary-skill`
-to the `prompt` aggregate. Their binding order is the Model-visible order.
+Prompt and Skill providers are ordinary Modules selected before boot. The root
+base definition binds `fixture-instructions` and `summary-skill` to the
+`prompt` aggregate. Their binding order is the Model-visible order.
 
 Each static plugin Instance declares one or more versioned contributions in
 the project document:
@@ -402,73 +429,76 @@ manifest and reported through an omitted count. Scripts are returned only as
 text and are never executed. No file changes are observed until the next App
 generation.
 
-The opt-in ChatGPT Subscription composition enables this catalog without
-changing the base direct profile:
+Enable the Skills Plugin independently of the selected Model:
 
 ```sh
+cargo run -p lenso-agent-cli -- plugins enable skills \
+  --evidence "reviewed local skills"
 cargo run -p lenso-agent-cli -- \
-  --app openai-codex-direct-skills \
   "Use the most relevant available Skill and one relevant resource to review this repository."
 ```
 
-This profile requires `~/.agents/skills` to exist. The base
-`openai-codex-direct` variant remains portable and does not inspect that
-directory.
+This Plugin requires `~/.agents/skills` to exist. When disabled, the base does
+not inspect that directory.
 
 ## Tool profiles
 
-Tool profiles are App Composition recipes, not Kernel modes or Tool Runtime
-switches. A profile expands to ordinary selected Tool Provider Module Instances
-and explicit bindings:
+Tool profiles are selected Module contributions, not Kernel modes or Tool
+Runtime switches. Static profiles expand from a base App Definition; supported
+optional profiles come from the persisted Plugin Active Set:
 
 - `readonly` selects rooted observation providers such as `list`,
   `search`, `read`, and the filesystem Skills
   provider;
-- `coding` adds the separate create-only/exact-edit workspace mutation Provider;
-- `local-coding` adds independently removable structured process Tools and a
-  native process Provider to `coding`; and
+- `coding` enables the separate create-only/exact-edit workspace mutation
+  Plugin;
+- `local-coding` selects independently removable structured process Tools and a
+  native process Provider;
 - `automation` selects explicit domain Providers and does not receive raw
   workspace or process access by default.
 
-The existing readonly Compositions still expose no generic shell, write, edit,
-delete, browser, or network Tool. The two opt-in coding Compositions add only
-`create_file` and `edit`. The two higher-authority
-local-coding Compositions additionally expose `run_process` with an explicit
-program catalog, workspace-relative cwd, cleared-and-allowlisted environment,
-timeout, argument, and combined-output limits. Removing Providers and bindings
-removes those Tool surfaces without changing the Agent Loop or Kernel. See
+The base exposes no generic shell, write, edit, delete, browser, or network
+Tool. Enabling the reviewed `workspace-edit` Plugin adds only
+`create_file` and `edit`. Enabling `local-process` adds `run_process` with an
+explicit program catalog, workspace-relative cwd,
+cleared-and-allowlisted environment, timeout, argument, and combined-output
+limits. Removing Providers and bindings removes those Tool surfaces without
+changing the Agent Loop or Kernel. See
 [ADR-0004](docs/adr/0004-use-minimal-composed-tool-profiles-and-progressive-skills.md).
 
 ## Run the opt-in coding slice
 
-The deterministic coding Composition proves create, unique exact edit, and
-read-back without changing the readonly Composition:
+Enable workspace mutation over the deterministic readonly base, then prove
+create, unique exact edit, and read-back:
 
 ```sh
+cargo run -p lenso-agent-cli -- plugins enable workspace-edit \
+  --evidence "reviewed workspace mutation"
 cargo run -p lenso-agent-cli -- \
-  --app headless-coding \
   "Create and edit a workspace note."
 ```
 
-For ChatGPT Subscription, select the `openai-codex-direct-coding` App. This App
-is explicitly mutating: run it only with a reviewed workspace root. Tool
+Model choice is independent of workspace authority. Workspace mutation is
+explicitly privileged: use it only with a reviewed workspace root. Tool
 arguments are retained in the durable Session trajectory, so do not use
 mutation Tools for credentials or other secret content.
 
 ## Run the opt-in local coding slice
 
-The deterministic local-coding Composition proves edit, `cargo check`, and
-read-back through separate workspace and process providers:
+Enable process execution and workspace mutation independently to prove edit,
+`cargo check`, and read-back through separate providers:
 
 ```sh
+cargo run -p lenso-agent-cli -- plugins enable local-process \
+  --evidence "reviewed local process execution"
+cargo run -p lenso-agent-cli -- plugins enable workspace-edit \
+  --evidence "reviewed local coding mutation"
 cargo run -p lenso-agent-cli -- \
-  --app headless-local-coding \
   "Edit and validate the workspace project."
 ```
 
-For ChatGPT Subscription, select the `openai-codex-direct-local-coding` App.
-That App allows `cargo`, `git`, and `rg`, but it is deliberately not
-a hostile-code sandbox: Cargo build scripts, tests, Git configuration, and
+The `local-process` Plugin allows `cargo`, `git`, and `rg`, but it is
+deliberately not a hostile-code sandbox: Cargo build scripts, tests, Git configuration, and
 allowed programs can execute code or perform effects available to the host
 user. Use it only with reviewed code and a reviewed workspace. There is no
 shell-string parsing, but that alone is not a security boundary. Command
@@ -481,9 +511,7 @@ secrets.
 cargo fmt --all -- --check
 cargo check --locked --workspace --all-targets
 cargo test --locked --workspace
-for definition in composition/*.app.json; do
-  lenso app check --definition "${definition}"
-done
+lenso app check --definition lenso.app.json
 ./scripts/check-contracts.sh
 ./scripts/check-removal.sh
 ```
@@ -493,21 +521,20 @@ it is not presented as a production model provider.
 
 ## Run an OpenAI-compatible provider
 
-The second Composition replaces only the `model` Instance and adds an explicit
-Env Secrets Module. The API key remains outside the project document and
-Resolved App Plan:
+The `openai-compatible` Plugin replaces only the `model` Instance and adds an
+explicit Env Secrets Module. The API key remains outside the project document
+and Resolved App Plan:
 
 ```sh
 export OPENAI_API_KEY="..."
-cargo run -p lenso-agent-cli -- \
-  --app openai-readonly \
+cargo run -p lenso-agent-cli -- plugins enable openai-compatible \
+  --evidence "reviewed remote model provider"
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Use read to read README.md, then summarize it."
 ```
 
-The `openai-readonly` variant defaults to OpenAI's base URL and `gpt-4o-mini`. An App
-author can select another Chat Completions-compatible base URL and model, then
-resolve and review a new Plan. Loopback HTTP is accepted only for tests; remote
-providers require HTTPS.
+The bundled profile defaults to OpenAI's base URL and `gpt-4o-mini`. Loopback
+HTTP is accepted only by the test profile; remote providers require HTTPS.
 
 ## Use a ChatGPT subscription (experimental)
 
@@ -529,13 +556,14 @@ OAuth profiles are stored together in `~/.lenso/agent/auth.json`, using a
 Pi-style provider-keyed JSON shape. The directory is private and the credential
 file is created with mode `0600` on Unix.
 
-The subscription Composition defaults to `gpt-5.6-luna` with medium reasoning.
+The subscription Plugin defaults to `gpt-5.6-luna` with medium reasoning.
 
-Run the subscription App with:
+Enable and run the subscription Model with:
 
 ```sh
+cargo run -p lenso-agent-cli -- plugins enable codex-direct \
+  --evidence "reviewed experimental subscription provider"
 cargo run -p lenso-agent-cli -- \
-  --app openai-codex-direct \
   "Summarize this repository."
 ```
 
