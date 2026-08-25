@@ -291,14 +291,29 @@ impl<P: ModelProvider> NativeStreamEndpoint for ModelEndpoint<P> {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_native_provide_model {
-    ($provider:expr, $lifecycle:expr, $support:path) => {{
+macro_rules! __lenso_native_endpoints_model {
+    ($provider:expr, $support:path) => {{
         use $support as __LensoNativeSupport;
         let endpoint = ::std::rc::Rc::new($crate::ModelEndpoint::new($provider));
-        __LensoNativeSupport::NativeModuleInstance::with_all_endpoints(
+        (
             vec![],
             vec![endpoint.clone() as ::std::rc::Rc<dyn __LensoNativeSupport::NativeStreamEndpoint>],
             vec![],
+        )
+    }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_provide_model {
+    ($provider:expr, $lifecycle:expr, $support:path) => {{
+        use $support as __LensoNativeSupport;
+        let (request_endpoints, stream_endpoints, event_endpoints) =
+            $crate::__lenso_native_endpoints_model!($provider, $support);
+        __LensoNativeSupport::NativeModuleInstance::with_all_endpoints(
+            request_endpoints,
+            stream_endpoints,
+            event_endpoints,
             $lifecycle,
         )
     }};

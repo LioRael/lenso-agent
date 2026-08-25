@@ -13,11 +13,9 @@ package-id = "lenso.agent.skills.filesystem"
 
 [dependencies]
 directories.workspace = true
-futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
-lenso-kernel.workspace = true
-lenso-native-adapter.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

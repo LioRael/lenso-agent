@@ -10,21 +10,17 @@ use std::{
 };
 
 use directories::BaseDirs;
-use futures::future::{LocalBoxFuture, ready};
+use lenso::prelude::*;
+use lenso_capability_agent_prompt_provider as prompt_provider;
 use lenso_capability_agent_prompt_provider::{
-    ContributeRequest, ContributeResponse, ContributeResponseContributionsItem,
-    ContributeResponseContributionsItemKind, PromptProviderEndpoint, PromptProviderProvider,
+    ContributeError, ContributeRequest, ContributeResponse, ContributeResponseContributionsItem,
+    ContributeResponseContributionsItemKind,
 };
+use lenso_capability_agent_tool_provider as tool_provider;
 use lenso_capability_agent_tool_provider::{
     CatalogError, CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteRequest, ExecuteResponse, ExecuteResponseContentType, ToolProviderEndpoint,
-    ToolProviderProvider,
+    ExecuteRequest, ExecuteResponse, ExecuteResponseContentType,
 };
-use lenso_kernel::{
-    InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
-    RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use sha2::{Digest, Sha256};
 
 /// Lists metadata for the snapshotted Skills.
@@ -55,36 +51,6 @@ struct SkillsConfig {
     max_resource_manifest_bytes: usize,
 }
 
-/// Instantiates an explicitly selected filesystem Skill catalog.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false},{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","operations":["contribute"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported filesystem Skills entrypoint"));
-    }
-    let config =
-        serde_json::from_str::<SkillsConfig>(context.configuration()).map_err(|error| {
-            invalid_plan(format!("invalid filesystem Skills configuration: {error}"))
-        })?;
-    validate_config(&config)?;
-    let state = Rc::new(RefCell::new(None));
-    let provider = FilesystemSkillsProvider {
-        state: state.clone(),
-    };
-    let tool_endpoint =
-        Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
-    let prompt_endpoint =
-        Rc::new(PromptProviderEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![tool_endpoint, prompt_endpoint],
-        FilesystemSkillsLifecycle { config, state },
-    ))
-}
-
 #[derive(Clone, Debug)]
 struct SkillSnapshot {
     name: String,
@@ -110,9 +76,30 @@ struct SkillsSnapshot {
     catalog_contribution: ContributeResponseContributionsItem,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct FilesystemSkillsProvider {
     state: Rc<RefCell<Option<SkillsSnapshot>>>,
+}
+
+/// One filesystem Skill catalog exposed through both Tool and Prompt roles.
+#[lenso::module(
+    configuration_schema = "config.schema.json",
+    validate = validate_config,
+    prepare = prepare_skills
+)]
+#[derive(Clone, Debug)]
+struct FilesystemSkillsModule {
+    #[config]
+    config: SkillsConfig,
+    provider: FilesystemSkillsProvider,
+}
+
+fn prepare_skills(module: &FilesystemSkillsModule, _context: &PrepareContext) -> ModuleFuture {
+    let result = load_snapshot(&module.config);
+    if let Ok(snapshot) = &result {
+        module.provider.state.replace(Some(snapshot.clone()));
+    }
+    Box::pin(async move { result.map(|_| ()) })
 }
 
 impl FilesystemSkillsProvider {
@@ -253,14 +240,15 @@ impl From<RuntimeFailure> for ProviderFailure {
     }
 }
 
-impl ToolProviderProvider for FilesystemSkillsProvider {
+#[lenso::provides(tool_provider::ToolProvider, prompt_provider::PromptProvider)]
+impl FilesystemSkillsModule {
+    #[allow(clippy::unused_self)]
     fn catalog(
         &self,
-        _context: InvocationContext,
+        _context: Ctx,
         _request: CatalogRequest,
-    ) -> LocalBoxFuture<'static, Result<Result<CatalogResponse, CatalogError>, RuntimeFailure>>
-    {
-        Box::pin(ready(Ok(Ok(CatalogResponse {
+    ) -> impl std::future::Future<Output = Result<CatalogResponse, CatalogError>> {
+        std::future::ready(Ok(CatalogResponse {
             tools: vec![
                 CatalogResponseToolsItem {
                     name: LIST_TOOL.to_owned(),
@@ -292,32 +280,30 @@ impl ToolProviderProvider for FilesystemSkillsProvider {
                         .to_owned(),
                 },
             ],
-        }))))
+        }))
     }
 
     fn execute(
         &self,
-        _context: InvocationContext,
+        _context: Ctx,
         request: ExecuteRequest,
-    ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
-    {
-        let result = match self.execute_now(&request) {
-            Ok(response) => Ok(Ok(response)),
-            Err(ProviderFailure::Domain(error)) => Ok(Err(error)),
-            Err(ProviderFailure::Runtime(error)) => Err(error),
-        };
-        Box::pin(ready(result))
+    ) -> impl std::future::Future<Output = ModuleResult<ExecuteResponse, ExecuteError>> {
+        let result = self.provider.execute_now(&request);
+        drop(request);
+        std::future::ready(match result {
+            Ok(response) => Ok(response),
+            Err(ProviderFailure::Domain(error)) => Err(ModuleError::domain(error)),
+            Err(ProviderFailure::Runtime(error)) => Err(ModuleError::runtime(error)),
+        })
     }
-}
 
-impl PromptProviderProvider for FilesystemSkillsProvider {
     fn contribute(
         &self,
-        _context: InvocationContext,
+        _context: Ctx,
         _request: ContributeRequest,
-    ) -> lenso_kernel::NativeRequestFuture<lenso_capability_agent_prompt_provider::PromptProvider>
-    {
+    ) -> impl std::future::Future<Output = ModuleResult<ContributeResponse, ContributeError>> {
         let result = self
+            .provider
             .state
             .borrow()
             .as_ref()
@@ -326,24 +312,9 @@ impl PromptProviderProvider for FilesystemSkillsProvider {
             })
             .ok_or(RuntimeFailure::Unavailable {
                 capability: lenso_capability_agent_prompt_provider::CAPABILITY_ID,
-            });
-        Box::pin(ready(result.map(Ok)))
-    }
-}
-
-#[derive(Debug)]
-struct FilesystemSkillsLifecycle {
-    config: SkillsConfig,
-    state: Rc<RefCell<Option<SkillsSnapshot>>>,
-}
-
-impl ModuleLifecycle for FilesystemSkillsLifecycle {
-    fn prepare(&self, _context: PrepareContext) -> ModuleFuture {
-        let result = load_snapshot(&self.config);
-        if let Ok(snapshot) = &result {
-            self.state.replace(Some(snapshot.clone()));
-        }
-        Box::pin(ready(result.map(|_| ())))
+            })
+            .map_err(ModuleError::runtime);
+        std::future::ready(result)
     }
 }
 
@@ -941,6 +912,20 @@ mod tests {
             max_resource_total_bytes: 32_768,
             max_resource_manifest_bytes: 8_192,
         }
+    }
+
+    #[test]
+    fn generated_descriptor_owns_both_provider_roles() {
+        let descriptor: serde_json::Value = serde_json::from_str(MODULE_DESCRIPTOR_JSON).unwrap();
+        let provided = descriptor["provided_capabilities"].as_array().unwrap();
+
+        assert_eq!(descriptor["package_id"], "lenso.agent.skills.filesystem");
+        assert_eq!(provided.len(), 2);
+        assert_eq!(provided[0]["capability_id"], "lenso.agent.tool-provider@1");
+        assert_eq!(
+            provided[1]["capability_id"],
+            "lenso.agent.prompt-provider@1"
+        );
     }
 
     fn write_skill(root: &Path, name: &str, description: &str, body: &str) {
