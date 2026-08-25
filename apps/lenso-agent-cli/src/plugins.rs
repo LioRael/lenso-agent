@@ -20,6 +20,7 @@ use crate::{
 const APP_ID: &str = "lenso.agent.harness";
 const ACTIVE_SET_FILE: &str = "active-set.json";
 const ACTIVE_SET_DIRECTORY: &str = "active-sets";
+const RECOVERY_AUTHORITY_DIRECTORY: &str = "generation-authorities";
 const MANIFEST_FILE: &str = "lenso-plugin.json";
 const LOCAL_REVIEW_PROVENANCE: &str = "local-review";
 const LOCAL_REVIEW_POLICY: &str = "lenso.agent.local-review@1";
@@ -858,6 +859,62 @@ pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginA
     load_generation_authority_unfenced(root)
 }
 
+pub(crate) fn record_current_generation_authority(root: &Path) -> Result<(), String> {
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.snapshot()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let active = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    record_active_set_in(root, RECOVERY_AUTHORITY_DIRECTORY, &active)
+}
+
+pub(crate) fn recovery_generation_authorities(
+    root: &Path,
+) -> Result<Vec<GenerationPluginAuthority>, String> {
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.snapshot()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let directory = root.join(RECOVERY_AUTHORITY_DIRECTORY);
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|error| format!("failed to inspect Generation recovery authority: {error}"))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("Generation recovery authority is not a regular directory".to_owned());
+    }
+    let mut entries = fs::read_dir(&directory)
+        .map_err(|error| format!("failed to enumerate Generation recovery authority: {error}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to enumerate Generation recovery authority: {error}"))?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    entries
+        .into_iter()
+        .map(|entry| {
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path).map_err(|error| {
+                format!("failed to inspect Generation recovery authority: {error}")
+            })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("Generation recovery authority record is not a regular file".to_owned());
+            }
+            let bytes = fs::read(&path).map_err(|error| {
+                format!("failed to read Generation recovery authority: {error}")
+            })?;
+            let active = CanonicalDocument::<ActivePluginSet>::parse("active-set.json", &bytes)
+                .map_err(control_error)?;
+            let expected =
+                active_set_record_path_in(root, RECOVERY_AUTHORITY_DIRECTORY, active.digest())?;
+            if path != expected {
+                return Err(
+                    "Generation recovery authority record is not content-addressed".to_owned(),
+                );
+            }
+            let active = validate_active_set(active.into_value(), &store, &profiles)?;
+            let authority_store = PluginStore::open(root.join("store")).map_err(control_error)?;
+            generation_authority_from_document(authority_store, &active)
+        })
+        .collect()
+}
+
 fn load_generation_authority_unfenced(root: &Path) -> Result<GenerationPluginAuthority, String> {
     let profiles = harness_plugin_profiles()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
@@ -1426,13 +1483,19 @@ fn load_active_set(root: &Path) -> Result<ActivePluginSet, String> {
 }
 
 fn active_set_record_path(root: &Path, digest: &str) -> Result<PathBuf, String> {
+    active_set_record_path_in(root, ACTIVE_SET_DIRECTORY, digest)
+}
+
+fn active_set_record_path_in(
+    root: &Path,
+    directory: &str,
+    digest: &str,
+) -> Result<PathBuf, String> {
     let digest = digest
         .strip_prefix("sha256:")
         .filter(|value| value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .ok_or_else(|| "Active Set digest is not canonical SHA-256".to_owned())?;
-    Ok(root
-        .join(ACTIVE_SET_DIRECTORY)
-        .join(format!("{digest}.json")))
+    Ok(root.join(directory).join(format!("{digest}.json")))
 }
 
 fn load_active_set_record(root: &Path, digest: &str) -> Result<ActivePluginSet, String> {
@@ -1566,7 +1629,15 @@ fn record_active_set(
     root: &Path,
     active: &CanonicalDocument<ActivePluginSet>,
 ) -> Result<(), String> {
-    let directory = root.join(ACTIVE_SET_DIRECTORY);
+    record_active_set_in(root, ACTIVE_SET_DIRECTORY, active)
+}
+
+fn record_active_set_in(
+    root: &Path,
+    directory_name: &str,
+    active: &CanonicalDocument<ActivePluginSet>,
+) -> Result<(), String> {
+    let directory = root.join(directory_name);
     fs::create_dir_all(&directory)
         .map_err(|error| format!("failed to create Active Set history: {error}"))?;
     let metadata = fs::symlink_metadata(&directory)
@@ -1574,7 +1645,7 @@ fn record_active_set(
     if !metadata.is_dir() || metadata.file_type().is_symlink() {
         return Err("Active Set history is not a regular directory".to_owned());
     }
-    let destination = active_set_record_path(root, active.digest())?;
+    let destination = active_set_record_path_in(root, directory_name, active.digest())?;
     match fs::symlink_metadata(&destination) {
         Ok(metadata) => {
             if !metadata.is_file() || metadata.file_type().is_symlink() {

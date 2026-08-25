@@ -486,7 +486,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1034,7 +1034,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lenso"
 version = "0.4.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "futures",
  "lenso-kernel",
@@ -1483,7 +1483,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-secrets"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=be774a6c08dd426fa0a476f85cccfa52bc966720#be774a6c08dd426fa0a476f85cccfa52bc966720"
+source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=5ff3ddb175aab296136709f6cb54237f19ec65d3#5ff3ddb175aab296136709f6cb54237f19ec65d3"
 dependencies = [
  "futures",
  "lenso-contract-codegen 0.5.2",
@@ -1548,7 +1548,7 @@ dependencies = [
 [[package]]
 name = "lenso-dylib-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -1577,7 +1577,7 @@ source = "git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f30
 [[package]]
 name = "lenso-native-adapter"
 version = "0.1.2"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "futures",
  "inventory",
@@ -1590,7 +1590,7 @@ dependencies = [
 [[package]]
 name = "lenso-native-adapter-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1603,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "lenso-plugin-control-plane"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "fs2",
  "futures",
@@ -1625,7 +1625,7 @@ dependencies = [
 [[package]]
 name = "lenso-quickjs-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -1638,7 +1638,7 @@ dependencies = [
 [[package]]
 name = "lenso-runner"
 version = "0.1.6"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "cpu-time",
  "futures",
@@ -1650,11 +1650,13 @@ dependencies = [
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
+ "futures",
  "hex",
  "lenso-app-plan",
  "lenso-kernel",
+ "serde",
  "serde_json",
  "sha2",
 ]
@@ -1662,7 +1664,7 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-env-module"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=be774a6c08dd426fa0a476f85cccfa52bc966720#be774a6c08dd426fa0a476f85cccfa52bc966720"
+source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=5ff3ddb175aab296136709f6cb54237f19ec65d3#5ff3ddb175aab296136709f6cb54237f19ec65d3"
 dependencies = [
  "futures",
  "lenso-capability-secrets",
@@ -1675,7 +1677,7 @@ dependencies = [
 [[package]]
 name = "lenso-wasm-component-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=08822e72d25cc4ffd5a0267b22c053aa3080d96d#08822e72d25cc4ffd5a0267b22c053aa3080d96d"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=1a835b8a213d24635171297160f3b534e5602cce#1a835b8a213d24635171297160f3b534e5602cce"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -1960,7 +1962,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2174,7 +2176,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2231,7 +2233,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2554,7 +2556,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3258,7 +3260,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
