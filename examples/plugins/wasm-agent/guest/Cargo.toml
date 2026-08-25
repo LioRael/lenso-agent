@@ -13,7 +13,7 @@ lenso-capability-agent-model = { path = "../../../../crates/lenso-capability-age
 lenso-capability-agent-prompt = { path = "../../../../crates/lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../../../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-tools = { path = "../../../../crates/lenso-capability-agent-tools" }
-lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "ffb07bc8dc7103b58c864b59225ca0f4609b6fdf" }
+lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "61502d0b575dca5102fbf7625dbab45a8389180d" }
 serde_json = "1"
 wit-bindgen = "0.60"
 

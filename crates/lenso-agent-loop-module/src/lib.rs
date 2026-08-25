@@ -1,14 +1,14 @@
 //! Agent Loop Module.
 
 use std::{
-    cell::{Cell, RefCell},
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
 
 use lenso::prelude::*;
 use lenso_capability_agent::{
-    self as agent_capability, CAPABILITY_ID, RunTurnError, RunTurnRequest, RunTurnResponse,
+    self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse,
 };
 use lenso_capability_agent_model::{
     self as model_capability, CompleteError, CompleteMessage, CompleteMessageInput,
@@ -133,7 +133,7 @@ struct AgentConfig {
     max_history_events: i64,
 }
 
-#[lenso::module(lifecycle, validate = validate_agent_config)]
+#[lenso::module(validate = validate_agent_config)]
 #[derive(Clone, Debug)]
 struct AgentLoop {
     #[config]
@@ -142,7 +142,8 @@ struct AgentLoop {
     prompt: Port<prompt_capability::PromptClient>,
     tools: Port<tools_capability::ToolsClient>,
     session: Port<session_capability::SessionClient>,
-    tasks: Rc<RefCell<Option<ManagedTaskScope>>>,
+    #[tasks]
+    tasks: ManagedTasks,
     active: Rc<Cell<bool>>,
 }
 
@@ -159,14 +160,6 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
     Ok(())
 }
 
-impl Lifecycle for AgentLoop {
-    #[allow(clippy::unused_async_trait_impl)]
-    async fn activate(&self, context: ActivateContext) -> Result<(), RuntimeFailure> {
-        self.tasks.replace(Some(context.tasks().clone()));
-        Ok(())
-    }
-}
-
 #[lenso::provides(agent_capability::Agent)]
 impl AgentLoop {
     async fn run_turn(
@@ -180,19 +173,13 @@ impl AgentLoop {
         if self.active.replace(true) {
             return Err(ModuleError::domain(RunTurnError::ConcurrentTurn));
         }
-        let Some(tasks) = self.tasks.borrow().clone() else {
-            self.active.set(false);
-            return Err(ModuleError::runtime(RuntimeFailure::Unavailable {
-                capability: CAPABILITY_ID,
-            }));
-        };
         let active = self.active.clone();
         let (stream, channel) = ProviderStream::channel(&context, 1);
         let module = self.clone();
-        let task = tasks.spawn_local(Box::pin(async move {
+        let task = self.tasks.spawn_local(async move {
             let _turn = ActiveTurn(active);
             produce_turn(module, context, request, channel).await;
-        }));
+        });
         match task {
             Ok(_) => Ok(stream),
             Err(error) => {
