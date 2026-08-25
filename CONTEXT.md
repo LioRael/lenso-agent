@@ -57,21 +57,33 @@ existing canonical Plan byte-for-byte. Legacy Composition fragments have no
 remaining authority and are removed.
 
 The current host baseline selects released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. It pins `lenso-runner` and `lenso-native-adapter` to
-`lenso-runtime-rust` revision
-`13906bb13f959450dfd9f30920dccd58901fefd6`, the merged Runtime revision
-that also contains `lenso-plugin-control-plane`, the preview Wasm Component,
-QuickJS, and native-dylib Execution Adapters, and the source-derived native
-Module factory catalog. The catalog records code linked into the Host; it does
-not discover dependencies or activate Module Instances. The CLI now uses the
-generic control plane to admit and lock reviewed passive releases plus executable
-contributions registered in a product-owned Plugin Profile Catalog, resolve and
-stage one initial App Generation, and pin each Turn with a Generation lease.
+`lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
+`lenso-plugin-control-plane` to `lenso-runtime-rust` revision
+`1a835b8a213d24635171297160f3b534e5602cce`. That Runtime includes the durable
+Generation Controller and Host suspension seam, the bounded request ABI shared
+by the preview Wasm Component and QuickJS Adapters, the experimental native
+dylib Adapter, and the source-derived native Module factory catalog. The catalog
+records code linked into the Host; it does not discover dependencies or
+activate Module Instances. The CLI uses the generic control plane to admit and
+lock reviewed passive releases plus executable contributions registered in a
+product-owned Plugin Profile Catalog, resolve and stage one initial App
+Generation, and pin each Turn with a durable Controller route.
 Before the Ready Gate, the Host content-addresses the canonical Generation Spec
 under `.lenso/plugins/generations`; the Turn lease injects that digest into the
 root Invocation Context and the Agent Loop records it in `turn_started` Session
 events. Resumed Sessions can therefore cross Generations without losing which
 immutable graph owned each Turn.
+
+The Host now stores fenced Generation lifecycle authority under
+`.lenso/plugins/generation-control`. Startup either creates the initial durable
+Generation or recovers exact Active and Standby Generations from
+`.lenso/plugins/generation-authorities`. Recovery authority is separate from
+user-visible rollback history and GC roots. If committed Plugin authority
+changed while the CLI was stopped, startup performs a standard maintenance
+transition before routing. One shared authority fence covers resolve, recovery,
+Ready, and switch. Normal exit suspends process-local Kernel resources without
+retiring durable authority. The Controller owns terminal-failure maintenance,
+while the Turn route injects the Generation digest into Invocation Context.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and

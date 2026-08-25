@@ -1,5 +1,4 @@
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     env, fs,
     fs::OpenOptions,
@@ -10,7 +9,6 @@ use std::{
     time::Duration,
 };
 
-use futures::future::LocalBoxFuture;
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
 use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;
@@ -30,17 +28,17 @@ use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::Agent;
 use lenso_kernel::{
-    CancellationToken, ExecutionAdapterCatalog, InvocationContext, Kernel, NativeApp,
-    NativeStreamHandle, ShutdownOutcome,
+    CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
 };
 use lenso_native_adapter::NativeModuleRegistry;
 use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, BuiltInModule,
-    CanonicalDocument, ClassPolicy, ControlPlaneError, GenerationLease, GenerationRuntime,
-    GenerationSupervisor, HostBuildManifest, HostExecutionPolicy, ReplacementMode, ResolutionInput,
-    ResolvedGeneration, RolloutPolicy, resolve_generation, sha256_digest,
+    CanonicalDocument, CatalogFactory, ClassPolicy, ControlLifecycle, ControlPlaneError,
+    ControlStateStore, DurableControlState, DurableGenerationRoute, DurableGenerationSupervisor,
+    FileControlStateStore, GenerationController, GenerationControllerClient, HostBuildManifest,
+    HostExecutionPolicy, KernelGenerationRuntime, MemoryControlStateStore, ReplacementMode,
+    ResolutionInput, ResolvedGeneration, RolloutPolicy, resolve_generation, sha256_digest,
 };
-use lenso_runner::TokioDriver;
 use lenso_secrets_env_module as _;
 
 use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, harness_plugin_profiles};
@@ -49,142 +47,28 @@ const APP_ID: &str = "lenso.agent.harness";
 const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
+const CONTROL_DIRECTORY: &str = "generation-control";
+const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 
 static NEXT_ROOT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
-struct LiveGeneration {
-    app: NativeApp,
-    driver: TokioDriver,
-    agent: Rc<NativeStreamHandle<Agent>>,
-}
+struct HarnessCatalogFactory;
 
-#[derive(Clone, Debug, Default)]
-struct GenerationRoutes {
-    slots: Rc<RefCell<BTreeMap<String, LiveGeneration>>>,
-}
-
-impl GenerationRoutes {
-    fn agent(&self, digest: &str) -> Result<Rc<NativeStreamHandle<Agent>>, String> {
-        self.slots
-            .borrow()
-            .get(digest)
-            .map(|slot| Rc::clone(&slot.agent))
-            .ok_or_else(|| format!("leased Generation `{digest}` has no live Agent route"))
-    }
-
-    async fn shutdown_all(&self) -> Result<(), String> {
-        let slots = std::mem::take(&mut *self.slots.borrow_mut());
-        let mut failures = Vec::new();
-        for (digest, slot) in slots {
-            slot.driver.request_shutdown();
-            match slot
-                .app
-                .shutdown(Duration::from_nanos(DRAIN_TIMEOUT_NANOS))
-                .await
-            {
-                ShutdownOutcome::Clean => {}
-                outcome => {
-                    failures.push(format!(
-                        "Generation `{digest}` shutdown was not clean: {outcome:?}"
-                    ));
-                }
-            }
-        }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            Err(failures.join("; "))
-        }
-    }
-}
-
-#[derive(Debug)]
-struct HarnessGenerationRuntime {
-    routes: GenerationRoutes,
-}
-
-impl GenerationRuntime for HarnessGenerationRuntime {
-    type Handle = String;
-
-    fn stage<'a>(
-        &'a mut self,
-        generation: &'a ResolvedGeneration,
-        ready_timeout_nanos: u64,
-    ) -> LocalBoxFuture<'a, Result<Self::Handle, ControlPlaneError>> {
-        Box::pin(async move {
-            let digest = generation.spec.digest().to_owned();
-            if self.routes.slots.borrow().contains_key(&digest) {
-                return Err(host_failure("Generation route was already live"));
-            }
-            let (registry, _) = native_host_build();
-            let driver = TokioDriver::new();
-            let app = tokio::time::timeout(
-                Duration::from_nanos(ready_timeout_nanos),
-                Kernel::start(
-                    generation.plan.clone(),
-                    driver.clone(),
-                    ExecutionAdapterCatalog::single(registry),
-                ),
-            )
-            .await
-            .map_err(|_| host_failure("Kernel Generation Ready Gate timed out"))?
-            .map_err(|error| {
-                host_failure(format!("Kernel Generation failed before Ready: {error:?}"))
-            })?;
-            let agent = match app.stream_handle::<Agent>("cli") {
-                Ok(agent) => Rc::new(agent),
-                Err(error) => {
-                    driver.request_shutdown();
-                    let cleanup = app
-                        .shutdown(Duration::from_nanos(DRAIN_TIMEOUT_NANOS))
-                        .await;
-                    return Err(host_failure(format!(
-                        "Agent binding is unavailable: {error:?}; cleanup: {cleanup:?}"
-                    )));
-                }
-            };
-            let previous = self
-                .routes
-                .slots
-                .borrow_mut()
-                .insert(digest.clone(), LiveGeneration { app, driver, agent });
-            debug_assert!(previous.is_none(), "live route was checked before staging");
-            Ok(digest)
-        })
-    }
-
-    fn shutdown(
-        &mut self,
-        handle: Self::Handle,
-        drain_timeout_nanos: u64,
-    ) -> LocalBoxFuture<'_, Result<(), ControlPlaneError>> {
-        Box::pin(async move {
-            let slot = self
-                .routes
-                .slots
-                .borrow_mut()
-                .remove(&handle)
-                .ok_or_else(|| host_failure("Generation route was not live"))?;
-            slot.driver.request_shutdown();
-            match slot
-                .app
-                .shutdown(Duration::from_nanos(drain_timeout_nanos))
-                .await
-            {
-                ShutdownOutcome::Clean => Ok(()),
-                outcome => Err(host_failure(format!(
-                    "Generation shutdown was not clean: {outcome:?}"
-                ))),
-            }
-        })
+impl CatalogFactory for HarnessCatalogFactory {
+    fn catalog(
+        &self,
+        _generation: &ResolvedGeneration,
+    ) -> Result<ExecutionAdapterCatalog, ControlPlaneError> {
+        let (registry, _) = native_host_build();
+        Ok(ExecutionAdapterCatalog::single(registry))
     }
 }
 
 #[derive(Debug)]
 pub struct AgentApp {
-    supervisor: GenerationSupervisor<HarnessGenerationRuntime>,
-    routes: GenerationRoutes,
+    client: GenerationControllerClient<NativeApp>,
+    controller: Option<tokio::task::JoinHandle<Result<DurableControlState, ControlPlaneError>>>,
 }
 
 impl AgentApp {
@@ -193,44 +77,118 @@ impl AgentApp {
     }
 
     async fn start_with_store(plan_bytes: &[u8], store_root: &Path) -> Result<Self, String> {
+        let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
+        let _authority_fence = authority.snapshot()?;
         let generation = resolve_initial_generation(plan_bytes, store_root)?;
         record_generation_spec(store_root, &generation.spec)?;
-        let transition = initial_transition(&generation).map_err(control_error)?;
-        let routes = GenerationRoutes::default();
-        let runtime = HarnessGenerationRuntime {
-            routes: routes.clone(),
-        };
-        let mut supervisor = GenerationSupervisor::new(APP_ID, runtime);
-        supervisor
-            .transition(&transition, &generation)
-            .await
+        crate::plugins::record_current_generation_authority(store_root)?;
+        let store = FileControlStateStore::open(store_root.join(CONTROL_DIRECTORY))
             .map_err(control_error)?;
-        Ok(Self { supervisor, routes })
+        let durable = store.load(APP_ID).map_err(control_error)?;
+        let has_live_state = durable.generations.iter().any(|record| {
+            matches!(
+                record.lifecycle,
+                ControlLifecycle::Staged
+                    | ControlLifecycle::Ready
+                    | ControlLifecycle::Active
+                    | ControlLifecycle::Draining
+                    | ControlLifecycle::Standby
+            )
+        });
+        let runtime = KernelGenerationRuntime::new(HarnessCatalogFactory);
+        let supervisor = if has_live_state {
+            let live_digests = durable
+                .generations
+                .iter()
+                .filter(|record| {
+                    matches!(
+                        record.lifecycle,
+                        ControlLifecycle::Active | ControlLifecycle::Standby
+                    )
+                })
+                .map(|record| record.generation_spec_digest.as_str())
+                .collect::<BTreeSet<_>>();
+            let recoverable = resolve_retained_generations(plan_bytes, store_root)?;
+            if !live_digests
+                .iter()
+                .all(|digest| recoverable.contains_key(*digest))
+            {
+                return Err(
+                    "durable Generation recovery lacks retained exact Plugin authority".to_owned(),
+                );
+            }
+            DurableGenerationSupervisor::recover(
+                APP_ID,
+                runtime,
+                store,
+                &recoverable,
+                now_unix_nanos()?,
+            )
+            .await
+            .map_err(control_error)?
+        } else {
+            DurableGenerationSupervisor::open(APP_ID, runtime, store).map_err(control_error)?
+        };
+        let recovered_active = supervisor.state().active_generation_spec_digest.clone();
+        let (controller, client) =
+            GenerationController::new(supervisor, MAINTENANCE_INTERVAL).map_err(control_error)?;
+        let task = tokio::task::spawn_local(controller.run());
+        if recovered_active.as_deref() != Some(generation.spec.digest()) {
+            let transition = if let Some(active) = recovered_active.as_deref() {
+                let recoverable = resolve_retained_generations(plan_bytes, store_root)?;
+                let previous = recoverable.get(active).ok_or_else(|| {
+                    "recovered Generation lost its retained Plugin authority".to_owned()
+                })?;
+                maintenance_transition(previous, &generation).map_err(control_error)?
+            } else {
+                initial_transition(&generation).map_err(control_error)?
+            };
+            if let Err(error) = client
+                .transition(transition, generation, BTreeMap::new())
+                .await
+            {
+                drop(client);
+                let _ = task.await;
+                return Err(control_error(error));
+            }
+        }
+        Ok(Self {
+            client,
+            controller: Some(task),
+        })
     }
 
-    pub fn lease_turn(&self) -> Result<TurnGeneration, String> {
-        let lease = self.supervisor.lease().map_err(control_error)?;
-        let handle = self.routes.agent(lease.generation_spec_digest())?;
-        Ok(TurnGeneration { lease, handle })
+    pub async fn lease_turn(&self) -> Result<TurnGeneration, String> {
+        let route = self.client.route().await.map_err(control_error)?;
+        let handle = Rc::new(
+            route
+                .target()
+                .stream_handle::<Agent>("cli")
+                .map_err(|error| format!("leased Generation has no Agent route: {error:?}"))?,
+        );
+        Ok(TurnGeneration { route, handle })
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
-        if self
-            .supervisor
-            .generations()
-            .iter()
-            .any(|(_, _, leases)| *leases != 0)
-        {
-            return Err("cannot shut down while an Agent Turn holds a Generation lease".to_owned());
+        let expected = self.client.suspend().await.map_err(control_error)?;
+        let task = self
+            .controller
+            .take()
+            .ok_or_else(|| "Generation Controller is already stopped".to_owned())?;
+        let actual = task
+            .await
+            .map_err(|error| format!("Generation Controller task failed: {error}"))?
+            .map_err(control_error)?;
+        if actual != expected {
+            return Err("Generation Controller returned inconsistent durable state".to_owned());
         }
-        self.routes.shutdown_all().await
+        Ok(())
     }
 }
 
 #[derive(Debug)]
 pub struct TurnGeneration {
-    #[allow(dead_code, reason = "the lease is an RAII routing guard")]
-    lease: GenerationLease,
+    route: DurableGenerationRoute<NativeApp>,
     handle: Rc<NativeStreamHandle<Agent>>,
 }
 
@@ -264,7 +222,7 @@ impl TurnGeneration {
     }
 
     fn generation_spec_digest(&self) -> &str {
-        self.lease.generation_spec_digest()
+        self.route.generation_spec_digest()
     }
 }
 
@@ -338,6 +296,19 @@ pub(crate) fn resolve_initial_generation(
 ) -> Result<ResolvedGeneration, String> {
     let authority = crate::plugins::load_generation_authority(store_root)?;
     resolve_generation_with_authority(plan_bytes, &authority)
+}
+
+fn resolve_retained_generations(
+    plan_bytes: &[u8],
+    store_root: &Path,
+) -> Result<BTreeMap<String, ResolvedGeneration>, String> {
+    crate::plugins::recovery_generation_authorities(store_root)?
+        .into_iter()
+        .map(|authority| {
+            let generation = resolve_generation_with_authority(plan_bytes, &authority)?;
+            Ok((generation.spec.digest().to_owned(), generation))
+        })
+        .collect()
 }
 
 fn resolve_generation_with_authority(
@@ -432,26 +403,35 @@ pub(crate) async fn ready_check_maintenance_transition(
     if current.spec.digest() == candidate.spec.digest() {
         return Err("candidate Plugin authority resolves to the current Generation".to_owned());
     }
-    let routes = GenerationRoutes::default();
-    let runtime = HarnessGenerationRuntime {
-        routes: routes.clone(),
-    };
-    let mut supervisor = GenerationSupervisor::new(APP_ID, runtime);
+    let runtime = KernelGenerationRuntime::new(HarnessCatalogFactory);
+    let supervisor =
+        DurableGenerationSupervisor::open(APP_ID, runtime, MemoryControlStateStore::default())
+            .map_err(control_error)?;
+    let (controller, client) =
+        GenerationController::new(supervisor, MAINTENANCE_INTERVAL).map_err(control_error)?;
+    let task = tokio::task::spawn_local(controller.run());
     let ready_result = async {
         let initial = initial_transition(&current).map_err(control_error)?;
-        supervisor
-            .transition(&initial, &current)
+        client
+            .transition(initial, current.clone(), BTreeMap::new())
             .await
             .map_err(control_error)?;
         let maintenance = maintenance_transition(&current, &candidate).map_err(control_error)?;
-        supervisor
-            .transition(&maintenance, &candidate)
+        client
+            .transition(maintenance, candidate.clone(), BTreeMap::new())
             .await
             .map_err(control_error)?;
         Ok::<(), String>(())
     }
     .await;
-    let cleanup_result = routes.shutdown_all().await;
+    let cleanup_result = async {
+        client.shutdown().await.map_err(control_error)?;
+        task.await
+            .map_err(|error| format!("Generation Controller task failed: {error}"))?
+            .map_err(control_error)?;
+        Ok::<(), String>(())
+    }
+    .await;
     match (ready_result, cleanup_result) {
         (Ok(()), Ok(())) => {}
         (Err(error), Ok(())) | (Ok(()), Err(error)) => return Err(error),
@@ -628,10 +608,11 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
     (registry, built_in_modules)
 }
 
-fn host_failure(detail: impl Into<String>) -> ControlPlaneError {
-    ControlPlaneError::HostFailure {
-        detail: detail.into(),
-    }
+fn now_unix_nanos() -> Result<u128, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .map_err(|error| format!("system clock precedes Unix epoch: {error}"))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -681,7 +662,7 @@ mod tests {
                 let mut app = AgentApp::start_with_store(PLAN, directory.path())
                     .await
                     .unwrap();
-                let turn = app.lease_turn().unwrap();
+                let turn = app.lease_turn().await.unwrap();
                 assert_eq!(turn.handle().binding_count(), 1);
                 assert!(!turn.generation_spec_digest().is_empty());
                 let context = turn.invocation_context().unwrap();
@@ -692,6 +673,15 @@ mod tests {
                 assert!(app.shutdown().await.is_err());
                 drop(turn);
                 app.shutdown().await.unwrap();
+                drop(app);
+
+                let mut recovered = AgentApp::start_with_store(PLAN, directory.path())
+                    .await
+                    .unwrap();
+                let recovered_turn = recovered.lease_turn().await.unwrap();
+                assert_eq!(recovered_turn.handle().binding_count(), 1);
+                drop(recovered_turn);
+                recovered.shutdown().await.unwrap();
             })
             .await;
     }

@@ -66,7 +66,7 @@ async fn run() -> Result<(), String> {
     let mut app = generation::AgentApp::start(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
-    let turn = app.lease_turn()?;
+    let turn = app.lease_turn().await?;
     let result = invoke(&turn, args).await;
     drop(turn);
     let shutdown = app.shutdown().await;
