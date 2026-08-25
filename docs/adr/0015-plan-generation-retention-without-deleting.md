@@ -19,6 +19,11 @@ The Harness Host provides a read-only command:
 generations gc-plan [--root <plugin-root>] [--sessions <session-directory>]
 ```
 
+The public CLI now calls this `generations gc-preview` so the read-only report
+is not confused with an executable Resolved App Plan. `gc-plan` remains a
+compatibility alias; the semantics and authority described by this decision do
+not change.
+
 It validates and enumerates Generation Specs, retained Plugin Set locks, and
 all durable `turn_started` events. A Generation is `protected` when its Plugin
 Set is current or retained, when a Session Turn records its digest, or both. A

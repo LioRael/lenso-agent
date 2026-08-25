@@ -27,9 +27,22 @@ struct Args {
     session: Option<String>,
 }
 
+const DEFAULT_APP: &str = "headless-readonly";
+const SUPPORTED_APPS: &[&str] = &[
+    DEFAULT_APP,
+    "headless-coding",
+    "headless-local-coding",
+    "openai-readonly",
+    "openai-codex-direct",
+    "openai-codex-direct-skills",
+    "openai-codex-direct-coding",
+    "openai-codex-direct-local-coding",
+];
+
 #[derive(Debug)]
 enum CliCommand {
     Run(Args),
+    Help,
     Auth(AuthCommand),
     Plugins(plugins::PluginCommand),
     Generations(provenance::GenerationCommand),
@@ -58,6 +71,10 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let args = match parse_args()? {
         CliCommand::Run(args) => args,
+        CliCommand::Help => {
+            println!("{}", run_usage());
+            return Ok(());
+        }
         CliCommand::Auth(command) => return run_auth(&command).await,
         CliCommand::Plugins(command) => return plugins::run(command).await,
         CliCommand::Generations(command) => return provenance::run_generation(command),
@@ -143,10 +160,8 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "sessions") {
         return provenance::parse_session_command(&raw[1..]).map(CliCommand::Sessions);
     }
-    let mut plan = env::var_os("LENSO_RESOLVED_PLAN").map_or_else(
-        || PathBuf::from("composition/headless-readonly/resolved-plan.json"),
-        PathBuf::from,
-    );
+    let mut plan = default_plan();
+    let mut plan_source = None;
     let mut prompt = None;
     let mut session = None;
     let mut allowed_tools = None::<Vec<String>>;
@@ -154,12 +169,26 @@ fn parse_args() -> Result<CliCommand, String> {
     let mut arguments = raw.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--app" => {
+                if let Some(source) = plan_source {
+                    return Err(format!("--app conflicts with {source}"));
+                }
+                let app = arguments
+                    .next()
+                    .ok_or_else(|| "--app requires a name".to_owned())?;
+                plan = app_plan(&app)?;
+                plan_source = Some("--app");
+            }
             "--plan" => {
+                if let Some(source) = plan_source {
+                    return Err(format!("--plan conflicts with {source}"));
+                }
                 plan = PathBuf::from(
                     arguments
                         .next()
                         .ok_or_else(|| "--plan requires a path".to_owned())?,
                 );
+                plan_source = Some("--plan");
             }
             "--prompt" => {
                 prompt = Some(
@@ -193,19 +222,54 @@ fn parse_args() -> Result<CliCommand, String> {
                 allowed_tools = Some(Vec::new());
             }
             "--help" | "-h" => {
-                return Err(
-                    "usage: lenso-agent-cli <plugins|generations|sessions|auth> ... | --prompt <text> [--session <id>] [--allow-tool <name> ... | --no-tools] [--plan <path>]".to_owned(),
-                );
+                return Ok(CliCommand::Help);
             }
-            unknown => return Err(format!("unknown argument `{unknown}`")),
+            unknown if unknown.starts_with('-') => {
+                return Err(format!("unknown argument `{unknown}`"));
+            }
+            positional_prompt => {
+                if prompt.is_some() {
+                    return Err(
+                        "only one prompt is accepted; quote multi-word prompts as one argument"
+                            .to_owned(),
+                    );
+                }
+                prompt = Some(positional_prompt.to_owned());
+            }
         }
     }
     Ok(CliCommand::Run(Args {
         allowed_tools,
         plan,
-        prompt: prompt.ok_or_else(|| "--prompt is required".to_owned())?,
+        prompt: prompt.ok_or_else(|| "a prompt is required".to_owned())?,
         session,
     }))
+}
+
+fn default_plan() -> PathBuf {
+    env::var_os("LENSO_RESOLVED_PLAN").map_or_else(
+        || app_plan(DEFAULT_APP).expect("the default App must be supported"),
+        PathBuf::from,
+    )
+}
+
+fn app_plan(app: &str) -> Result<PathBuf, String> {
+    if !SUPPORTED_APPS.contains(&app) {
+        return Err(format!(
+            "unknown App `{app}`; choose one of: {}",
+            SUPPORTED_APPS.join(", ")
+        ));
+    }
+    Ok(PathBuf::from("composition")
+        .join(app)
+        .join("resolved-plan.json"))
+}
+
+fn run_usage() -> String {
+    format!(
+        "usage: lenso-agent-cli <prompt> [--app <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <plugins|generations|sessions|auth> ...\n\nApps: {}\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.",
+        SUPPORTED_APPS.join(", ")
+    )
 }
 
 fn parse_auth(arguments: &[String]) -> Result<AuthCommand, String> {

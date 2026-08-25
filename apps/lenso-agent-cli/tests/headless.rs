@@ -469,7 +469,7 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
 }
 
 #[test]
-fn generation_gc_plan_reports_reachability_without_deleting() {
+fn generation_gc_preview_reports_reachability_without_deleting() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# GC Fixture\n").unwrap();
     let first = run(
@@ -505,35 +505,35 @@ fn generation_gc_plan_reports_reachability_without_deleting() {
     assert!(remove.status.success());
     let empty_sessions = temporary.path().join("empty-sessions");
     fs::create_dir(&empty_sessions).unwrap();
-    let plan = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+    let preview = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
         .args([
             "generations",
-            "gc-plan",
+            "gc-preview",
             "--sessions",
             empty_sessions.to_str().unwrap(),
         ])
         .output()
         .unwrap();
     assert!(
-        plan.status.success(),
+        preview.status.success(),
         "{}",
-        String::from_utf8_lossy(&plan.stderr)
+        String::from_utf8_lossy(&preview.stderr)
     );
-    let stdout = String::from_utf8(plan.stdout).unwrap();
+    let stdout = String::from_utf8(preview.stdout).unwrap();
     assert!(stdout.contains("summary: protected=1 candidates=1"));
     let records_before = fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
         .unwrap()
         .count();
 
-    let plan_with_sessions = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+    let preview_with_sessions = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
-        .args(["generations", "gc-plan"])
+        .args(["generations", "gc-preview"])
         .output()
         .unwrap();
-    assert!(plan_with_sessions.status.success());
+    assert!(preview_with_sessions.status.success());
     assert!(
-        String::from_utf8_lossy(&plan_with_sessions.stdout)
+        String::from_utf8_lossy(&preview_with_sessions.stdout)
             .contains("summary: protected=2 candidates=0")
     );
     assert_eq!(
@@ -572,13 +572,15 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     assert!(inspect.status.success());
     assert!(String::from_utf8_lossy(&inspect.stdout).contains("spec=invalid"));
 
-    let gc_plan = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+    let gc_preview = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
-        .args(["generations", "gc-plan"])
+        .args(["generations", "gc-preview"])
         .output()
         .unwrap();
-    assert!(!gc_plan.status.success());
-    assert!(String::from_utf8_lossy(&gc_plan.stderr).contains("Generation Spec validation failed"));
+    assert!(!gc_preview.status.success());
+    assert!(
+        String::from_utf8_lossy(&gc_preview.stderr).contains("Generation Spec validation failed")
+    );
 
     let second = run(
         temporary.path(),
@@ -638,13 +640,13 @@ fn direct_answer_finishes_without_a_tool_call() {
 }
 
 #[test]
-fn product_runner_accepts_the_authoring_plan_environment() {
+fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environment() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
         .env("LENSO_RESOLVED_PLAN", plan_path())
-        .args(["--prompt", "Answer directly: hello"])
+        .arg("Answer directly: hello")
         .output()
         .unwrap();
 
@@ -657,6 +659,61 @@ fn product_runner_accepts_the_authoring_plan_environment() {
         String::from_utf8_lossy(&output.stdout),
         "Plugin: Direct answer.\n"
     );
+}
+
+#[test]
+fn product_runner_selects_a_reviewed_app_without_a_plan_path() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let app_directory = temporary
+        .path()
+        .join("composition")
+        .join("headless-readonly");
+    fs::create_dir_all(&app_directory).unwrap();
+    fs::copy(plan_path(), app_directory.join("resolved-plan.json")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["--app", "headless-readonly", "Answer directly: hello"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Plugin: Direct answer.\n"
+    );
+}
+
+#[test]
+fn product_runner_help_leads_with_the_simple_interface_and_lists_apps() {
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .arg("--help")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--app <name>]"));
+    assert!(stdout.contains("headless-readonly"));
+    assert!(stdout.contains("Advanced: --prompt <text> and --plan <path>"));
+}
+
+#[test]
+fn product_runner_rejects_an_unknown_app_before_startup() {
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .args(["--app", "unknown", "hello"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("unknown App `unknown`; choose one of:"));
+    assert!(stderr.contains("openai-codex-direct-local-coding"));
 }
 
 #[test]

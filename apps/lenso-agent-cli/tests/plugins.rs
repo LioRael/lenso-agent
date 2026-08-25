@@ -154,6 +154,12 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
     let release_one = tempfile::tempdir().unwrap();
     let release_two = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    let app_directory = workspace
+        .path()
+        .join("composition")
+        .join("headless-readonly");
+    fs::create_dir_all(&app_directory).unwrap();
+    fs::copy(plan_path(), app_directory.join("resolved-plan.json")).unwrap();
     let manifest_one = write_tool_bundle_release(release_one.path(), "1.0.0");
     let manifest_two = write_tool_bundle_release(release_two.path(), "2.0.0");
 
@@ -221,8 +227,13 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
 
     let upgrade = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
-        .env("LENSO_RESOLVED_PLAN", plan_path())
-        .args(["plugins", "upgrade", "--bundle"])
+        .args([
+            "plugins",
+            "upgrade",
+            "--app",
+            "headless-readonly",
+            "--bundle",
+        ])
         .arg(release_two.path())
         .output()
         .unwrap();
