@@ -17,6 +17,10 @@ use lenso_agent_text_tools_module::{
 use lenso_app_plan::{
     CapabilityBinding, CapabilityCardinality, CapabilityOperationKind, ResolvedAppPlan,
 };
+use lenso_capability_agent::{
+    CAPABILITY_ID as AGENT_CAPABILITY_ID, DESCRIPTOR_VERSION as AGENT_DESCRIPTOR_VERSION,
+    RUN_TURN_OPERATION,
+};
 use lenso_capability_agent_auth_openai_codex::{
     ACCESS_OPERATION as CODEX_AUTH_ACCESS_OPERATION, CAPABILITY_ID as CODEX_AUTH_CAPABILITY_ID,
     DESCRIPTOR_VERSION as CODEX_AUTH_DESCRIPTOR_VERSION,
@@ -41,6 +45,9 @@ pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 pub(crate) const NATIVE_TOOL_PROFILE: &str = "agent-tool-provider-v1";
 pub(crate) const NATIVE_MODEL_PROFILE: &str = "agent-model-provider-v1";
 pub(crate) const NATIVE_AUTH_PROFILE: &str = "agent-auth-provider-v1";
+pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
+pub(crate) const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
+pub(crate) const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
 
 const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"type":"object"}"#;
 const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
@@ -56,6 +63,9 @@ const CODEX_AUTH_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-auth-openai-codex-module/config.schema.json");
 const CODEX_AUTH_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-auth-openai-codex/capability.json");
+const AGENT_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent/capability.json");
+const GUEST_AGENT_PACKAGE_ID: &str = "lenso.agent.guest";
 const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"fixture/readme-summary-v1"}"#;
 const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#;
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
@@ -113,7 +123,7 @@ pub(crate) struct ExecutablePluginProfile {
     registration_id: String,
     adapter_profile: String,
     package_id: String,
-    factory_identity: String,
+    authority: ImplementationAuthority,
     configuration_schema_digest: String,
     configuration: String,
     provides: Vec<CapabilityProfile>,
@@ -123,6 +133,12 @@ pub(crate) struct ExecutablePluginProfile {
     support_channel: SupportChannel,
     trust: TrustLevel,
     attachment: AttachmentProfile,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ImplementationAuthority {
+    BuiltIn { factory_identity: String },
+    Artifact,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -139,14 +155,14 @@ impl PluginProfileCatalog {
                 profile.registration_id
             ));
         }
-        if self
-            .profiles
-            .values()
-            .any(|registered| registered.factory_identity == profile.factory_identity)
-        {
+        if profile.built_in_factory().is_some_and(|factory| {
+            self.profiles
+                .values()
+                .any(|registered| registered.built_in_factory() == Some(factory))
+        }) {
             return Err(format!(
                 "Plugin factory `{}` has more than one attachment profile",
-                profile.factory_identity
+                profile.built_in_factory().expect("checked above")
             ));
         }
         self.profiles
@@ -429,11 +445,17 @@ impl PluginProfileCatalog {
 }
 
 impl ExecutablePluginProfile {
+    fn built_in_factory(&self) -> Option<&str> {
+        match &self.authority {
+            ImplementationAuthority::BuiltIn { factory_identity } => Some(factory_identity),
+            ImplementationAuthority::Artifact => None,
+        }
+    }
+
     fn validate(&self) -> Result<(), String> {
         if self.registration_id.is_empty()
             || self.adapter_profile.is_empty()
             || self.package_id.is_empty()
-            || self.factory_identity.is_empty()
             || self.configuration_schema_digest.is_empty()
             || self.configuration.is_empty()
             || self.provides.is_empty()
@@ -441,6 +463,12 @@ impl ExecutablePluginProfile {
             || self.execution_class.is_empty()
         {
             return Err("Plugin profile fields must be non-empty".to_owned());
+        }
+        if matches!(
+            &self.authority,
+            ImplementationAuthority::BuiltIn { factory_identity } if factory_identity.is_empty()
+        ) {
+            return Err("built-in Plugin profile factory identity must be non-empty".to_owned());
         }
         if let Some((consumer, attachment_capability_id, attachment_descriptor_version)) =
             self.attachment.capability_edge()
@@ -529,9 +557,18 @@ impl ExecutablePluginProfile {
                 .iter()
                 .any(|implementation| implementation.targets.iter().any(|item| item == target))
             && contribution.implementations.iter().all(|implementation| {
-                implementation.artifact.is_none()
-                    && implementation.built_in_factory.as_deref()
-                        == Some(self.factory_identity.as_str())
+                let authority_matches = match &self.authority {
+                    ImplementationAuthority::BuiltIn { factory_identity } => {
+                        implementation.artifact.is_none()
+                            && implementation.built_in_factory.as_deref()
+                                == Some(factory_identity.as_str())
+                    }
+                    ImplementationAuthority::Artifact => {
+                        implementation.artifact.is_some()
+                            && implementation.built_in_factory.is_none()
+                    }
+                };
+                authority_matches
                     && implementation.entrypoint == self.entrypoint
                     && implementation.execution_class == self.execution_class
                     && implementation.profiles == [self.adapter_profile.as_str()]
@@ -546,7 +583,19 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(text_tools_profile())?
         .register(fixture_model_profile())?
         .register(codex_model_profile())?
-        .register(codex_auth_profile())
+        .register(codex_auth_profile())?
+        .register(guest_agent_profile(
+            "quickjs-agent-provider-v1",
+            QUICKJS_EXECUTION_CLASS,
+            "plugin.mjs",
+            TrustLevel::Constrained,
+        ))?
+        .register(guest_agent_profile(
+            "wasm-agent-provider-v1",
+            WASM_EXECUTION_CLASS,
+            "plugin",
+            TrustLevel::Isolated,
+        ))
 }
 
 fn text_tools_profile() -> ExecutablePluginProfile {
@@ -554,7 +603,9 @@ fn text_tools_profile() -> ExecutablePluginProfile {
         registration_id: "native-text-tools-v1".to_owned(),
         adapter_profile: NATIVE_TOOL_PROFILE.to_owned(),
         package_id: TEXT_TOOLS_PACKAGE_ID.to_owned(),
-        factory_identity: TEXT_TOOLS_FACTORY_IDENTITY.to_owned(),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: TEXT_TOOLS_FACTORY_IDENTITY.to_owned(),
+        },
         configuration_schema_digest: sha256_digest(EMPTY_CONFIGURATION_SCHEMA),
         configuration: "{}".to_owned(),
         provides: vec![CapabilityProfile {
@@ -585,7 +636,9 @@ fn fixture_model_profile() -> ExecutablePluginProfile {
         registration_id: "native-fixture-model-v1".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package_id: FIXTURE_MODEL_PACKAGE_ID.to_owned(),
-        factory_identity: FIXTURE_MODEL_FACTORY_IDENTITY.to_owned(),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: FIXTURE_MODEL_FACTORY_IDENTITY.to_owned(),
+        },
         configuration_schema_digest: sha256_digest(FIXTURE_MODEL_CONFIGURATION_SCHEMA),
         configuration: format!(r#"{{"model":"{FIXTURE_MODEL_ID}"}}"#),
         provides: vec![CapabilityProfile {
@@ -619,7 +672,9 @@ fn codex_model_profile() -> ExecutablePluginProfile {
         registration_id: "native-codex-direct-model-v1".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package_id: CODEX_MODEL_PACKAGE_ID.to_owned(),
-        factory_identity: CODEX_MODEL_FACTORY_IDENTITY.to_owned(),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: CODEX_MODEL_FACTORY_IDENTITY.to_owned(),
+        },
         configuration_schema_digest: sha256_digest(CODEX_MODEL_CONFIGURATION_SCHEMA),
         configuration: CODEX_MODEL_CONFIGURATION.to_owned(),
         provides: vec![CapabilityProfile {
@@ -662,7 +717,9 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
         registration_id: "native-codex-auth-v1".to_owned(),
         adapter_profile: NATIVE_AUTH_PROFILE.to_owned(),
         package_id: CODEX_AUTH_PACKAGE_ID.to_owned(),
-        factory_identity: CODEX_AUTH_FACTORY_IDENTITY.to_owned(),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: CODEX_AUTH_FACTORY_IDENTITY.to_owned(),
+        },
         configuration_schema_digest: sha256_digest(CODEX_AUTH_CONFIGURATION_SCHEMA),
         configuration: CODEX_AUTH_CONFIGURATION.to_owned(),
         provides: vec![CapabilityProfile {
@@ -678,6 +735,45 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
         attachment: AttachmentProfile::IntraPluginOnly,
+    }
+}
+
+fn guest_agent_profile(
+    registration_id: &str,
+    execution_class: &str,
+    entrypoint: &str,
+    trust: TrustLevel,
+) -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: registration_id.to_owned(),
+        adapter_profile: AGENT_PROVIDER_PROFILE.to_owned(),
+        package_id: GUEST_AGENT_PACKAGE_ID.to_owned(),
+        authority: ImplementationAuthority::Artifact,
+        configuration_schema_digest: sha256_digest(EMPTY_CONFIGURATION_SCHEMA),
+        configuration: "{}".to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: AGENT_CAPABILITY_ID.to_owned(),
+            descriptor_version: AGENT_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(AGENT_DESCRIPTOR),
+            request_operations: vec![RUN_TURN_OPERATION.to_owned()],
+            operation_kinds: BTreeMap::from([(
+                RUN_TURN_OPERATION.to_owned(),
+                CapabilityOperationKind::Stream,
+            )]),
+        }],
+        requires: Vec::new(),
+        entrypoint: entrypoint.to_owned(),
+        execution_class: execution_class.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust,
+        attachment: AttachmentProfile::ReplaceOne {
+            consumer_instance: "cli".to_owned(),
+            capability_id: AGENT_CAPABILITY_ID.to_owned(),
+            descriptor_version: AGENT_DESCRIPTOR_VERSION.to_owned(),
+            displaced_provider_instance: "agent".to_owned(),
+            allowed_displaced_packages: BTreeSet::from([AGENT_LOOP_PACKAGE_ID.to_owned()]),
+            base_configuration_replacements: Vec::new(),
+        },
     }
 }
 
@@ -844,7 +940,9 @@ mod tests {
         let mut second = text_tools_profile();
         second.registration_id = "native-more-text-tools-v1".to_owned();
         second.package_id = "example.more-text-tools".to_owned();
-        second.factory_identity = "example.more-text-tools@1.0.0".to_owned();
+        second.authority = ImplementationAuthority::BuiltIn {
+            factory_identity: "example.more-text-tools@1.0.0".to_owned(),
+        };
         let contribution = contribution_for(&second, "test-target");
         let catalog = PluginProfileCatalog::default()
             .register(text_tools_profile())
@@ -909,8 +1007,9 @@ mod tests {
             requires: profile.requires.clone(),
             implementations: vec![ImplementationVariant {
                 id: "native".to_owned(),
-                artifact: None,
-                built_in_factory: Some(profile.factory_identity.clone()),
+                artifact: matches!(profile.authority, ImplementationAuthority::Artifact)
+                    .then(|| "artifact".to_owned()),
+                built_in_factory: profile.built_in_factory().map(str::to_owned),
                 entrypoint: profile.entrypoint.clone(),
                 execution_class: profile.execution_class.clone(),
                 targets: vec![target.to_owned()],

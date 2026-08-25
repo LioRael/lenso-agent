@@ -23,9 +23,12 @@ agent-cli
        `- one lenso.agent.session@1 -> session-log
 ```
 
-All selected Instances run in one Execution Lane for the first slice. The Host
-control plane assembles only the native Rust Execution Adapter before Kernel
-boot. No contract opts into cross-lane transfer in V1.
+All selected Instances run in one Execution Lane for the first slice. Before
+Kernel boot, the Host control plane assembles native Rust, QuickJS, and Wasm
+Component Execution Adapters from its build manifest and registers the
+generated JSON codec for `lenso.agent@1`. The built-in profile remains native;
+a reviewed Artifact profile may replace that provider in the next immutable App
+Generation. No contract opts into cross-lane transfer in V1.
 
 ## Authoritative facts
 
@@ -155,6 +158,11 @@ make both the workspace root and model endpoint visible before execution.
 16. A read-only GC plan validates all Generation Specs and Session Turn
     provenance, protects current or retained Plugin Set and Session references,
     and reports unreferenced Generation candidates without deleting them.
+17. Installing the reviewed QuickJS Agent Bundle replaces the built-in Agent
+    Loop, starts the resolved durable Generation, and completes a typed streamed
+    Turn through the generated `lenso.agent@1` codec. The same product profile
+    boundary admits reviewed Wasm Component Agent artifacts; Adapter-level
+    tests execute a real Rust Component guest.
 
 ## Deferred
 
@@ -165,4 +173,6 @@ shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding
 replacement, distributed coordination, automatic rollback, Generation deletion,
 Plugin Store collection, retention windows, and overlap replacement are
-separate slices.
+separate slices. Guest imports are also separate: a non-native Agent provider
+can currently own the loop, but it cannot yet acquire Model, Prompt, Tools, or
+Session Capability clients from inside the guest.

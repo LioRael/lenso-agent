@@ -49,10 +49,13 @@ Generation path.
   an in-memory control store, then retire the preview after the Ready Gate. They
   still do not mutate a different running CLI process.
 
-The native catalog remains the only product-selected execution class. The
-Runtime's Wasm Component and QuickJS Adapters now require the common bounded
-request ABI and exact pre-Ready Guest Descriptor, but product selection waits
-for generated Agent Capability codecs and an accepted product Plugin profile.
+The Host selects native Rust, Wasm Component, and QuickJS execution classes.
+The generated Agent Capability projection supplies the shared typed Stream
+codec, and product-owned Artifact profiles allow reviewed Wasm or QuickJS
+contributions to replace the exact native Agent Loop. The Runtime-owned
+multi-execution catalog consumes the Generation's digest-verified Artifact
+catalog and enforces the exact pre-Ready Guest Descriptor and bounded Stream
+limits.
 
 ## Consequences
 
@@ -63,7 +66,7 @@ for generated Agent Capability codecs and an accepted product Plugin profile.
   epoch before admitting routes.
 - A durable authority mismatch fails startup instead of silently selecting the
   newest Store files or rebuilding a different graph.
-- Live install commands, overlap rollout UX, non-native Agent Plugins, durable
+- Overlap rollout UX, guest imports for required Host Capabilities, durable
   Session fencing, and distributed leader election remain separate product
   work. None is added to Kernel.
 

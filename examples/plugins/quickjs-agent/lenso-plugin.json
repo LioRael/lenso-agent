@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "plugin_id": "example.quickjs-agent",
+  "release_version": "1.0.0",
+  "artifacts": [
+    {
+      "id": "agent-js",
+      "kind": "quick_js_module",
+      "digest": "sha256:9026061b0e8eae841b9d78563c8d632d12bad172c15bf221e0d30a35f9092e8c",
+      "size": 1431,
+      "media_type": "text/javascript",
+      "path": "plugin.mjs",
+      "targets": [
+        "aarch64-linux",
+        "aarch64-macos",
+        "x86_64-linux",
+        "x86_64-macos"
+      ]
+    }
+  ],
+  "module_contributions": [
+    {
+      "id": "agent",
+      "package_id": "lenso.agent.guest",
+      "configuration_schema_digest": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
+      "provides": [
+        {
+          "capability_id": "lenso.agent@1",
+          "descriptor_version": "1.1.0",
+          "descriptor_digest": "sha256:b732474abb0a706714c72c7534a3ddbc61f1ec01289d036b02124d18aa63ffdb",
+          "request_operations": ["run_turn"],
+          "operation_kinds": { "run_turn": "stream" }
+        }
+      ],
+      "requires": [],
+      "implementations": [
+        {
+          "id": "quickjs",
+          "artifact": "agent-js",
+          "built_in_factory": null,
+          "entrypoint": "plugin.mjs",
+          "execution_class": "lenso.quickjs@1",
+          "targets": [
+            "aarch64-linux",
+            "aarch64-macos",
+            "x86_64-linux",
+            "x86_64-macos"
+          ],
+          "profiles": ["agent-provider-v1"],
+          "support_channel": "experimental",
+          "trust": "constrained"
+        }
+      ],
+      "permission_request_ids": [],
+      "state": null
+    }
+  ],
+  "data_contributions": [],
+  "permission_requests": [],
+  "features": [],
+  "binding_templates": [],
+  "product_metadata": []
+}

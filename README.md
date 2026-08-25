@@ -77,17 +77,17 @@ Modules can be removed while the remaining graph still resolves.
 ## Runtime baseline
 
 The host currently uses released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.8`. `lenso-runner` and `lenso-native-adapter` are locked to
+`lenso-kernel 0.1.9`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`13906bb13f959450dfd9f30920dccd58901fefd6`, which closes the generic dynamic
+`12fd7934ddc72d9d32d647c931be3de00b6fe334`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
 
 The CLI now passes its reviewed Resolved App Plan through the first bounded
 Plugin control-plane slice. It opens the content-addressed Plugin Store at
-`.lenso/plugins/store`, closes the executable and installed native factories in
-a Host Build Manifest, applies a native-only Host Execution Policy, and resolves
+`.lenso/plugins/store`, closes the executable, installed native factories, and
+the Wasm Component and QuickJS Adapter profiles in a Host Build Manifest, and resolves
 the validated base Plan plus an empty Plugin lock into one exact initial App
 Generation. The already-resolved base Plan, including explicit Provider order,
 remains authoritative in the Generation spec. Each Agent Turn holds a
@@ -100,7 +100,7 @@ making provenance a user-supplied request field.
 
 The Host can admit passive Plugin releases plus executable profiles
 registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
-entry closes the exact package, factory, entrypoint, configuration Schema,
+entry closes the exact package, implementation authority, entrypoint, configuration Schema,
 Capability Descriptor and Operations, operation kinds, execution class, target,
 support/trust policy, canonical configuration, and one bounded attachment rule.
 The Catalog admits the linked `lenso.agent.text-tools@0.1.0` factory as a
@@ -108,12 +108,15 @@ stateless, permission-free append-to-`many` Tool Provider. It also admits one
 restricted `lenso.agent.model.fixture@0.1.0` profile that replaces the fixture
 base Plan's exact `model` provider for the `agent` consumer. The experimental
 Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
-binding, and the coupled Agent model configuration. Data mounts, permission
+binding, and the coupled Agent model configuration. Experimental Artifact
+profiles additionally allow a reviewed QuickJS or Wasm Component Module to
+replace the exact native Agent Loop through the generated `AgentJsonCodec`.
+Data mounts, permission
 requests, arbitrary binding templates, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
-automatic rollback, distributed coordination, Generation deletion and Plugin
-Store garbage collection, and product acceptance of the preview Wasm
-Component, QuickJS, and native-dylib Adapters remain deferred.
+automatic rollback, distributed coordination, Generation deletion, Plugin
+Store garbage collection, native-dylib product acceptance, and guest access to
+required Host Capabilities remain deferred.
 
 ## Install, upgrade, roll back, and remove a Plugin release
 
@@ -126,6 +129,11 @@ factories, privileged or stateful contributions, and unbounded review evidence.
 cargo run -p lenso-agent-cli -- plugins install \
   --bundle ./reviewed-plugin \
   --feature extras
+
+# Install the checked-in non-native Agent Loop replacement.
+cargo run -p lenso-agent-cli -- plugins install \
+  --bundle examples/plugins/quickjs-agent \
+  --evidence local-review
 
 cargo run -p lenso-agent-cli -- plugins status
 

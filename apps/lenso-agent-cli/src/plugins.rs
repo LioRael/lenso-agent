@@ -1761,6 +1761,7 @@ mod tests {
     };
     use lenso_agent_text_tools_module::FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY;
     use lenso_app_plan::{CapabilityOperationKind, ResolvedAppPlan};
+    use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
     use lenso_capability_agent_auth_openai_codex::{
         ACCESS_OPERATION as CODEX_AUTH_ACCESS_OPERATION, CAPABILITY_ID as CODEX_AUTH_CAPABILITY_ID,
         DESCRIPTOR_VERSION as CODEX_AUTH_DESCRIPTOR_VERSION,
@@ -1775,6 +1776,7 @@ mod tests {
         DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
         EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
     };
+    use lenso_kernel::StreamEvent;
     use lenso_plugin_control_plane::{
         ArtifactDeclaration, ArtifactKind, BindingTemplate, CapabilityDeclaration,
         CapabilityRequirement, ImplementationVariant, ModuleContribution, PermissionRequest,
@@ -1784,6 +1786,7 @@ mod tests {
 
     use crate::plugin_profiles::{
         NATIVE_AUTH_PROFILE, NATIVE_EXECUTION_CLASS, NATIVE_MODEL_PROFILE, NATIVE_TOOL_PROFILE,
+        QUICKJS_EXECUTION_CLASS,
     };
 
     const PLAN: &[u8] = include_bytes!("../../../composition/headless-readonly/resolved-plan.json");
@@ -1910,6 +1913,66 @@ mod tests {
         let approved: ResolvedAppPlan = serde_json::from_slice(PLAN).unwrap();
         assert_eq!(generation.plan, approved);
         assert!(generation.artifact_set.value().instances.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reviewed_quickjs_agent_plugin_replaces_loop_and_runs_in_a_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let root = tempfile::tempdir().unwrap();
+                let bundle = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../examples/plugins/quickjs-agent");
+                install(
+                    root.path(),
+                    &bundle,
+                    Some("review-ticket-quickjs-agent"),
+                    Vec::new(),
+                )
+                .unwrap();
+
+                let generation =
+                    crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+                assert!(generation.plan.module_instance("agent").is_none());
+                let guest = generation
+                    .plan
+                    .module_instances()
+                    .iter()
+                    .find(|instance| instance.package_id() == "lenso.agent.guest")
+                    .unwrap();
+                assert_eq!(guest.execution_class().as_str(), QUICKJS_EXECUTION_CLASS);
+
+                let mut app = crate::generation::AgentApp::start_with_store(PLAN, root.path())
+                    .await
+                    .unwrap();
+                let turn = app.lease_turn().await.unwrap();
+                let context = turn.invocation_context().unwrap();
+                let stream = turn
+                    .handle()
+                    .open_with_context(
+                        RUN_TURN_OPERATION,
+                        context,
+                        RunTurnRequest {
+                            input: "hello guest".to_owned(),
+                            session_id: None,
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let StreamEvent::Message(message) = stream.receive().await.unwrap() else {
+                    panic!("guest Agent did not emit a message");
+                };
+                assert_eq!(message.text, "QuickJS plugin: hello guest");
+                assert!(matches!(
+                    stream.receive().await.unwrap(),
+                    StreamEvent::Terminal(Ok(()))
+                ));
+                drop(stream);
+                drop(turn);
+                app.shutdown().await.unwrap();
+            })
+            .await;
     }
 
     #[test]
