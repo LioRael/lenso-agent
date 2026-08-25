@@ -543,6 +543,10 @@ impl AdmissionPolicy for LocalReviewPolicy<'_> {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one fenced transition keeps Plugin installation authority atomic"
+)]
 fn install(
     root: &Path,
     bundle_root: &Path,
@@ -1022,6 +1026,10 @@ fn generation_authority_from_document(
     })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one composition pass keeps displacement, grants, and bindings deterministic"
+)]
 pub(crate) fn generation_composition(
     authority: &GenerationPluginAuthority,
     base_plan: &ResolvedAppPlan,

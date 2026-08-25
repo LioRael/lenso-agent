@@ -696,6 +696,10 @@ impl ExecutablePluginProfile {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one profile invariant audit keeps all executable authority checks together"
+    )]
     fn validate(&self) -> Result<(), String> {
         if self.registration_id.is_empty()
             || self.adapter_profile.is_empty()

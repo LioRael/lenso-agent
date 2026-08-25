@@ -1089,7 +1089,7 @@ fn build_external_wasm_http_fetch_bundle(
         serde_json::from_slice(&fs::read(source.join("lenso-plugin.template.json")).unwrap())
             .unwrap();
     template["release_version"] = release_version.into();
-    let mut origins = origins.iter().copied().collect::<Vec<_>>();
+    let mut origins = origins.to_vec();
     origins.sort_unstable();
     template["permission_requests"][0]["scope"]["origins"] = serde_json::json!(origins);
     let template_path = source.join(format!("lenso-plugin-{release_version}.template.json"));
