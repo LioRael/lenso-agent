@@ -1,45 +1,89 @@
 //! Removable, stateless text Tool Provider Plugin Module.
 
-use lenso_agent_module as agent;
+use futures::future::ready;
+use lenso_capability_agent_tool_provider::{
+    self as tool_provider_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
+    ExecuteError, ExecuteRequest, ExecuteResponse, ExecuteResponseContentType,
+    ToolProviderProvider,
+};
+use lenso_kernel::InvocationContext;
+use schemars::JsonSchema;
 
 /// Stable Tool name exposed only while the Plugin is active.
 pub const UPPERCASE_TOOL: &str = "text.uppercase";
 
 const MAX_TEXT_BYTES: usize = 4_096;
 
-#[derive(agent::JsonSchema, serde::Deserialize)]
+#[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct UppercaseArguments {
     #[schemars(length(max = 4096))]
     text: String,
 }
 
-#[agent::tool(
-    name = UPPERCASE_TOOL,
-    description = "Convert one bounded UTF-8 string to uppercase."
-)]
-fn uppercase(arguments: UppercaseArguments) -> Result<agent::ToolOutput, agent::ToolError> {
+fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteError> {
     if arguments.text.len() > MAX_TEXT_BYTES {
-        return Err(agent::ToolError::OutputLimitExceeded);
+        return Err(ExecuteError::OutputLimitExceeded);
     }
     let UppercaseArguments { text } = arguments;
     let content = text.to_uppercase();
     if content.len() > MAX_TEXT_BYTES {
-        return Err(agent::ToolError::OutputLimitExceeded);
+        return Err(ExecuteError::OutputLimitExceeded);
     }
-    Ok(agent::ToolOutput {
+    Ok(ExecuteResponse {
         content,
-        content_type: agent::ToolOutputType::Text,
+        content_type: ExecuteResponseContentType::Text,
         metadata_json: r#"{"operation":"uppercase"}"#.to_owned(),
     })
+}
+
+#[lenso::module]
+#[derive(Clone, Copy, Debug)]
+struct TextTools {}
+
+#[lenso::provides(tool_provider_contract::ToolProvider)]
+impl ToolProviderProvider for TextTools {
+    fn catalog(
+        &self,
+        _context: InvocationContext,
+        _request: CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderCatalog> {
+        static INPUT_SCHEMA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let input_schema_json = INPUT_SCHEMA
+            .get_or_init(|| {
+                serde_json::to_string(&schemars::schema_for!(UppercaseArguments))
+                    .expect("derived Tool input Schema must serialize")
+            })
+            .clone();
+        Box::pin(ready(Ok(Ok(CatalogResponse {
+            tools: vec![CatalogResponseToolsItem {
+                name: UPPERCASE_TOOL.to_owned(),
+                description: "Convert one bounded UTF-8 string to uppercase.".to_owned(),
+                input_schema_json,
+            }],
+        }))))
+    }
+
+    fn execute(
+        &self,
+        _context: InvocationContext,
+        request: ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        Box::pin(ready(if request.name == UPPERCASE_TOOL {
+            let Ok(arguments) = serde_json::from_str(&request.arguments_json) else {
+                return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+            };
+            Ok(uppercase(arguments))
+        } else {
+            Ok(Err(ExecuteError::NotFound))
+        }))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent::__private::{
-        CancellationToken, CatalogRequest, ExecuteRequest, InvocationContext, ToolProviderProvider,
-    };
+    use lenso_kernel::CancellationToken;
 
     #[test]
     fn uppercase_is_bounded() {
@@ -52,7 +96,7 @@ mod tests {
         let oversized = "x".repeat(MAX_TEXT_BYTES + 1);
         assert!(matches!(
             uppercase(UppercaseArguments { text: oversized }),
-            Err(agent::ToolError::OutputLimitExceeded)
+            Err(ExecuteError::OutputLimitExceeded)
         ));
     }
 
@@ -60,7 +104,7 @@ mod tests {
     fn generated_provider_derives_schema_and_dispatches_safely() {
         let context = || InvocationContext::new(1, None, CancellationToken::new());
         let catalog = futures::executor::block_on(ToolProviderProvider::catalog(
-            &__LensoToolProvider_uppercase,
+            &TextTools {},
             context(),
             CatalogRequest {},
         ))
@@ -73,7 +117,7 @@ mod tests {
         assert_eq!(schema["additionalProperties"], false);
 
         let unknown = futures::executor::block_on(ToolProviderProvider::execute(
-            &__LensoToolProvider_uppercase,
+            &TextTools {},
             context(),
             ExecuteRequest {
                 name: "text.unknown".to_owned(),
@@ -81,10 +125,10 @@ mod tests {
             },
         ))
         .unwrap();
-        assert!(matches!(unknown, Err(agent::ToolError::NotFound)));
+        assert!(matches!(unknown, Err(ExecuteError::NotFound)));
 
         let invalid = futures::executor::block_on(ToolProviderProvider::execute(
-            &__LensoToolProvider_uppercase,
+            &TextTools {},
             context(),
             ExecuteRequest {
                 name: UPPERCASE_TOOL.to_owned(),
@@ -92,7 +136,7 @@ mod tests {
             },
         ))
         .unwrap();
-        assert!(matches!(invalid, Err(agent::ToolError::InvalidArguments)));
+        assert!(matches!(invalid, Err(ExecuteError::InvalidArguments)));
     }
 
     #[test]

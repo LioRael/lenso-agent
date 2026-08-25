@@ -13,17 +13,14 @@ use futures::{
     future::{LocalBoxFuture, ready},
     stream::LocalBoxStream,
 };
+use lenso::prelude::*;
 use lenso_capability_agent_model::{
-    CAPABILITY_ID, CompleteError, CompleteRequest, CompleteRequestMessagesItem,
-    CompleteRequestMessagesItemRole, CompleteResponse, CompleteResponseKind, ModelEndpoint,
-    ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CompleteError, CompleteRequest,
+    CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteResponse,
+    CompleteResponseKind, ModelInvocationError, ModelProvider,
 };
-use lenso_capability_secrets::{ResolveRequest, SecretsClient};
-use lenso_kernel::{
-    ActivateContext, DeactivateContext, InvocationContext, ModuleFuture, ModuleLifecycle,
-    NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_capability_secrets::{self as secrets_contract, ResolveRequest};
+use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,65 +69,20 @@ impl OpenAiConfig {
     }
 }
 
-/// Instantiates one OpenAI-compatible Model generation.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","operations":["complete"],"operation_kinds":{"complete":"stream"},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.secrets@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan(
-            "unsupported OpenAI-compatible Model entrypoint",
-        ));
-    }
-    let config = serde_json::from_str::<OpenAiConfig>(context.configuration())
-        .map_err(|_| invalid_plan("invalid OpenAI-compatible Model configuration"))?
-        .validate()?;
-    let client = reqwest::Client::builder()
-        .build()
-        .map_err(|_| invalid_plan("failed to construct OpenAI-compatible HTTP client"))?;
-    let secrets = Rc::new(RefCell::new(None));
-    let endpoint = Rc::new(ModelEndpoint::new(OpenAiCompatibleModel {
-        config,
-        client,
-        secrets: secrets.clone(),
-    })) as Rc<dyn NativeStreamEndpoint>;
-    Ok(NativeModuleInstance::with_stream_endpoints(
-        vec![endpoint],
-        OpenAiLifecycle { secrets },
-    ))
+fn validate_config(config: &OpenAiConfig) -> Result<(), RuntimeFailure> {
+    config.clone().validate().map(|_| ())
 }
 
-#[derive(Debug)]
-struct OpenAiLifecycle {
-    secrets: Rc<RefCell<Option<Rc<SecretsClient>>>>,
-}
-
-impl ModuleLifecycle for OpenAiLifecycle {
-    fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        let client = match SecretsClient::from_dependencies(context.dependencies()) {
-            Ok(client) => client,
-            Err(error) => return Box::pin(ready(Err(error))),
-        };
-        self.secrets.replace(Some(Rc::new(client)));
-        Box::pin(ready(Ok(())))
-    }
-
-    fn deactivate(&self, _context: DeactivateContext) -> ModuleFuture {
-        self.secrets.replace(None);
-        Box::pin(ready(Ok(())))
-    }
-}
-
+#[lenso::module(configuration_schema = "config.schema.json", validate = validate_config)]
 #[derive(Clone, Debug)]
 struct OpenAiCompatibleModel {
+    #[config]
     config: OpenAiConfig,
     client: reqwest::Client,
-    secrets: Rc<RefCell<Option<Rc<SecretsClient>>>>,
+    secrets: Port<secrets_contract::SecretsClient>,
 }
 
+#[lenso::provides(model_contract::Model)]
 impl ModelProvider for OpenAiCompatibleModel {
     fn complete(
         &self,
@@ -146,13 +98,7 @@ impl ModelProvider for OpenAiCompatibleModel {
             Ok(body) => body,
             Err(error) => return Box::pin(ready(Err(ModelInvocationError::Domain(error)))),
         };
-        let Some(secrets) = self.secrets.borrow().clone() else {
-            return Box::pin(ready(Err(ModelInvocationError::Runtime(
-                RuntimeFailure::Unavailable {
-                    capability: CAPABILITY_ID,
-                },
-            ))));
-        };
+        let secrets = self.secrets.clone();
         let client = self.client.clone();
         let config = self.config.clone();
         Box::pin(async move {

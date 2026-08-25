@@ -33,18 +33,24 @@ and providers, and plugin digest byte-identical.
 
 Generated Rust Capability Clients implement the product-neutral
 `CapabilityClient` contract and emit hidden provider/requirement metadata for
-Module compilation. The Agent Loop is the first deep struct-level Module: its
-configuration type derives the package-owned Schema, its Model, Prompt, Tools,
-and Session `Port<Client>` fields derive exact requirements, and its annotated
-Agent Provider implementation derives the endpoint, Descriptor artifact,
-factory, lifecycle connection glue, and link-time registration. Activation
-still receives dependencies only from Plan-owned `ModuleDependencies`; the
-Module writes only its real configuration validation and task-scope hook.
-The Agent Loop now consumes the public `lenso::prelude`, `lenso::module`, and
-`lenso::provides` authoring facade without direct Module-authoring or Native
-Adapter dependencies. Ergonomic domain-method lowering, the broader
-configuration type profile, multi-Capability providers, and migration of the
-remaining Modules remain follow-up work.
+Module compilation. Every Harness Provider Module now uses the public
+`lenso::prelude`, `lenso::module`, and `lenso::provides` source-first facade.
+Its configuration type derives the package-owned Schema, `Port<Client>` and
+`ManyPort<Client>` fields derive exact requirements, annotated Provider
+implementations derive endpoints, and `#[module(lifecycle)]` exposes only the
+prepare, activate, and deactivate hooks that the Module actually owns. The
+former Harness-specific Module authoring and proc-macro crates are removed.
+The CLI Module remains the deliberate compatibility exception: it is a
+consumer-only identity used to anchor the CLI-to-Agent binding, while the
+current source-first facade finalizes Module metadata from a Provider
+implementation and cannot yet describe a Module with no provided Capability.
+Adding a fake Provider would make the graph less accurate.
+
+Source-derived Provider Descriptors use the standard fail-fast admission
+default (`max_concurrency: 1`, `queue_capacity: 0`). The regenerated canonical
+Plans therefore replace the old hand-written per-Module queue capacities while
+preserving the same Module Instances, Capability requirements, bindings, and
+configuration.
 
 All eight executable variants are now authored by source-derived
 `composition/*.app.json` definitions. Their Module packages derive package
@@ -57,8 +63,9 @@ existing canonical Plan byte-for-byte. Legacy Composition fragments have no
 remaining authority and are removed.
 
 The current host baseline selects released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. It pins its Host Runtime crates to `lenso-runtime-rust`
-revision `a6fdfd4081c4f6c71be1aad7d46bee72fff6d337` and its standalone Plugin Bundle
+`lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
+`lenso-plugin-control-plane` to `lenso-runtime-rust` revision
+`48cf37b6475a0dbbe4ad8492888ed7c6c17abae4` and its standalone Plugin Bundle
 builder to revision `6d504b530b268fe6b08b5b4253956af05697f733`. That Runtime includes the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native

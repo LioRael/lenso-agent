@@ -13,6 +13,7 @@ package-id = "lenso.agent.workspace-edit"
 
 [dependencies]
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true

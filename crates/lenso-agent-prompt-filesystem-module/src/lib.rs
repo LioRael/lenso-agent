@@ -10,15 +10,13 @@ use std::{
 
 use directories::BaseDirs;
 use futures::future::ready;
+use lenso::prelude::*;
 use lenso_capability_agent_prompt_provider::{
-    ContributeRequest, ContributeResponse, ContributeResponseContributionsItem,
-    ContributeResponseContributionsItemKind, PromptProviderEndpoint, PromptProviderProvider,
+    self as prompt_provider_contract, ContributeRequest, ContributeResponse,
+    ContributeResponseContributionsItem, ContributeResponseContributionsItemKind,
+    PromptProviderProvider,
 };
-use lenso_kernel::{
-    InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
-    RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -31,36 +29,19 @@ struct FilesystemPromptConfig {
     max_total_bytes: usize,
 }
 
-/// Instantiates an explicitly selected filesystem Skill set.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","operations":["contribute"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
 )]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported filesystem Prompt entrypoint"));
-    }
-    let config = serde_json::from_str::<FilesystemPromptConfig>(context.configuration()).map_err(
-        |error| invalid_plan(format!("invalid filesystem Prompt configuration: {error}")),
-    )?;
-    validate_config(&config)?;
-    let state = Rc::new(RefCell::new(None));
-    let endpoint = Rc::new(PromptProviderEndpoint::new(FilesystemPrompt {
-        state: state.clone(),
-    })) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![endpoint],
-        FilesystemPromptLifecycle { config, state },
-    ))
-}
-
 #[derive(Clone, Debug)]
 struct FilesystemPrompt {
+    #[config]
+    config: FilesystemPromptConfig,
     state: Rc<RefCell<Option<Vec<ContributeResponseContributionsItem>>>>,
 }
 
+#[lenso::provides(prompt_provider_contract::PromptProvider)]
 impl PromptProviderProvider for FilesystemPrompt {
     fn contribute(
         &self,
@@ -81,19 +62,11 @@ impl PromptProviderProvider for FilesystemPrompt {
     }
 }
 
-#[derive(Debug)]
-struct FilesystemPromptLifecycle {
-    config: FilesystemPromptConfig,
-    state: Rc<RefCell<Option<Vec<ContributeResponseContributionsItem>>>>,
-}
-
-impl ModuleLifecycle for FilesystemPromptLifecycle {
-    fn prepare(&self, _context: PrepareContext) -> ModuleFuture {
-        let result = load_skills(&self.config);
-        if let Ok(contributions) = &result {
-            self.state.replace(Some(contributions.clone()));
-        }
-        Box::pin(ready(result.map(|_| ())))
+impl Lifecycle for FilesystemPrompt {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
+        self.state.replace(Some(load_skills(&self.config)?));
+        Ok(())
     }
 }
 

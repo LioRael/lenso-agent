@@ -13,6 +13,7 @@ package-id = "lenso.agent.model.fixture"
 
 [dependencies]
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-agent-native-support = { path = "../lenso-agent-native-support" }
 lenso-kernel.workspace = true

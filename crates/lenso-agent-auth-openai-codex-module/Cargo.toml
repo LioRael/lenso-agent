@@ -16,6 +16,7 @@ base64.workspace = true
 directories.workspace = true
 fs2.workspace = true
 futures.workspace = true
+lenso.workspace = true
 lenso-capability-agent-auth-openai-codex = { path = "../lenso-capability-agent-auth-openai-codex" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true

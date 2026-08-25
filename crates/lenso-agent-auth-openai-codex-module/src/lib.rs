@@ -5,7 +5,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    rc::Rc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -14,10 +13,9 @@ use directories::BaseDirs;
 use fs2::FileExt;
 use futures::future::LocalBoxFuture;
 use lenso_capability_agent_auth_openai_codex::{
-    AccessError, AccessRequest, AccessResponse, OpenaiCodexEndpoint, OpenaiCodexProvider,
+    self as auth_contract, AccessError, AccessRequest, AccessResponse, OpenaiCodexProvider,
 };
-use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest as _, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -162,34 +160,19 @@ pub struct DirectAuthStatus {
     pub expires_at: Option<u64>,
 }
 
-/// Instantiates one `OpenAI` Codex Auth generation.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.auth.openai-codex@1","descriptor_version":"1.0.0","operations":["access"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported OpenAI Codex Auth entrypoint"));
-    }
-    let config = serde_json::from_str::<AuthConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid OpenAI Codex Auth configuration: {error}")))?
-        .validate()?;
-    let provider = CodexAuth {
-        config,
-        client: reqwest::Client::new(),
-    };
-    let endpoint = Rc::new(OpenaiCodexEndpoint::new(provider)) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::new(vec![endpoint]))
+fn validate_config(config: &AuthConfig) -> Result<(), RuntimeFailure> {
+    config.clone().validate().map(|_| ())
 }
 
+#[lenso::module(configuration_schema = "config.schema.json", validate = validate_config)]
 #[derive(Clone, Debug)]
 struct CodexAuth {
+    #[config]
     config: AuthConfig,
     client: reqwest::Client,
 }
 
+#[lenso::provides(auth_contract::OpenaiCodex)]
 impl OpenaiCodexProvider for CodexAuth {
     fn access(
         &self,

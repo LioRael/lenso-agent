@@ -1,14 +1,15 @@
 //! Static Prompt and Skill contribution Module.
 
-use std::{collections::BTreeSet, rc::Rc};
+use std::{cell::RefCell, collections::BTreeSet, rc::Rc};
 
 use futures::future::ready;
+use lenso::prelude::*;
 use lenso_capability_agent_prompt_provider::{
-    ContributeRequest, ContributeResponse, ContributeResponseContributionsItem,
-    ContributeResponseContributionsItemKind, PromptProviderEndpoint, PromptProviderProvider,
+    self as prompt_provider_contract, ContributeRequest, ContributeResponse,
+    ContributeResponseContributionsItem, ContributeResponseContributionsItemKind,
+    PromptProviderProvider,
 };
-use lenso_kernel::{InvocationContext, NativeRequestEndpoint, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -32,30 +33,32 @@ enum StaticContributionKind {
     Skill,
 }
 
-/// Instantiates one explicitly configured Prompt contribution Instance.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.prompt-provider@1","descriptor_version":"1.0.0","operations":["contribute"],"operation_kinds":{},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported static Prompt entrypoint"));
-    }
-    let config = serde_json::from_str::<StaticPromptConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid static Prompt configuration: {error}")))?;
-    let contributions = validate_and_convert(config)?;
-    let endpoint = Rc::new(PromptProviderEndpoint::new(StaticPrompt { contributions }))
-        as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::new(vec![endpoint]))
+fn validate_config(config: &StaticPromptConfig) -> Result<(), RuntimeFailure> {
+    validate_and_convert(config.clone()).map(|_| ())
 }
 
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
+)]
 #[derive(Clone, Debug)]
 struct StaticPrompt {
-    contributions: Vec<ContributeResponseContributionsItem>,
+    #[config]
+    config: StaticPromptConfig,
+    contributions: Rc<RefCell<Option<Vec<ContributeResponseContributionsItem>>>>,
 }
 
+impl Lifecycle for StaticPrompt {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
+        self.contributions
+            .replace(Some(validate_and_convert(self.config.clone())?));
+        Ok(())
+    }
+}
+
+#[lenso::provides(prompt_provider_contract::PromptProvider)]
 impl PromptProviderProvider for StaticPrompt {
     fn contribute(
         &self,
@@ -63,9 +66,15 @@ impl PromptProviderProvider for StaticPrompt {
         _request: ContributeRequest,
     ) -> lenso_kernel::NativeRequestFuture<lenso_capability_agent_prompt_provider::PromptProvider>
     {
-        Box::pin(ready(Ok(Ok(ContributeResponse {
-            contributions: self.contributions.clone(),
-        }))))
+        let result = self
+            .contributions
+            .borrow()
+            .clone()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: prompt_provider_contract::CAPABILITY_ID,
+            })
+            .map(|contributions| ContributeResponse { contributions });
+        Box::pin(ready(result.map(Ok)))
     }
 }
 

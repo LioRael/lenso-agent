@@ -83,9 +83,9 @@ struct FilesystemSkillsProvider {
 
 /// One filesystem Skill catalog exposed through both Tool and Prompt roles.
 #[lenso::module(
+    lifecycle,
     configuration_schema = "config.schema.json",
-    validate = validate_config,
-    prepare = prepare_skills
+    validate = validate_config
 )]
 #[derive(Clone, Debug)]
 struct FilesystemSkillsModule {
@@ -94,12 +94,13 @@ struct FilesystemSkillsModule {
     provider: FilesystemSkillsProvider,
 }
 
-fn prepare_skills(module: &FilesystemSkillsModule, _context: &PrepareContext) -> ModuleFuture {
-    let result = load_snapshot(&module.config);
-    if let Ok(snapshot) = &result {
-        module.provider.state.replace(Some(snapshot.clone()));
+impl Lifecycle for FilesystemSkillsModule {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
+        let snapshot = load_snapshot(&self.config)?;
+        self.provider.state.replace(Some(snapshot));
+        Ok(())
     }
-    Box::pin(async move { result.map(|_| ()) })
 }
 
 impl FilesystemSkillsProvider {

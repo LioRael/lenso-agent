@@ -4,20 +4,16 @@ use std::{
     fs,
     io::Write,
     path::{Component, Path, PathBuf},
-    rc::Rc,
 };
 
 use futures::future::{LocalBoxFuture, ready};
+use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
-    CatalogError, CatalogRequest, CatalogResponse, CatalogResponseToolsItem, ExecuteError,
-    ExecuteRequest, ExecuteResponse, ExecuteResponseContentType, ToolProviderEndpoint,
-    ToolProviderProvider,
+    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse,
+    CatalogResponseToolsItem, ExecuteError, ExecuteRequest, ExecuteResponse,
+    ExecuteResponseContentType, ToolProviderProvider,
 };
-use lenso_kernel::{
-    InvocationContext, ModuleFuture, ModuleLifecycle, NativeRequestEndpoint, PrepareContext,
-    RuntimeFailure,
-};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
 
 /// Stable Tool name for unique exact text replacement.
@@ -31,29 +27,6 @@ struct WorkspaceEditConfig {
     root: PathBuf,
     max_file_bytes: usize,
     max_edit_bytes: usize,
-}
-
-/// Instantiates the opt-in workspace mutation Tool Provider.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","operations":["catalog","execute"],"operation_kinds":{},"default_admission":{"queue_capacity":4,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported workspace-edit entrypoint"));
-    }
-    let config = serde_json::from_str::<WorkspaceEditConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid workspace-edit configuration: {error}")))?;
-    validate_config(&config)?;
-    let provider = WorkspaceEditProvider { config };
-    let endpoint =
-        Rc::new(ToolProviderEndpoint::new(provider.clone())) as Rc<dyn NativeRequestEndpoint>;
-    Ok(NativeModuleInstance::with_lifecycle(
-        vec![endpoint],
-        WorkspaceEditLifecycle { provider },
-    ))
 }
 
 fn validate_config(config: &WorkspaceEditConfig) -> Result<(), RuntimeFailure> {
@@ -70,8 +43,14 @@ fn validate_config(config: &WorkspaceEditConfig) -> Result<(), RuntimeFailure> {
     Ok(())
 }
 
+#[lenso::module(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
+)]
 #[derive(Clone, Debug)]
 struct WorkspaceEditProvider {
+    #[config]
     config: WorkspaceEditConfig,
 }
 
@@ -297,6 +276,7 @@ impl WorkspaceEditProvider {
     }
 }
 
+#[lenso::provides(tool_provider_contract::ToolProvider)]
 impl ToolProviderProvider for WorkspaceEditProvider {
     fn catalog(
         &self,
@@ -339,14 +319,10 @@ impl ToolProviderProvider for WorkspaceEditProvider {
     }
 }
 
-#[derive(Debug)]
-struct WorkspaceEditLifecycle {
-    provider: WorkspaceEditProvider,
-}
-
-impl ModuleLifecycle for WorkspaceEditLifecycle {
-    fn prepare(&self, _context: PrepareContext) -> ModuleFuture {
-        Box::pin(ready(self.provider.canonical_root().map(|_| ())))
+impl Lifecycle for WorkspaceEditProvider {
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
+        self.canonical_root().map(|_| ())
     }
 }
 

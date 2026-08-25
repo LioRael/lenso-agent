@@ -1,16 +1,13 @@
 //! Deterministic Model Module for the headless read-only proof.
 
-use std::rc::Rc;
-
 use futures::future::{LocalBoxFuture, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
-    CAPABILITY_ID, CompleteError, CompleteRequest, CompleteRequestMessagesItem,
-    CompleteRequestMessagesItemRole, CompleteResponse, CompleteResponseKind, ModelEndpoint,
-    ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CompleteError, CompleteRequest,
+    CompleteRequestMessagesItem, CompleteRequestMessagesItemRole, CompleteResponse,
+    CompleteResponseKind, ModelInvocationError, ModelProvider,
 };
-use lenso_kernel::{InvocationContext, NativeStreamEndpoint, NativeStreamSession, RuntimeFailure};
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
 
 /// Only model identifier supported by the deterministic fixture.
 pub const MODEL_ID: &str = "fixture/readme-summary-v1";
@@ -21,46 +18,23 @@ struct FixtureConfig {
     model: String,
 }
 
-/// Instantiates the deterministic Model fixture.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","operations":["complete"],"operation_kinds":{"complete":"stream"},"default_admission":{"queue_capacity":1,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[]}"#,
-    configuration_schema = "config.schema.json"
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(RuntimeFailure::InvalidResolvedPlan {
-            detail: format!(
-                "unsupported fixture Model entrypoint `{}`",
-                context.entrypoint()
-            ),
-        });
-    }
-    let config =
-        serde_json::from_str::<FixtureConfig>(context.configuration()).map_err(|error| {
-            RuntimeFailure::InvalidResolvedPlan {
-                detail: format!("invalid fixture Model configuration: {error}"),
-            }
-        })?;
+fn validate_config(config: &FixtureConfig) -> Result<(), RuntimeFailure> {
     if config.model != MODEL_ID {
         return Err(RuntimeFailure::InvalidResolvedPlan {
             detail: format!("fixture Model must be `{MODEL_ID}`"),
         });
     }
-    let endpoint =
-        Rc::new(ModelEndpoint::new(FixtureModel { config })) as Rc<dyn NativeStreamEndpoint>;
-    Ok(NativeModuleInstance::with_stream_endpoints(
-        vec![endpoint],
-        lenso_kernel::NoopModuleLifecycle,
-    ))
+    Ok(())
 }
 
+#[lenso::module(configuration_schema = "config.schema.json", validate = validate_config)]
 #[derive(Clone, Debug)]
 struct FixtureModel {
+    #[config]
     config: FixtureConfig,
 }
 
+#[lenso::provides(model_contract::Model)]
 impl ModelProvider for FixtureModel {
     fn complete(
         &self,
