@@ -14,6 +14,7 @@ use futures::{
     future::{LocalBoxFuture, ready},
     lock::Mutex,
 };
+use lenso::prelude::*;
 use lenso_capability_agent::{
     self as agent_capability, AgentInvocationError, AgentProvider, CAPABILITY_ID, RunTurnError,
     RunTurnRequest, RunTurnResponse,
@@ -36,10 +37,8 @@ use lenso_capability_agent_tools::{
     self as tools_capability, CatalogRequest, ExecuteRequest, ToolsExecuteInvocationError,
 };
 use lenso_kernel::{
-    ActivateContext, CancellationToken, InvocationContext, ManagedTaskScope, ModuleFuture,
-    NativeStreamItem, NativeStreamSession, RuntimeFailure, StreamEvent,
+    CancellationToken, InvocationContext, NativeStreamItem, NativeStreamSession, StreamEvent,
 };
-use lenso_module_authoring::Port;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Host-issued Invocation Context key for the leased App Generation identity.
@@ -93,7 +92,7 @@ fn canonical_generation_digest(value: &str) -> bool {
     })
 }
 
-#[derive(Clone, Debug, serde::Deserialize, lenso_native_adapter::ModuleConfig)]
+#[derive(Clone, Debug, serde::Deserialize, lenso::ModuleConfig)]
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
     model: String,
@@ -103,10 +102,7 @@ struct AgentConfig {
     max_history_events: i64,
 }
 
-#[lenso_native_adapter::module(
-    validate = validate_agent_config,
-    activate = activate_agent_loop
-)]
+#[lenso::module(validate = validate_agent_config, activate = activate_agent_loop)]
 #[derive(Clone, Debug)]
 struct AgentLoop {
     #[config]
@@ -137,7 +133,7 @@ fn activate_agent_loop(module: &AgentLoop, context: &ActivateContext) -> ModuleF
     Box::pin(ready(Ok(())))
 }
 
-#[lenso_native_adapter::provides(agent_capability::Agent)]
+#[lenso::provides(agent_capability::Agent)]
 impl AgentProvider for AgentLoop {
     fn run_turn(
         &self,

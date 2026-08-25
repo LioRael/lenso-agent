@@ -190,10 +190,11 @@ impl<P: PromptProviderProvider> NativeRequestEndpoint for PromptProviderEndpoint
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_native_provide_prompt_provider {
-    ($provider:expr, $lifecycle:expr) => {{
+    ($provider:expr, $lifecycle:expr, $support:path) => {{
+        use $support as __LensoNativeSupport;
         let endpoint = ::std::rc::Rc::new($crate::PromptProviderEndpoint::new($provider));
-        ::lenso_native_adapter::NativeModuleInstance::with_all_endpoints(
-            vec![endpoint.clone() as ::std::rc::Rc<dyn ::lenso_kernel::NativeRequestEndpoint>],
+        __LensoNativeSupport::NativeModuleInstance::with_all_endpoints(
+            vec![endpoint.clone() as ::std::rc::Rc<dyn __LensoNativeSupport::NativeRequestEndpoint>],
             vec![],
             vec![],
             $lifecycle,

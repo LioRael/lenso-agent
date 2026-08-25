@@ -40,7 +40,9 @@ Agent Provider implementation derives the endpoint, Descriptor artifact,
 factory, lifecycle connection glue, and link-time registration. Activation
 still receives dependencies only from Plan-owned `ModuleDependencies`; the
 Module writes only its real configuration validation and task-scope hook.
-The public `lenso::module` facade, ergonomic domain-method lowering, broader
+The Agent Loop now consumes the public `lenso::prelude`, `lenso::module`, and
+`lenso::provides` authoring facade without direct Module-authoring or Native
+Adapter dependencies. Ergonomic domain-method lowering, the broader
 configuration type profile, multi-Capability providers, and migration of the
 remaining Modules remain follow-up work.
 
