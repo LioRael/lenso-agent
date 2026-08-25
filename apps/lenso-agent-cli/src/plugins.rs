@@ -327,6 +327,7 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
     let mut features = Vec::new();
     let mut expected_manifest = None;
     let mut plan = None;
+    let mut plan_source = None;
     let mut root = default_root();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
@@ -337,7 +338,20 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
             "--expected-manifest" => {
                 expected_manifest = Some(arguments.next().ok_or_else(usage)?.clone());
             }
-            "--plan" => plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            "--app" => {
+                if let Some(source) = plan_source {
+                    return Err(format!("--app conflicts with {source}"));
+                }
+                plan = Some(crate::app_plan(arguments.next().ok_or_else(usage)?)?);
+                plan_source = Some("--app");
+            }
+            "--plan" => {
+                if let Some(source) = plan_source {
+                    return Err(format!("--plan conflicts with {source}"));
+                }
+                plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?));
+                plan_source = Some("--plan");
+            }
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
             _ => return Err(usage()),
         }
@@ -355,12 +369,26 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
 fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
     let mut to = None;
     let mut plan = None;
+    let mut plan_source = None;
     let mut root = default_root();
     let mut arguments = arguments.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--to" => to = Some(arguments.next().ok_or_else(usage)?.clone()),
-            "--plan" => plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            "--app" => {
+                if let Some(source) = plan_source {
+                    return Err(format!("--app conflicts with {source}"));
+                }
+                plan = Some(crate::app_plan(arguments.next().ok_or_else(usage)?)?);
+                plan_source = Some("--app");
+            }
+            "--plan" => {
+                if let Some(source) = plan_source {
+                    return Err(format!("--plan conflicts with {source}"));
+                }
+                plan = Some(PathBuf::from(arguments.next().ok_or_else(usage)?));
+                plan_source = Some("--plan");
+            }
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
             _ => return Err(usage()),
         }
@@ -373,7 +401,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--app <name> | --plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--app <name> | --plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -381,10 +409,7 @@ fn default_root() -> PathBuf {
 }
 
 fn default_plan() -> PathBuf {
-    std::env::var_os("LENSO_RESOLVED_PLAN").map_or_else(
-        || PathBuf::from("composition/headless-readonly/resolved-plan.json"),
-        PathBuf::from,
-    )
+    crate::default_plan()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

@@ -18,7 +18,7 @@ const APP_ID: &str = "lenso.agent.harness";
 #[derive(Debug)]
 pub enum GenerationCommand {
     Inspect { digest: String, root: PathBuf },
-    GcPlan { root: PathBuf, sessions: PathBuf },
+    GcPreview { root: PathBuf, sessions: PathBuf },
 }
 
 #[derive(Debug)]
@@ -44,7 +44,7 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
                 digest = Some(arguments.next().ok_or_else(generation_usage)?.clone());
             }
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(generation_usage)?),
-            "--sessions" if command == "gc-plan" => {
+            "--sessions" if command == "gc-preview" || command == "gc-plan" => {
                 sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
             }
             _ => return Err(generation_usage()),
@@ -55,7 +55,7 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
             digest: digest.ok_or_else(generation_usage)?,
             root,
         }),
-        "gc-plan" => Ok(GenerationCommand::GcPlan { root, sessions }),
+        "gc-preview" | "gc-plan" => Ok(GenerationCommand::GcPreview { root, sessions }),
         _ => Err(generation_usage()),
     }
 }
@@ -114,11 +114,11 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
             );
             Ok(())
         }
-        GenerationCommand::GcPlan { root, sessions } => print_gc_plan(&root, &sessions),
+        GenerationCommand::GcPreview { root, sessions } => print_gc_preview(&root, &sessions),
     }
 }
 
-fn print_gc_plan(root: &Path, sessions: &Path) -> Result<(), String> {
+fn print_gc_preview(root: &Path, sessions: &Path) -> Result<(), String> {
     let plugin_sets = retained_plugin_set_digests(root)?;
     let session_generations = inspect_all_turn_started_events(sessions)?
         .into_iter()
@@ -300,7 +300,7 @@ fn canonical_digest_hash(digest: &str) -> Result<&str, String> {
 }
 
 fn generation_usage() -> String {
-    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-plan [--root <plugin-root>] [--sessions <session-directory>]>".to_owned()
+    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-preview [--root <plugin-root>] [--sessions <session-directory>]>".to_owned()
 }
 
 fn session_usage() -> String {

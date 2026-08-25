@@ -1,87 +1,71 @@
 # Lenso Agent Harness
 
-A headless-first, traceable Agent Harness composed from ordinary Lenso Modules
-and portable Capabilities.
+A headless-first Agent Harness for running a model with an explicitly selected
+set of Tools, Prompt instructions, and durable Sessions.
 
-The project now includes its first executable `headless-readonly` slice. It
-owns:
+## Try it
 
-- the V1 product context and architecture decision;
-- portable Agent, Model, Tools, Tool Provider, and Session Capability sources,
-  plus the private structured Process Capability;
-- portable Prompt aggregate and Prompt Provider Capability sources;
-- generated Rust bindings derived from those sources, with Bun projections
-  distributed by `@lenso/bun`;
-- validation commands that keep generated artifacts fresh;
-- deterministic, OpenAI-compatible, and experimental direct ChatGPT
-  subscription Model Modules; Tool Runtime; Prompt aggregation; static
-  Prompt/Skill contributions; workspace-read, opt-in workspace-edit, structured
-  process execution, and progressive-disclosure filesystem Skills; file
-  Session; Agent Loop; and CLI Modules; and
-- eight complete source-derived App Definitions and their canonical Resolved
-  App Plans.
+Run the deterministic, read-only App from the repository root:
 
-The Agent Harness is not a Kernel mode or a runtime plugin registry. Installed
-packages and an App Composition materialize one immutable Resolved App Plan
-before boot.
+```sh
+cargo run -p lenso-agent-cli -- \
+  "Summarize this workspace README."
+```
 
-## Source-derived App Definition
+The default `headless-readonly` App uses a deterministic fixture Model and can
+only read the current workspace. Choose another reviewed App by name when you
+need a different Model or Tool authority:
 
-Each executable variant has one `composition/<variant>.app.json` App Definition.
-The definitions select locked Cargo packages and keyed Instances without
-repeating Capability IDs, operations, bindings, execution classes, lifecycle
-policy, or configuration Schemas:
+```sh
+cargo run -p lenso-agent-cli -- \
+  --app headless-coding \
+  "Create and edit a workspace note."
+```
+
+Use `--session <id>` to resume a durable Session, `--no-tools` to remove Tool
+access for one Turn, or repeated `--allow-tool <name>` options to narrow the
+selected App's Tool set. Run `cargo run -p lenso-agent-cli -- --help` for the
+complete interface.
+
+## Choose an App
+
+| App | Model | Workspace authority |
+| --- | --- | --- |
+| `headless-readonly` | deterministic fixture | read only |
+| `headless-coding` | deterministic fixture | read and edit |
+| `headless-local-coding` | deterministic fixture | read, edit, and reviewed processes |
+| `openai-readonly` | OpenAI-compatible API | read only |
+| `openai-codex-direct` | ChatGPT subscription | read only |
+| `openai-codex-direct-skills` | ChatGPT subscription | read only, plus selected local Skills |
+| `openai-codex-direct-coding` | ChatGPT subscription | read and edit |
+| `openai-codex-direct-local-coding` | ChatGPT subscription | read, edit, and reviewed processes |
+
+The coding Apps can mutate the selected workspace. The local-coding Apps also
+run an explicit program catalog and are trusted-code profiles, not sandboxes.
+
+## How Apps are composed
+
+Each executable variant has one source `composition/<variant>.app.json` App
+Definition. It selects locked Module packages, configuration, and bindings. The
+authoring tool validates that definition and materializes an immutable Resolved
+App Plan before boot; the Kernel never discovers packages or mutates the
+running graph.
+
+Normal runs select the reviewed App by name, so callers do not need to manage
+Plan files. App authors and release automation can reproduce the exact derived
+artifact explicitly:
 
 ```sh
 lenso app check --definition composition/headless-readonly.app.json
 lenso app resolve --definition composition/headless-readonly.app.json \
   --output .lenso/headless-readonly/resolved-plan.json
-
-cargo run -p lenso-agent-cli -- \
-  --plan .lenso/headless-readonly/resolved-plan.json \
-  --prompt "Summarize this workspace README."
 ```
 
-Each selected Module derives its identity, package-owned configuration Schema,
-Capability endpoints and Ports, execution policy, factory, and link-time Host
-registration into its Cargo artifact. The App Definition names the statically
-linked Host package, so external Cargo dependencies are discovered through the
-same artifact path as workspace Modules. The CLI reads those artifacts without
-executing Module code, validates configuration, derives bindings, and emits
-bytes identical to each reviewed Plan. The smaller
-[`composition/text-tools.app.json`](composition/text-tools.app.json) remains a
-single-Module authoring fixture.
-
-All Provider Modules use the source-first `#[lenso::module]` facade. Modules
-with lifecycle work opt in with `#[lenso::module(lifecycle)]`; one-to-one and
-one-to-many dependencies use typed `Port<Client>` and `ManyPort<Client>` fields.
-The CLI Module is intentionally the only low-level factory because it is a
-consumer-only binding anchor with no provided Capability, a shape the current
-source-first facade cannot yet finalize without inventing a false Provider.
-Source-derived Provider admission is fail-fast (`queue_capacity: 0`), which is
-recorded in the reviewed canonical Plans.
-
-## Select an App variant
-
-Choose one definition, resolve it, and pass only the reviewed immutable Plan to
-the product Runner:
-
-```sh
-lenso app check \
-  --definition composition/openai-codex-direct-local-coding.app.json
-lenso app resolve \
-  --definition composition/openai-codex-direct-local-coding.app.json \
-  --output .lenso/openai-codex-direct-local-coding/resolved-plan.json
-cargo run -p lenso-agent-cli -- \
-  --plan .lenso/openai-codex-direct-local-coding/resolved-plan.json \
-  --prompt "Inspect this workspace."
-```
-
-The tracked `composition/*/resolved-plan.json` artifacts remain exact review
-and release evidence; never edit them by hand. Legacy recipe and fragment
-authorities have been removed. `scripts/check-removal.sh` validates every App
-Definition and proves that optional Prompt, Skill, workspace-edit, and process
-Modules can be removed while the remaining graph still resolves.
+`--plan <path>` remains an advanced escape hatch for exact Plan replay. The
+tracked `composition/*/resolved-plan.json` files are review and release
+evidence; never edit them by hand. `scripts/check-removal.sh` proves that
+optional Prompt, Skill, workspace-edit, and process Modules can be removed
+while the remaining graph still resolves.
 
 ## Runtime baseline
 
@@ -165,13 +149,13 @@ cargo run -p lenso-agent-cli -- plugins inspect \
 cargo run -p lenso-agent-cli -- generations inspect \
   --digest sha256:<generation-spec-digest>
 
-cargo run -p lenso-agent-cli -- generations gc-plan
+cargo run -p lenso-agent-cli -- generations gc-preview
 
 cargo run -p lenso-agent-cli -- sessions provenance \
   --session <session-id>
 
 cargo run -p lenso-agent-cli -- \
-  --prompt "Use text.uppercase to uppercase Lenso plugin."
+  "Use text.uppercase to uppercase Lenso plugin."
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.text-tools
@@ -181,7 +165,7 @@ cargo run -p lenso-agent-cli -- plugins install \
   --evidence "review-ticket-88"
 
 cargo run -p lenso-agent-cli -- \
-  --prompt "Answer directly: hello"
+  "Answer directly: hello"
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.fixture-model
@@ -193,7 +177,7 @@ cargo run -p lenso-agent-cli -- plugins install \
   --evidence "review-ticket-92"
 
 cargo run -p lenso-agent-cli -- \
-  --prompt "Summarize this repository."
+  "Summarize this repository."
 
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.codex-direct
@@ -206,9 +190,9 @@ records that derived decision and the CLI prints it as `governance`.
 Replacement, state, permissions, dependencies, Artifact-backed execution, and
 preview or experimental Profiles still require explicit `--evidence`. An
 explicit `--expected-manifest` remains available for automation that already
-owns a prior CAS value. Upgrade and rollback read the Plan from
-`LENSO_RESOLVED_PLAN`, falling back to the normal product Plan path; `--plan`
-overrides it.
+owns a prior CAS value. Upgrade and rollback accept `--app <name>` and default
+to `headless-readonly`. `LENSO_RESOLVED_PLAN` and `--plan <path>` remain
+advanced overrides for automation and exact Plan replay.
 
 Admission stores immutable objects and its receipt under
 `.lenso/plugins/store`. Activation atomically writes
@@ -246,11 +230,8 @@ permission to replace a `one` binding.
 From the repository root:
 
 ```sh
-lenso app resolve --definition composition/headless-readonly.app.json \
-  --output .lenso/headless-readonly/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
-  --plan .lenso/headless-readonly/resolved-plan.json \
-  --prompt "Summarize this workspace README."
+  "Summarize this workspace README."
 ```
 
 The CLI writes the generated Session ID to stderr. Resume the durable Session
@@ -366,11 +347,9 @@ The opt-in ChatGPT Subscription composition enables this catalog without
 changing the base direct profile:
 
 ```sh
-lenso app resolve --definition composition/openai-codex-direct-skills.app.json \
-  --output .lenso/openai-codex-direct-skills/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
-  --plan .lenso/openai-codex-direct-skills/resolved-plan.json \
-  --prompt "Use the most relevant available Skill and one relevant resource to review this repository."
+  --app openai-codex-direct-skills \
+  "Use the most relevant available Skill and one relevant resource to review this repository."
 ```
 
 This profile requires `~/.agents/skills` to exist. The base
@@ -407,18 +386,15 @@ The deterministic coding Composition proves create, unique exact edit, and
 read-back without changing the readonly Composition:
 
 ```sh
-lenso app resolve --definition composition/headless-coding.app.json \
-  --output .lenso/headless-coding/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
-  --plan .lenso/headless-coding/resolved-plan.json \
-  --prompt "Create and edit a workspace note."
+  --app headless-coding \
+  "Create and edit a workspace note."
 ```
 
-For ChatGPT Subscription, use
-the `openai-codex-direct-coding` variant and its matching Resolved Plan. This profile is
-explicitly mutating: run it only with a reviewed workspace root. Tool arguments
-are retained in the durable Session trajectory, so do not use mutation Tools
-for credentials or other secret content.
+For ChatGPT Subscription, select the `openai-codex-direct-coding` App. This App
+is explicitly mutating: run it only with a reviewed workspace root. Tool
+arguments are retained in the durable Session trajectory, so do not use
+mutation Tools for credentials or other secret content.
 
 ## Run the opt-in local coding slice
 
@@ -426,16 +402,13 @@ The deterministic local-coding Composition proves edit, `cargo check`, and
 read-back through separate workspace and process providers:
 
 ```sh
-lenso app resolve --definition composition/headless-local-coding.app.json \
-  --output .lenso/headless-local-coding/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
-  --plan .lenso/headless-local-coding/resolved-plan.json \
-  --prompt "Edit and validate the workspace project."
+  --app headless-local-coding \
+  "Edit and validate the workspace project."
 ```
 
-For ChatGPT Subscription, use
-the `openai-codex-direct-local-coding` variant and its matching Resolved Plan.
-That ChatGPT profile allows `cargo`, `git`, and `rg`, but it is deliberately not
+For ChatGPT Subscription, select the `openai-codex-direct-local-coding` App.
+That App allows `cargo`, `git`, and `rg`, but it is deliberately not
 a hostile-code sandbox: Cargo build scripts, tests, Git configuration, and
 allowed programs can execute code or perform effects available to the host
 user. Use it only with reviewed code and a reviewed workspace. There is no
@@ -467,11 +440,9 @@ Resolved App Plan:
 
 ```sh
 export OPENAI_API_KEY="..."
-lenso app resolve --definition composition/openai-readonly.app.json \
-  --output .lenso/openai-readonly/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
-  --plan .lenso/openai-readonly/resolved-plan.json \
-  --prompt "Use workspace.read_text to read README.md, then summarize it."
+  --app openai-readonly \
+  "Use workspace.read_text to read README.md, then summarize it."
 ```
 
 The `openai-readonly` variant defaults to OpenAI's base URL and `gpt-4o-mini`. An App
@@ -501,14 +472,12 @@ file is created with mode `0600` on Unix.
 
 The subscription Composition defaults to `gpt-5.6-luna` with medium reasoning.
 
-Resolve and run the subscription Composition with:
+Run the subscription App with:
 
 ```sh
-lenso app resolve --definition composition/openai-codex-direct.app.json \
-  --output .lenso/openai-codex-direct/resolved-plan.json
 cargo run -p lenso-agent-cli -- \
-  --plan .lenso/openai-codex-direct/resolved-plan.json \
-  --prompt "Summarize this repository."
+  --app openai-codex-direct \
+  "Summarize this repository."
 ```
 
 This profile directly provides `lenso.agent.model@1`, while Lenso continues to
