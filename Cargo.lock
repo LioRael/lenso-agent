@@ -1383,6 +1383,7 @@ dependencies = [
  "lenso-agent-tui-module",
  "lenso-agent-tui-static-module",
  "lenso-agent-workspace-edit-module",
+ "lenso-agent-workspace-import-read-module",
  "lenso-agent-workspace-read-module",
  "lenso-app-plan",
  "lenso-capability-agent",
@@ -1393,6 +1394,7 @@ dependencies = [
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tools",
  "lenso-capability-agent-tui-contribution",
+ "lenso-capability-agent-workspace-read",
  "lenso-kernel",
  "lenso-native-adapter",
  "lenso-plugin-bundle",
@@ -1654,6 +1656,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-workspace-import-read-module"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-workspace-read",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "lenso-agent-workspace-read-module"
 version = "0.2.0"
 dependencies = [
@@ -1819,6 +1835,22 @@ dependencies = [
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-workspace-read"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-module-authoring",
+ "lenso-runtime-codec",
  "serde",
  "serde_json",
 ]

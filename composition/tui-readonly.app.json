@@ -11,7 +11,8 @@
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.tui": "lenso-agent-tui-module",
     "lenso.agent.tui.static": "lenso-agent-tui-static-module",
-    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module"
+    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
   },
   "app": {
     "name": "tui-readonly",
@@ -98,6 +99,14 @@
               "body": "Enter sends a message.\nEsc cancels the active Turn or exits while idle.\nCtrl-C exits immediately.\nTab cycles contributed panels."
             }
           ]
+        }
+      },
+      {
+        "key": "workspace-import-read",
+        "package": "lenso.agent.workspace-import-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576
         }
       },
       {

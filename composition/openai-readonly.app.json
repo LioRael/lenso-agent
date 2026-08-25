@@ -11,7 +11,8 @@
     "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
-    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module"
+    "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
   },
   "app": {
     "name": "openai-readonly",
@@ -97,6 +98,14 @@
         "key": "tools",
         "package": "lenso.agent.tools",
         "configuration": {}
+      },
+      {
+        "key": "workspace-import-read",
+        "package": "lenso.agent.workspace-import-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576
+        }
       },
       {
         "key": "workspace-read",
