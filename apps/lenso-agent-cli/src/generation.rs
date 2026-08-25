@@ -11,6 +11,7 @@ use std::{
 
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
+use lenso_agent_http_fetch_module as _;
 use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;
 use lenso_agent_model_fixture_module as _;
 use lenso_agent_model_openai_codex_direct_module as _;
@@ -30,6 +31,7 @@ use lenso_agent_workspace_import_read_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::{Agent, AgentJsonCodec};
+use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::SessionJsonCodec;
@@ -768,6 +770,7 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
 fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
     MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
         .with_wasm_codec(AgentJsonCodec)
+        .with_wasm_codec(HttpFetchJsonCodec)
         .with_wasm_codec(ModelJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)

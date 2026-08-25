@@ -7,14 +7,16 @@ use std::{
 
 use lenso_app_plan::{CapabilityBinding, ModuleInstancePlan, ResolvedAppPlan};
 use lenso_plugin_control_plane::{
-    AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedInstance, LockedPlugin,
-    ModuleContribution, PluginBundle, PluginManifest, PluginSetLock, PluginStore,
+    AdmissionPolicy, ApprovedGrant, CanonicalDocument, ControlPlaneError, LockedInstance,
+    LockedPlugin, ModuleContribution, PluginBundle, PluginManifest, PluginSetLock, PluginStore,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::{
     authority::AuthorityCoordinator,
-    plugin_profiles::{PluginProfileCatalog, ResolvedAttachment, harness_plugin_profiles},
+    plugin_profiles::{
+        PluginProfileCatalog, ResolvedAttachment, harness_plugin_profiles, plugin_instance_key,
+    },
 };
 
 const APP_ID: &str = "lenso.agent.harness";
@@ -232,6 +234,16 @@ fn print_active_set(root: &Path, digest: &str) -> Result<(), String> {
         println!(
             "instance: {} plugin={} contribution={}",
             instance.instance_key, instance.plugin_id, instance.contribution_id
+        );
+    }
+    for grant in &active.value().lock.approved_grants {
+        println!(
+            "grant: instance={} request={} enforcement={:?} enforcer={} scope={}",
+            grant.instance_key,
+            grant.permission_request_id,
+            grant.enforcement_kind,
+            grant.enforcer_identity,
+            serde_json::to_string(&grant.scope).map_err(|error| error.to_string())?
         );
     }
     Ok(())
@@ -612,6 +624,12 @@ fn install(
         .lock
         .instances
         .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+    replace_plugin_grants(
+        &mut active.lock.approved_grants,
+        manifest.value(),
+        &selected.module_contribution_ids,
+        &profiles,
+    )?;
     active
         .releases
         .retain(|release| release.plugin_id != manifest.value().plugin_id);
@@ -658,6 +676,17 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
         .lock
         .plugins
         .retain(|plugin| plugin.plugin_id != plugin_id);
+    let removed_instances = active
+        .lock
+        .instances
+        .iter()
+        .filter(|instance| instance.plugin_id == plugin_id)
+        .map(|instance| instance.instance_key.clone())
+        .collect::<BTreeSet<_>>();
+    active
+        .lock
+        .approved_grants
+        .retain(|grant| !removed_instances.contains(&grant.instance_key));
     active
         .lock
         .instances
@@ -833,6 +862,12 @@ fn replacement_active_set(
         .lock
         .instances
         .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+    replace_plugin_grants(
+        &mut candidate.lock.approved_grants,
+        manifest.value(),
+        &selected.module_contribution_ids,
+        profiles,
+    )?;
     candidate
         .releases
         .retain(|release| release.plugin_id != manifest.value().plugin_id);
@@ -1012,6 +1047,13 @@ pub(crate) fn generation_composition(
                 )
             })?;
         let contribution = active_contribution(manifest.value(), instance)?;
+        profiles.validate_permission_enforcement(
+            contribution,
+            &target,
+            &instance.instance_key,
+            &authority.lock.value().approved_grants,
+            base_plan,
+        )?;
         plugin_bindings.extend(fixed_host_bindings(
             &profiles,
             contribution,
@@ -1198,8 +1240,8 @@ fn validate_active_set(
     {
         return Err("active Plugin Set schema or App identity is invalid".to_owned());
     }
-    if !active.lock.data_mounts.is_empty() || !active.lock.approved_grants.is_empty() {
-        return Err("this Host does not accept Plugin Data mounts or permission grants".to_owned());
+    if !active.lock.data_mounts.is_empty() {
+        return Err("this Host does not accept Plugin Data mounts".to_owned());
     }
     ensure_sorted_unique(
         active.lock.plugins.iter().map(|plugin| &plugin.plugin_id),
@@ -1221,6 +1263,7 @@ fn validate_active_set(
         return Err("active Releases do not exactly close the Plugin lock".to_owned());
     }
     let mut expected_instances = Vec::new();
+    let mut expected_grants = Vec::new();
     for locked in &active.lock.plugins {
         let release = active
             .releases
@@ -1252,12 +1295,30 @@ fn validate_active_set(
             &selected.module_contribution_ids,
             profiles,
         )?);
+        expected_grants.extend(
+            profiles
+                .approved_grants_for(
+                    manifest.value(),
+                    &selected.module_contribution_ids,
+                    &host_target(),
+                )
+                .map_err(control_error)?,
+        );
         validate_receipt_closure(locked, release, manifest.value(), store)?;
     }
     expected_instances.sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
     if active.lock.instances != expected_instances {
         return Err(
             "active Plugin Instances do not exactly close selected contributions".to_owned(),
+        );
+    }
+    expected_grants.sort_by(|left, right| {
+        (&left.instance_key, &left.permission_request_id)
+            .cmp(&(&right.instance_key, &right.permission_request_id))
+    });
+    if active.lock.approved_grants != expected_grants {
+        return Err(
+            "active Plugin permission grants do not exactly close selected requests".to_owned(),
         );
     }
     CanonicalDocument::from_value("active-set.json", active).map_err(control_error)
@@ -1322,8 +1383,15 @@ fn validate_supported_manifest(
     manifest: &PluginManifest,
     profiles: &PluginProfileCatalog,
 ) -> Result<(), ControlPlaneError> {
-    if !manifest.data_contributions.is_empty() || !manifest.permission_requests.is_empty() {
-        return rejected("this Host rejects Plugin Data mounts and permission requests");
+    if !manifest.data_contributions.is_empty() {
+        return rejected("this Host rejects Plugin Data mounts");
+    }
+    if manifest
+        .features
+        .iter()
+        .any(|feature| !feature.permission_request_ids.is_empty())
+    {
+        return rejected("this Host does not support feature-gated permission requests");
     }
     let target = host_target();
     profiles.validate_manifest_topology(manifest, &target)
@@ -1454,17 +1522,37 @@ fn locked_instances(
             Ok(LockedInstance {
                 plugin_id: manifest.plugin_id.clone(),
                 contribution_id: contribution_id.clone(),
-                instance_key: format!(
-                    "plugin:{}:{}:{contribution_id}",
-                    manifest.plugin_id.len(),
-                    manifest.plugin_id
-                ),
+                instance_key: plugin_instance_key(&manifest.plugin_id, contribution_id),
                 implementation_variant: None,
                 configuration,
                 execution_lane: "main".to_owned(),
             })
         })
         .collect()
+}
+
+fn replace_plugin_grants(
+    grants: &mut Vec<ApprovedGrant>,
+    manifest: &PluginManifest,
+    selected_contributions: &[String],
+    profiles: &PluginProfileCatalog,
+) -> Result<(), String> {
+    let plugin_instances = manifest
+        .module_contributions
+        .iter()
+        .map(|contribution| plugin_instance_key(&manifest.plugin_id, &contribution.id))
+        .collect::<BTreeSet<_>>();
+    grants.retain(|grant| !plugin_instances.contains(&grant.instance_key));
+    grants.extend(
+        profiles
+            .approved_grants_for(manifest, selected_contributions, &host_target())
+            .map_err(control_error)?,
+    );
+    grants.sort_by(|left, right| {
+        (&left.instance_key, &left.permission_request_id)
+            .cmp(&(&right.instance_key, &right.permission_request_id))
+    });
+    Ok(())
 }
 
 pub(crate) fn host_target() -> String {
