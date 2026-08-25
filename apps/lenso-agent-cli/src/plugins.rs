@@ -54,7 +54,7 @@ const CODEX_AUTH_DESCRIPTOR: &[u8] =
 pub enum PluginCommand {
     Install {
         bundle: PathBuf,
-        evidence: String,
+        evidence: Option<String>,
         features: Vec<String>,
         root: PathBuf,
     },
@@ -64,9 +64,9 @@ pub enum PluginCommand {
     },
     Upgrade {
         bundle: PathBuf,
-        evidence: String,
+        evidence: Option<String>,
         features: Vec<String>,
-        expected_manifest: String,
+        expected_manifest: Option<String>,
         plan: PathBuf,
         root: PathBuf,
     },
@@ -111,7 +111,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             features,
             root,
         } => {
-            let outcome = install(&root, &bundle, &evidence, features)?;
+            let outcome = install(&root, &bundle, evidence.as_deref(), features)?;
             println!(
                 "installed: {}@{}",
                 outcome.plugin_id, outcome.release_version
@@ -119,6 +119,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             println!("manifest: {}", outcome.manifest_digest);
             println!("receipt: {}", outcome.receipt_digest);
             println!("plugin-set: {}", outcome.plugin_set_digest);
+            println!("governance: {}", outcome.governance);
             Ok(())
         }
         PluginCommand::Status { root } => {
@@ -153,9 +154,9 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             let outcome = upgrade(
                 &root,
                 &bundle,
-                &evidence,
+                evidence.as_deref(),
                 features,
-                &expected_manifest,
+                expected_manifest.as_deref(),
                 &plan,
             )
             .await?;
@@ -170,6 +171,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             );
             println!("active-set: {}", outcome.active_set_digest);
             println!("generation: {}", outcome.generation_spec_digest);
+            println!("governance: {}", outcome.governance);
             Ok(())
         }
         PluginCommand::Rollback { to, plan, root } => {
@@ -258,7 +260,7 @@ fn parse_install(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Install {
         bundle: bundle.ok_or_else(usage)?,
-        evidence: evidence.ok_or_else(usage)?,
+        evidence,
         features,
         root,
     })
@@ -342,10 +344,10 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Upgrade {
         bundle: bundle.ok_or_else(usage)?,
-        evidence: evidence.ok_or_else(usage)?,
+        evidence,
         features,
-        expected_manifest: expected_manifest.ok_or_else(usage)?,
-        plan: plan.ok_or_else(usage)?,
+        expected_manifest,
+        plan: plan.unwrap_or_else(default_plan),
         root,
     })
 }
@@ -365,17 +367,24 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Rollback {
         to: to.ok_or_else(usage)?,
-        plan: plan.ok_or_else(usage)?,
+        plan: plan.unwrap_or_else(default_plan),
         root,
     })
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <install --bundle <directory> --evidence <review> [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> --evidence <review> --expected-manifest <sha256:digest> --plan <path> [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> --plan <path> [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
     PathBuf::from(".lenso/plugins")
+}
+
+fn default_plan() -> PathBuf {
+    std::env::var_os("LENSO_RESOLVED_PLAN").map_or_else(
+        || PathBuf::from("composition/headless-readonly/resolved-plan.json"),
+        PathBuf::from,
+    )
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -433,6 +442,7 @@ struct InstallOutcome {
     manifest_digest: String,
     receipt_digest: String,
     plugin_set_digest: String,
+    governance: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -443,6 +453,7 @@ struct UpgradeOutcome {
     previous_active_set_digest: String,
     active_set_digest: String,
     generation_spec_digest: String,
+    governance: String,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -498,7 +509,7 @@ impl AdmissionPolicy for LocalReviewPolicy<'_> {
 fn install(
     root: &Path,
     bundle_root: &Path,
-    evidence: &str,
+    evidence: Option<&str>,
     mut features: Vec<String>,
 ) -> Result<InstallOutcome, String> {
     let profiles = harness_plugin_profiles()?;
@@ -516,6 +527,13 @@ fn install(
     if features.len() != feature_count {
         return Err("selected Plugin Features contain a duplicate".to_owned());
     }
+    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let (evidence, governance) = admission_evidence(
+        evidence,
+        &profiles,
+        manifest.value(),
+        &selected.module_contribution_ids,
+    )?;
 
     if let Some(existing) = active
         .lock
@@ -534,12 +552,11 @@ fn install(
         .admit(
             &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
             &LocalReviewPolicy {
-                evidence,
+                evidence: &evidence,
                 profiles: &profiles,
             },
         )
         .map_err(control_error)?;
-    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
     let locked = LockedPlugin {
         plugin_id: manifest.value().plugin_id.clone(),
         release_version: manifest.value().release_version.clone(),
@@ -593,6 +610,7 @@ fn install(
         manifest_digest: manifest.digest().to_owned(),
         receipt_digest: receipt.digest().to_owned(),
         plugin_set_digest: lock.digest().to_owned(),
+        governance,
     })
 }
 
@@ -632,9 +650,9 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
 async fn upgrade(
     root: &Path,
     bundle_root: &Path,
-    evidence: &str,
+    evidence: Option<&str>,
     mut features: Vec<String>,
-    expected_manifest: &str,
+    expected_manifest: Option<&str>,
     plan_path: &Path,
 ) -> Result<UpgradeOutcome, String> {
     let profiles = harness_plugin_profiles()?;
@@ -658,7 +676,9 @@ async fn upgrade(
                 manifest.value().plugin_id
             )
         })?;
-    if existing.manifest_digest != expected_manifest {
+    if let Some(expected_manifest) = expected_manifest
+        && existing.manifest_digest != expected_manifest
+    {
         return Err(format!(
             "Plugin `{}` Manifest compare-and-swap failed: expected `{expected_manifest}`, active `{}`",
             existing.plugin_id, existing.manifest_digest
@@ -676,11 +696,18 @@ async fn upgrade(
     if features.len() != feature_count {
         return Err("selected Plugin Features contain a duplicate".to_owned());
     }
+    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let (evidence, governance) = admission_evidence(
+        evidence,
+        &profiles,
+        manifest.value(),
+        &selected.module_contribution_ids,
+    )?;
     let receipt = store
         .admit(
             &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
             &LocalReviewPolicy {
-                evidence,
+                evidence: &evidence,
                 profiles: &profiles,
             },
         )
@@ -714,7 +741,29 @@ async fn upgrade(
         previous_active_set_digest: current.digest().to_owned(),
         active_set_digest: candidate.digest().to_owned(),
         generation_spec_digest,
+        governance,
     })
+}
+
+fn admission_evidence(
+    explicit: Option<&str>,
+    profiles: &PluginProfileCatalog,
+    manifest: &PluginManifest,
+    selected_contribution_ids: &[String],
+) -> Result<(String, String), String> {
+    if let Some(explicit) = explicit {
+        return Ok((explicit.to_owned(), "reviewed".to_owned()));
+    }
+    let Some(reason) = profiles
+        .automatic_local_admission(manifest, selected_contribution_ids, &host_target())
+        .map_err(control_error)?
+    else {
+        return Err(
+            "this Plugin changes a governed provider, dependency, state, permission, artifact, trust, or support boundary; pass `--evidence <review>`"
+                .to_owned(),
+        );
+    };
+    Ok((reason.to_owned(), reason.to_owned()))
 }
 
 fn replacement_active_set(
@@ -1742,19 +1791,14 @@ mod tests {
         include_bytes!("../../../composition/openai-codex-direct/resolved-plan.json");
 
     #[test]
-    fn reviewed_passive_release_is_locked_and_closed_into_a_generation() {
+    fn passive_release_uses_automatic_local_admission() {
         let root = tempfile::tempdir().unwrap();
         let bundle = tempfile::tempdir().unwrap();
         let manifest = write_passive_bundle(bundle.path());
-        let outcome = install(
-            root.path(),
-            bundle.path(),
-            "review-ticket-42",
-            vec!["extras".to_owned()],
-        )
-        .unwrap();
+        let outcome = install(root.path(), bundle.path(), None, vec!["extras".to_owned()]).unwrap();
         assert_eq!(outcome.plugin_id, "example.passive");
         assert_eq!(outcome.manifest_digest, manifest.digest());
+        assert_eq!(outcome.governance, "automatic:local-passive-release");
 
         let authority = load_generation_authority(root.path()).unwrap();
         assert_eq!(authority.lock.value().plugins.len(), 1);
@@ -1791,7 +1835,7 @@ mod tests {
             b"extra",
             b"{\"kind\":\"fixture\"}",
         );
-        let error = install(root.path(), bundle.path(), "review", Vec::new()).unwrap_err();
+        let error = install(root.path(), bundle.path(), Some("review"), Vec::new()).unwrap_err();
         assert!(error.contains("permission requests"));
         assert!(!root.path().join(ACTIVE_SET_FILE).exists());
     }
@@ -1808,17 +1852,21 @@ mod tests {
             "unregistered@1".into();
         fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
 
-        let error = install(root.path(), bundle.path(), "review", Vec::new()).unwrap_err();
+        let error = install(root.path(), bundle.path(), Some("review"), Vec::new()).unwrap_err();
         assert!(error.contains("does not match a registered Plugin profile"));
         assert!(!root.path().join(ACTIVE_SET_FILE).exists());
     }
 
     #[test]
-    fn reviewed_native_tool_plugin_is_composed_and_removed_exactly() {
+    fn trusted_stateless_append_many_plugin_uses_the_fast_path() {
         let root = tempfile::tempdir().unwrap();
         let bundle = tempfile::tempdir().unwrap();
         write_tool_bundle(bundle.path());
-        install(root.path(), bundle.path(), "review-ticket-77", Vec::new()).unwrap();
+        let outcome = install(root.path(), bundle.path(), None, Vec::new()).unwrap();
+        assert_eq!(
+            outcome.governance,
+            "automatic:local-trusted-stateless-append-many"
+        );
 
         let authority = load_generation_authority(root.path()).unwrap();
         assert_eq!(authority.lock.value().instances.len(), 1);
@@ -1869,7 +1917,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let bundle = tempfile::tempdir().unwrap();
         write_model_bundle(bundle.path(), "example.fixture-model");
-        install(root.path(), bundle.path(), "review-ticket-88", Vec::new()).unwrap();
+        let error = install(root.path(), bundle.path(), None, Vec::new()).unwrap_err();
+        assert!(error.contains("pass `--evidence <review>`"));
+        install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-88"),
+            Vec::new(),
+        )
+        .unwrap();
 
         let authority = load_generation_authority(root.path()).unwrap();
         let instance_key = authority.lock.value().instances[0].instance_key.clone();
@@ -1920,7 +1976,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let bundle = tempfile::tempdir().unwrap();
         write_model_bundle(bundle.path(), "example.fixture-model");
-        install(root.path(), bundle.path(), "review-ticket-89", Vec::new()).unwrap();
+        install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-89"),
+            Vec::new(),
+        )
+        .unwrap();
 
         let error =
             crate::generation::resolve_initial_generation(OPENAI_PLAN, root.path()).unwrap_err();
@@ -1934,19 +1996,41 @@ mod tests {
         let second = tempfile::tempdir().unwrap();
         write_model_bundle(first.path(), "example.fixture-model-a");
         write_model_bundle(second.path(), "example.fixture-model-b");
-        install(root.path(), first.path(), "review-ticket-90", Vec::new()).unwrap();
-        install(root.path(), second.path(), "review-ticket-91", Vec::new()).unwrap();
+        install(
+            root.path(),
+            first.path(),
+            Some("review-ticket-90"),
+            Vec::new(),
+        )
+        .unwrap();
+        install(
+            root.path(),
+            second.path(),
+            Some("review-ticket-91"),
+            Vec::new(),
+        )
+        .unwrap();
 
         let error = crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap_err();
         assert!(error.contains("more than one Plugin replacement targets Instance `model`"));
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one atomic Model/Auth replacement test keeps the complete topology visible"
+    )]
     fn reviewed_codex_plugin_closes_model_auth_and_agent_configuration_atomically() {
         let root = tempfile::tempdir().unwrap();
         let bundle = tempfile::tempdir().unwrap();
         write_codex_bundle(bundle.path());
-        install(root.path(), bundle.path(), "review-ticket-92", Vec::new()).unwrap();
+        install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-92"),
+            Vec::new(),
+        )
+        .unwrap();
 
         let authority = load_generation_authority(root.path()).unwrap();
         assert_eq!(authority.lock.value().instances.len(), 2);
@@ -2055,8 +2139,13 @@ mod tests {
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest["binding_templates"] = serde_json::json!([]);
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let error =
-            install(root.path(), bundle.path(), "review-ticket-93", Vec::new()).unwrap_err();
+        let error = install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-93"),
+            Vec::new(),
+        )
+        .unwrap_err();
         assert!(error.contains("must be consumed exactly once"));
 
         write_codex_bundle(bundle.path());
@@ -2064,8 +2153,13 @@ mod tests {
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
         manifest["binding_templates"][0]["provider_contribution_id"] = "codex-model".into();
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let error =
-            install(root.path(), bundle.path(), "review-ticket-94", Vec::new()).unwrap_err();
+        let error = install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-94"),
+            Vec::new(),
+        )
+        .unwrap_err();
         assert!(error.contains("is incompatible"));
 
         write_codex_bundle(bundle.path());
@@ -2080,8 +2174,13 @@ mod tests {
             "product_metadata_ids": []
         }]);
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let error =
-            install(root.path(), bundle.path(), "review-ticket-95", Vec::new()).unwrap_err();
+        let error = install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-95"),
+            Vec::new(),
+        )
+        .unwrap_err();
         assert!(error.contains("is missing provider"));
 
         write_codex_bundle(bundle.path());
@@ -2091,8 +2190,13 @@ mod tests {
             serde_json::json!([manifest["module_contributions"][0].clone()]);
         manifest["binding_templates"] = serde_json::json!([]);
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
-        let error =
-            install(root.path(), bundle.path(), "review-ticket-96", Vec::new()).unwrap_err();
+        let error = install(
+            root.path(),
+            bundle.path(),
+            Some("review-ticket-96"),
+            Vec::new(),
+        )
+        .unwrap_err();
         assert!(error.contains("must be consumed exactly once"));
     }
 
@@ -2105,7 +2209,7 @@ mod tests {
         let error = install(
             root.path(),
             bundle.path(),
-            "review",
+            Some("review"),
             vec!["extras".to_owned()],
         )
         .unwrap_err();
@@ -2115,7 +2219,7 @@ mod tests {
         install(
             root.path(),
             bundle.path(),
-            "review",
+            Some("review"),
             vec!["extras".to_owned()],
         )
         .unwrap();

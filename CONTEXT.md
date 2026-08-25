@@ -96,6 +96,15 @@ exclusive transition fence. The transition process shuts the preview
 Generation down after validation; it is not live hot loading or distributed
 coordination.
 
+Local governance is risk-derived. Passive Releases and selected executable
+contributions that are stable, trusted, stateless, permission-free,
+dependency-free, Artifact-free, and append only to an existing `many`
+requirement receive automatic local admission with derived evidence in their
+Receipt. Provider replacement and every higher-authority boundary still
+require review evidence. Upgrade may derive its Manifest CAS from the validated
+active authority while holding the exclusive fence; callers can still supply
+an expected digest explicitly.
+
 The CLI provides read-only provenance inspection across retained Active Sets,
 Generation Specs, and Session Turns. The File Session Module validates and
 projects its private `turn_started` records, the Agent Loop interprets its own
