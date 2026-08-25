@@ -49,7 +49,7 @@ async fn run(args: Args) -> Result<(), String> {
     let plan = args.plan.unwrap_or_else(default_plan);
     let bytes =
         fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))?;
-    let mut app = AgentApp::start(&bytes)
+    let mut app = AgentApp::start_tui(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
     let allowed_tools = if args.no_tools {

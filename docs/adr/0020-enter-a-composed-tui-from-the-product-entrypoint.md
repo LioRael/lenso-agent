@@ -28,6 +28,10 @@ The existing `lenso-agent-cli` binary remains the companion headless and Host
 maintenance surface during migration. App startup, auth recovery, Plugin
 authority, and Generation inspection therefore remain usable when the TUI App
 cannot become ready without adding maintenance subcommands to `lenso-agent`.
+Because these entrypoints select distinct App Compositions, the TUI owns a
+separate durable Controller namespace while sharing the Plugin Store, retained
+exact Plugin authority, and immutable Generation records with the companion
+CLI. Neither surface attempts to recover the other's Controller lineage.
 
 The interactive surface is an ordinary consumer-only `lenso.agent.tui` Module.
 It requires exactly one `lenso.agent@1` provider and `many`

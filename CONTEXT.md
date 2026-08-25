@@ -85,18 +85,22 @@ root Invocation Context and the Agent Loop records it in `turn_started` Session
 events. Resumed Sessions can therefore cross Generations without losing which
 immutable graph owned each Turn.
 
-The Host now stores fenced Generation lifecycle authority under
-`.lenso/plugins/generation-control`. Startup either creates the initial durable
-Generation or recovers exact Active and Standby Generations from
-`.lenso/plugins/generation-authorities`. Recovery authority is separate from
-user-visible rollback history and GC roots. If committed Plugin authority
-changed while the CLI was stopped, startup performs a standard maintenance
-transition before routing. One shared authority fence covers resolve, recovery,
-Ready, and switch. Normal exit suspends process-local Kernel resources without
-retiring durable authority. The Controller owns terminal-failure maintenance,
-while the Turn route injects the Generation digest into Invocation Context. A
-later validated transition may reactivate the exact immutable digest of a
-retired Generation; live candidate duplication still fails closed.
+The Host now stores fenced Generation lifecycle authority under a stable
+product-surface namespace: `.lenso/plugins/generation-control` for the companion
+headless CLI and `.lenso/plugins/tui-generation-control` for `lenso-agent`.
+These distinct App Compositions share Plugin authority and immutable Generation
+records, but never recover each other's Controller lineage. Startup either
+creates the initial durable Generation or recovers exact Active and Standby
+Generations from `.lenso/plugins/generation-authorities`. Recovery authority is
+separate from user-visible rollback history and GC roots. If committed Plugin
+authority changed while the CLI was stopped, startup performs a standard
+maintenance transition before routing. One shared authority fence covers
+resolve, recovery, Ready, and switch. Normal exit suspends process-local Kernel
+resources without retiring durable authority. The Controller owns
+terminal-failure maintenance, while the Turn route injects the Generation
+digest into Invocation Context. A later validated transition may reactivate the
+exact immutable digest of a retired Generation; live candidate duplication
+still fails closed.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and

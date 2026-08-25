@@ -62,6 +62,7 @@ const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
+const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
@@ -93,16 +94,34 @@ impl AgentApp {
         Self::start_with_store(plan_bytes, Path::new(".lenso/plugins")).await
     }
 
+    pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_tui_with_store(plan_bytes, Path::new(".lenso/plugins")).await
+    }
+
     pub(crate) async fn start_with_store(
         plan_bytes: &[u8],
         store_root: &Path,
+    ) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(plan_bytes, store_root, CONTROL_DIRECTORY)
+            .await
+    }
+
+    async fn start_tui_with_store(plan_bytes: &[u8], store_root: &Path) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(plan_bytes, store_root, TUI_CONTROL_DIRECTORY)
+            .await
+    }
+
+    async fn start_with_store_and_control_directory(
+        plan_bytes: &[u8],
+        store_root: &Path,
+        control_directory: &str,
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
         let _authority_fence = authority.snapshot()?;
         let generation = resolve_initial_generation(plan_bytes, store_root)?;
         record_generation_spec(store_root, &generation.spec)?;
         crate::plugins::record_current_generation_authority(store_root)?;
-        let store = FileControlStateStore::open(store_root.join(CONTROL_DIRECTORY))
+        let store = FileControlStateStore::open(store_root.join(control_directory))
             .map_err(control_error)?;
         let durable = store.load(APP_ID).map_err(control_error)?;
         let has_live_state = durable.generations.iter().any(|record| {
@@ -882,6 +901,25 @@ mod tests {
                 assert_eq!(recovered_turn.handle().binding_count(), 1);
                 drop(recovered_turn);
                 recovered.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn tui_start_does_not_recover_the_headless_controller_lineage() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut headless = AgentApp::start_with_store(PLAN, directory.path())
+                    .await
+                    .unwrap();
+                headless.shutdown().await.unwrap();
+
+                let mut tui = AgentApp::start_tui_with_store(TUI_PLAN, directory.path())
+                    .await
+                    .unwrap();
+                tui.shutdown().await.unwrap();
             })
             .await;
     }

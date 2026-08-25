@@ -25,8 +25,12 @@ The Agent Host uses the Runtime-owned `KernelGenerationRuntime`,
 `DurableGenerationSupervisor`, and `GenerationController` as its only live
 Generation path.
 
-- `.lenso/plugins/generation-control` stores the fsync'd compare-and-set control
-  record separately from immutable Generation Specs and Plugin authority.
+- A stable product-surface namespace stores each fsync'd compare-and-set control
+  record separately from immutable Generation Specs and Plugin authority. The
+  companion headless CLI uses `.lenso/plugins/generation-control`; the
+  independently composed `lenso-agent` TUI uses
+  `.lenso/plugins/tui-generation-control`. They share Plugin authority but do
+  not recover each other's Controller lineage.
 - Startup resolves and records the exact committed Generation and retains a
   content-addressed recovery copy of its Plugin authority, separate from the
   user-visible rollback history and Generation GC roots. It opens a new durable
