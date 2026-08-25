@@ -298,3 +298,71 @@ pub enum AgentInvocationError {
     Domain(RunTurnError),
     Runtime(RuntimeFailure),
 }
+
+#[derive(Debug, Default)]
+pub struct AgentJsonCodec;
+
+impl lenso_runtime_codec::JsonCapabilityCodec for AgentJsonCodec {
+    fn capability_id(&self) -> &'static str { CAPABILITY_ID }
+
+    fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn request_operations(&self) -> &'static [&'static str] { &[] }
+    fn stream_operations(&self) -> &'static [&'static str] { &[RUN_TURN_OPERATION] }
+
+    fn encode_request(&self, operation: &str, _request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
+        Err(runtime_codec_unknown_operation(operation))
+    }
+
+    fn decode_response(&self, operation: &str, _value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
+        Err(runtime_codec_unknown_operation(operation))
+    }
+
+    fn decode_domain_error(&self, operation: &str, _value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
+        Err(runtime_codec_unknown_operation(operation))
+    }
+
+    fn encode_stream_open(&self, operation: &str, request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
+        match operation {
+            RUN_TURN_OPERATION => {
+                let value = request.downcast_ref::<RunTurnRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
+            _ => Err(runtime_codec_unknown_operation(operation)),
+        }
+    }
+
+    fn encode_stream_message(&self, operation: &str, message: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
+        match operation {
+            RUN_TURN_OPERATION => {
+                let value = message.downcast_ref::<RunTurnResponse>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
+            _ => Err(runtime_codec_unknown_operation(operation)),
+        }
+    }
+
+    fn decode_stream_message(&self, operation: &str, value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
+        match operation {
+            RUN_TURN_OPERATION => serde_json::from_value::<RunTurnResponse>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
+            _ => Err(runtime_codec_unknown_operation(operation)),
+        }
+    }
+
+    fn decode_stream_domain_error(&self, operation: &str, value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
+        match operation {
+            RUN_TURN_OPERATION => serde_json::from_value::<RunTurnError>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
+            _ => Err(runtime_codec_unknown_operation(operation)),
+        }
+    }
+}
+
+fn runtime_codec_protocol_failure() -> RuntimeFailure { RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID } }
+
+fn runtime_codec_unknown_operation(operation: &str) -> RuntimeFailure {
+    RuntimeFailure::UnknownOperation { capability: CAPABILITY_ID, operation: operation.to_owned() }
+}

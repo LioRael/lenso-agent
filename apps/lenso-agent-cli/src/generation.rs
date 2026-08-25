@@ -26,7 +26,7 @@ use lenso_agent_tools_module as _;
 use lenso_agent_workspace_edit_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
-use lenso_capability_agent::Agent;
+use lenso_capability_agent::{Agent, AgentJsonCodec};
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
 };
@@ -36,12 +36,15 @@ use lenso_plugin_control_plane::{
     CanonicalDocument, CatalogFactory, ClassPolicy, ControlLifecycle, ControlPlaneError,
     ControlStateStore, DurableControlState, DurableGenerationRoute, DurableGenerationSupervisor,
     FileControlStateStore, GenerationController, GenerationControllerClient, HostBuildManifest,
-    HostExecutionPolicy, KernelGenerationRuntime, MemoryControlStateStore, ReplacementMode,
-    ResolutionInput, ResolvedGeneration, RolloutPolicy, resolve_generation, sha256_digest,
+    HostExecutionPolicy, KernelGenerationRuntime, MemoryControlStateStore,
+    MultiExecutionCatalogFactory, ReplacementMode, ResolutionInput, ResolvedGeneration,
+    RolloutPolicy, resolve_generation, sha256_digest,
 };
 use lenso_secrets_env_module as _;
 
-use crate::plugin_profiles::{NATIVE_EXECUTION_CLASS, harness_plugin_profiles};
+use crate::plugin_profiles::{
+    NATIVE_EXECUTION_CLASS, QUICKJS_EXECUTION_CLASS, WASM_EXECUTION_CLASS, harness_plugin_profiles,
+};
 
 const APP_ID: &str = "lenso.agent.harness";
 const READY_TIMEOUT_NANOS: u64 = 10_000_000_000;
@@ -76,7 +79,10 @@ impl AgentApp {
         Self::start_with_store(plan_bytes, Path::new(".lenso/plugins")).await
     }
 
-    async fn start_with_store(plan_bytes: &[u8], store_root: &Path) -> Result<Self, String> {
+    pub(crate) async fn start_with_store(
+        plan_bytes: &[u8],
+        store_root: &Path,
+    ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
         let _authority_fence = authority.snapshot()?;
         let generation = resolve_initial_generation(plan_bytes, store_root)?;
@@ -95,7 +101,7 @@ impl AgentApp {
                     | ControlLifecycle::Standby
             )
         });
-        let runtime = KernelGenerationRuntime::new(HarnessCatalogFactory);
+        let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
         let supervisor = if has_live_state {
             let live_digests = durable
                 .generations
@@ -337,11 +343,20 @@ fn resolve_generation_with_authority(
     })?;
     let (_, built_in_modules) = native_host_build();
     let plugin_profiles = harness_plugin_profiles()?;
-    let native_profiles = plugin_profiles.profiles_for_execution_class(NATIVE_EXECUTION_CLASS);
-    let native_support_channels =
-        plugin_profiles.support_channels_for_execution_class(NATIVE_EXECUTION_CLASS);
-    let native_trust_levels =
-        plugin_profiles.trust_levels_for_execution_class(NATIVE_EXECUTION_CLASS);
+    let execution_classes = [
+        (NATIVE_EXECUTION_CLASS, "lenso-native-adapter@0.1.2"),
+        (QUICKJS_EXECUTION_CLASS, "lenso-quickjs-adapter@0.1.0"),
+        (WASM_EXECUTION_CLASS, "lenso-wasm-component-adapter@0.1.0"),
+    ];
+    let adapter_profiles = execution_classes
+        .iter()
+        .map(|(execution_class, build_identity)| AdapterProfile {
+            execution_class: (*execution_class).to_owned(),
+            adapter_build_identity: (*build_identity).to_owned(),
+            targets: vec![target.clone()],
+            profiles: plugin_profiles.profiles_for_execution_class(execution_class),
+        })
+        .collect();
     let host_build = CanonicalDocument::from_value(
         "lenso-host-build.json",
         HostBuildManifest {
@@ -350,12 +365,7 @@ fn resolve_generation_with_authority(
             host_executable_digest: sha256_digest(&executable_bytes),
             target: target.clone(),
             built_in_modules,
-            adapter_profiles: vec![AdapterProfile {
-                execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-                adapter_build_identity: "lenso-native-adapter@runtime-58c02e8".to_owned(),
-                targets: vec![target.clone()],
-                profiles: native_profiles.clone(),
-            }],
+            adapter_profiles,
         },
     )
     .map_err(control_error)?;
@@ -366,13 +376,20 @@ fn resolve_generation_with_authority(
             app_id: APP_ID.to_owned(),
             host_build_manifest_digest: host_build.digest().to_owned(),
             target,
-            classes: vec![ClassPolicy {
-                execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
-                support_channels: native_support_channels,
-                trust_levels: native_trust_levels,
-                profiles: native_profiles,
-            }],
-            preference: vec![NATIVE_EXECUTION_CLASS.to_owned()],
+            classes: execution_classes
+                .iter()
+                .map(|(execution_class, _)| ClassPolicy {
+                    execution_class: (*execution_class).to_owned(),
+                    support_channels: plugin_profiles
+                        .support_channels_for_execution_class(execution_class),
+                    trust_levels: plugin_profiles.trust_levels_for_execution_class(execution_class),
+                    profiles: plugin_profiles.profiles_for_execution_class(execution_class),
+                })
+                .collect(),
+            preference: execution_classes
+                .iter()
+                .map(|(execution_class, _)| (*execution_class).to_owned())
+                .collect(),
             instance_overrides: Vec::new(),
         },
     )
@@ -403,7 +420,7 @@ pub(crate) async fn ready_check_maintenance_transition(
     if current.spec.digest() == candidate.spec.digest() {
         return Err("candidate Plugin authority resolves to the current Generation".to_owned());
     }
-    let runtime = KernelGenerationRuntime::new(HarnessCatalogFactory);
+    let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
     let supervisor =
         DurableGenerationSupervisor::open(APP_ID, runtime, MemoryControlStateStore::default())
             .map_err(control_error)?;
@@ -606,6 +623,12 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
         .collect::<Vec<_>>();
     built_in_modules.sort_by(|left, right| left.factory_identity.cmp(&right.factory_identity));
     (registry, built_in_modules)
+}
+
+fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
+    MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
+        .with_wasm_codec(AgentJsonCodec)
+        .with_quickjs_codec(AgentJsonCodec)
 }
 
 fn now_unix_nanos() -> Result<u128, String> {
