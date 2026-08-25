@@ -26,7 +26,7 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
         .current_dir(workspace.path())
         .args(["plugins", "install", "--bundle"])
         .arg(bundle.path())
-        .args(["--feature", "extras", "--evidence", "review-ticket-42"])
+        .args(["--feature", "extras"])
         .output()
         .unwrap();
     assert!(
@@ -37,6 +37,7 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
     let install_stdout = String::from_utf8(install.stdout).unwrap();
     assert!(install_stdout.contains("installed: example.passive@1.0.0"));
     assert!(install_stdout.contains("receipt: sha256:"));
+    assert!(install_stdout.contains("governance: automatic:local-passive-release"));
     assert!(
         workspace
             .path()
@@ -95,13 +96,16 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
         .current_dir(workspace.path())
         .args(["plugins", "install", "--bundle"])
         .arg(bundle.path())
-        .args(["--evidence", "review-ticket-77"])
         .output()
         .unwrap();
     assert!(
         install.status.success(),
         "{}",
         String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&install.stdout)
+            .contains("governance: automatic:local-trusted-stateless-append-many")
     );
 
     let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
@@ -217,16 +221,9 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
 
     let upgrade = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
+        .env("LENSO_RESOLVED_PLAN", plan_path())
         .args(["plugins", "upgrade", "--bundle"])
         .arg(release_two.path())
-        .args([
-            "--evidence",
-            "review-ticket-upgrade-2",
-            "--expected-manifest",
-            &manifest_one,
-            "--plan",
-        ])
-        .arg(plan_path())
         .output()
         .unwrap();
     assert!(
@@ -237,6 +234,7 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
     let upgrade_stdout = String::from_utf8(upgrade.stdout).unwrap();
     assert!(upgrade_stdout.contains("upgraded: example.text-tools@2.0.0"));
     assert!(upgrade_stdout.contains(&format!("manifest: {manifest_two}")));
+    assert!(upgrade_stdout.contains("governance: automatic:local-trusted-stateless-append-many"));
     let previous = output_value(&upgrade_stdout, "previous-active-set: ");
     let upgraded = output_value(&upgrade_stdout, "active-set: ");
     assert_ne!(previous, upgraded);

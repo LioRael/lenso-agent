@@ -271,6 +271,43 @@ impl PluginProfileCatalog {
         Ok(())
     }
 
+    pub(crate) fn automatic_local_admission(
+        &self,
+        manifest: &PluginManifest,
+        selected_contribution_ids: &[String],
+        target: &str,
+    ) -> Result<Option<&'static str>, ControlPlaneError> {
+        if selected_contribution_ids.is_empty() {
+            return Ok(Some("automatic:local-passive-release"));
+        }
+        for contribution_id in selected_contribution_ids {
+            let contribution = manifest
+                .module_contributions
+                .iter()
+                .find(|contribution| &contribution.id == contribution_id)
+                .ok_or_else(|| ControlPlaneError::AdmissionRejected {
+                    detail: format!(
+                        "selected Module contribution `{contribution_id}` is missing from the Manifest"
+                    ),
+                })?;
+            let profile = self.matching_profile(contribution, target)?;
+            if !matches!(profile.attachment, AttachmentProfile::AppendMany { .. })
+                || profile.support_channel != SupportChannel::Stable
+                || profile.trust != TrustLevel::Trusted
+                || !profile.requires.is_empty()
+                || contribution.state.is_some()
+                || !contribution.permission_request_ids.is_empty()
+                || contribution
+                    .implementations
+                    .iter()
+                    .any(|implementation| implementation.artifact.is_some())
+            {
+                return Ok(None);
+            }
+        }
+        Ok(Some("automatic:local-trusted-stateless-append-many"))
+    }
+
     pub(crate) fn binding_for_template(
         manifest: &PluginManifest,
         template: &BindingTemplate,

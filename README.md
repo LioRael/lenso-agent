@@ -98,7 +98,7 @@ stores the canonical Generation Spec by digest under
 Invocation Context, and each `turn_started` Session event records it without
 making provenance a user-supplied request field.
 
-The Host can admit reviewed passive Plugin releases plus executable profiles
+The Host can admit passive Plugin releases plus executable profiles
 registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
 entry closes the exact package, factory, entrypoint, configuration Schema,
 Capability Descriptor and Operations, operation kinds, execution class, target,
@@ -115,7 +115,7 @@ automatic rollback, distributed coordination, Generation deletion and Plugin
 Store garbage collection, and product acceptance of the preview Wasm
 Component, QuickJS, and native-dylib Adapters remain deferred.
 
-## Install, upgrade, roll back, and remove a reviewed Plugin release
+## Install, upgrade, roll back, and remove a Plugin release
 
 A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
 declared by that Manifest. Admission rejects undeclared files, symlinks, digest
@@ -125,26 +125,20 @@ factories, privileged or stateful contributions, and unbounded review evidence.
 ```sh
 cargo run -p lenso-agent-cli -- plugins install \
   --bundle ./reviewed-plugin \
-  --feature extras \
-  --evidence "review-ticket-42"
+  --feature extras
 
 cargo run -p lenso-agent-cli -- plugins status
 
 cargo run -p lenso-agent-cli -- plugins install \
-  --bundle examples/plugins/text-tools \
-  --evidence "review-ticket-77"
+  --bundle examples/plugins/text-tools
 
-# Use the manifest digest printed by install as the CAS guard.
+# The Host reads the active Manifest CAS under its authority fence.
 cargo run -p lenso-agent-cli -- plugins upgrade \
-  --bundle examples/plugins/text-tools-v2 \
-  --evidence "review-ticket-78" \
-  --expected-manifest sha256:<current-manifest-digest> \
-  --plan composition/headless-readonly/resolved-plan.json
+  --bundle examples/plugins/text-tools-v2
 
 # Use the previous-active-set digest printed by upgrade.
 cargo run -p lenso-agent-cli -- plugins rollback \
-  --to sha256:<previous-active-set-digest> \
-  --plan composition/headless-readonly/resolved-plan.json
+  --to sha256:<previous-active-set-digest>
 
 cargo run -p lenso-agent-cli -- plugins history
 
@@ -187,6 +181,17 @@ cargo run -p lenso-agent-cli -- \
 cargo run -p lenso-agent-cli -- plugins remove \
   --plugin example.codex-direct
 ```
+
+Passive Releases and selected executable contributions that are stable,
+trusted, stateless, permission-free, dependency-free, Artifact-free, and only
+append to a `many` requirement receive automatic local admission. The Receipt
+records that derived decision and the CLI prints it as `governance`.
+Replacement, state, permissions, dependencies, Artifact-backed execution, and
+preview or experimental Profiles still require explicit `--evidence`. An
+explicit `--expected-manifest` remains available for automation that already
+owns a prior CAS value. Upgrade and rollback read the Plan from
+`LENSO_RESOLVED_PLAN`, falling back to the normal product Plan path; `--plan`
+overrides it.
 
 Admission stores immutable objects and its receipt under
 `.lenso/plugins/store`. Activation atomically writes
