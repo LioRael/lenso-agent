@@ -103,7 +103,7 @@ Capability and attachment, empty configuration, no Host imports, permissions,
 state, Data mounts, or binding templates, and mandatory review evidence. It
 also admits one reviewed variant with exactly one generated
 `lenso.agent.workspace-read@1/read_text` Host import. The Host Profile fixes
-that binding to the base `workspace-read` Instance; the Bundle cannot select a
+that binding to the dedicated base `workspace-import-read` Instance; the Bundle cannot select a
 provider or request workspace write, process, network, Secrets, state, or Data
 mount authority. It
 admits one restricted `lenso.agent.model.fixture@0.1.0` profile that replaces

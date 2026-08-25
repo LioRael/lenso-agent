@@ -79,8 +79,8 @@ const CODEX_AUTH_DESCRIPTOR: &[u8] =
 const AGENT_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent/capability.json");
 const GUEST_AGENT_PACKAGE_ID: &str = "lenso.agent.guest";
-const WORKSPACE_READ_PACKAGE_ID: &str = "lenso.agent.workspace-read";
-const WORKSPACE_READ_INSTANCE: &str = "workspace-read";
+const WORKSPACE_READ_PACKAGE_ID: &str = "lenso.agent.workspace-import-read";
+const WORKSPACE_READ_INSTANCE: &str = "workspace-import-read";
 const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"model":"fixture/readme-summary-v1","max_steps":8,"max_tool_calls":4,"max_output_tokens":1024,"max_history_events":200}"#;
 const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#;
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
@@ -611,34 +611,7 @@ impl ExecutablePluginProfile {
                 self.registration_id
             ));
         }
-        if self.inherit_displaced_requirements && !self.fixed_host_imports.is_empty() {
-            return Err(format!(
-                "Plugin profile `{}` cannot combine inherited and fixed Host imports",
-                self.registration_id
-            ));
-        }
-        let mut imported_capabilities = BTreeSet::new();
-        for host_import in &self.fixed_host_imports {
-            if host_import.capability_id.is_empty()
-                || host_import.descriptor_version.is_empty()
-                || host_import.provider_instance.is_empty()
-                || host_import.allowed_provider_packages.is_empty()
-                || !imported_capabilities.insert((
-                    host_import.capability_id.as_str(),
-                    host_import.descriptor_version.as_str(),
-                ))
-                || !self.requires.iter().any(|requirement| {
-                    requirement.capability_id == host_import.capability_id
-                        && requirement.descriptor_version == host_import.descriptor_version
-                        && requirement.cardinality == RequirementCardinality::One
-                })
-            {
-                return Err(format!(
-                    "Plugin profile `{}` fixed Host import policy is invalid",
-                    self.registration_id
-                ));
-            }
-        }
+        self.validate_host_import_policy()?;
         if let AttachmentProfile::ReplaceOne {
             base_configuration_replacements,
             ..
@@ -666,6 +639,38 @@ impl ExecutablePluginProfile {
                 "Plugin profile `{}` configuration is not canonical JSON",
                 self.registration_id
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_host_import_policy(&self) -> Result<(), String> {
+        if self.inherit_displaced_requirements && !self.fixed_host_imports.is_empty() {
+            return Err(format!(
+                "Plugin profile `{}` cannot combine inherited and fixed Host imports",
+                self.registration_id
+            ));
+        }
+        let mut imported_capabilities = BTreeSet::new();
+        for host_import in &self.fixed_host_imports {
+            if host_import.capability_id.is_empty()
+                || host_import.descriptor_version.is_empty()
+                || host_import.provider_instance.is_empty()
+                || host_import.allowed_provider_packages.is_empty()
+                || !imported_capabilities.insert((
+                    host_import.capability_id.as_str(),
+                    host_import.descriptor_version.as_str(),
+                ))
+                || !self.requires.iter().any(|requirement| {
+                    requirement.capability_id == host_import.capability_id
+                        && requirement.descriptor_version == host_import.descriptor_version
+                        && requirement.cardinality == RequirementCardinality::One
+                })
+            {
+                return Err(format!(
+                    "Plugin profile `{}` fixed Host import policy is invalid",
+                    self.registration_id
+                ));
+            }
         }
         Ok(())
     }
@@ -838,7 +843,7 @@ fn third_party_wasm_tool_profile() -> ExecutablePluginProfile {
 
 fn third_party_wasm_workspace_read_tool_profile() -> ExecutablePluginProfile {
     let mut profile = third_party_wasm_tool_profile();
-    profile.registration_id = "third-party-wasm-workspace-read-tool-provider-v1".to_owned();
+    "third-party-wasm-workspace-read-tool-provider-v1".clone_into(&mut profile.registration_id);
     profile.requires = vec![CapabilityRequirement {
         capability_id: WORKSPACE_READ_CAPABILITY_ID.to_owned(),
         descriptor_version: WORKSPACE_READ_DESCRIPTOR_VERSION.to_owned(),

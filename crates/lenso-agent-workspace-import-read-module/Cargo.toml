@@ -1,7 +1,7 @@
 [package]
-name = "lenso-agent-workspace-read-module"
+name = "lenso-agent-workspace-import-read-module"
 version = "0.1.0"
-description = "Read-only workspace Tool Provider Module for the Lenso Agent Harness."
+description = "Host-selected workspace read Capability provider for reviewed Lenso Agent Plugins."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -9,12 +9,12 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.lenso]
-package-id = "lenso.agent.workspace-read"
+package-id = "lenso.agent.workspace-import-read"
 
 [dependencies]
 futures.workspace = true
 lenso.workspace = true
-lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-workspace-read = { path = "../lenso-capability-agent-workspace-read" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 serde.workspace = true

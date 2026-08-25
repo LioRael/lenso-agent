@@ -137,7 +137,7 @@ the Capability, operations, execution class, empty configuration, and absence
 of Host imports, permissions, state, Data mounts, and binding templates; it
 still requires review evidence. The workspace-reader variant has the same
 limits except for its single exact requirement, which the Host Profile binds
-to the base `workspace-read` Instance; the Bundle cannot select the provider
+to the dedicated base `workspace-import-read` Instance; the Bundle cannot select the provider
 or add another requirement. The Codex set closes exact Model and Auth
 contributions, their intra-Plugin `one` binding, and the compatible base Agent
 model configuration. Replacement requires the exact base edge and allowlisted

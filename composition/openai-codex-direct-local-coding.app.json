@@ -11,6 +11,7 @@
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module",
     "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
     "lenso.agent.process-tools": "lenso-agent-process-tools-module",
     "lenso.agent.process.native": "lenso-agent-process-native-module",
@@ -140,6 +141,14 @@
           "max_edit_bytes": 131072,
           "max_file_bytes": 1048576,
           "root": "."
+        }
+      },
+      {
+        "key": "workspace-import-read",
+        "package": "lenso.agent.workspace-import-read",
+        "configuration": {
+          "root": ".",
+          "max_output_bytes": 1048576
         }
       },
       {

@@ -151,6 +151,7 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
     reason = "one external Plugin scenario proves the complete release lifecycle"
 )]
 fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
+    let _external_wasm_guard = external_wasm_test_lock().lock().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
@@ -242,6 +243,7 @@ fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
     reason = "one external Plugin scenario proves imported workspace authority and its release lifecycle"
 )]
 fn external_wasm_tool_imports_only_the_host_selected_workspace_reader() {
+    let _external_wasm_guard = external_wasm_test_lock().lock().unwrap();
     let workspace = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
@@ -735,6 +737,11 @@ fn copy_external_wasm_tool_source(destination: &Path) {
     ] {
         fs::copy(source.join(relative), destination.join(relative)).unwrap();
     }
+}
+
+fn external_wasm_test_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 fn copy_external_wasm_workspace_reader_source(destination: &Path) {

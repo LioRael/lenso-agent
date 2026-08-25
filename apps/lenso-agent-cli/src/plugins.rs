@@ -1011,21 +1011,12 @@ pub(crate) fn generation_composition(
                     instance.instance_key
                 )
             })?;
-        let contribution = manifest
-            .value()
-            .module_contributions
-            .iter()
-            .find(|contribution| contribution.id == instance.contribution_id)
-            .ok_or_else(|| {
-                format!(
-                    "Plugin Instance `{}` has no Module contribution",
-                    instance.instance_key
-                )
-            })?;
-        plugin_bindings.extend(profiles.fixed_host_bindings_for(
+        let contribution = active_contribution(manifest.value(), instance)?;
+        plugin_bindings.extend(fixed_host_bindings(
+            &profiles,
             contribution,
             &target,
-            &instance.instance_key,
+            instance,
             base_plan,
         )?);
         match profiles.attachment_for(contribution, &target, &instance.instance_key, base_plan)? {
@@ -1094,6 +1085,32 @@ pub(crate) fn generation_composition(
         bindings,
         preserved_base_bindings,
     })
+}
+
+fn fixed_host_bindings(
+    profiles: &PluginProfileCatalog,
+    contribution: &ModuleContribution,
+    target: &str,
+    instance: &LockedInstance,
+    base_plan: &ResolvedAppPlan,
+) -> Result<Vec<CapabilityBinding>, String> {
+    profiles.fixed_host_bindings_for(contribution, target, &instance.instance_key, base_plan)
+}
+
+fn active_contribution<'a>(
+    manifest: &'a PluginManifest,
+    instance: &LockedInstance,
+) -> Result<&'a ModuleContribution, String> {
+    manifest
+        .module_contributions
+        .iter()
+        .find(|contribution| contribution.id == instance.contribution_id)
+        .ok_or_else(|| {
+            format!(
+                "Plugin Instance `{}` has no Module contribution",
+                instance.instance_key
+            )
+        })
 }
 
 fn base_generation_composition(base_plan: &ResolvedAppPlan) -> GenerationComposition {

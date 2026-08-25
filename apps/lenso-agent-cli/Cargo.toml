@@ -25,6 +25,7 @@ lenso-agent-skills-filesystem-module = { path = "../../crates/lenso-agent-skills
 lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
 lenso-agent-text-tools-module = { path = "../../crates/lenso-agent-text-tools-module" }
 lenso-agent-workspace-edit-module = { path = "../../crates/lenso-agent-workspace-edit-module" }
+lenso-agent-workspace-import-read-module = { path = "../../crates/lenso-agent-workspace-import-read-module" }
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-auth-openai-codex = { path = "../../crates/lenso-capability-agent-auth-openai-codex" }

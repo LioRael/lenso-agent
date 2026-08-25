@@ -24,6 +24,7 @@ use lenso_agent_session_file_module as _;
 use lenso_agent_skills_filesystem_module as _;
 use lenso_agent_tools_module as _;
 use lenso_agent_workspace_edit_module as _;
+use lenso_agent_workspace_import_read_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_app_plan::ResolvedAppPlan;
 use lenso_capability_agent::{Agent, AgentJsonCodec};

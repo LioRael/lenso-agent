@@ -14,14 +14,14 @@ while the Plugin Tool is executing. Direct WASI filesystem access would also byp
 ## Decision
 
 The Harness owns a portable `lenso.agent.workspace-read@1` Capability, Descriptor `1.0.0`, with one
-request Operation: `read_text`. The existing `lenso.agent.workspace-read` Module provides it in
-addition to its Agent Tool Provider surface. The contract keeps workspace-root resolution,
+request Operation: `read_text`. A dedicated `lenso.agent.workspace-import-read` Module provides it
+without changing the existing Agent Tool Provider Module. The contract keeps workspace-root resolution,
 symlink rejection, byte limits, storage, and filesystem implementation private.
 
 The Plugin Profile Catalog admits one additional package-independent Wasm Tool shape. It is the ADR
 0018 shape plus exactly one `lenso.agent.workspace-read@1` requirement. The Host Profile, not the
-Bundle, binds that requirement to base Instance `workspace-read` only when its package identity is
-`lenso.agent.workspace-read`. The resulting Capability binding is included in the immutable
+Bundle, binds that requirement to base Instance `workspace-import-read` only when its package identity is
+`lenso.agent.workspace-import-read`. The resulting Capability binding is included in the immutable
 Generation Plan. Explicit review evidence remains mandatory.
 
 The shape still rejects permission requests, state, Data mounts, custom binding templates, extra
@@ -46,6 +46,8 @@ test builds outside the workspace and proves authority-expansion rejection, inst
 ## Rejected alternatives
 
 Binding the Plugin back to `lenso.agent.tool-provider@1` would expose a generic role and deadlock on
-its single-concurrency nested invocation. Giving the component WASI filesystem mounts would create
+its single-concurrency nested invocation. Adding a second provided Capability to the existing Tool
+Provider Module also caused descriptor registration to bleed into another multi-Capability Module,
+so the Host role remains a separate Module Instance. Giving the component WASI filesystem mounts would create
 ambient authority outside the Plan. Allowing the Manifest to name its provider would delegate Host
 Composition policy to the publisher.

@@ -28,6 +28,7 @@ members = [
     "crates/lenso-agent-tools-module",
     "crates/lenso-agent-text-tools-module",
     "crates/lenso-agent-workspace-edit-module",
+    "crates/lenso-agent-workspace-import-read-module",
     "crates/lenso-agent-workspace-read-module",
     "crates/lenso-agent-cli-module",
 ]

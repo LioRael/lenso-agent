@@ -1087,6 +1087,7 @@ dependencies = [
  "lenso-agent-text-tools-module",
  "lenso-agent-tools-module",
  "lenso-agent-workspace-edit-module",
+ "lenso-agent-workspace-import-read-module",
  "lenso-agent-workspace-read-module",
  "lenso-app-plan",
  "lenso-capability-agent",
@@ -1335,13 +1336,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-workspace-import-read-module"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-workspace-read",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "lenso-agent-workspace-read-module"
 version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
  "lenso-capability-agent-tool-provider",
- "lenso-capability-agent-workspace-read",
  "lenso-kernel",
  "lenso-native-adapter",
  "serde",
