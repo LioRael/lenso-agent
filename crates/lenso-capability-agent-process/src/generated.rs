@@ -3,6 +3,7 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
+use lenso_module_authoring::CapabilityClient;
 pub const CAPABILITY_ID: &str = "lenso.agent.process@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
 pub const PORTABLE: bool = false;
@@ -314,10 +315,7 @@ pub struct ProcessClient {
 }
 impl ProcessClient {
     pub fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
-        Ok(Self {
-            catalog: dependencies.one::<ProcessCatalog>()?,
-            run: dependencies.one::<ProcessRun>()?,
-        })
+        <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
     pub async fn catalog(&self, request: CatalogRequest) -> Result<CatalogResponse, ProcessCatalogInvocationError> {
@@ -342,6 +340,27 @@ impl ProcessClient {
         self.run.invoke_with_context(RUN_OPERATION, context, request).await
             .map_err(ProcessRunInvocationError::Runtime)?
             .map_err(ProcessRunInvocationError::Domain)
+    }
+}
+
+impl CapabilityClient for ProcessClient {
+    type Dependencies = ModuleDependencies;
+    type Error = RuntimeFailure;
+
+    const CAPABILITY_ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn from_dependencies(dependencies: &ModuleDependencies) -> Result<Self, RuntimeFailure> {
+        Ok(Self {
+            catalog: dependencies.one::<ProcessCatalog>()?,
+            run: dependencies.one::<ProcessRun>()?,
+        })
+    }
+
+    fn already_connected() -> RuntimeFailure {
+        RuntimeFailure::ModuleFailure {
+            detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
+        }
     }
 }
 
