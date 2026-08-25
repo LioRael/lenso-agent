@@ -11,6 +11,14 @@ pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const SESSION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"append\",\"open\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+
 pub const APPEND_OPERATION: &str = "append";
 pub const OPEN_OPERATION: &str = "open";
 pub const READ_OPERATION: &str = "read";
@@ -522,6 +530,20 @@ impl<P: SessionProvider> NativeRequestEndpoint for SessionEndpoint<P> {
             _ => Box::pin(futures::future::ready(Err(RuntimeFailure::UnknownOperation { capability: CAPABILITY_ID, operation: operation.to_owned() }))),
         }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_provide_session {
+    ($provider:expr, $lifecycle:expr) => {{
+        let endpoint = ::std::rc::Rc::new($crate::SessionEndpoint::new($provider));
+        ::lenso_native_adapter::NativeModuleInstance::with_all_endpoints(
+            vec![endpoint.clone() as ::std::rc::Rc<dyn ::lenso_kernel::NativeRequestEndpoint>],
+            vec![],
+            vec![],
+            $lifecycle,
+        )
+    }};
 }
 
 #[derive(Debug)]
