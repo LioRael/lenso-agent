@@ -2,7 +2,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
 
@@ -33,8 +33,43 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Host-issued Invocation Context key for the leased App Generation identity.
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
+/// Host-issued Invocation Context key for one Turn's narrowed Tool authority.
+pub const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
+
+/// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunScope {
+    /// Exact Tool names admitted for this Turn. An empty set disables Tools.
+    pub allowed_tools: BTreeSet<String>,
+}
+
+impl RunScope {
+    /// Creates a deterministic scope from requested Tool names.
+    pub fn new(tools: impl IntoIterator<Item = impl Into<String>>) -> Result<Self, String> {
+        let mut allowed_tools = BTreeSet::new();
+        for tool in tools {
+            let tool = tool.into();
+            if tool.is_empty() || tool.len() > 128 {
+                return Err("Run Scope contains an invalid Tool name".to_owned());
+            }
+            allowed_tools.insert(tool);
+        }
+        Ok(Self { allowed_tools })
+    }
+
+    /// Attaches this scope to one root Invocation Context.
+    pub fn attach(self, context: InvocationContext) -> Result<InvocationContext, String> {
+        let bytes = serde_json::to_vec(&self)
+            .map_err(|error| format!("failed to encode Run Scope: {error}"))?;
+        context
+            .with_extension(RUN_SCOPE_EXTENSION, bytes)
+            .map_err(|error| format!("failed to attach Run Scope: {error}"))
+    }
+}
 
 type TurnFailure = ModuleError<RunTurnError, RuntimeFailure>;
+const RECOVERY_EVENT_LIMIT: u64 = 512;
 
 /// One validated Turn-to-Generation provenance reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -58,10 +93,13 @@ pub fn inspect_turn_generation_provenance(
     struct TurnStartedPayload {
         generation_spec_digest: String,
         input: String,
+        #[serde(default)]
+        run_scope: Option<RunScope>,
     }
     let payload = serde_json::from_str::<TurnStartedPayload>(payload_json)
         .map_err(|error| format!("Turn provenance payload is invalid: {error}"))?;
     let _ = payload.input;
+    let _ = payload.run_scope;
     if !canonical_generation_digest(&payload.generation_spec_digest) {
         return Err("Turn Generation Spec digest is invalid".to_owned());
     }
@@ -202,6 +240,7 @@ async fn run_turn(
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
     let generation_spec_digest = generation_spec_digest(context)?;
+    let run_scope = run_scope(context)?;
     let opened = clients
         .session
         .open_with_context(
@@ -213,11 +252,18 @@ async fn run_turn(
         .await
         .map_err(map_session_open_error)?;
     let session_id = opened.session_id;
-    let mut messages = if opened.created {
+    let history = if opened.created {
         Vec::new()
     } else {
-        read_history(clients, context, &session_id, &opened.revision, config).await?
+        read_session_tail(clients, context, &session_id, &opened.revision, config).await?
     };
+    let history_event_count = usize::try_from(config.max_history_events).map_err(|_| {
+        ModuleError::runtime(RuntimeFailure::Internal {
+            detail: "Agent history limit conversion failed".to_owned(),
+        })
+    })?;
+    let history_start = history.len().saturating_sub(history_event_count);
+    let mut messages = reconstruct_history(&history[history_start..])?;
     let turn_id = uuid::Uuid::new_v4().to_string();
     let mut revision = opened.revision;
     let mut initial_events = Vec::new();
@@ -228,12 +274,14 @@ async fn run_turn(
             &serde_json::json!({"session_id": session_id}),
         )?);
     }
+    initial_events.extend(interrupted_turn_events(&history)?);
     initial_events.push(session_event(
         AppendRequestEventsItemKind::TurnStarted,
         Some(&turn_id),
         &serde_json::json!({
             "generation_spec_digest": generation_spec_digest,
-            "input": request.input
+            "input": request.input,
+            "run_scope": run_scope.as_ref()
         }),
     )?);
     revision = append_events(clients, context, &session_id, revision, initial_events).await?;
@@ -247,6 +295,7 @@ async fn run_turn(
         &turn_id,
         &mut revision,
         messages,
+        run_scope.as_ref(),
         channel,
     )
     .await;
@@ -254,6 +303,19 @@ async fn run_turn(
         record_turn_failure(clients, context, &session_id, &turn_id, revision, error).await;
     }
     result
+}
+
+fn run_scope(context: &InvocationContext) -> Result<Option<RunScope>, TurnFailure> {
+    context
+        .extension(RUN_SCOPE_EXTENSION)
+        .map(|bytes| {
+            serde_json::from_slice(bytes).map_err(|error| {
+                ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!("Agent Turn has an invalid Run Scope: {error}"),
+                })
+            })
+        })
+        .transpose()
 }
 
 fn generation_spec_digest(context: &InvocationContext) -> Result<&str, TurnFailure> {
@@ -285,6 +347,7 @@ async fn execute_steps(
     turn_id: &str,
     revision: &mut String,
     mut messages: Vec<CompleteRequestMessagesItem>,
+    run_scope: Option<&RunScope>,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
     let prompt = clients
@@ -314,15 +377,34 @@ async fn execute_steps(
                 detail: format!("Tool catalog failed: {error:?}"),
             })
         })?;
-    let tools = catalog
+    let static_tools = catalog
         .tools
         .into_iter()
+        .map(|tool| (tool.name.clone(), tool))
+        .collect::<BTreeMap<_, _>>();
+    if let Some(scope) = run_scope
+        && let Some(unknown) = scope
+            .allowed_tools
+            .iter()
+            .find(|name| !static_tools.contains_key(*name))
+    {
+        return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+            detail: format!("Run Scope requests Tool `{unknown}` outside the Plan-bound catalog"),
+        }));
+    }
+    let tools = static_tools
+        .values()
+        .filter(|tool| run_scope.is_none_or(|scope| scope.allowed_tools.contains(&tool.name)))
         .map(|tool| CompleteRequestToolsItem {
-            name: tool.name,
-            description: tool.description,
-            input_schema_json: tool.input_schema_json,
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            input_schema_json: tool.input_schema_json.clone(),
         })
         .collect::<Vec<_>>();
+    let admitted_tools = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<BTreeSet<_>>();
     let mut tool_call_count = 0_u32;
     let mut sequence = 0_u64;
     let mut remaining_output_tokens = config.max_output_tokens;
@@ -424,6 +506,14 @@ async fn execute_steps(
         }
         tool_call_count = tool_call_count.saturating_add(requested);
         for tool_call in completion.tool_calls {
+            if !admitted_tools.contains(tool_call.tool_name.as_str()) {
+                return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!(
+                        "Model requested Tool `{}` outside the immutable Run Scope",
+                        tool_call.tool_name
+                    ),
+                }));
+            }
             *revision = append_events(
                 clients,
                 context,
@@ -559,13 +649,13 @@ async fn send_agent_message(
         .map_err(|_| ModuleError::runtime(RuntimeFailure::Cancelled { request_id }))
 }
 
-async fn read_history(
+async fn read_session_tail(
     clients: &AgentLoop,
     context: &InvocationContext,
     session_id: &str,
     current_revision: &str,
     config: &AgentConfig,
-) -> Result<Vec<CompleteRequestMessagesItem>, TurnFailure> {
+) -> Result<Vec<ReadResponseEventsItem>, TurnFailure> {
     let current_revision = current_revision.parse::<u64>().map_err(|_| {
         ModuleError::runtime(RuntimeFailure::ModuleFailure {
             detail: "Session returned an invalid revision".to_owned(),
@@ -574,11 +664,12 @@ async fn read_history(
     if current_revision == 0 {
         return Ok(Vec::new());
     }
-    let history_limit = u64::try_from(config.max_history_events).map_err(|_| {
+    let configured_history_limit = u64::try_from(config.max_history_events).map_err(|_| {
         ModuleError::runtime(RuntimeFailure::Internal {
             detail: "Agent history limit conversion failed".to_owned(),
         })
     })?;
+    let history_limit = configured_history_limit.max(RECOVERY_EVENT_LIMIT);
     let history = clients
         .session
         .read_with_context(
@@ -586,12 +677,48 @@ async fn read_history(
             ReadRequest {
                 session_id: session_id.to_owned(),
                 after_revision: current_revision.saturating_sub(history_limit).to_string(),
-                limit: config.max_history_events,
+                limit: i64::try_from(history_limit).map_err(|_| {
+                    ModuleError::runtime(RuntimeFailure::Internal {
+                        detail: "Agent recovery limit conversion failed".to_owned(),
+                    })
+                })?,
             },
         )
         .await
         .map_err(map_session_read_error)?;
-    reconstruct_history(&history.events)
+    Ok(history.events)
+}
+
+fn interrupted_turn_events(
+    events: &[ReadResponseEventsItem],
+) -> Result<Vec<AppendRequestEventsItem>, TurnFailure> {
+    let mut open_turns = BTreeSet::new();
+    for event in events {
+        let Some(turn_id) = event.turn_id.as_ref() else {
+            continue;
+        };
+        match event.kind {
+            ReadResponseEventsItemKind::TurnStarted => {
+                open_turns.insert(turn_id.clone());
+            }
+            ReadResponseEventsItemKind::TurnCompleted
+            | ReadResponseEventsItemKind::TurnFailed
+            | ReadResponseEventsItemKind::TurnCancelled => {
+                open_turns.remove(turn_id);
+            }
+            _ => {}
+        }
+    }
+    open_turns
+        .into_iter()
+        .map(|turn_id| {
+            session_event(
+                AppendRequestEventsItemKind::TurnFailed,
+                Some(&turn_id),
+                &serde_json::json!({"error": "host_interrupted"}),
+            )
+        })
+        .collect()
 }
 
 #[derive(Default)]
@@ -960,5 +1087,49 @@ mod tests {
         })
         .to_string();
         assert!(inspect_turn_generation_provenance(2, Some("turn-1"), &unknown).is_err());
+    }
+
+    #[test]
+    fn interrupted_turn_is_closed_before_a_resumed_turn_starts() {
+        let events = [history_event(
+            "1",
+            ReadResponseEventsItemKind::TurnStarted,
+            r#"{"input":"hello"}"#,
+        )];
+
+        let recovery = interrupted_turn_events(&events).unwrap();
+
+        assert_eq!(recovery.len(), 1);
+        assert_eq!(recovery[0].kind, AppendRequestEventsItemKind::TurnFailed);
+        assert_eq!(recovery[0].turn_id.as_deref(), Some("turn-1"));
+        assert!(recovery[0].payload_json.contains("host_interrupted"));
+    }
+
+    #[test]
+    fn completed_turn_needs_no_recovery_fact() {
+        let events = [
+            history_event(
+                "1",
+                ReadResponseEventsItemKind::TurnStarted,
+                r#"{"input":"hello"}"#,
+            ),
+            history_event(
+                "2",
+                ReadResponseEventsItemKind::TurnCompleted,
+                r#"{"output":"world"}"#,
+            ),
+        ];
+
+        assert!(interrupted_turn_events(&events).unwrap().is_empty());
+    }
+
+    #[test]
+    fn run_scope_is_deterministic_and_rejects_invalid_names() {
+        let scope = RunScope::new(["workspace.read", "text.echo", "workspace.read"]).unwrap();
+        assert_eq!(
+            scope.allowed_tools.into_iter().collect::<Vec<_>>(),
+            vec!["text.echo", "workspace.read"]
+        );
+        assert!(RunScope::new([""]).is_err());
     }
 }
