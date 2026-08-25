@@ -153,6 +153,15 @@ pub trait __LensoIntoPromptAssembleResult {
 impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, AssembleError> {
     fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, lenso_module_authoring::ModuleError<AssembleError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
+}
 impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, PromptInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> {
         match self {

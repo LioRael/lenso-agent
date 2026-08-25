@@ -215,6 +215,18 @@ where
             .map_err(ModelInvocationError::Domain)
     }
 }
+impl<S> __LensoIntoModelCompleteStreamResult for Result<S, lenso_module_authoring::ModuleError<CompleteError, RuntimeFailure>>
+where
+    S: NativeStreamSession + 'static,
+{
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, ModelInvocationError> {
+        match self {
+            Ok(stream) => Ok(Box::new(stream) as Box<dyn NativeStreamSession>),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Err(ModelInvocationError::Domain(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(ModelInvocationError::Runtime(error)),
+        }
+    }
+}
 impl<S> __LensoIntoModelCompleteStreamResult for Result<S, ModelInvocationError>
 where
     S: NativeStreamSession + 'static,

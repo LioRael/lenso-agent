@@ -143,6 +143,18 @@ where
             .map_err(AgentInvocationError::Domain)
     }
 }
+impl<S> __LensoIntoAgentRunTurnStreamResult for Result<S, lenso_module_authoring::ModuleError<RunTurnError, RuntimeFailure>>
+where
+    S: NativeStreamSession + 'static,
+{
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, AgentInvocationError> {
+        match self {
+            Ok(stream) => Ok(Box::new(stream) as Box<dyn NativeStreamSession>),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Err(AgentInvocationError::Domain(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(AgentInvocationError::Runtime(error)),
+        }
+    }
+}
 impl<S> __LensoIntoAgentRunTurnStreamResult for Result<S, AgentInvocationError>
 where
     S: NativeStreamSession + 'static,

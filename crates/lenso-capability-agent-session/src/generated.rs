@@ -465,6 +465,15 @@ pub trait __LensoIntoSessionAppendResult {
 impl __LensoIntoSessionAppendResult for Result<AppendResponse, AppendError> {
     fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoSessionAppendResult for Result<AppendResponse, lenso_module_authoring::ModuleError<AppendError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
+}
 impl __LensoIntoSessionAppendResult for Result<AppendResponse, SessionAppendInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> {
         match self {
@@ -482,6 +491,15 @@ pub trait __LensoIntoSessionOpenResult {
 impl __LensoIntoSessionOpenResult for Result<OpenResponse, OpenError> {
     fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoSessionOpenResult for Result<OpenResponse, lenso_module_authoring::ModuleError<OpenError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
+}
 impl __LensoIntoSessionOpenResult for Result<OpenResponse, SessionOpenInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> {
         match self {
@@ -498,6 +516,15 @@ pub trait __LensoIntoSessionReadResult {
 }
 impl __LensoIntoSessionReadResult for Result<ReadResponse, ReadError> {
     fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoSessionReadResult for Result<ReadResponse, lenso_module_authoring::ModuleError<ReadError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
 }
 impl __LensoIntoSessionReadResult for Result<ReadResponse, SessionReadInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> {

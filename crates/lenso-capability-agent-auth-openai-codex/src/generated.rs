@@ -146,6 +146,15 @@ pub trait __LensoIntoOpenaiCodexAccessResult {
 impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, AccessError> {
     fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, lenso_module_authoring::ModuleError<AccessError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
+}
 impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, OpenaiCodexInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> {
         match self {

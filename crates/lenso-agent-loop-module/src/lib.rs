@@ -1,23 +1,15 @@
 //! Agent Loop Module.
 
 use std::{
-    any::Any,
     cell::{Cell, RefCell},
     collections::BTreeMap,
-    fmt,
     rc::Rc,
 };
 
-use futures::{
-    SinkExt, StreamExt,
-    channel::mpsc,
-    future::{LocalBoxFuture, ready},
-    lock::Mutex,
-};
+use futures::future::ready;
 use lenso::prelude::*;
 use lenso_capability_agent::{
-    self as agent_capability, AgentInvocationError, CAPABILITY_ID, RunTurnError, RunTurnRequest,
-    RunTurnResponse,
+    self as agent_capability, CAPABILITY_ID, RunTurnError, RunTurnRequest, RunTurnResponse,
 };
 use lenso_capability_agent_model::{
     self as model_capability, CompleteRequest, CompleteRequestMessagesItem,
@@ -36,13 +28,13 @@ use lenso_capability_agent_session::{
 use lenso_capability_agent_tools::{
     self as tools_capability, CatalogRequest, ExecuteRequest, ToolsExecuteInvocationError,
 };
-use lenso_kernel::{
-    CancellationToken, InvocationContext, NativeStreamItem, NativeStreamSession, StreamEvent,
-};
+use lenso_kernel::{InvocationContext, StreamEvent};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Host-issued Invocation Context key for the leased App Generation identity.
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
+
+type TurnFailure = ModuleError<RunTurnError, RuntimeFailure>;
 
 /// One validated Turn-to-Generation provenance reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -135,45 +127,38 @@ fn activate_agent_loop(module: &AgentLoop, context: &ActivateContext) -> ModuleF
 
 #[lenso::provides(agent_capability::Agent)]
 impl AgentLoop {
-    // Opening the stream only schedules the managed turn; the generated Provider
-    // lowering still requires the same async domain-method shape as other Operations.
     #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn run_turn(
         &self,
         context: Ctx,
         request: RunTurnRequest,
-    ) -> Result<AgentTurnStream, AgentInvocationError> {
+    ) -> ModuleResult<ProviderStream<agent_capability::Agent>, RunTurnError> {
         if request.input.trim().is_empty() {
-            return Err(AgentInvocationError::Domain(
-                RunTurnError::ContextLimitExceeded,
-            ));
+            return Err(ModuleError::domain(RunTurnError::ContextLimitExceeded));
         }
         if self.active.replace(true) {
-            return Err(AgentInvocationError::Domain(RunTurnError::ConcurrentTurn));
+            return Err(ModuleError::domain(RunTurnError::ConcurrentTurn));
         }
         let Some(tasks) = self.tasks.borrow().clone() else {
             self.active.set(false);
-            return Err(AgentInvocationError::Runtime(RuntimeFailure::Unavailable {
+            return Err(ModuleError::runtime(RuntimeFailure::Unavailable {
                 capability: CAPABILITY_ID,
             }));
         };
         let active = self.active.clone();
-        let cancellation = context.cancellation();
-        let (sender, receiver) = mpsc::channel(1);
+        let (stream, channel) = ProviderStream::channel(&context, 1);
         let module = self.clone();
         let task = tasks.spawn_local(Box::pin(async move {
             let _turn = ActiveTurn(active);
-            produce_turn(module, context, request, sender).await;
+            produce_turn(module, context, request, channel).await;
         }));
         match task {
-            Ok(_) => Ok(AgentTurnStream::new(receiver, cancellation)),
+            Ok(_) => Ok(stream),
             Err(error) => {
                 self.active.set(false);
-                Err(AgentInvocationError::Runtime(
-                    RuntimeFailure::ModuleFailure {
-                        detail: format!("Agent turn task failed to start: {error:?}"),
-                    },
-                ))
+                Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!("Agent turn task failed to start: {error:?}"),
+                }))
             }
         }
     }
@@ -188,96 +173,23 @@ impl Drop for ActiveTurn {
     }
 }
 
-type AgentChannelItem = Result<NativeStreamItem, RuntimeFailure>;
-
-struct AgentTurnStream {
-    receiver: Rc<Mutex<mpsc::Receiver<AgentChannelItem>>>,
-    cancellation: CancellationToken,
-    cancelled: Rc<Cell<bool>>,
-    send_closed: Rc<Cell<bool>>,
-}
-
-impl fmt::Debug for AgentTurnStream {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("AgentTurnStream")
-            .field("cancelled", &self.cancelled.get())
-            .field("send_closed", &self.send_closed.get())
-            .finish_non_exhaustive()
-    }
-}
-
-impl AgentTurnStream {
-    fn new(receiver: mpsc::Receiver<AgentChannelItem>, cancellation: CancellationToken) -> Self {
-        Self {
-            receiver: Rc::new(Mutex::new(receiver)),
-            cancellation,
-            cancelled: Rc::new(Cell::new(false)),
-            send_closed: Rc::new(Cell::new(false)),
-        }
-    }
-}
-
-impl NativeStreamSession for AgentTurnStream {
-    fn send(&self, _message: Box<dyn Any>) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
-        Box::pin(ready(Err(RuntimeFailure::ProtocolViolation {
-            capability: CAPABILITY_ID,
-        })))
-    }
-
-    fn receive(&self) -> LocalBoxFuture<'static, Result<NativeStreamItem, RuntimeFailure>> {
-        let receiver = self.receiver.clone();
-        let cancelled = self.cancelled.clone();
-        Box::pin(async move {
-            if cancelled.get() {
-                return Err(RuntimeFailure::AdmissionClosed);
-            }
-            receiver.lock().await.next().await.unwrap_or_else(|| {
-                Err(RuntimeFailure::ModuleFailure {
-                    detail: "Agent turn ended without a terminal event".to_owned(),
-                })
-            })
-        })
-    }
-
-    fn close_send(&self) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
-        let result = if self.send_closed.replace(true) {
-            Err(RuntimeFailure::ProtocolViolation {
-                capability: CAPABILITY_ID,
-            })
-        } else {
-            Ok(())
-        };
-        Box::pin(ready(result))
-    }
-
-    fn cancel(&self) {
-        self.cancellation.cancel();
-        self.cancelled.set(true);
-    }
-}
-
 async fn produce_turn(
     module: AgentLoop,
     context: InvocationContext,
     request: RunTurnRequest,
-    mut sender: mpsc::Sender<AgentChannelItem>,
+    mut channel: ProviderStreamChannel<agent_capability::Agent>,
 ) {
-    match run_turn(&module, &module.config, &context, request, &mut sender).await {
+    match run_turn(&module, &module.config, &context, request, &mut channel).await {
         Ok(()) => {
-            let _ = sender.send(Ok(NativeStreamItem::PeerHalfClosed)).await;
-            let _ = sender.send(Ok(NativeStreamItem::Terminal(Ok(())))).await;
+            let _ = channel.close_send().await;
+            let _ = channel.finish().await;
         }
-        Err(AgentInvocationError::Domain(error)) => {
-            let _ = sender.send(Ok(NativeStreamItem::PeerHalfClosed)).await;
-            let _ = sender
-                .send(Ok(NativeStreamItem::Terminal(Err(
-                    Box::new(error) as Box<dyn Any>
-                ))))
-                .await;
+        Err(ModuleError::Domain(error)) => {
+            let _ = channel.close_send().await;
+            let _ = channel.fail(error).await;
         }
-        Err(AgentInvocationError::Runtime(error)) => {
-            let _ = sender.send(Err(error)).await;
+        Err(ModuleError::Runtime(error)) => {
+            let _ = channel.fail_runtime(error).await;
         }
     }
 }
@@ -287,8 +199,8 @@ async fn run_turn(
     config: &AgentConfig,
     context: &InvocationContext,
     request: RunTurnRequest,
-    sender: &mut mpsc::Sender<AgentChannelItem>,
-) -> Result<(), AgentInvocationError> {
+    channel: &mut ProviderStreamChannel<agent_capability::Agent>,
+) -> Result<(), TurnFailure> {
     let generation_spec_digest = generation_spec_digest(context)?;
     let opened = clients
         .session
@@ -335,7 +247,7 @@ async fn run_turn(
         &turn_id,
         &mut revision,
         messages,
-        sender,
+        channel,
     )
     .await;
     if let Err(error) = &result {
@@ -344,7 +256,7 @@ async fn run_turn(
     result
 }
 
-fn generation_spec_digest(context: &InvocationContext) -> Result<&str, AgentInvocationError> {
+fn generation_spec_digest(context: &InvocationContext) -> Result<&str, TurnFailure> {
     let digest = context
         .extension(GENERATION_SPEC_DIGEST_EXTENSION)
         .and_then(|value| std::str::from_utf8(value).ok())
@@ -357,7 +269,7 @@ fn generation_spec_digest(context: &InvocationContext) -> Result<&str, AgentInvo
             })
         })
         .ok_or_else(|| {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: "Agent Turn is missing canonical Generation provenance".to_owned(),
             })
         })?;
@@ -373,8 +285,8 @@ async fn execute_steps(
     turn_id: &str,
     revision: &mut String,
     mut messages: Vec<CompleteRequestMessagesItem>,
-    sender: &mut mpsc::Sender<AgentChannelItem>,
-) -> Result<(), AgentInvocationError> {
+    channel: &mut ProviderStreamChannel<agent_capability::Agent>,
+) -> Result<(), TurnFailure> {
     let prompt = clients
         .prompt
         .assemble_with_context(context.clone(), AssembleRequest {})
@@ -398,7 +310,7 @@ async fn execute_steps(
         .catalog_with_context(context.clone(), CatalogRequest {})
         .await
         .map_err(|error| {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Tool catalog failed: {error:?}"),
             })
         })?;
@@ -444,7 +356,7 @@ async fn execute_steps(
             },
             session_id,
             &mut sequence,
-            sender,
+            channel,
         )
         .await?;
         if let Some(output_tokens) = completion.output_tokens {
@@ -454,11 +366,9 @@ async fn execute_steps(
         turn_output.push_str(&completion.text);
         if completion.tool_calls.is_empty() {
             if completion.text.is_empty() {
-                return Err(AgentInvocationError::Runtime(
-                    RuntimeFailure::ModuleFailure {
-                        detail: "Model completed without text or a Tool call".to_owned(),
-                    },
-                ));
+                return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: "Model completed without text or a Tool call".to_owned(),
+                }));
             }
             *revision = append_events(
                 clients,
@@ -503,20 +413,14 @@ async fn execute_steps(
             });
         }
         if step == config.max_steps {
-            return Err(AgentInvocationError::Domain(
-                RunTurnError::StepLimitExceeded,
-            ));
+            return Err(ModuleError::domain(RunTurnError::StepLimitExceeded));
         }
         let requested = u32::try_from(completion.tool_calls.len()).unwrap_or(u32::MAX);
         if tool_call_count.saturating_add(requested) > config.max_tool_calls {
-            return Err(AgentInvocationError::Domain(
-                RunTurnError::ToolCallLimitExceeded,
-            ));
+            return Err(ModuleError::domain(RunTurnError::ToolCallLimitExceeded));
         }
         if remaining_output_tokens <= 0 {
-            return Err(AgentInvocationError::Domain(
-                RunTurnError::ContextLimitExceeded,
-            ));
+            return Err(ModuleError::domain(RunTurnError::ContextLimitExceeded));
         }
         tool_call_count = tool_call_count.saturating_add(requested);
         for tool_call in completion.tool_calls {
@@ -573,9 +477,7 @@ async fn execute_steps(
             });
         }
     }
-    Err(AgentInvocationError::Domain(
-        RunTurnError::StepLimitExceeded,
-    ))
+    Err(ModuleError::domain(RunTurnError::StepLimitExceeded))
 }
 
 #[derive(Debug)]
@@ -591,38 +493,31 @@ async fn stream_model(
     request: CompleteRequest,
     session_id: &str,
     sequence: &mut u64,
-    sender: &mut mpsc::Sender<AgentChannelItem>,
-) -> Result<ModelStep, AgentInvocationError> {
+    channel: &mut ProviderStreamChannel<agent_capability::Agent>,
+) -> Result<ModelStep, TurnFailure> {
     let stream = clients
         .model
         .complete_with_context(context.clone(), request)
         .await
         .map_err(|error| {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Model completion failed: {error:?}"),
             })
         })?;
-    stream
-        .close_send()
-        .await
-        .map_err(AgentInvocationError::Runtime)?;
+    stream.close_send().await.map_err(ModuleError::runtime)?;
     let mut completion = ModelStep {
         text: String::new(),
         tool_calls: Vec::new(),
         output_tokens: None,
     };
     loop {
-        match stream
-            .receive()
-            .await
-            .map_err(AgentInvocationError::Runtime)?
-        {
+        match stream.receive().await.map_err(ModuleError::runtime)? {
             ModelEvent::Message(message) => match message.kind {
                 CompleteResponseKind::TextDelta => {
                     completion.text.push_str(&message.text);
                     *sequence = sequence.saturating_add(1);
                     send_agent_message(
-                        sender,
+                        channel,
                         RunTurnResponse {
                             sequence: sequence.to_string(),
                             session_id: Some(session_id.to_owned()),
@@ -636,7 +531,7 @@ async fn stream_model(
                 CompleteResponseKind::Usage => {
                     completion.output_tokens =
                         Some(message.output_tokens.parse().map_err(|_| {
-                            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                                 detail: "Model emitted invalid output token usage".to_owned(),
                             })
                         })?);
@@ -645,27 +540,23 @@ async fn stream_model(
             StreamEvent::PeerHalfClosed => {}
             StreamEvent::Terminal(Ok(())) => return Ok(completion),
             StreamEvent::Terminal(Err(error)) => {
-                return Err(AgentInvocationError::Runtime(
-                    RuntimeFailure::ModuleFailure {
-                        detail: format!("Model stream failed: {error:?}"),
-                    },
-                ));
+                return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!("Model stream failed: {error:?}"),
+                }));
             }
         }
     }
 }
 
 async fn send_agent_message(
-    sender: &mut mpsc::Sender<AgentChannelItem>,
+    channel: &mut ProviderStreamChannel<agent_capability::Agent>,
     message: RunTurnResponse,
     request_id: u64,
-) -> Result<(), AgentInvocationError> {
-    sender
-        .send(Ok(NativeStreamItem::Message(
-            Box::new(message) as Box<dyn Any>
-        )))
+) -> Result<(), TurnFailure> {
+    channel
+        .send(message)
         .await
-        .map_err(|_| AgentInvocationError::Runtime(RuntimeFailure::Cancelled { request_id }))
+        .map_err(|_| ModuleError::runtime(RuntimeFailure::Cancelled { request_id }))
 }
 
 async fn read_history(
@@ -674,9 +565,9 @@ async fn read_history(
     session_id: &str,
     current_revision: &str,
     config: &AgentConfig,
-) -> Result<Vec<CompleteRequestMessagesItem>, AgentInvocationError> {
+) -> Result<Vec<CompleteRequestMessagesItem>, TurnFailure> {
     let current_revision = current_revision.parse::<u64>().map_err(|_| {
-        AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+        ModuleError::runtime(RuntimeFailure::ModuleFailure {
             detail: "Session returned an invalid revision".to_owned(),
         })
     })?;
@@ -684,7 +575,7 @@ async fn read_history(
         return Ok(Vec::new());
     }
     let history_limit = u64::try_from(config.max_history_events).map_err(|_| {
-        AgentInvocationError::Runtime(RuntimeFailure::Internal {
+        ModuleError::runtime(RuntimeFailure::Internal {
             detail: "Agent history limit conversion failed".to_owned(),
         })
     })?;
@@ -711,7 +602,7 @@ struct HistoricalTurn {
 
 fn reconstruct_history(
     events: &[ReadResponseEventsItem],
-) -> Result<Vec<CompleteRequestMessagesItem>, AgentInvocationError> {
+) -> Result<Vec<CompleteRequestMessagesItem>, TurnFailure> {
     let mut turns = BTreeMap::<String, HistoricalTurn>::new();
     let mut turn_order = Vec::new();
     for event in events {
@@ -755,12 +646,12 @@ fn reconstruct_history(
 fn history_payload_text(
     event: &ReadResponseEventsItem,
     field: &str,
-) -> Result<String, AgentInvocationError> {
+) -> Result<String, TurnFailure> {
     serde_json::from_str::<serde_json::Value>(&event.payload_json)
         .ok()
         .and_then(|payload| payload.get(field)?.as_str().map(ToOwned::to_owned))
         .ok_or_else(|| {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: "Session history contains an invalid Agent event".to_owned(),
             })
         })
@@ -792,7 +683,7 @@ async fn record_turn_failure(
     session_id: &str,
     turn_id: &str,
     revision: String,
-    error: &AgentInvocationError,
+    error: &TurnFailure,
 ) {
     let cancelled = context.is_cancelled();
     let kind = if cancelled {
@@ -822,22 +713,18 @@ async fn record_turn_failure(
     }
 }
 
-fn turn_error_code(error: &AgentInvocationError, cancelled: bool) -> &'static str {
+fn turn_error_code(error: &TurnFailure, cancelled: bool) -> &'static str {
     if cancelled {
         return "cancelled";
     }
     match error {
-        AgentInvocationError::Domain(RunTurnError::ConcurrentTurn) => "concurrent_turn",
-        AgentInvocationError::Domain(RunTurnError::ContextLimitExceeded) => {
-            "context_limit_exceeded"
-        }
-        AgentInvocationError::Domain(RunTurnError::InvalidSession) => "invalid_session",
-        AgentInvocationError::Domain(RunTurnError::StepLimitExceeded) => "step_limit_exceeded",
-        AgentInvocationError::Domain(RunTurnError::ToolCallLimitExceeded) => {
-            "tool_call_limit_exceeded"
-        }
-        AgentInvocationError::Domain(RunTurnError::Unknown(_)) => "unknown_domain_error",
-        AgentInvocationError::Runtime(_) => "runtime_failure",
+        ModuleError::Domain(RunTurnError::ConcurrentTurn) => "concurrent_turn",
+        ModuleError::Domain(RunTurnError::ContextLimitExceeded) => "context_limit_exceeded",
+        ModuleError::Domain(RunTurnError::InvalidSession) => "invalid_session",
+        ModuleError::Domain(RunTurnError::StepLimitExceeded) => "step_limit_exceeded",
+        ModuleError::Domain(RunTurnError::ToolCallLimitExceeded) => "tool_call_limit_exceeded",
+        ModuleError::Domain(RunTurnError::Unknown(_)) => "unknown_domain_error",
+        ModuleError::Runtime(_) => "runtime_failure",
     }
 }
 
@@ -847,7 +734,7 @@ async fn append_events(
     session_id: &str,
     expected_revision: String,
     events: Vec<AppendRequestEventsItem>,
-) -> Result<String, AgentInvocationError> {
+) -> Result<String, TurnFailure> {
     clients
         .session
         .append_with_context(
@@ -867,7 +754,7 @@ fn session_event(
     kind: AppendRequestEventsItemKind,
     turn_id: Option<&str>,
     payload: &serde_json::Value,
-) -> Result<AppendRequestEventsItem, AgentInvocationError> {
+) -> Result<AppendRequestEventsItem, TurnFailure> {
     Ok(AppendRequestEventsItem {
         event_id: uuid::Uuid::new_v4().to_string(),
         kind,
@@ -875,7 +762,7 @@ fn session_event(
         occurred_at: OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .map_err(|error| {
-                AgentInvocationError::Runtime(RuntimeFailure::Internal {
+                ModuleError::runtime(RuntimeFailure::Internal {
                     detail: format!("failed to format event timestamp: {error}"),
                 })
             })?,
@@ -883,67 +770,67 @@ fn session_event(
     })
 }
 
-fn map_session_open_error(error: SessionOpenInvocationError) -> AgentInvocationError {
+fn map_session_open_error(error: SessionOpenInvocationError) -> TurnFailure {
     match error {
         SessionOpenInvocationError::Domain(OpenError::InvalidSessionId | OpenError::NotFound) => {
-            AgentInvocationError::Domain(RunTurnError::InvalidSession)
+            ModuleError::domain(RunTurnError::InvalidSession)
         }
         SessionOpenInvocationError::Domain(error) => {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Session open failed: {error:?}"),
             })
         }
-        SessionOpenInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+        SessionOpenInvocationError::Runtime(error) => ModuleError::runtime(error),
     }
 }
 
-fn map_session_read_error(error: SessionReadInvocationError) -> AgentInvocationError {
+fn map_session_read_error(error: SessionReadInvocationError) -> TurnFailure {
     match error {
         SessionReadInvocationError::Domain(ReadError::InvalidCursor | ReadError::NotFound) => {
-            AgentInvocationError::Domain(RunTurnError::InvalidSession)
+            ModuleError::domain(RunTurnError::InvalidSession)
         }
         SessionReadInvocationError::Domain(error) => {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Session read failed: {error:?}"),
             })
         }
-        SessionReadInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+        SessionReadInvocationError::Runtime(error) => ModuleError::runtime(error),
     }
 }
 
-fn map_session_append_error(error: SessionAppendInvocationError) -> AgentInvocationError {
+fn map_session_append_error(error: SessionAppendInvocationError) -> TurnFailure {
     match error {
         SessionAppendInvocationError::Domain(AppendError::RevisionConflict { .. }) => {
-            AgentInvocationError::Domain(RunTurnError::ConcurrentTurn)
+            ModuleError::domain(RunTurnError::ConcurrentTurn)
         }
         SessionAppendInvocationError::Domain(error) => {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Session append failed: {error:?}"),
             })
         }
-        SessionAppendInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+        SessionAppendInvocationError::Runtime(error) => ModuleError::runtime(error),
     }
 }
 
-fn map_prompt_error(error: PromptInvocationError) -> AgentInvocationError {
+fn map_prompt_error(error: PromptInvocationError) -> TurnFailure {
     match error {
         PromptInvocationError::Domain(error) => {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Prompt assembly failed: {error:?}"),
             })
         }
-        PromptInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+        PromptInvocationError::Runtime(error) => ModuleError::runtime(error),
     }
 }
 
-fn map_tools_error(error: ToolsExecuteInvocationError) -> AgentInvocationError {
+fn map_tools_error(error: ToolsExecuteInvocationError) -> TurnFailure {
     match error {
         ToolsExecuteInvocationError::Domain(error) => {
-            AgentInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Tool execution failed: {error:?}"),
             })
         }
-        ToolsExecuteInvocationError::Runtime(error) => AgentInvocationError::Runtime(error),
+        ToolsExecuteInvocationError::Runtime(error) => ModuleError::runtime(error),
     }
 }
 
@@ -956,6 +843,7 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_kernel::{CancellationToken, NativeStreamSession};
 
     #[test]
     fn struct_authoring_derives_the_complete_module_descriptor() {
@@ -1025,9 +913,9 @@ mod tests {
 
     #[test]
     fn stream_cancellation_propagates_to_the_invocation() {
-        let (_sender, receiver) = mpsc::channel::<AgentChannelItem>(1);
         let cancellation = CancellationToken::new();
-        let stream = AgentTurnStream::new(receiver, cancellation.clone());
+        let context = InvocationContext::new(1, None, cancellation.clone());
+        let (stream, _channel) = ProviderStream::<agent_capability::Agent>::channel(&context, 1);
         stream.cancel();
         assert!(cancellation.is_cancelled());
     }
