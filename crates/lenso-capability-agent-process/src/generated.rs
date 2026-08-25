@@ -264,6 +264,15 @@ pub trait __LensoIntoProcessCatalogResult {
 impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, CatalogError> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, lenso_module_authoring::ModuleError<CatalogError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
+}
 impl __LensoIntoProcessCatalogResult for Result<CatalogResponse, ProcessCatalogInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<CatalogResponse, CatalogError>, RuntimeFailure> {
         match self {
@@ -280,6 +289,15 @@ pub trait __LensoIntoProcessRunResult {
 }
 impl __LensoIntoProcessRunResult for Result<RunResponse, RunError> {
     fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoProcessRunResult for Result<RunResponse, lenso_module_authoring::ModuleError<RunError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
 }
 impl __LensoIntoProcessRunResult for Result<RunResponse, ProcessRunInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<RunResponse, RunError>, RuntimeFailure> {

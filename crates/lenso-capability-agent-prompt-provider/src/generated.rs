@@ -150,6 +150,15 @@ pub trait __LensoIntoPromptProviderContributeResult {
 impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, ContributeError> {
     fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> { Ok(self) }
 }
+impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, lenso_module_authoring::ModuleError<ContributeError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_module_authoring::ModuleError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_module_authoring::ModuleError::Runtime(error)) => Err(error),
+        }
+    }
+}
 impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, PromptProviderInvocationError> {
     fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> {
         match self {
