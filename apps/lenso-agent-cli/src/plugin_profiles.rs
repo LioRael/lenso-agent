@@ -29,11 +29,20 @@ use lenso_capability_agent_model::{
     CAPABILITY_ID as MODEL_CAPABILITY_ID, COMPLETE_OPERATION as MODEL_COMPLETE_OPERATION,
     DESCRIPTOR_VERSION as MODEL_DESCRIPTOR_VERSION,
 };
+use lenso_capability_agent_prompt::{
+    CAPABILITY_ID as PROMPT_CAPABILITY_ID, DESCRIPTOR_VERSION as PROMPT_DESCRIPTOR_VERSION,
+};
+use lenso_capability_agent_session::{
+    CAPABILITY_ID as SESSION_CAPABILITY_ID, DESCRIPTOR_VERSION as SESSION_DESCRIPTOR_VERSION,
+};
 use lenso_capability_agent_tool_provider::{
     CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
     CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
     DESCRIPTOR_VERSION as TOOL_PROVIDER_DESCRIPTOR_VERSION,
     EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
+};
+use lenso_capability_agent_tools::{
+    CAPABILITY_ID as TOOLS_CAPABILITY_ID, DESCRIPTOR_VERSION as TOOLS_DESCRIPTOR_VERSION,
 };
 use lenso_plugin_control_plane::{
     BindingTemplate, CapabilityDeclaration, CapabilityRequirement, ControlPlaneError,
@@ -133,6 +142,7 @@ pub(crate) struct ExecutablePluginProfile {
     support_channel: SupportChannel,
     trust: TrustLevel,
     attachment: AttachmentProfile,
+    inherit_displaced_requirements: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -276,7 +286,8 @@ impl PluginProfileCatalog {
                             && template.capability_id == requirement.capability_id
                     })
                     .count();
-                if count != 1 {
+                let may_import_from_host = profile.inherit_displaced_requirements;
+                if count > 1 || (count == 0 && !may_import_from_host) {
                     return rejected(format!(
                         "Plugin contribution `{}` does not close exactly one binding for `{}`",
                         contribution.id, requirement.capability_id
@@ -322,6 +333,15 @@ impl PluginProfileCatalog {
             }
         }
         Ok(Some("automatic:local-trusted-stateless-append-many"))
+    }
+
+    pub(crate) fn permits_host_requirements(
+        &self,
+        contribution: &ModuleContribution,
+        target: &str,
+    ) -> Result<bool, ControlPlaneError> {
+        self.matching_profile(contribution, target)
+            .map(|profile| profile.inherit_displaced_requirements)
     }
 
     pub(crate) fn binding_for_template(
@@ -502,6 +522,14 @@ impl ExecutablePluginProfile {
                 self.registration_id
             ));
         }
+        if self.inherit_displaced_requirements
+            && !matches!(self.attachment, AttachmentProfile::ReplaceOne { .. })
+        {
+            return Err(format!(
+                "Plugin profile `{}` may inherit Host requirements only when replacing one provider",
+                self.registration_id
+            ));
+        }
         if let AttachmentProfile::ReplaceOne {
             base_configuration_replacements,
             ..
@@ -536,7 +564,7 @@ impl ExecutablePluginProfile {
     fn matches(&self, contribution: &ModuleContribution, target: &str) -> bool {
         contribution.package_id == self.package_id
             && contribution.configuration_schema_digest == self.configuration_schema_digest
-            && contribution.requires == self.requires
+            && requirements_match(&contribution.requires, &self.requires)
             && contribution.permission_request_ids.is_empty()
             && contribution.state.is_none()
             && contribution.provides.len() == self.provides.len()
@@ -576,6 +604,19 @@ impl ExecutablePluginProfile {
                     && implementation.trust == self.trust
             })
     }
+}
+
+fn requirements_match(
+    actual: &[CapabilityRequirement],
+    expected: &[CapabilityRequirement],
+) -> bool {
+    actual.len() == expected.len()
+        && actual
+            .iter()
+            .all(|requirement| expected.contains(requirement))
+        && expected
+            .iter()
+            .all(|requirement| actual.contains(requirement))
 }
 
 pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> {
@@ -628,6 +669,7 @@ fn text_tools_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        inherit_displaced_requirements: false,
     }
 }
 
@@ -664,6 +706,7 @@ fn fixture_model_profile() -> ExecutablePluginProfile {
             allowed_displaced_packages: BTreeSet::from([FIXTURE_MODEL_PACKAGE_ID.to_owned()]),
             base_configuration_replacements: Vec::new(),
         },
+        inherit_displaced_requirements: false,
     }
 }
 
@@ -709,6 +752,7 @@ fn codex_model_profile() -> ExecutablePluginProfile {
                 replacement_configuration: CODEX_AGENT_CONFIGURATION.to_owned(),
             }],
         },
+        inherit_displaced_requirements: false,
     }
 }
 
@@ -735,6 +779,7 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
         attachment: AttachmentProfile::IntraPluginOnly,
+        inherit_displaced_requirements: false,
     }
 }
 
@@ -761,7 +806,28 @@ fn guest_agent_profile(
                 CapabilityOperationKind::Stream,
             )]),
         }],
-        requires: Vec::new(),
+        requires: vec![
+            CapabilityRequirement {
+                capability_id: MODEL_CAPABILITY_ID.to_owned(),
+                descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
+                cardinality: RequirementCardinality::One,
+            },
+            CapabilityRequirement {
+                capability_id: PROMPT_CAPABILITY_ID.to_owned(),
+                descriptor_version: PROMPT_DESCRIPTOR_VERSION.to_owned(),
+                cardinality: RequirementCardinality::One,
+            },
+            CapabilityRequirement {
+                capability_id: TOOLS_CAPABILITY_ID.to_owned(),
+                descriptor_version: TOOLS_DESCRIPTOR_VERSION.to_owned(),
+                cardinality: RequirementCardinality::One,
+            },
+            CapabilityRequirement {
+                capability_id: SESSION_CAPABILITY_ID.to_owned(),
+                descriptor_version: SESSION_DESCRIPTOR_VERSION.to_owned(),
+                cardinality: RequirementCardinality::One,
+            },
+        ],
         entrypoint: entrypoint.to_owned(),
         execution_class: execution_class.to_owned(),
         support_channel: SupportChannel::Experimental,
@@ -774,6 +840,7 @@ fn guest_agent_profile(
             allowed_displaced_packages: BTreeSet::from([AGENT_LOOP_PACKAGE_ID.to_owned()]),
             base_configuration_replacements: Vec::new(),
         },
+        inherit_displaced_requirements: true,
     }
 }
 
@@ -973,6 +1040,24 @@ mod tests {
             [TrustLevel::Trusted]
         );
         catalog
+            .validate_contribution(&contribution, "test-target")
+            .unwrap();
+    }
+
+    #[test]
+    fn capability_requirement_order_does_not_affect_profile_matching() {
+        let profile = guest_agent_profile(
+            "quickjs-agent-provider-v1",
+            QUICKJS_EXECUTION_CLASS,
+            "plugin.mjs",
+            TrustLevel::Constrained,
+        );
+        let mut contribution = contribution_for(&profile, "test-target");
+        contribution.requires.reverse();
+
+        PluginProfileCatalog::default()
+            .register(profile)
+            .unwrap()
             .validate_contribution(&contribution, "test-target")
             .unwrap();
     }

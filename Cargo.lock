@@ -1034,7 +1034,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lenso"
 version = "0.4.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "futures",
  "lenso-kernel",
@@ -1089,7 +1089,10 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-auth-openai-codex",
  "lenso-capability-agent-model",
+ "lenso-capability-agent-prompt",
+ "lenso-capability-agent-session",
  "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-tools",
  "lenso-kernel",
  "lenso-native-adapter",
  "lenso-plugin-control-plane",
@@ -1378,7 +1381,7 @@ name = "lenso-capability-agent-auth-openai-codex"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
@@ -1391,11 +1394,12 @@ name = "lenso-capability-agent-model"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-authoring 0.1.0 (git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030)",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
+ "lenso-runtime-codec",
  "schemars",
  "serde",
  "serde_json",
@@ -1406,7 +1410,7 @@ name = "lenso-capability-agent-process"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
@@ -1419,10 +1423,11 @@ name = "lenso-capability-agent-prompt"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
+ "lenso-runtime-codec",
  "serde",
  "serde_json",
 ]
@@ -1432,7 +1437,7 @@ name = "lenso-capability-agent-prompt-provider"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
@@ -1445,10 +1450,11 @@ name = "lenso-capability-agent-session"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
+ "lenso-runtime-codec",
  "serde",
  "serde_json",
 ]
@@ -1458,8 +1464,8 @@ name = "lenso-capability-agent-tool-provider"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-authoring 0.1.0 (git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030)",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
@@ -1473,10 +1479,11 @@ name = "lenso-capability-agent-tools"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen 0.6.0",
+ "lenso-contract-codegen 0.6.1",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-module-authoring",
+ "lenso-runtime-codec",
  "serde",
  "serde_json",
 ]
@@ -1484,7 +1491,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-secrets"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=e1cd46dd7156241f05ad5eeebbae995831c07da6#e1cd46dd7156241f05ad5eeebbae995831c07da6"
+source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=dfdaaef9bffc2f804284195df09f6dd62d3a442e#dfdaaef9bffc2f804284195df09f6dd62d3a442e"
 dependencies = [
  "futures",
  "lenso-contract-codegen 0.5.2",
@@ -1497,19 +1504,9 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030#16c4aff52c539e16f3024f6414de56e6c181b030"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=c732d0612d782c47ca4616da672fc81ae8e38652#c732d0612d782c47ca4616da672fc81ae8e38652"
 dependencies = [
- "lenso-contract-authoring-macros 0.1.0 (git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030)",
- "schemars",
- "serde_json",
-]
-
-[[package]]
-name = "lenso-contract-authoring"
-version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=a4e62253efeda64a4da03ab54501e755decf3e66#a4e62253efeda64a4da03ab54501e755decf3e66"
-dependencies = [
- "lenso-contract-authoring-macros 0.1.0 (git+https://github.com/LioRael/lenso-protocols?rev=a4e62253efeda64a4da03ab54501e755decf3e66)",
+ "lenso-contract-authoring-macros",
  "schemars",
  "serde_json",
 ]
@@ -1517,17 +1514,7 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030#16c4aff52c539e16f3024f6414de56e6c181b030"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
-name = "lenso-contract-authoring-macros"
-version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=a4e62253efeda64a4da03ab54501e755decf3e66#a4e62253efeda64a4da03ab54501e755decf3e66"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=c732d0612d782c47ca4616da672fc81ae8e38652#c732d0612d782c47ca4616da672fc81ae8e38652"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1546,20 +1533,10 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-codegen"
-version = "0.6.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030#16c4aff52c539e16f3024f6414de56e6c181b030"
-dependencies = [
- "lenso-contract-authoring 0.1.0 (git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030)",
- "semver",
- "serde_json",
-]
-
-[[package]]
-name = "lenso-contract-codegen"
 version = "0.6.1"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=a4e62253efeda64a4da03ab54501e755decf3e66#a4e62253efeda64a4da03ab54501e755decf3e66"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=c732d0612d782c47ca4616da672fc81ae8e38652#c732d0612d782c47ca4616da672fc81ae8e38652"
 dependencies = [
- "lenso-contract-authoring 0.1.0 (git+https://github.com/LioRael/lenso-protocols?rev=a4e62253efeda64a4da03ab54501e755decf3e66)",
+ "lenso-contract-authoring",
  "semver",
  "serde_json",
 ]
@@ -1579,7 +1556,7 @@ dependencies = [
 [[package]]
 name = "lenso-dylib-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -1603,12 +1580,12 @@ dependencies = [
 [[package]]
 name = "lenso-module-authoring"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=16c4aff52c539e16f3024f6414de56e6c181b030#16c4aff52c539e16f3024f6414de56e6c181b030"
+source = "git+https://github.com/LioRael/lenso-protocols?rev=c732d0612d782c47ca4616da672fc81ae8e38652#c732d0612d782c47ca4616da672fc81ae8e38652"
 
 [[package]]
 name = "lenso-native-adapter"
 version = "0.1.2"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "futures",
  "inventory",
@@ -1621,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "lenso-native-adapter-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -1634,7 +1611,7 @@ dependencies = [
 [[package]]
 name = "lenso-plugin-control-plane"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "fs2",
  "futures",
@@ -1656,7 +1633,7 @@ dependencies = [
 [[package]]
 name = "lenso-quickjs-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -1669,7 +1646,7 @@ dependencies = [
 [[package]]
 name = "lenso-runner"
 version = "0.1.6"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "cpu-time",
  "futures",
@@ -1681,7 +1658,7 @@ dependencies = [
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "futures",
  "hex",
@@ -1695,7 +1672,7 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-env-module"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=e1cd46dd7156241f05ad5eeebbae995831c07da6#e1cd46dd7156241f05ad5eeebbae995831c07da6"
+source = "git+https://github.com/LioRael/lenso-secrets-module.git?rev=dfdaaef9bffc2f804284195df09f6dd62d3a442e#dfdaaef9bffc2f804284195df09f6dd62d3a442e"
 dependencies = [
  "futures",
  "lenso-capability-secrets",
@@ -1708,7 +1685,7 @@ dependencies = [
 [[package]]
 name = "lenso-wasm-component-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=12fd7934ddc72d9d32d647c931be3de00b6fe334#12fd7934ddc72d9d32d647c931be3de00b6fe334"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=9e54c87c574c7c027b05189d8f5033b52f92149b#9e54c87c574c7c027b05189d8f5033b52f92149b"
 dependencies = [
  "futures",
  "lenso-app-plan",
