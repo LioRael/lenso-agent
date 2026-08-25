@@ -64,9 +64,8 @@ impl HttpFetchProvider for HttpFetcher {
         let config = self.config.clone();
         Box::pin(async move {
             validate_config(&config)?;
-            let url = match reqwest::Url::parse(&request.url) {
-                Ok(url) => url,
-                Err(_) => return Ok(Err(GetError::InvalidUrl)),
+            let Ok(url) = reqwest::Url::parse(&request.url) else {
+                return Ok(Err(GetError::InvalidUrl));
             };
             if !url.username().is_empty() || url.password().is_some() {
                 return Ok(Err(GetError::InvalidUrl));
@@ -114,9 +113,8 @@ impl HttpFetchProvider for HttpFetcher {
                 }
                 body.extend_from_slice(&chunk);
             }
-            let body = match String::from_utf8(body) {
-                Ok(body) => body,
-                Err(_) => return Ok(Err(GetError::ResponseNotUtf8)),
+            let Ok(body) = String::from_utf8(body) else {
+                return Ok(Err(GetError::ResponseNotUtf8));
             };
             Ok(Ok(GetResponse {
                 status_code,
