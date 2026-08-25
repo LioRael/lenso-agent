@@ -5,7 +5,11 @@ use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse,
     CatalogResponseToolsItem, ExecuteError, ExecuteRequest, ExecuteResponse,
-    ExecuteResponseContentType, ToolProviderProvider,
+    ExecuteResponseContentType,
+};
+use lenso_capability_agent_workspace_read::{
+    self as workspace_read_contract, ReadTextError, ReadTextErrorExecutionFailedPayload,
+    ReadTextRequest, ReadTextResponse,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use std::{
@@ -317,7 +321,10 @@ impl WorkspaceProvider {
         Ok(())
     }
 
-    fn read_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+    fn read_text_tool(
+        &self,
+        arguments_json: &str,
+    ) -> Result<ExecuteResponse, WorkspaceReadFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -367,8 +374,11 @@ impl WorkspaceProvider {
     }
 }
 
-#[lenso::provides(tool_provider_contract::ToolProvider)]
-impl ToolProviderProvider for WorkspaceProvider {
+#[lenso::provides(
+    tool_provider_contract::ToolProvider,
+    workspace_read_contract::WorkspaceRead
+)]
+impl WorkspaceProvider {
     fn catalog(
         &self,
         _context: InvocationContext,
@@ -404,12 +414,28 @@ impl ToolProviderProvider for WorkspaceProvider {
         let result = match request.name.as_str() {
             LIST_TOOL => self.list(&request.arguments_json),
             SEARCH_TOOL => self.search(&request.arguments_json),
-            READ_TEXT_TOOL => self.read_text(&request.arguments_json),
+            READ_TEXT_TOOL => self.read_text_tool(&request.arguments_json),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {
             Ok(response) => Ok(Ok(response)),
             Err(WorkspaceReadFailure::Domain(error)) => Ok(Err(error)),
+            Err(WorkspaceReadFailure::Runtime(error)) => Err(error),
+        }))
+    }
+    fn read_text(
+        &self,
+        _context: InvocationContext,
+        request: ReadTextRequest,
+    ) -> LocalBoxFuture<'static, Result<Result<ReadTextResponse, ReadTextError>, RuntimeFailure>>
+    {
+        let arguments = serde_json::json!({"path": request.path}).to_string();
+        Box::pin(ready(match self.read_text_tool(&arguments) {
+            Ok(response) => Ok(Ok(ReadTextResponse {
+                content: response.content,
+                metadata_json: response.metadata_json,
+            })),
+            Err(WorkspaceReadFailure::Domain(error)) => Ok(Err(map_read_error(error))),
             Err(WorkspaceReadFailure::Runtime(error)) => Err(error),
         }))
     }
@@ -444,6 +470,23 @@ fn execution_failed(reason_code: &str, message: &str) -> WorkspaceReadFailure {
     })
 }
 
+fn map_read_error(error: ExecuteError) -> ReadTextError {
+    match error {
+        ExecuteError::InvalidArguments => ReadTextError::InvalidArguments,
+        ExecuteError::PermissionDenied => ReadTextError::PermissionDenied,
+        ExecuteError::NotFound => ReadTextError::NotFound,
+        ExecuteError::OutputLimitExceeded => ReadTextError::OutputLimitExceeded,
+        ExecuteError::ExecutionFailed { payload } => ReadTextError::ExecutionFailed {
+            payload: ReadTextErrorExecutionFailedPayload {
+                reason_code: payload.reason_code,
+                message: payload.message,
+                details_json: payload.details_json,
+            },
+        },
+        ExecuteError::Unknown(error) => ReadTextError::Unknown(error),
+    }
+}
+
 fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
     RuntimeFailure::InvalidResolvedPlan {
         detail: detail.into(),
@@ -453,6 +496,7 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_kernel::CancellationToken;
 
     fn provider(root: PathBuf) -> WorkspaceProvider {
         WorkspaceProvider {
@@ -481,7 +525,10 @@ mod tests {
         assert_eq!(result[1]["path"], "z.txt");
         assert_eq!(result.as_array().unwrap().len(), 2);
         assert_eq!(
-            provider.read_text(r#"{"path":".hidden"}"#).unwrap().content,
+            provider
+                .read_text_tool(r#"{"path":".hidden"}"#)
+                .unwrap()
+                .content,
             "secret"
         );
     }
@@ -518,13 +565,13 @@ mod tests {
         let provider = provider(root);
         assert_eq!(
             provider
-                .read_text(r#"{"path":"README.md"}"#)
+                .read_text_tool(r#"{"path":"README.md"}"#)
                 .unwrap()
                 .content,
             "# Fixture\n"
         );
         assert!(matches!(
-            provider.read_text(r#"{"path":"../secret"}"#),
+            provider.read_text_tool(r#"{"path":"../secret"}"#),
             Err(WorkspaceReadFailure::Domain(ExecuteError::PermissionDenied))
         ));
     }
@@ -546,7 +593,7 @@ mod tests {
             Err(WorkspaceReadFailure::Domain(ExecuteError::PermissionDenied))
         ));
         assert!(matches!(
-            provider.read_text(r#"{"path":"link"}"#),
+            provider.read_text_tool(r#"{"path":"link"}"#),
             Err(WorkspaceReadFailure::Domain(ExecuteError::PermissionDenied))
         ));
     }
@@ -591,7 +638,7 @@ mod tests {
         provider.config.max_search_bytes = 4096;
         provider.config.max_output_bytes = 4;
         assert!(matches!(
-            provider.read_text(r#"{"path":"a"}"#),
+            provider.read_text_tool(r#"{"path":"a"}"#),
             Err(WorkspaceReadFailure::Domain(
                 ExecuteError::OutputLimitExceeded
             ))
@@ -622,8 +669,49 @@ mod tests {
             Err(WorkspaceReadFailure::Runtime(_))
         ));
         assert!(matches!(
-            provider.read_text(r#"{"path":"x"}"#),
+            provider.read_text_tool(r#"{"path":"x"}"#),
             Err(WorkspaceReadFailure::Runtime(_))
         ));
+    }
+
+    #[test]
+    fn workspace_read_capability_preserves_success_domain_and_runtime_outcomes() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("README.md"), "# Capability Fixture\n").unwrap();
+        let provider = provider(root.clone());
+        let context = || InvocationContext::new(1, None, CancellationToken::new());
+
+        let success = futures::executor::block_on(provider.read_text(
+            context(),
+            ReadTextRequest {
+                path: "README.md".to_owned(),
+            },
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(success.content, "# Capability Fixture\n");
+
+        let domain = futures::executor::block_on(provider.read_text(
+            context(),
+            ReadTextRequest {
+                path: "../outside".to_owned(),
+            },
+        ))
+        .unwrap()
+        .unwrap_err();
+        assert_eq!(domain, ReadTextError::PermissionDenied);
+
+        fs::remove_file(root.join("README.md")).unwrap();
+        fs::remove_dir(root).unwrap();
+        let runtime = futures::executor::block_on(provider.read_text(
+            context(),
+            ReadTextRequest {
+                path: "README.md".to_owned(),
+            },
+        ))
+        .unwrap_err();
+        assert!(matches!(runtime, RuntimeFailure::ModuleFailure { .. }));
     }
 }

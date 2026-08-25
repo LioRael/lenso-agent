@@ -9,6 +9,7 @@ members = [
     "crates/lenso-capability-agent-prompt",
     "crates/lenso-capability-agent-prompt-provider",
     "crates/lenso-capability-agent-process",
+    "crates/lenso-capability-agent-workspace-read",
     "crates/lenso-capability-agent-tools",
     "crates/lenso-capability-agent-tool-provider",
     "crates/lenso-capability-agent-session",

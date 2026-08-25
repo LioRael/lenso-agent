@@ -101,18 +101,23 @@ stateless, permission-free append-to-`many` Tool Provider. It also admits one
 package-independent, isolated Wasm Tool Provider shape with the same exact
 Capability and attachment, empty configuration, no Host imports, permissions,
 state, Data mounts, or binding templates, and mandatory review evidence. It
+also admits one reviewed variant with exactly one generated
+`lenso.agent.workspace-read@1/read_text` Host import. The Host Profile fixes
+that binding to the base `workspace-read` Instance; the Bundle cannot select a
+provider or request workspace write, process, network, Secrets, state, or Data
+mount authority. It
 admits one restricted `lenso.agent.model.fixture@0.1.0` profile that replaces
 the fixture base Plan's exact `model` provider for the `agent` consumer. The
 experimental Codex Direct profile admits one atomic Model/Auth pair, its exact intra-Plugin
 binding, and the coupled Agent model configuration. Experimental Artifact
 profiles additionally allow a reviewed QuickJS or Wasm Component Module to
 replace the exact native Agent Loop through the generated `AgentJsonCodec`.
-Data mounts, permission
-requests, arbitrary binding templates, and incomplete Feature selections fail
+Other Data mounts, permission requests, arbitrary binding templates, extra
+Capability requirements, and incomplete Feature selections fail
 admission. General provider/configuration selection, overlap replacement,
 automatic rollback, distributed coordination, Generation deletion, Plugin
-Store garbage collection, native-dylib product acceptance, and third-party Host
-Capability permissions remain deferred.
+Store garbage collection, native-dylib product acceptance, and general
+third-party Host Capability permissions remain deferred.
 
 ## Install, upgrade, roll back, and remove a Plugin release
 
@@ -239,8 +244,10 @@ its closure; Session provenance reports each Turn's Spec as available, missing,
 or invalid without rendering the stored input. The local filesystem fence is
 not a distributed lease or network-filesystem portability claim. Adding another
 executable shape remains a Host code and review change. The one
-package-independent Wasm Tool shape is not runtime discovery or general
-permission to import Host Capabilities or replace a `one` binding.
+package-independent pure Wasm Tool shape is not runtime discovery or general
+permission to import Host Capabilities or replace a `one` binding. The
+separately reviewed workspace-reader shape imports only the Host-selected
+`workspace-read@1/read_text` Capability recorded in its immutable Generation.
 
 ## Run the deterministic slice
 

@@ -1096,6 +1096,7 @@ dependencies = [
  "lenso-capability-agent-session",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tools",
+ "lenso-capability-agent-workspace-read",
  "lenso-kernel",
  "lenso-native-adapter",
  "lenso-plugin-bundle",
@@ -1340,6 +1341,7 @@ dependencies = [
  "futures",
  "lenso",
  "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-workspace-read",
  "lenso-kernel",
  "lenso-native-adapter",
  "serde",
@@ -1477,6 +1479,21 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-agent-tools"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-module-authoring",
+ "lenso-runtime-codec",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-workspace-read"
 version = "0.1.0"
 dependencies = [
  "futures",

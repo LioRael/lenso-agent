@@ -168,6 +168,10 @@ make both the workspace root and model endpoint visible before execution.
     serves a real Agent Tool call, upgrades, rolls back to the exact retired
     Generation, serves again, and disappears after removal without Host code
     registration or recompilation.
+19. A second standalone Wasm Tool shape imports the generated
+    `lenso.agent.workspace-read@1/read_text` client through one immutable
+    Host-selected binding. Tests reject an added process requirement and prove
+    a real workspace read across install, upgrade, rollback, and removal.
 
 ## Deferred
 
@@ -179,5 +183,6 @@ placement, additional production Catalog entries, `one` or `optional` binding
 replacement, distributed coordination, automatic rollback, Generation deletion,
 Plugin Store collection, retention windows, and overlap replacement are
 separate slices. General third-party Guest imports are also separate: the
-bounded Wasm Tool shape has no Host imports, while permissioned external
-Modules require their own reviewed product profiles and policy.
+bounded pure Wasm Tool shape has no Host imports, while the workspace-reader
+shape admits only one Host-selected read Capability. Other permissioned
+external Modules require their own reviewed product profiles and policy.

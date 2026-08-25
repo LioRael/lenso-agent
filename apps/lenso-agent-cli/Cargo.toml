@@ -33,6 +33,7 @@ lenso-capability-agent-prompt = { path = "../../crates/lenso-capability-agent-pr
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
 lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
+lenso-capability-agent-workspace-read = { path = "../../crates/lenso-capability-agent-workspace-read" }
 futures.workspace = true
 fs2.workspace = true
 lenso-app-plan.workspace = true

@@ -44,6 +44,10 @@ use lenso_capability_agent_tool_provider::{
 use lenso_capability_agent_tools::{
     CAPABILITY_ID as TOOLS_CAPABILITY_ID, DESCRIPTOR_VERSION as TOOLS_DESCRIPTOR_VERSION,
 };
+use lenso_capability_agent_workspace_read::{
+    CAPABILITY_ID as WORKSPACE_READ_CAPABILITY_ID,
+    DESCRIPTOR_VERSION as WORKSPACE_READ_DESCRIPTOR_VERSION,
+};
 use lenso_plugin_control_plane::{
     BindingTemplate, CapabilityDeclaration, CapabilityRequirement, ControlPlaneError,
     ModuleContribution, PluginManifest, RequirementCardinality, SupportChannel, TrustLevel,
@@ -75,6 +79,8 @@ const CODEX_AUTH_DESCRIPTOR: &[u8] =
 const AGENT_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent/capability.json");
 const GUEST_AGENT_PACKAGE_ID: &str = "lenso.agent.guest";
+const WORKSPACE_READ_PACKAGE_ID: &str = "lenso.agent.workspace-read";
+const WORKSPACE_READ_INSTANCE: &str = "workspace-read";
 const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"model":"fixture/readme-summary-v1","max_steps":8,"max_tool_calls":4,"max_output_tokens":1024,"max_history_events":200}"#;
 const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#;
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
@@ -142,7 +148,16 @@ pub(crate) struct ExecutablePluginProfile {
     support_channel: SupportChannel,
     trust: TrustLevel,
     attachment: AttachmentProfile,
+    fixed_host_imports: Vec<FixedHostImport>,
     inherit_displaced_requirements: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FixedHostImport {
+    capability_id: String,
+    descriptor_version: String,
+    provider_instance: String,
+    allowed_provider_packages: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -292,7 +307,7 @@ impl PluginProfileCatalog {
                             && template.capability_id == requirement.capability_id
                     })
                     .count();
-                let may_import_from_host = profile.inherit_displaced_requirements;
+                let may_import_from_host = profile.permits_host_requirement(requirement);
                 if count > 1 || (count == 0 && !may_import_from_host) {
                     return rejected(format!(
                         "Plugin contribution `{}` does not close exactly one binding for `{}`",
@@ -346,8 +361,68 @@ impl PluginProfileCatalog {
         contribution: &ModuleContribution,
         target: &str,
     ) -> Result<bool, ControlPlaneError> {
-        self.matching_profile(contribution, target)
-            .map(|profile| profile.inherit_displaced_requirements)
+        self.matching_profile(contribution, target).map(|profile| {
+            profile.inherit_displaced_requirements || !profile.fixed_host_imports.is_empty()
+        })
+    }
+
+    pub(crate) fn fixed_host_bindings_for(
+        &self,
+        contribution: &ModuleContribution,
+        target: &str,
+        consumer_instance: &str,
+        base_plan: &ResolvedAppPlan,
+    ) -> Result<Vec<CapabilityBinding>, String> {
+        let profile = self
+            .matching_profile(contribution, target)
+            .map_err(|error| format!("Plugin profile selection failed: {error}"))?;
+        profile
+            .fixed_host_imports
+            .iter()
+            .map(|host_import| {
+                let provider = base_plan
+                    .module_instance(&host_import.provider_instance)
+                    .ok_or_else(|| {
+                        format!(
+                            "Plugin profile `{}` requires Host provider Instance `{}`",
+                            profile.registration_id, host_import.provider_instance
+                        )
+                    })?;
+                if !host_import
+                    .allowed_provider_packages
+                    .contains(provider.package_id())
+                {
+                    return Err(format!(
+                        "Plugin profile `{}` cannot import Host provider package `{}`",
+                        profile.registration_id,
+                        provider.package_id()
+                    ));
+                }
+                let matching_endpoints = provider
+                    .provided_capabilities()
+                    .iter()
+                    .filter(|provided| {
+                        provided.capability_id() == host_import.capability_id
+                            && provided.descriptor_version() == host_import.descriptor_version
+                    })
+                    .count();
+                if matching_endpoints != 1 {
+                    return Err(format!(
+                        "Plugin profile `{}` Host provider `{}` does not expose exactly one `{}@{}` endpoint",
+                        profile.registration_id,
+                        host_import.provider_instance,
+                        host_import.capability_id,
+                        host_import.descriptor_version
+                    ));
+                }
+                Ok(CapabilityBinding::new(
+                    consumer_instance,
+                    &host_import.capability_id,
+                    &host_import.descriptor_version,
+                    &host_import.provider_instance,
+                ))
+            })
+            .collect()
     }
 
     pub(crate) fn binding_for_template(
@@ -536,6 +611,34 @@ impl ExecutablePluginProfile {
                 self.registration_id
             ));
         }
+        if self.inherit_displaced_requirements && !self.fixed_host_imports.is_empty() {
+            return Err(format!(
+                "Plugin profile `{}` cannot combine inherited and fixed Host imports",
+                self.registration_id
+            ));
+        }
+        let mut imported_capabilities = BTreeSet::new();
+        for host_import in &self.fixed_host_imports {
+            if host_import.capability_id.is_empty()
+                || host_import.descriptor_version.is_empty()
+                || host_import.provider_instance.is_empty()
+                || host_import.allowed_provider_packages.is_empty()
+                || !imported_capabilities.insert((
+                    host_import.capability_id.as_str(),
+                    host_import.descriptor_version.as_str(),
+                ))
+                || !self.requires.iter().any(|requirement| {
+                    requirement.capability_id == host_import.capability_id
+                        && requirement.descriptor_version == host_import.descriptor_version
+                        && requirement.cardinality == RequirementCardinality::One
+                })
+            {
+                return Err(format!(
+                    "Plugin profile `{}` fixed Host import policy is invalid",
+                    self.registration_id
+                ));
+            }
+        }
         if let AttachmentProfile::ReplaceOne {
             base_configuration_replacements,
             ..
@@ -610,6 +713,15 @@ impl ExecutablePluginProfile {
                     && implementation.trust == self.trust
             })
     }
+
+    fn permits_host_requirement(&self, requirement: &CapabilityRequirement) -> bool {
+        self.inherit_displaced_requirements
+            || self.fixed_host_imports.iter().any(|host_import| {
+                host_import.capability_id == requirement.capability_id
+                    && host_import.descriptor_version == requirement.descriptor_version
+                    && requirement.cardinality == RequirementCardinality::One
+            })
+    }
 }
 
 impl PackagePolicy {
@@ -652,7 +764,8 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
             "plugin",
             TrustLevel::Isolated,
         ))?
-        .register(third_party_wasm_tool_profile())
+        .register(third_party_wasm_tool_profile())?
+        .register(third_party_wasm_workspace_read_tool_profile())
 }
 
 fn text_tools_profile() -> ExecutablePluginProfile {
@@ -685,6 +798,7 @@ fn text_tools_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
 }
@@ -717,8 +831,26 @@ fn third_party_wasm_tool_profile() -> ExecutablePluginProfile {
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
         },
+        fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
+}
+
+fn third_party_wasm_workspace_read_tool_profile() -> ExecutablePluginProfile {
+    let mut profile = third_party_wasm_tool_profile();
+    profile.registration_id = "third-party-wasm-workspace-read-tool-provider-v1".to_owned();
+    profile.requires = vec![CapabilityRequirement {
+        capability_id: WORKSPACE_READ_CAPABILITY_ID.to_owned(),
+        descriptor_version: WORKSPACE_READ_DESCRIPTOR_VERSION.to_owned(),
+        cardinality: RequirementCardinality::One,
+    }];
+    profile.fixed_host_imports = vec![FixedHostImport {
+        capability_id: WORKSPACE_READ_CAPABILITY_ID.to_owned(),
+        descriptor_version: WORKSPACE_READ_DESCRIPTOR_VERSION.to_owned(),
+        provider_instance: WORKSPACE_READ_INSTANCE.to_owned(),
+        allowed_provider_packages: BTreeSet::from([WORKSPACE_READ_PACKAGE_ID.to_owned()]),
+    }];
+    profile
 }
 
 fn fixture_model_profile() -> ExecutablePluginProfile {
@@ -754,6 +886,7 @@ fn fixture_model_profile() -> ExecutablePluginProfile {
             allowed_displaced_packages: BTreeSet::from([FIXTURE_MODEL_PACKAGE_ID.to_owned()]),
             base_configuration_replacements: Vec::new(),
         },
+        fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
 }
@@ -800,6 +933,7 @@ fn codex_model_profile() -> ExecutablePluginProfile {
                 replacement_configuration: CODEX_AGENT_CONFIGURATION.to_owned(),
             }],
         },
+        fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
 }
@@ -827,6 +961,7 @@ fn codex_auth_profile() -> ExecutablePluginProfile {
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
         attachment: AttachmentProfile::IntraPluginOnly,
+        fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: false,
     }
 }
@@ -888,6 +1023,7 @@ fn guest_agent_profile(
             allowed_displaced_packages: BTreeSet::from([AGENT_LOOP_PACKAGE_ID.to_owned()]),
             base_configuration_replacements: Vec::new(),
         },
+        fixed_host_imports: Vec::new(),
         inherit_displaced_requirements: true,
     }
 }
@@ -1152,6 +1288,30 @@ mod tests {
             .unwrap_err();
         assert!(
             error
+                .to_string()
+                .contains("does not match a registered Plugin profile")
+        );
+    }
+
+    #[test]
+    fn workspace_reader_wasm_profile_accepts_only_its_exact_host_import() {
+        let profile = third_party_wasm_workspace_read_tool_profile();
+        let mut contribution = contribution_for(&profile, "test-target");
+        contribution.package_id = "dev.example.workspace-reader".to_owned();
+        let catalog = PluginProfileCatalog::default().register(profile).unwrap();
+        catalog
+            .validate_contribution(&contribution, "test-target")
+            .unwrap();
+
+        contribution.requires.push(CapabilityRequirement {
+            capability_id: "lenso.agent.process@1".to_owned(),
+            descriptor_version: "1.0.0".to_owned(),
+            cardinality: RequirementCardinality::One,
+        });
+        assert!(
+            catalog
+                .validate_contribution(&contribution, "test-target")
+                .unwrap_err()
                 .to_string()
                 .contains("does not match a registered Plugin profile")
         );

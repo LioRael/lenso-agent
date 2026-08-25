@@ -32,6 +32,7 @@ use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::SessionJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::ToolsJsonCodec;
+use lenso_capability_agent_workspace_read::WorkspaceReadJsonCodec;
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
 };
@@ -638,11 +639,13 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(SessionJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
+        .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
+        .with_quickjs_codec(WorkspaceReadJsonCodec)
 }
 
 fn now_unix_nanos() -> Result<u128, String> {

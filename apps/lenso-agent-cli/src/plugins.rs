@@ -1022,6 +1022,12 @@ pub(crate) fn generation_composition(
                     instance.instance_key
                 )
             })?;
+        plugin_bindings.extend(profiles.fixed_host_bindings_for(
+            contribution,
+            &target,
+            &instance.instance_key,
+            base_plan,
+        )?);
         match profiles.attachment_for(contribution, &target, &instance.instance_key, base_plan)? {
             ResolvedAttachment::AppendMany(binding) => plugin_bindings.push(binding),
             ResolvedAttachment::ReplaceOne {

@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.workspace-read@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "read_text",
+      "interaction": "request",
+      "request_schema": "schemas/read-text-request.schema.json",
+      "response_schema": "schemas/read-text-response.schema.json",
+      "domain_error_schema": "schemas/read-text-error.schema.json"
+    }
+  ]
+}

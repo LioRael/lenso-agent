@@ -15,6 +15,7 @@ package-id = "lenso.agent.workspace-read"
 futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-workspace-read = { path = "../lenso-capability-agent-workspace-read" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 serde.workspace = true
