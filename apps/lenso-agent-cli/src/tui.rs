@@ -20,13 +20,27 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
 };
 
 use crate::generation::{AgentApp, TurnGeneration};
 
 const EVENT_TICK: Duration = Duration::from_millis(250);
 const MAX_INPUT_CHARACTERS: usize = 262_144;
+const PANEL_BREAKPOINT: u16 = 96;
+
+struct Palette;
+
+impl Palette {
+    // Named ANSI colors inherit the terminal theme, preserving hierarchy on
+    // both light and dark backgrounds without taking ownership of the canvas.
+    const ACCENT: Color = Color::LightMagenta;
+    const AGENT: Color = Color::LightCyan;
+    const BORDER: Color = Color::DarkGray;
+    const ERROR: Color = Color::LightRed;
+    const MUTED: Color = Color::Gray;
+    const QUIET: Color = Color::DarkGray;
+}
 
 /// App-owned options that narrow one interactive TUI session.
 #[derive(Clone, Debug, Default)]
@@ -48,6 +62,7 @@ enum Speaker {
     User,
     Agent,
     System,
+    Error,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -59,12 +74,12 @@ enum UiPhase {
 }
 
 impl UiPhase {
-    const fn status(self) -> &'static str {
+    const fn activity(self) -> Option<(&'static str, Color)> {
         match self {
-            Self::Idle => "idle · Esc quits · Tab changes panel",
-            Self::SubmitRequested => "submitting",
-            Self::Active => "thinking · Esc cancels",
-            Self::Failed => "turn failed · Esc quits",
+            Self::Idle => None,
+            Self::SubmitRequested => Some(("◆ Starting turn", Palette::ACCENT)),
+            Self::Active => Some(("◆ Working", Palette::AGENT)),
+            Self::Failed => Some(("● Turn failed", Palette::ERROR)),
         }
     }
 }
@@ -85,6 +100,7 @@ struct TuiState {
     session_id: Option<String>,
     phase: UiPhase,
     active: Option<ActiveTurn>,
+    tool_scope: String,
 }
 
 impl TuiState {
@@ -92,15 +108,17 @@ impl TuiState {
         Self {
             input: String::new(),
             input_characters: 0,
-            transcript: vec![TranscriptEntry {
-                speaker: Speaker::System,
-                text: "Ready. Type a message and press Enter.".to_owned(),
-            }],
+            transcript: Vec::new(),
             panels,
             selected_panel: 0,
             session_id: options.session_id.clone(),
             phase: UiPhase::Idle,
             active: None,
+            tool_scope: match &options.allowed_tools {
+                None => "composed tools".to_owned(),
+                Some(tools) if tools.is_empty() => "no tools".to_owned(),
+                Some(tools) => format!("{} scoped tools", tools.len()),
+            },
         }
     }
 
@@ -184,7 +202,7 @@ async fn run_loop(
                     }
                 }
                 stream_event = active.stream.receive() => {
-                    handle_stream_event(stream_event, state)?;
+                    handle_stream_event(stream_event, state);
                 }
             }
         } else {
@@ -315,8 +333,20 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
 fn handle_stream_event(
     event: Result<StreamEvent<RunTurnResponse, RunTurnError>, lenso_kernel::RuntimeFailure>,
     state: &mut TuiState,
-) -> Result<(), String> {
-    match event.map_err(|error| format!("Agent stream failed: {error:?}"))? {
+) {
+    let event = match event {
+        Ok(event) => event,
+        Err(error) => {
+            state.active = None;
+            state.transcript.push(TranscriptEntry {
+                speaker: Speaker::Error,
+                text: runtime_failure_message(error),
+            });
+            state.phase = UiPhase::Failed;
+            return;
+        }
+    };
+    match event {
         StreamEvent::Message(message) => {
             state.session_id = message.session_id.or_else(|| state.session_id.clone());
             state.append_agent_text(&message.text);
@@ -328,98 +358,145 @@ fn handle_stream_event(
         }
         StreamEvent::Terminal(Err(error)) => {
             state.active = None;
-            state.push_system(format!("Agent turn failed: {error:?}"));
+            state.transcript.push(TranscriptEntry {
+                speaker: Speaker::Error,
+                text: format!("Agent turn failed: {error:?}"),
+            });
             state.phase = UiPhase::Failed;
         }
     }
-    Ok(())
+}
+
+fn runtime_failure_message(error: lenso_kernel::RuntimeFailure) -> String {
+    match error {
+        lenso_kernel::RuntimeFailure::ModuleFailure { detail } => {
+            format!("Turn stopped — {detail}")
+        }
+        error => format!("Turn stopped — {error:?}"),
+    }
 }
 
 fn render(frame: &mut Frame<'_>, state: &TuiState) {
-    let [header, body, input, status] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(6),
-        Constraint::Length(3),
+    let area = content_area(frame.area());
+    let compact = area.height <= 16;
+    let composer_height = if compact { 3 } else { 4 };
+    let [header, body, activity, composer, shortcuts] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Min(4),
+        Constraint::Length(1),
+        Constraint::Length(composer_height),
         Constraint::Length(1),
     ])
-    .areas(frame.area());
+    .areas(area);
 
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                " Lenso Agent ",
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                state.session_id.as_deref().unwrap_or("new session"),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]))
-        .block(Block::default().borders(Borders::ALL)),
-        header,
-    );
+    render_header(frame, header, state);
 
-    if state.panels.is_empty() || body.width < 80 {
+    if state.panels.is_empty() || body.width < PANEL_BREAKPOINT {
         render_transcript(frame, body, state);
     } else {
-        let [chat, panel] =
-            Layout::horizontal([Constraint::Percentage(72), Constraint::Percentage(28)])
-                .areas(body);
+        let panel_width = body
+            .width
+            .saturating_mul(28)
+            .saturating_div(100)
+            .clamp(26, 36);
+        let [chat, _, panel] = Layout::horizontal([
+            Constraint::Min(48),
+            Constraint::Length(2),
+            Constraint::Length(panel_width),
+        ])
+        .areas(body);
         render_transcript(frame, chat, state);
         render_panel(frame, panel, state);
     }
 
-    frame.render_widget(
-        Paragraph::new(state.input.as_str())
-            .block(Block::default().title(" Message ").borders(Borders::ALL)),
-        input,
-    );
-    if state.active.is_none() {
-        let cursor_x = input
-            .x
-            .saturating_add(1)
-            .saturating_add(u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX))
-            .min(input.right().saturating_sub(2));
-        frame.set_cursor_position((cursor_x, input.y.saturating_add(1)));
+    render_activity(frame, activity, state);
+    render_composer(frame, composer, state);
+    render_shortcuts(frame, shortcuts, state);
+}
+
+fn content_area(area: Rect) -> Rect {
+    let horizontal = if area.width >= 64 { 2 } else { 1 };
+    let vertical = u16::from(area.height >= 18);
+    Rect {
+        x: area.x.saturating_add(horizontal),
+        y: area.y.saturating_add(vertical),
+        width: area.width.saturating_sub(horizontal.saturating_mul(2)),
+        height: area.height.saturating_sub(vertical.saturating_mul(2)),
     }
+}
+
+fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let session = state.session_id.as_deref().unwrap_or("new session");
+    let [identity, session_area] =
+        Layout::horizontal([Constraint::Min(18), Constraint::Length(28)]).areas(area);
     frame.render_widget(
-        Paragraph::new(state.phase.status()).style(Style::default().fg(Color::DarkGray)),
-        status,
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                "LENSO",
+                Style::default()
+                    .fg(Palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  agent", Style::default().fg(Palette::MUTED)),
+        ])),
+        identity,
+    );
+    frame.render_widget(
+        Paragraph::new(session)
+            .alignment(ratatui::layout::Alignment::Right)
+            .style(Style::default().fg(Palette::QUIET)),
+        session_area,
     );
 }
 
 fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let transcript_area = Block::default()
+        .padding(Padding::new(1, 1, 1, 0))
+        .inner(area);
     let mut lines = Vec::new();
-    for entry in &state.transcript {
-        let (label, color) = match entry.speaker {
-            Speaker::User => ("You", Color::Cyan),
-            Speaker::Agent => ("Agent", Color::Green),
-            Speaker::System => ("System", Color::DarkGray),
-        };
+    if state.transcript.is_empty() {
         lines.push(Line::from(Span::styled(
-            label,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
+            "What do you want to work on?",
+            Style::default().add_modifier(Modifier::BOLD),
         )));
-        lines.extend(entry.text.lines().map(|line| Line::from(line.to_owned())));
+        lines.push(Line::from(Span::styled(
+            "Your Agent, tools, and UI are selected by this App Composition.",
+            Style::default().fg(Palette::MUTED),
+        )));
+    }
+    for entry in &state.transcript {
+        let (prefix, color, modifier) = match entry.speaker {
+            Speaker::User => ("❯ ", Palette::ACCENT, Modifier::BOLD),
+            Speaker::Agent => ("◆ ", Palette::AGENT, Modifier::empty()),
+            Speaker::System => ("• ", Palette::MUTED, Modifier::empty()),
+            Speaker::Error => ("● ", Palette::ERROR, Modifier::BOLD),
+        };
+        let mut content = entry.text.lines();
+        let first = content.next().unwrap_or_else(|| {
+            if matches!(entry.speaker, Speaker::Agent) && state.phase == UiPhase::Active {
+                "Working…"
+            } else {
+                ""
+            }
+        });
+        lines.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(color).add_modifier(modifier)),
+            Span::raw(first.to_owned()),
+        ]));
+        lines.extend(content.map(|line| Line::from(format!("  {line}"))));
         lines.push(Line::default());
     }
-    let visible_height = usize::from(area.height.saturating_sub(2));
-    let scroll = lines
-        .len()
-        .saturating_sub(visible_height)
+    let wrap_width = usize::from(transcript_area.width).max(1);
+    let rendered_line_count = lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(wrap_width))
+        .sum::<usize>();
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let scroll = rendered_line_count
+        .saturating_sub(usize::from(transcript_area.height))
         .try_into()
         .unwrap_or(u16::MAX);
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(
-                Block::default()
-                    .title(" Conversation ")
-                    .borders(Borders::ALL),
-            )
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        area,
-    );
+    frame.render_widget(paragraph.scroll((scroll, 0)), transcript_area);
 }
 
 fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
@@ -436,10 +513,114 @@ fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     };
     frame.render_widget(
         Paragraph::new(panel.body.as_str())
-            .block(Block::default().title(title).borders(Borders::ALL))
+            .style(Style::default().fg(Palette::MUTED))
+            .block(
+                Block::default()
+                    .title(Span::styled(title, Style::default().fg(Palette::MUTED)))
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Palette::BORDER))
+                    .padding(Padding::horizontal(1)),
+            )
             .wrap(Wrap { trim: false }),
         area,
     );
+}
+
+fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let Some((label, color)) = state.phase.activity() else {
+        return;
+    };
+    let suffix = if state.phase == UiPhase::Active {
+        "  Esc cancel"
+    } else {
+        ""
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(label, Style::default().fg(color)),
+            Span::styled(suffix, Style::default().fg(Palette::QUIET)),
+        ])),
+        area,
+    );
+}
+
+fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let focused = state.active.is_none();
+    let border = if focused {
+        Palette::ACCENT
+    } else {
+        Palette::BORDER
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let input = if state.input.is_empty() {
+        Line::from(vec![
+            Span::styled("❯ ", Style::default().fg(border)),
+            Span::styled("Ask Lenso Agent…", Style::default().fg(Palette::QUIET)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("❯ ", Style::default().fg(border)),
+            Span::raw(state.input.as_str()),
+        ])
+    };
+    frame.render_widget(Paragraph::new(input), inner);
+
+    if focused {
+        let cursor_x = inner
+            .x
+            .saturating_add(2)
+            .saturating_add(u16::try_from(state.input.chars().count()).unwrap_or(u16::MAX))
+            .min(inner.right().saturating_sub(1));
+        frame.set_cursor_position((cursor_x, inner.y));
+    }
+}
+
+fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let mut spans = Vec::new();
+    if state.active.is_none() {
+        spans.extend(shortcut("enter", "send"));
+        spans.push(Span::raw("   "));
+    }
+    spans.extend(shortcut(
+        "esc",
+        if state.active.is_some() {
+            "cancel"
+        } else {
+            "quit"
+        },
+    ));
+    if !state.panels.is_empty() && area.width >= PANEL_BREAKPOINT {
+        spans.push(Span::raw("   "));
+        spans.extend(shortcut("tab", "panels"));
+    }
+    spans.extend([
+        Span::raw("   "),
+        Span::styled(
+            state.tool_scope.as_str(),
+            Style::default().fg(Palette::QUIET),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn shortcut(key: &'static str, label: &'static str) -> [Span<'static>; 2] {
+    [
+        Span::styled(
+            key,
+            Style::default()
+                .fg(Palette::MUTED)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!(" {label}"), Style::default().fg(Palette::QUIET)),
+    ]
 }
 
 struct TerminalSession {
@@ -517,10 +698,32 @@ mod tests {
         state.input = "hello".to_owned();
         terminal.draw(|frame| render(frame, &state)).unwrap();
         let content = terminal.backend().to_string();
-        assert!(content.contains("Lenso Agent"));
-        assert!(content.contains("Conversation"));
+        assert!(content.contains("LENSO  agent"));
+        assert!(content.contains("What do you want to work on?"));
         assert!(content.contains("Help"));
         assert!(content.contains("hello"));
+        assert!(content.contains("enter send"));
+        assert!(!content.contains("Conversation"));
+    }
+
+    #[test]
+    fn compact_layout_keeps_the_conversation_and_composer_primary() {
+        let backend = TestBackend::new(80, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let state = TuiState::new(
+            &TuiOptions::default(),
+            vec![SnapshotResponsePanelsItem {
+                id: "agent.help".to_owned(),
+                title: "Help".to_owned(),
+                body: "Esc quits".to_owned(),
+            }],
+        );
+        terminal.draw(|frame| render(frame, &state)).unwrap();
+        let content = terminal.backend().to_string();
+        assert!(content.contains("What do you want to work on?"));
+        assert!(content.contains("Ask Lenso Agent…"));
+        assert!(!content.contains("Esc quits"));
+        assert!(!content.contains("tab panels"));
     }
 
     #[test]
@@ -538,5 +741,25 @@ mod tests {
         state.append_input(&"x".repeat(MAX_INPUT_CHARACTERS + 1));
         assert_eq!(state.input_characters, MAX_INPUT_CHARACTERS);
         assert_eq!(state.input.len(), MAX_INPUT_CHARACTERS);
+    }
+
+    #[test]
+    fn runtime_failure_stays_inline_and_keeps_the_tui_available() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        handle_stream_event(
+            Err(lenso_kernel::RuntimeFailure::ModuleFailure {
+                detail: "fixture failure".to_owned(),
+            }),
+            &mut state,
+        );
+        assert_eq!(state.phase, UiPhase::Failed);
+        assert!(state.active.is_none());
+        assert!(matches!(
+            state.transcript.last(),
+            Some(TranscriptEntry {
+                speaker: Speaker::Error,
+                text,
+            }) if text.contains("fixture failure")
+        ));
     }
 }
