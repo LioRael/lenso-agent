@@ -18,6 +18,7 @@ fn codex_direct_bundle_path() -> std::path::PathBuf {
 
 #[test]
 fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     let bundle = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
@@ -88,6 +89,7 @@ fn provenance_inspection_does_not_create_missing_authority() {
 
 #[test]
 fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     let bundle = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
@@ -151,9 +153,7 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
     reason = "one external Plugin scenario proves the complete release lifecycle"
 )]
 fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
-    let _external_wasm_guard = external_wasm_test_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
@@ -245,9 +245,7 @@ fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
     reason = "one external Plugin scenario proves imported workspace authority and its release lifecycle"
 )]
 fn external_wasm_tool_imports_only_the_host_selected_workspace_reader() {
-    let _external_wasm_guard = external_wasm_test_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
@@ -358,6 +356,7 @@ fn external_wasm_tool_imports_only_the_host_selected_workspace_reader() {
     reason = "one subprocess scenario preserves the authority digests across upgrade and rollback"
 )]
 fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() {
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     let release_one = tempfile::tempdir().unwrap();
     let release_two = tempfile::tempdir().unwrap();
@@ -542,6 +541,7 @@ fn upgrade_is_ready_gated_and_manual_rollback_restores_the_previous_authority() 
 
 #[test]
 fn reviewed_fixture_model_plugin_replaces_the_base_provider_and_runs() {
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
 
@@ -588,6 +588,7 @@ fn reviewed_fixture_model_plugin_replaces_the_base_provider_and_runs() {
 
 #[test]
 fn reviewed_codex_direct_plugin_installs_and_fails_closed_without_login() {
+    let _plugin_test_guard = plugin_test_guard();
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
 
@@ -743,9 +744,15 @@ fn copy_external_wasm_tool_source(destination: &Path) {
     }
 }
 
-fn external_wasm_test_lock() -> &'static std::sync::Mutex<()> {
+fn plugin_test_lock() -> &'static std::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
+}
+
+fn plugin_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    plugin_test_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn copy_external_wasm_workspace_reader_source(destination: &Path) {
