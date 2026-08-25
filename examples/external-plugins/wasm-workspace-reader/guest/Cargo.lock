@@ -87,7 +87,7 @@ name = "external-wasm-workspace-reader"
 version = "1.0.0"
 dependencies = [
  "lenso-capability-agent-workspace-read",
- "lenso-guest-sdk 0.1.0",
+ "lenso-guest-sdk",
  "serde",
  "serde_json",
  "wit-bindgen",
@@ -267,7 +267,7 @@ dependencies = [
  "lenso-contract-authoring",
  "lenso-contract-codegen",
  "lenso-contract-runtime",
- "lenso-guest-sdk 0.1.1",
+ "lenso-guest-sdk",
  "lenso-kernel",
  "lenso-module-authoring",
  "lenso-runtime-codec",
@@ -313,15 +313,6 @@ checksum = "9f56bfb2aaaa51297547762092ff859e774908a05737c4d7d44a2064e8a29c83"
 dependencies = [
  "base64",
  "bytes",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lenso-guest-sdk"
-version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=c56e4a01d14704eeae26e2121dbd87dbf380b1d3#c56e4a01d14704eeae26e2121dbd87dbf380b1d3"
-dependencies = [
  "serde",
  "serde_json",
 ]

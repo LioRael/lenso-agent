@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 lenso-capability-agent-workspace-read = { git = "https://github.com/LioRael/lenso-agent-harness.git", rev = "2f1b9f19b604a52316b8039baadda724b519ec16" }
-lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "c56e4a01d14704eeae26e2121dbd87dbf380b1d3" }
+lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "ffb07bc8dc7103b58c864b59225ca0f4609b6fdf" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wit-bindgen = "0.60"

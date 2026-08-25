@@ -151,7 +151,9 @@ fn reviewed_native_tool_plugin_executes_and_remove_deletes_the_capability() {
     reason = "one external Plugin scenario proves the complete release lifecycle"
 )]
 fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
-    let _external_wasm_guard = external_wasm_test_lock().lock().unwrap();
+    let _external_wasm_guard = external_wasm_test_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let workspace = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
@@ -243,7 +245,9 @@ fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
     reason = "one external Plugin scenario proves imported workspace authority and its release lifecycle"
 )]
 fn external_wasm_tool_imports_only_the_host_selected_workspace_reader() {
-    let _external_wasm_guard = external_wasm_test_lock().lock().unwrap();
+    let _external_wasm_guard = external_wasm_test_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let workspace = tempfile::tempdir().unwrap();
     let external = tempfile::tempdir().unwrap();
     let bundles = tempfile::tempdir().unwrap();
