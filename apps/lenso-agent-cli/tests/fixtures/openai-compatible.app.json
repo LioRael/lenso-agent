@@ -1,43 +1,31 @@
 {
   "schema_version": 1,
-  "manifest": "../Cargo.toml",
+  "manifest": "../../../../Cargo.toml",
   "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
-    "lenso.agent.model.openai-codex-direct": "lenso-agent-model-openai-codex-direct-module",
+    "lenso.agent.model.openai-compatible": "lenso-agent-model-openai-compatible-module",
+    "lenso.secrets.env": "lenso-secrets-env-module",
     "lenso.agent.prompt": "lenso-agent-prompt-module",
     "lenso.agent.prompt.static": "lenso-agent-prompt-static-module",
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
-    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module",
-    "lenso.agent.workspace-edit": "lenso-agent-workspace-edit-module",
-    "lenso.agent.process-tools": "lenso-agent-process-tools-module",
-    "lenso.agent.process.native": "lenso-agent-process-native-module",
-    "lenso.agent.auth.openai-codex": "lenso-agent-auth-openai-codex-module"
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
   },
   "app": {
-    "name": "openai-codex-direct-local-coding",
+    "name": "openai-readonly",
     "modules": [
       {
         "key": "agent",
         "package": "lenso.agent.loop",
         "configuration": {
           "max_history_events": 200,
-          "max_output_tokens": 4096,
+          "max_output_tokens": 1024,
           "max_steps": 8,
           "max_tool_calls": 4,
-          "model": "gpt-5.6-luna"
-        }
-      },
-      {
-        "key": "auth",
-        "package": "lenso.agent.auth.openai-codex",
-        "configuration": {
-          "issuer": "https://auth.openai.com",
-          "profile": "default",
-          "refresh_margin_seconds": 60
+          "model": "gpt-4o-mini"
         }
       },
       {
@@ -61,43 +49,11 @@
       },
       {
         "key": "model",
-        "package": "lenso.agent.model.openai-codex-direct",
+        "package": "lenso.agent.model.openai-compatible",
         "configuration": {
-          "base_url": "https://chatgpt.com/backend-api",
-          "max_event_bytes": 1048576,
-          "model": "gpt-5.6-luna",
-          "reasoning_effort": "medium"
-        }
-      },
-      {
-        "key": "native-process",
-        "package": "lenso.agent.process.native",
-        "configuration": {
-          "allowed_programs": [
-            "cargo",
-            "git",
-            "rg"
-          ],
-          "environment_allowlist": [
-            "PATH",
-            "HOME",
-            "CARGO_HOME",
-            "RUSTUP_HOME",
-            "TMPDIR",
-            "LANG",
-            "LC_ALL"
-          ],
-          "max_argument_bytes": 131072,
-          "max_output_bytes": 262144,
-          "max_timeout_ms": 600000,
-          "root": "."
-        }
-      },
-      {
-        "key": "process-tools",
-        "package": "lenso.agent.process-tools",
-        "configuration": {
-          "default_timeout_ms": 120000
+          "api_key_ref": "model/openai-api-key",
+          "base_url": "https://api.openai.com/v1",
+          "model": "gpt-4o-mini"
         }
       },
       {
@@ -106,6 +62,15 @@
         "configuration": {
           "max_contributions": 16,
           "max_total_bytes": 65536
+        }
+      },
+      {
+        "key": "secrets",
+        "package": "lenso.secrets.env",
+        "configuration": {
+          "references": {
+            "model/openai-api-key": "OPENAI_API_KEY"
+          }
         }
       },
       {
@@ -133,15 +98,6 @@
         "key": "tools",
         "package": "lenso.agent.tools",
         "configuration": {}
-      },
-      {
-        "key": "workspace-edit",
-        "package": "lenso.agent.workspace-edit",
-        "configuration": {
-          "max_edit_bytes": 131072,
-          "max_file_bytes": 1048576,
-          "root": "."
-        }
       },
       {
         "key": "workspace-import-read",

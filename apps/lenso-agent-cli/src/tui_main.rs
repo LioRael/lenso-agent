@@ -2,11 +2,10 @@ use std::{fs, path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
 use lenso_agent_cli::{
+    default_plan,
     generation::AgentApp,
     tui::{self, TuiOptions},
 };
-
-const DEFAULT_PLAN: &str = "composition/tui-readonly/resolved-plan.json";
 
 /// Interactive Lenso Agent. Running without arguments opens the TUI.
 #[derive(Debug, Parser)]
@@ -46,7 +45,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    let plan = args.plan.unwrap_or_else(default_plan);
+    let plan = match args.plan {
+        Some(plan) => plan,
+        None => default_plan()?,
+    };
     let bytes =
         fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))?;
     let mut app = AgentApp::start_tui(&bytes)
@@ -71,10 +73,6 @@ async fn run(args: Args) -> Result<(), String> {
     result.and(shutdown)
 }
 
-fn default_plan() -> PathBuf {
-    PathBuf::from(DEFAULT_PLAN)
-}
-
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory;
@@ -95,6 +93,5 @@ mod tests {
         assert!(args.session.is_none());
         assert!(args.allowed_tools.is_empty());
         assert!(!args.no_tools);
-        assert_eq!(default_plan(), PathBuf::from(DEFAULT_PLAN));
     }
 }

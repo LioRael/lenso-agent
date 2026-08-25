@@ -2,8 +2,8 @@
 
 | Term | Owner and lifecycle | Stored form |
 | --- | --- | --- |
-| App Definition | App author selects locked Module instances, configuration, and bindings before resolution. | `composition/*.app.json` |
-| Resolved App Plan | The resolver creates the immutable execution graph consumed by the Kernel. It never changes in place. | `composition/*/resolved-plan.json` or `.lenso/<app>/resolved-plan.json` |
+| App Definition | App author selects the base Module instances, configuration, and bindings before resolution. | root `lenso.app.json` |
+| Resolved App Plan | The resolver creates the immutable execution graph consumed by the Kernel. It never changes in place. | generated `.lenso/resolved-plan.json` |
 | Plugin Manifest | Plugin publisher declares one exact release, artifacts, capabilities, permissions, and evidence. | `lenso-plugin.json` inside a Bundle |
 | Plugin lock | Host records the admitted Plugin releases selected for the next resolution. | Content-addressed control-plane state |
 | App Generation | Host stages one resolved Plan plus its exact runtime resources, then marks it ready before switching traffic. | `.lenso/plugins/generations/<digest>` |

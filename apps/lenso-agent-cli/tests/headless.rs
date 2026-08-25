@@ -2,19 +2,10 @@ use std::{fs, path::Path, process::Command};
 
 use lenso_plugin_control_plane::sha256_digest;
 
+mod support;
+
 fn plan_path() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/headless-readonly/resolved-plan.json")
-}
-
-fn coding_plan_path() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/headless-coding/resolved-plan.json")
-}
-
-fn local_coding_plan_path() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../composition/headless-local-coding/resolved-plan.json")
+    support::plan("base")
 }
 
 fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
@@ -662,19 +653,15 @@ fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environmen
 }
 
 #[test]
-fn product_runner_selects_a_reviewed_app_without_a_plan_path() {
+fn product_runner_resolves_the_single_base_app_without_a_plan_path() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    let app_directory = temporary
-        .path()
-        .join("composition")
-        .join("headless-readonly");
-    fs::create_dir_all(&app_directory).unwrap();
-    fs::copy(plan_path(), app_directory.join("resolved-plan.json")).unwrap();
+    let definition = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lenso.app.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
-        .args(["--app", "headless-readonly", "Answer directly: hello"])
+        .env("LENSO_APP_DEFINITION", definition)
+        .arg("Answer directly: hello")
         .output()
         .unwrap();
 
@@ -687,10 +674,11 @@ fn product_runner_selects_a_reviewed_app_without_a_plan_path() {
         String::from_utf8_lossy(&output.stdout),
         "Plugin: Direct answer.\n"
     );
+    assert!(temporary.path().join(".lenso/resolved-plan.json").is_file());
 }
 
 #[test]
-fn product_runner_help_leads_with_the_simple_interface_and_lists_apps() {
+fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .arg("--help")
         .output()
@@ -698,13 +686,13 @@ fn product_runner_help_leads_with_the_simple_interface_and_lists_apps() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--app <name>]"));
-    assert!(stdout.contains("headless-readonly"));
+    assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--session <id>]"));
+    assert!(stdout.contains("base App is resolved from lenso.app.json"));
     assert!(stdout.contains("Advanced: --prompt <text> and --plan <path>"));
 }
 
 #[test]
-fn product_runner_rejects_an_unknown_app_before_startup() {
+fn product_runner_rejects_the_removed_named_app_interface() {
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .args(["--app", "unknown", "hello"])
         .output()
@@ -712,8 +700,7 @@ fn product_runner_rejects_an_unknown_app_before_startup() {
 
     assert!(!output.status.success());
     let stderr = String::from_utf8(output.stderr).unwrap();
-    assert!(stderr.contains("unknown App `unknown`; choose one of:"));
-    assert!(stderr.contains("openai-codex-direct-local-coding"));
+    assert!(stderr.contains("unknown argument `--app`"));
 }
 
 #[test]
@@ -876,12 +863,26 @@ fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
 }
 
 #[test]
-fn opt_in_coding_profile_creates_edits_then_reads_back_one_file() {
+fn workspace_edit_plugin_creates_edits_then_reads_back_one_file() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let plan = plan_path();
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["plugins", "enable", "workspace-edit", "--evidence"])
+        .arg("reviewed workspace mutation")
+        .arg("--plan")
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
     let output = run(
         temporary.path(),
-        &coding_plan_path(),
+        &plan,
         "Create and edit a workspace note.",
         None,
     );
@@ -953,9 +954,36 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
         "pub fn value() -> u32 { 1 }\n",
     )
     .unwrap();
+    let plan = plan_path();
+    let enable_process = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["plugins", "enable", "local-process", "--evidence"])
+        .arg("reviewed local process execution")
+        .arg("--plan")
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        enable_process.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable_process.stderr)
+    );
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["plugins", "enable", "workspace-edit", "--evidence"])
+        .arg("reviewed local coding mutation")
+        .arg("--plan")
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
     let output = run(
         temporary.path(),
-        &local_coding_plan_path(),
+        &plan,
         "Edit and validate the workspace project.",
         None,
     );

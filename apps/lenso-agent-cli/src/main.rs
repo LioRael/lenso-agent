@@ -9,7 +9,7 @@ use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_agent_cli::{generation, plugins, provenance};
+use lenso_agent_cli::{default_plan, generation, plugins, provenance};
 use lenso_agent_loop_module::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
@@ -21,18 +21,6 @@ struct Args {
     prompt: String,
     session: Option<String>,
 }
-
-const DEFAULT_APP: &str = "headless-readonly";
-const SUPPORTED_APPS: &[&str] = &[
-    DEFAULT_APP,
-    "headless-coding",
-    "headless-local-coding",
-    "openai-readonly",
-    "openai-codex-direct",
-    "openai-codex-direct-skills",
-    "openai-codex-direct-coding",
-    "openai-codex-direct-local-coding",
-];
 
 #[derive(Debug)]
 enum CliCommand {
@@ -155,7 +143,7 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "sessions") {
         return provenance::parse_session_command(&raw[1..]).map(CliCommand::Sessions);
     }
-    let mut plan = default_plan();
+    let mut plan = None;
     let mut plan_source = None;
     let mut prompt = None;
     let mut session = None;
@@ -164,25 +152,15 @@ fn parse_args() -> Result<CliCommand, String> {
     let mut arguments = raw.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
-            "--app" => {
-                if let Some(source) = plan_source {
-                    return Err(format!("--app conflicts with {source}"));
-                }
-                let app = arguments
-                    .next()
-                    .ok_or_else(|| "--app requires a name".to_owned())?;
-                plan = app_plan(&app)?;
-                plan_source = Some("--app");
-            }
             "--plan" => {
                 if let Some(source) = plan_source {
                     return Err(format!("--plan conflicts with {source}"));
                 }
-                plan = PathBuf::from(
+                plan = Some(PathBuf::from(
                     arguments
                         .next()
                         .ok_or_else(|| "--plan requires a path".to_owned())?,
-                );
+                ));
                 plan_source = Some("--plan");
             }
             "--prompt" => {
@@ -235,36 +213,17 @@ fn parse_args() -> Result<CliCommand, String> {
     }
     Ok(CliCommand::Run(Args {
         allowed_tools,
-        plan,
+        plan: match plan {
+            Some(plan) => plan,
+            None => default_plan()?,
+        },
         prompt: prompt.ok_or_else(|| "a prompt is required".to_owned())?,
         session,
     }))
 }
 
-fn default_plan() -> PathBuf {
-    env::var_os("LENSO_RESOLVED_PLAN").map_or_else(
-        || app_plan(DEFAULT_APP).expect("the default App must be supported"),
-        PathBuf::from,
-    )
-}
-
-fn app_plan(app: &str) -> Result<PathBuf, String> {
-    if !SUPPORTED_APPS.contains(&app) {
-        return Err(format!(
-            "unknown App `{app}`; choose one of: {}",
-            SUPPORTED_APPS.join(", ")
-        ));
-    }
-    Ok(PathBuf::from("composition")
-        .join(app)
-        .join("resolved-plan.json"))
-}
-
 fn run_usage() -> String {
-    format!(
-        "usage: lenso-agent-cli <prompt> [--app <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <plugins|generations|sessions|auth> ...\n\nApps: {}\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.",
-        SUPPORTED_APPS.join(", ")
-    )
+    "usage: lenso-agent-cli <prompt> [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <plugins|generations|sessions|auth> ...\n\nEnable optional capabilities with `plugins enable`; the base App is resolved from lenso.app.json.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_auth(arguments: &[String]) -> Result<AuthCommand, String> {

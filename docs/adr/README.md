@@ -21,3 +21,5 @@
 - [0019 — Use portable model-visible Tool names](0019-use-portable-model-visible-tool-names.md)
 - [0020 — Enter a composed TUI from the product entrypoint](0020-enter-a-composed-tui-from-the-product-entrypoint.md)
 - [0021 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0021-bind-reviewed-wasm-tools-to-workspace-read.md)
+- [0022 — Compose optional built-ins through Plugin state](0022-compose-optional-builtins-through-plugin-state.md)
+- [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-modules-through-plugin-state.md)

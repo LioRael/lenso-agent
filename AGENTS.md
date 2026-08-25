@@ -22,9 +22,10 @@ contracts.
   Schemas directly. For Modules already migrated to source-first authoring, do
   not restore hand-written factories, endpoint glue, Schemas, or Host
   registration.
-- Edit App variants through their source-derived `composition/*.app.json`
-  definitions. Never hand-edit `composition/*/resolved-plan.json` Plans. Run
-  `lenso app check` and `lenso app resolve` for the exact definition.
+- Edit the base App through the source-derived root `lenso.app.json` definition
+  and select optional Modules through Plugin Desired State. Never hand-edit the
+  generated `.lenso/resolved-plan.json` Plan. Run `lenso app check` and
+  `lenso app resolve` for the root definition.
 - Use `/Users/leosouthey/Projects/framework/.lenso-tools/bin/lenso-cargo` for
   local Cargo commands. Public documentation must use portable `cargo`
   commands without local absolute paths.
