@@ -109,6 +109,13 @@ exact immutable digest of a retired Generation; live candidate duplication
 still fails closed. Each startup or offline transition hashes the exact Host
 executable once and reuses that immutable build identity across every initial,
 retained, current, and candidate Generation resolution in the operation.
+Clean suspension commits a durable marker only after every process-local
+Generation resource is released. When a replacement Host executable cannot
+restage the old executable-bound Generation, that marker authorizes a fenced
+cold replacement: the old control records are retained with
+`host_build_replaced`, a new Supervisor and routing epoch are opened, and the
+current exact Generation passes the ordinary initial Ready Gate. Missing clean
+suspension evidence still fails closed instead of resetting Controller state.
 
 The Host also owns one offline Plugin Release transition. Upgrade admission is
 guarded by an exact active-Manifest compare-and-swap, resolves current and

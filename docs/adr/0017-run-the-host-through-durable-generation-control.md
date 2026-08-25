@@ -48,9 +48,15 @@ Generation path.
 - Controller maintenance continuously reconciles terminal Kernel failure,
   routing epochs, drain deadlines, standby expiry, and authorized rollback.
 - Normal CLI exit uses Host suspension: it refuses active Turn Leases, shuts
-  down process-local Kernel resources, and preserves the durable Active and
-  Standby authority for exact recovery. Explicit Generation shutdown remains
-  the separate retirement operation.
+  down process-local Kernel resources, then commits a clean-suspension marker
+  while preserving the durable Active and Standby authority for exact recovery.
+  A later Host with the same build recovers those exact Generations. If a new
+  exact Host build cannot restage the executable-bound live digest, only that
+  marker authorizes a fenced cold replacement: the previous records become
+  retired with `host_build_replaced`, their provenance remains durable, and the
+  new build stages its current Generation through the ordinary initial Ready
+  Gate. A missing marker still fails closed. Explicit Generation shutdown
+  remains the separate retirement operation.
 - Offline upgrade and rollback validation use the same standard Controller over
   an in-memory control store, then retire the preview after the Ready Gate. They
   still do not mutate a different running CLI process.
@@ -68,8 +74,9 @@ limits.
 - Product code no longer owns a parallel Generation state machine or route
   table.
 - A graceful stop and next invocation recover the same immutable Generation
-  without changing its digest; crash recovery fences the older Supervisor
-  epoch before admitting routes.
+  without changing its digest; a graceful Host build replacement advances the
+  Supervisor and routing epochs without deleting old control history; crash
+  recovery fences the older Supervisor epoch before admitting routes.
 - A durable authority mismatch fails startup instead of silently selecting the
   newest Store files or rebuilding a different graph.
 - Overlap rollout UX, guest imports for required Host Capabilities, durable
