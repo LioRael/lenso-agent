@@ -1744,8 +1744,8 @@ name = "lenso-capability-agent-http-fetch"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-authoring",
- "lenso-contract-codegen",
+ "lenso-contract-authoring 0.1.1",
+ "lenso-contract-codegen 0.6.3",
  "lenso-contract-runtime",
  "lenso-guest-sdk",
  "lenso-kernel",

@@ -25,7 +25,7 @@ macro_rules! __lenso_required_many_http_fetch_client { () => { "{\"capability_id
 
 pub const GET_OPERATION: &str = "get";
 
-pub use lenso_contract_runtime::{UnknownDomainError};
+pub use lenso_contract_runtime::{RawJson, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -45,7 +45,7 @@ pub struct GetResponse {
     pub content_type: String,
     #[serde(rename = "metadata_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub metadata_json: String,
+    pub metadata_json: RawJson,
     #[serde(rename = "status_code")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub status_code: i64,
@@ -55,7 +55,7 @@ pub struct GetResponse {
 pub struct GetErrorExecutionFailedPayload {
     #[serde(rename = "details_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub details_json: String,
+    pub details_json: RawJson,
     #[serde(rename = "message")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub message: String,

@@ -122,7 +122,7 @@ impl HttpFetchProvider for HttpFetcher {
                 status_code,
                 content_type,
                 body,
-                metadata_json: serde_json::json!({"origin": origin}).to_string(),
+                metadata_json: raw_json(&serde_json::json!({"origin": origin})),
             }))
         })
     }
@@ -168,9 +168,18 @@ fn execution_failed(reason_code: &str, error: impl std::fmt::Display) -> GetErro
         payload: GetErrorExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: error.to_string(),
-            details_json: "{}".to_owned(),
+            details_json: "{}"
+                .try_into()
+                .expect("empty object must be valid raw JSON"),
         },
     }
+}
+
+fn raw_json(value: &serde_json::Value) -> http_fetch_contract::RawJson {
+    value
+        .to_string()
+        .try_into()
+        .expect("serde_json output must be valid raw JSON")
 }
 
 fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
