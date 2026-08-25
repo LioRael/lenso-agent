@@ -146,8 +146,42 @@ pub fn decode_assemble_response(wire: &str) -> Result<AssembleResponse, serde_js
 pub fn encode_assemble_error(value: &AssembleError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_assemble_error(wire: &str) -> Result<AssembleError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoPromptAssembleResult {
+    fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure>;
+}
+impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, AssembleError> {
+    fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPromptAssembleResult for Result<AssembleResponse, PromptInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<AssembleResponse, AssembleError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(PromptInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(PromptInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
 pub trait PromptProvider: fmt::Debug + 'static {
     fn assemble(&self, context: InvocationContext, request: AssembleRequest) -> NativeRequestFuture<Prompt>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_prompt {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportPrompt;
+        impl $crate::PromptProvider for $module {
+        fn assemble(&self, context: __LensoNativeSupportPrompt::InvocationContext, request: $crate::AssembleRequest) -> __LensoNativeSupportPrompt::NativeRequestFuture<$crate::Prompt> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::assemble(&module, context, request).await;
+                $crate::__LensoIntoPromptAssembleResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]

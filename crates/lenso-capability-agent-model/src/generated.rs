@@ -202,8 +202,47 @@ pub fn decode_complete_response(wire: &str) -> Result<CompleteResponse, serde_js
 pub fn encode_complete_error(value: &CompleteError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_complete_error(wire: &str) -> Result<CompleteError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoModelCompleteStreamResult {
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, ModelInvocationError>;
+}
+impl<S> __LensoIntoModelCompleteStreamResult for Result<S, CompleteError>
+where
+    S: NativeStreamSession + 'static,
+{
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, ModelInvocationError> {
+        self.map(|stream| Box::new(stream) as Box<dyn NativeStreamSession>)
+            .map_err(ModelInvocationError::Domain)
+    }
+}
+impl<S> __LensoIntoModelCompleteStreamResult for Result<S, ModelInvocationError>
+where
+    S: NativeStreamSession + 'static,
+{
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, ModelInvocationError> {
+        self.map(|stream| Box::new(stream) as Box<dyn NativeStreamSession>)
+    }
+}
+
 pub trait ModelProvider: fmt::Debug + 'static {
     fn complete(&self, context: InvocationContext, request: CompleteRequest) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_model {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportModel;
+        impl $crate::ModelProvider for $module {
+        fn complete(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CompleteRequest) -> __LensoNativeSupportModel::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportModel::NativeStreamSession>, $crate::ModelInvocationError>> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::complete(&module, context, request).await;
+                $crate::__LensoIntoModelCompleteStreamResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]

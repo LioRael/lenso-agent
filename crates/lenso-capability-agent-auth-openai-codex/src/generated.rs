@@ -139,8 +139,42 @@ pub fn decode_access_response(wire: &str) -> Result<AccessResponse, serde_json::
 pub fn encode_access_error(value: &AccessError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_access_error(wire: &str) -> Result<AccessError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoOpenaiCodexAccessResult {
+    fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure>;
+}
+impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, AccessError> {
+    fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoOpenaiCodexAccessResult for Result<AccessResponse, OpenaiCodexInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(OpenaiCodexInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(OpenaiCodexInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
 pub trait OpenaiCodexProvider: fmt::Debug + 'static {
     fn access(&self, context: InvocationContext, request: AccessRequest) -> NativeRequestFuture<OpenaiCodex>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_openai_codex {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportOpenaiCodex;
+        impl $crate::OpenaiCodexProvider for $module {
+        fn access(&self, context: __LensoNativeSupportOpenaiCodex::InvocationContext, request: $crate::AccessRequest) -> __LensoNativeSupportOpenaiCodex::NativeRequestFuture<$crate::OpenaiCodex> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::access(&module, context, request).await;
+                $crate::__LensoIntoOpenaiCodexAccessResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]

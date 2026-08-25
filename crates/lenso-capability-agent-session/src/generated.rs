@@ -458,10 +458,92 @@ pub fn decode_read_response(wire: &str) -> Result<ReadResponse, serde_json::Erro
 pub fn encode_read_error(value: &ReadError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_read_error(wire: &str) -> Result<ReadError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoSessionAppendResult {
+    fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure>;
+}
+impl __LensoIntoSessionAppendResult for Result<AppendResponse, AppendError> {
+    fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoSessionAppendResult for Result<AppendResponse, SessionAppendInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<AppendResponse, AppendError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(SessionAppendInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(SessionAppendInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoSessionOpenResult {
+    fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure>;
+}
+impl __LensoIntoSessionOpenResult for Result<OpenResponse, OpenError> {
+    fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoSessionOpenResult for Result<OpenResponse, SessionOpenInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<OpenResponse, OpenError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(SessionOpenInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(SessionOpenInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoSessionReadResult {
+    fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure>;
+}
+impl __LensoIntoSessionReadResult for Result<ReadResponse, ReadError> {
+    fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoSessionReadResult for Result<ReadResponse, SessionReadInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<ReadResponse, ReadError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(SessionReadInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(SessionReadInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
 pub trait SessionProvider: fmt::Debug + 'static {
     fn append(&self, context: InvocationContext, request: AppendRequest) -> NativeRequestFuture<SessionAppend>;
     fn open(&self, context: InvocationContext, request: OpenRequest) -> NativeRequestFuture<SessionOpen>;
     fn read(&self, context: InvocationContext, request: ReadRequest) -> NativeRequestFuture<SessionRead>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_session {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportSession;
+        impl $crate::SessionProvider for $module {
+        fn append(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::AppendRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionAppend> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::append(&module, context, request).await;
+                $crate::__LensoIntoSessionAppendResult::__lenso_into_result(result)
+            })
+        }
+        fn open(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::OpenRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionOpen> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::open(&module, context, request).await;
+                $crate::__LensoIntoSessionOpenResult::__lenso_into_result(result)
+            })
+        }
+        fn read(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::ReadRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionRead> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::read(&module, context, request).await;
+                $crate::__LensoIntoSessionReadResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]

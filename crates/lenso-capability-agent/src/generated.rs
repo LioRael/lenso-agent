@@ -130,8 +130,47 @@ pub fn decode_run_turn_response(wire: &str) -> Result<RunTurnResponse, serde_jso
 pub fn encode_run_turn_error(value: &RunTurnError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_run_turn_error(wire: &str) -> Result<RunTurnError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoAgentRunTurnStreamResult {
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, AgentInvocationError>;
+}
+impl<S> __LensoIntoAgentRunTurnStreamResult for Result<S, RunTurnError>
+where
+    S: NativeStreamSession + 'static,
+{
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, AgentInvocationError> {
+        self.map(|stream| Box::new(stream) as Box<dyn NativeStreamSession>)
+            .map_err(AgentInvocationError::Domain)
+    }
+}
+impl<S> __LensoIntoAgentRunTurnStreamResult for Result<S, AgentInvocationError>
+where
+    S: NativeStreamSession + 'static,
+{
+    fn __lenso_into_result(self) -> Result<Box<dyn NativeStreamSession>, AgentInvocationError> {
+        self.map(|stream| Box::new(stream) as Box<dyn NativeStreamSession>)
+    }
+}
+
 pub trait AgentProvider: fmt::Debug + 'static {
     fn run_turn(&self, context: InvocationContext, request: RunTurnRequest) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, AgentInvocationError>>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_agent {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportAgent;
+        impl $crate::AgentProvider for $module {
+        fn run_turn(&self, context: __LensoNativeSupportAgent::InvocationContext, request: $crate::RunTurnRequest) -> __LensoNativeSupportAgent::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportAgent::NativeStreamSession>, $crate::AgentInvocationError>> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::run_turn(&module, context, request).await;
+                $crate::__LensoIntoAgentRunTurnStreamResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]

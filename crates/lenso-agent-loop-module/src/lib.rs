@@ -16,8 +16,8 @@ use futures::{
 };
 use lenso::prelude::*;
 use lenso_capability_agent::{
-    self as agent_capability, AgentInvocationError, AgentProvider, CAPABILITY_ID, RunTurnError,
-    RunTurnRequest, RunTurnResponse,
+    self as agent_capability, AgentInvocationError, CAPABILITY_ID, RunTurnError, RunTurnRequest,
+    RunTurnResponse,
 };
 use lenso_capability_agent_model::{
     self as model_capability, CompleteRequest, CompleteRequestMessagesItem,
@@ -134,29 +134,28 @@ fn activate_agent_loop(module: &AgentLoop, context: &ActivateContext) -> ModuleF
 }
 
 #[lenso::provides(agent_capability::Agent)]
-impl AgentProvider for AgentLoop {
-    fn run_turn(
+impl AgentLoop {
+    // Opening the stream only schedules the managed turn; the generated Provider
+    // lowering still requires the same async domain-method shape as other Operations.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    async fn run_turn(
         &self,
-        context: InvocationContext,
+        context: Ctx,
         request: RunTurnRequest,
-    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, AgentInvocationError>> {
+    ) -> Result<AgentTurnStream, AgentInvocationError> {
         if request.input.trim().is_empty() {
-            return Box::pin(futures::future::ready(Err(AgentInvocationError::Domain(
+            return Err(AgentInvocationError::Domain(
                 RunTurnError::ContextLimitExceeded,
-            ))));
+            ));
         }
         if self.active.replace(true) {
-            return Box::pin(futures::future::ready(Err(AgentInvocationError::Domain(
-                RunTurnError::ConcurrentTurn,
-            ))));
+            return Err(AgentInvocationError::Domain(RunTurnError::ConcurrentTurn));
         }
         let Some(tasks) = self.tasks.borrow().clone() else {
             self.active.set(false);
-            return Box::pin(futures::future::ready(Err(AgentInvocationError::Runtime(
-                RuntimeFailure::Unavailable {
-                    capability: CAPABILITY_ID,
-                },
-            ))));
+            return Err(AgentInvocationError::Runtime(RuntimeFailure::Unavailable {
+                capability: CAPABILITY_ID,
+            }));
         };
         let active = self.active.clone();
         let cancellation = context.cancellation();
@@ -167,17 +166,14 @@ impl AgentProvider for AgentLoop {
             produce_turn(module, context, request, sender).await;
         }));
         match task {
-            Ok(_) => Box::pin(ready(Ok(
-                Box::new(AgentTurnStream::new(receiver, cancellation))
-                    as Box<dyn NativeStreamSession>,
-            ))),
+            Ok(_) => Ok(AgentTurnStream::new(receiver, cancellation)),
             Err(error) => {
                 self.active.set(false);
-                Box::pin(ready(Err(AgentInvocationError::Runtime(
+                Err(AgentInvocationError::Runtime(
                     RuntimeFailure::ModuleFailure {
                         detail: format!("Agent turn task failed to start: {error:?}"),
                     },
-                ))))
+                ))
             }
         }
     }

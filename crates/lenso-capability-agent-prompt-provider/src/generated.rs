@@ -143,8 +143,42 @@ pub fn decode_contribute_response(wire: &str) -> Result<ContributeResponse, serd
 pub fn encode_contribute_error(value: &ContributeError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_contribute_error(wire: &str) -> Result<ContributeError, serde_json::Error> { decode_portable_json(wire) }
 
+#[doc(hidden)]
+pub trait __LensoIntoPromptProviderContributeResult {
+    fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure>;
+}
+impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, ContributeError> {
+    fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPromptProviderContributeResult for Result<ContributeResponse, PromptProviderInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<ContributeResponse, ContributeError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(PromptProviderInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(PromptProviderInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
 pub trait PromptProviderProvider: fmt::Debug + 'static {
     fn contribute(&self, context: InvocationContext, request: ContributeRequest) -> NativeRequestFuture<PromptProvider>;
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_prompt_provider {
+    ($module:ty, $support:path) => {
+        use $support as __LensoNativeSupportPromptProvider;
+        impl $crate::PromptProviderProvider for $module {
+        fn contribute(&self, context: __LensoNativeSupportPromptProvider::InvocationContext, request: $crate::ContributeRequest) -> __LensoNativeSupportPromptProvider::NativeRequestFuture<$crate::PromptProvider> {
+            let module = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$module>::contribute(&module, context, request).await;
+                $crate::__LensoIntoPromptProviderContributeResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
 }
 
 #[derive(Debug)]
