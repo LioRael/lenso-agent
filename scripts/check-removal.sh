@@ -42,3 +42,6 @@ remove_modules composition/headless-coding.app.json \
 remove_modules composition/headless-local-coding.app.json \
   "${proof_root}/headless-without-process.app.json" \
   process-tools native-process
+remove_modules composition/headless-network.app.json \
+  "${proof_root}/headless-without-http-fetch.app.json" \
+  http-fetch

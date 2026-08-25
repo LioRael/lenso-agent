@@ -21,3 +21,4 @@
 - [0019 — Use portable model-visible Tool names](0019-use-portable-model-visible-tool-names.md)
 - [0020 — Enter a composed TUI from the product entrypoint](0020-enter-a-composed-tui-from-the-product-entrypoint.md)
 - [0021 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0021-bind-reviewed-wasm-tools-to-workspace-read.md)
+- [0022 — Enforce reviewed network grants through one HTTP Capability](0022-enforce-reviewed-network-grants-through-http-capability.md)

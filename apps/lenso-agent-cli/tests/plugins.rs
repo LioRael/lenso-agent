@@ -1,4 +1,11 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener,
+    path::Path,
+    process::Command,
+    thread,
+};
 
 use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
 use lenso_plugin_control_plane::sha256_digest;
@@ -348,6 +355,142 @@ fn external_wasm_tool_imports_only_the_host_selected_workspace_reader() {
     let after_remove = run_external_workspace_reader(workspace.path());
     assert!(!after_remove.status.success());
     assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one external Plugin scenario proves reviewed network authority across the release lifecycle"
+)]
+fn external_wasm_tool_uses_only_the_reviewed_network_origin() {
+    let _plugin_test_guard = plugin_test_guard();
+    let workspace = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    let (origin, server) = start_http_fixture(3);
+    copy_external_wasm_http_fetch_source(external.path());
+    let artifact = build_external_wasm_http_fetch(external.path());
+    let release_one = build_external_wasm_http_fetch_bundle(
+        external.path(),
+        bundles.path().join("v1"),
+        &artifact,
+        "1.0.0",
+        &[origin.as_str()],
+    );
+    let release_two = build_external_wasm_http_fetch_bundle(
+        external.path(),
+        bundles.path().join("v2"),
+        &artifact,
+        "2.0.0",
+        &[origin.as_str()],
+    );
+    let expanded = build_external_wasm_http_fetch_bundle(
+        external.path(),
+        bundles.path().join("expanded"),
+        &artifact,
+        "3.0.0",
+        &[origin.as_str(), "http://127.0.0.1:1"],
+    );
+    let plan = write_network_plan(workspace.path(), &origin);
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(&release_one)
+        .args(["--evidence", "network-origin-review-v1"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let install_stdout = String::from_utf8(install.stdout).unwrap();
+    assert!(install_stdout.contains("governance: reviewed"));
+    let active_set =
+        sha256_digest(&fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap());
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "inspect", "--active-set", &active_set])
+        .output()
+        .unwrap();
+    let inspect_stdout = String::from_utf8_lossy(&inspect.stdout);
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    assert!(inspect_stdout.contains("enforcer=lenso.agent.http-fetch"));
+    assert!(inspect_stdout.contains(&origin));
+    assert_external_http_fetch_runs(workspace.path(), &plan, &origin, "after install");
+
+    let active_before = fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap();
+    let rejected = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "upgrade", "--bundle"])
+        .arg(&expanded)
+        .args(["--evidence", "review-must-not-expand-origin", "--plan"])
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("exceeds the App HTTP enforcer allowlist"),
+        "{}",
+        String::from_utf8_lossy(&rejected.stderr)
+    );
+    assert_eq!(
+        fs::read(workspace.path().join(".lenso/plugins/active-set.json")).unwrap(),
+        active_before
+    );
+
+    let upgrade = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "upgrade", "--bundle"])
+        .arg(&release_two)
+        .args(["--evidence", "network-origin-review-v2", "--plan"])
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        upgrade.status.success(),
+        "{}",
+        String::from_utf8_lossy(&upgrade.stderr)
+    );
+    let upgrade_stdout = String::from_utf8(upgrade.stdout).unwrap();
+    let previous = output_value(&upgrade_stdout, "previous-active-set: ");
+    assert_external_http_fetch_runs(workspace.path(), &plan, &origin, "after upgrade");
+
+    let rollback = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "rollback", "--to", previous, "--plan"])
+        .arg(&plan)
+        .output()
+        .unwrap();
+    assert!(
+        rollback.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rollback.stderr)
+    );
+    assert_external_http_fetch_runs(workspace.path(), &plan, &origin, "after rollback");
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args([
+            "plugins",
+            "remove",
+            "--plugin",
+            "dev.example.wasm-http-fetch",
+        ])
+        .output()
+        .unwrap();
+    assert!(remove.status.success());
+    let after_remove = run_external_http_fetch(workspace.path(), &plan, &origin);
+    assert!(!after_remove.status.success());
+    assert!(String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"));
+    server.join().unwrap();
 }
 
 #[test]
@@ -771,6 +914,22 @@ fn copy_external_wasm_workspace_reader_source(destination: &Path) {
     }
 }
 
+fn copy_external_wasm_http_fetch_source(destination: &Path) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/external-plugins/wasm-http-fetch");
+    fs::create_dir_all(destination.join("guest/src")).unwrap();
+    fs::create_dir_all(destination.join("guest/wit")).unwrap();
+    for relative in [
+        "guest/Cargo.toml",
+        "guest/Cargo.lock",
+        "guest/src/lib.rs",
+        "guest/wit/world.wit",
+        "lenso-plugin.template.json",
+    ] {
+        fs::copy(source.join(relative), destination.join(relative)).unwrap();
+    }
+}
+
 fn build_external_wasm_tool(source: &Path) -> std::path::PathBuf {
     let target = source.join("target");
     let output = Command::new(env!("CARGO"))
@@ -817,6 +976,30 @@ fn build_external_wasm_workspace_reader(source: &Path) -> std::path::PathBuf {
         String::from_utf8_lossy(&output.stderr)
     );
     target.join("wasm32-unknown-unknown/release/external_wasm_workspace_reader.wasm")
+}
+
+fn build_external_wasm_http_fetch(source: &Path) -> std::path::PathBuf {
+    let target = source.join("target");
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--locked",
+            "--release",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--manifest-path",
+        ])
+        .arg(source.join("guest/Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    target.join("wasm32-unknown-unknown/release/external_wasm_http_fetch.wasm")
 }
 
 fn build_external_wasm_tool_bundle(
@@ -883,6 +1066,34 @@ fn build_external_wasm_workspace_reader_bundle(
     output
 }
 
+fn build_external_wasm_http_fetch_bundle(
+    source: &Path,
+    output: std::path::PathBuf,
+    artifact: &Path,
+    release_version: &str,
+    origins: &[&str],
+) -> std::path::PathBuf {
+    let mut template: serde_json::Value =
+        serde_json::from_slice(&fs::read(source.join("lenso-plugin.template.json")).unwrap())
+            .unwrap();
+    template["release_version"] = release_version.into();
+    let mut origins = origins.iter().copied().collect::<Vec<_>>();
+    origins.sort_unstable();
+    template["permission_requests"][0]["scope"]["origins"] = serde_json::json!(origins);
+    let template_path = source.join(format!("lenso-plugin-{release_version}.template.json"));
+    fs::write(&template_path, serde_json::to_vec(&template).unwrap()).unwrap();
+    build_bundle(&BundleBuild {
+        template: template_path,
+        output: output.clone(),
+        artifact_sources: vec![ArtifactSource {
+            artifact_id: "tool-wasm".to_owned(),
+            path: artifact.to_owned(),
+        }],
+    })
+    .unwrap();
+    output
+}
+
 fn run_external_text_tool(workspace: &Path) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace)
@@ -927,6 +1138,71 @@ fn assert_external_workspace_reader_runs(workspace: &Path, stage: &str) {
         String::from_utf8_lossy(&run.stdout),
         "Workspace Plugin result: # Plugin Fixture\n"
     );
+}
+
+fn write_network_plan(workspace: &Path, origin: &str) -> std::path::PathBuf {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../composition/headless-network/resolved-plan.json");
+    let mut plan: serde_json::Value = serde_json::from_slice(&fs::read(source).unwrap()).unwrap();
+    let modules = plan["module_instances"].as_array_mut().unwrap();
+    let provider = modules
+        .iter_mut()
+        .find(|module| module["instance_key"] == "http-fetch")
+        .unwrap();
+    provider["configuration"] = serde_json::to_string(&serde_json::json!({
+        "allowed_origins": [origin],
+        "max_response_bytes": 262_144,
+        "timeout_ms": 10_000
+    }))
+    .unwrap()
+    .into();
+    let path = workspace.join("network-plan.json");
+    fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    path
+}
+
+fn run_external_http_fetch(workspace: &Path, plan: &Path, origin: &str) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace)
+        .args(["--plan"])
+        .arg(plan)
+        .args([
+            "--prompt",
+            &format!("Use the network Plugin to fetch {origin}/fixture."),
+        ])
+        .output()
+        .unwrap()
+}
+
+fn assert_external_http_fetch_runs(workspace: &Path, plan: &Path, origin: &str, stage: &str) {
+    let run = run_external_http_fetch(workspace, plan, origin);
+    assert!(
+        run.status.success(),
+        "{stage}: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Network Plugin result: network fixture\n"
+    );
+}
+
+fn start_http_fixture(request_count: usize) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        for _ in 0..request_count {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 15\r\nConnection: close\r\n\r\nnetwork fixture",
+                )
+                .unwrap();
+        }
+    });
+    (origin, server)
 }
 
 fn output_value<'a>(stdout: &'a str, prefix: &str) -> &'a str {
