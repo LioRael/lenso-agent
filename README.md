@@ -79,7 +79,7 @@ Modules can be removed while the remaining graph still resolves.
 The host currently uses released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.9`. `lenso-runner` and `lenso-native-adapter` are locked to
 `lenso-runtime-rust` commit
-`12fd7934ddc72d9d32d647c931be3de00b6fe334`, which closes the generic dynamic
+`a6fdfd4081c4f6c71be1aad7d46bee72fff6d337`, which closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.

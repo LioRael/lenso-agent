@@ -57,6 +57,7 @@ lenso-kernel = "0.1.8"
 lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
 lenso-module-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "801353949443a32df70ea0730b3093fcafb30401" }
 lenso-native-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
+lenso-plugin-bundle = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "6d504b530b268fe6b08b5b4253956af05697f733" }
 lenso-plugin-control-plane = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
 lenso-quickjs-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
 lenso-runner = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a6fdfd4081c4f6c71be1aad7d46bee72fff6d337" }
@@ -73,7 +74,6 @@ tempfile = "3.23"
 time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt", "signal", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
-wit-component = "0.254"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
