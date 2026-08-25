@@ -46,13 +46,17 @@ fn install_text_tools_plugin(root: &Path) -> std::process::Output {
 }
 
 fn stored_session(root: &Path) -> serde_json::Value {
-    let path = fs::read_dir(root.join(".lenso/sessions"))
+    let path = stored_session_path(root);
+    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+}
+
+fn stored_session_path(root: &Path) -> std::path::PathBuf {
+    fs::read_dir(root.join(".lenso/sessions"))
         .unwrap()
         .next()
         .unwrap()
         .unwrap()
-        .path();
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+        .path()
 }
 
 fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
@@ -297,6 +301,102 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
         serde_json::from_slice(&fs::read(stored[0].path()).unwrap()).unwrap();
     assert_eq!(state["revision"], 12);
     assert_eq!(state["events"].as_array().unwrap().len(), 12);
+}
+
+#[test]
+fn resumed_session_closes_a_host_interrupted_turn_before_new_work() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Durable Fixture\n").unwrap();
+    let plan = plan_path();
+    let first = run(temporary.path(), &plan, "Answer directly: hello", None);
+    assert!(first.status.success());
+    let first_stderr = String::from_utf8(first.stderr).unwrap();
+    let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
+
+    let path = stored_session_path(temporary.path());
+    let mut session = stored_session(temporary.path());
+    let generation_spec_digest = turn_generation_digests(&session).pop().unwrap();
+    let interrupted_revision = session["revision"].as_u64().unwrap() + 1;
+    let interrupted_payload = serde_json::json!({
+        "generation_spec_digest": generation_spec_digest,
+        "input": "interrupted"
+    })
+    .to_string();
+    session["revision"] = interrupted_revision.into();
+    session["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "revision": interrupted_revision,
+            "event_id": "simulated-host-crash",
+            "kind": "turn_started",
+            "turn_id": "interrupted-turn",
+            "occurred_at": "2026-08-25T00:00:00Z",
+            "payload_json": interrupted_payload
+        }));
+    fs::write(&path, serde_json::to_vec(&session).unwrap()).unwrap();
+
+    let second = run(
+        temporary.path(),
+        &plan,
+        "Answer directly: recovered",
+        Some(session_id),
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let resumed = stored_session(temporary.path());
+    let events = resumed["events"].as_array().unwrap();
+    let recovered = events
+        .iter()
+        .find(|event| event["kind"] == "turn_failed" && event["turn_id"] == "interrupted-turn")
+        .unwrap();
+    assert!(
+        recovered["payload_json"]
+            .as_str()
+            .unwrap()
+            .contains("host_interrupted")
+    );
+    let recovery_index = events.iter().position(|event| event == recovered).unwrap();
+    let new_turn_index = events
+        .iter()
+        .rposition(|event| event["kind"] == "turn_started")
+        .unwrap();
+    assert!(recovery_index < new_turn_index);
+}
+
+#[test]
+fn run_scope_cannot_add_a_tool_outside_the_plan_catalog() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Scope Fixture\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["--plan", plan_path().to_str().unwrap()])
+        .args(["--prompt", "Answer directly: hello"])
+        .args(["--allow-tool", "ambient.superpower"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside the Plan-bound catalog"));
+    let session = stored_session(temporary.path());
+    let started: serde_json::Value = serde_json::from_str(
+        session["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == "turn_started")
+            .unwrap()["payload_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        started["run_scope"]["allowed_tools"][0],
+        "ambient.superpower"
+    );
 }
 
 #[test]

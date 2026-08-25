@@ -248,6 +248,11 @@ The CLI writes the generated Session ID to stderr. Resume the durable Session
 after a process restart with `--session <id>`. The Agent Loop streams text as
 the selected Model produces it, supports direct answers and bounded sequential
 Tool calls, and rebuilds a bounded completed-turn history for resumed Sessions.
+If a Host disappears after `turn_started`, the next resume atomically records a
+`turn_failed` event with `host_interrupted` before starting new work. A caller
+may also narrow one Turn with repeated `--allow-tool <name>` or `--no-tools`;
+the Agent Loop rejects names outside the Tool catalog bound by the immutable
+Plan, so the Turn-local scope can only remove authority.
 Every Turn records the leased `generation_spec_digest`; changing the active
 Plugin Set before resuming produces a new digest while preserving the earlier
 content-addressed Generation Spec and Session events.
