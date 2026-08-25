@@ -65,7 +65,8 @@ remaining authority and are removed.
 The current host baseline selects released `lenso-app-plan 0.1.4` and
 `lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
 `lenso-plugin-control-plane` to `lenso-runtime-rust` revision
-`48cf37b6475a0dbbe4ad8492888ed7c6c17abae4`. That Runtime includes the durable
+`48cf37b6475a0dbbe4ad8492888ed7c6c17abae4` and its standalone Plugin Bundle
+builder to revision `6d504b530b268fe6b08b5b4253956af05697f733`. That Runtime includes the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native
 dylib Adapter, and the source-derived native Module factory catalog. The catalog

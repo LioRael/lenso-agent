@@ -1837,6 +1837,7 @@ mod tests {
         EXECUTE_OPERATION as TOOL_PROVIDER_EXECUTE_OPERATION,
     };
     use lenso_kernel::StreamEvent;
+    use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
     use lenso_plugin_control_plane::{
         ArtifactDeclaration, ArtifactKind, BindingTemplate, CapabilityDeclaration,
         CapabilityRequirement, ImplementationVariant, ModuleContribution, PermissionRequest,
@@ -2065,7 +2066,7 @@ mod tests {
             .await;
     }
 
-    fn write_wasm_agent_bundle(root: &Path) {
+    fn write_wasm_agent_bundle(root: &Path) -> PathBuf {
         let source =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/wasm-agent");
         let target = tempfile::tempdir().unwrap();
@@ -2084,30 +2085,19 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
-        let core = fs::read(
-            target
-                .path()
-                .join("wasm32-unknown-unknown/release/lenso_wasm_agent_example.wasm"),
-        )
+        let output = root.join("bundle");
+        build_bundle(&BundleBuild {
+            template: source.join("lenso-plugin.template.json"),
+            output: output.clone(),
+            artifact_sources: vec![ArtifactSource {
+                artifact_id: "agent-wasm".to_owned(),
+                path: target
+                    .path()
+                    .join("wasm32-unknown-unknown/release/lenso_wasm_agent_example.wasm"),
+            }],
+        })
         .unwrap();
-        let component = wit_component::ComponentEncoder::default()
-            .module(&core)
-            .unwrap()
-            .validate(true)
-            .encode()
-            .unwrap();
-        fs::write(root.join("plugin.wasm"), &component).unwrap();
-
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(source.join("lenso-plugin.template.json")).unwrap())
-                .unwrap();
-        manifest["artifacts"][0]["digest"] = sha256_digest(&component).into();
-        manifest["artifacts"][0]["size"] = u64::try_from(component.len()).unwrap().into();
-        fs::write(
-            root.join(MANIFEST_FILE),
-            serde_json::to_vec_pretty(&manifest).unwrap(),
-        )
-        .unwrap();
+        output
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -2117,10 +2107,10 @@ mod tests {
             .run_until(async {
                 let root = tempfile::tempdir().unwrap();
                 let bundle = tempfile::tempdir().unwrap();
-                write_wasm_agent_bundle(bundle.path());
+                let bundle = write_wasm_agent_bundle(bundle.path());
                 install(
                     root.path(),
-                    bundle.path(),
+                    &bundle,
                     Some("review-ticket-wasm-agent"),
                     Vec::new(),
                 )
