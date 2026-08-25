@@ -11,6 +11,14 @@ pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const MODEL_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+
 pub const COMPLETE_OPERATION: &str = "complete";
 
 pub use lenso_contract_runtime::{Uint64, UnknownDomainError};
@@ -228,6 +236,20 @@ impl<P: ModelProvider> NativeStreamEndpoint for ModelEndpoint<P> {
             _ => Box::pin(futures::future::ready(Err(RuntimeFailure::UnknownOperation { capability: CAPABILITY_ID, operation: operation.to_owned() }))),
         }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_provide_model {
+    ($provider:expr, $lifecycle:expr) => {{
+        let endpoint = ::std::rc::Rc::new($crate::ModelEndpoint::new($provider));
+        ::lenso_native_adapter::NativeModuleInstance::with_all_endpoints(
+            vec![],
+            vec![endpoint.clone() as ::std::rc::Rc<dyn ::lenso_kernel::NativeStreamEndpoint>],
+            vec![],
+            $lifecycle,
+        )
+    }};
 }
 
 #[derive(Debug)]

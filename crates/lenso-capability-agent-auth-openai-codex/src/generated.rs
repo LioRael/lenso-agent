@@ -11,6 +11,14 @@ pub const CROSS_LANE_TRANSFER: bool = false;
 pub const OPENAI_CODEX_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const OPENAI_CODEX_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_provided_openai_codex { () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"access\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_openai_codex_client { () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
 pub const ACCESS_OPERATION: &str = "access";
 
 pub use lenso_contract_runtime::{Uint64, UnknownDomainError};
@@ -173,6 +181,20 @@ impl<P: OpenaiCodexProvider> NativeRequestEndpoint for OpenaiCodexEndpoint<P> {
             _ => Box::pin(futures::future::ready(Err(RuntimeFailure::UnknownOperation { capability: CAPABILITY_ID, operation: operation.to_owned() }))),
         }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_provide_openai_codex {
+    ($provider:expr, $lifecycle:expr) => {{
+        let endpoint = ::std::rc::Rc::new($crate::OpenaiCodexEndpoint::new($provider));
+        ::lenso_native_adapter::NativeModuleInstance::with_all_endpoints(
+            vec![endpoint.clone() as ::std::rc::Rc<dyn ::lenso_kernel::NativeRequestEndpoint>],
+            vec![],
+            vec![],
+            $lifecycle,
+        )
+    }};
 }
 
 #[derive(Debug)]

@@ -11,6 +11,14 @@ pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PROMPT_PROVIDER_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const PROMPT_PROVIDER_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_provided_prompt_provider { () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"contribute\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_prompt_provider_client { () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+
 pub const CONTRIBUTE_OPERATION: &str = "contribute";
 
 pub use lenso_contract_runtime::{UnknownDomainError};
@@ -177,6 +185,20 @@ impl<P: PromptProviderProvider> NativeRequestEndpoint for PromptProviderEndpoint
             _ => Box::pin(futures::future::ready(Err(RuntimeFailure::UnknownOperation { capability: CAPABILITY_ID, operation: operation.to_owned() }))),
         }
     }
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_provide_prompt_provider {
+    ($provider:expr, $lifecycle:expr) => {{
+        let endpoint = ::std::rc::Rc::new($crate::PromptProviderEndpoint::new($provider));
+        ::lenso_native_adapter::NativeModuleInstance::with_all_endpoints(
+            vec![endpoint.clone() as ::std::rc::Rc<dyn ::lenso_kernel::NativeRequestEndpoint>],
+            vec![],
+            vec![],
+            $lifecycle,
+        )
+    }};
 }
 
 #[derive(Debug)]

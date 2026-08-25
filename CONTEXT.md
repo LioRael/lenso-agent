@@ -31,14 +31,18 @@ interaction kind without a duplicated string annotation. The migration keeps
 the existing stream Descriptor, open/message/error Schemas, generated clients
 and providers, and plugin digest byte-identical.
 
-Generated Rust Capability Clients now implement the product-neutral
-`CapabilityClient` contract. The Agent Loop is the first deep Module to hold
-its Model, Prompt, Tools, and Session requirements as lifecycle-bound
-`Port<Client>` fields; activation connects those Ports only from the
-Plan-owned `ModuleDependencies`. Descriptor derivation and provider endpoint
-generation for a struct-level `#[lenso::module]` Interface remain follow-up
-work, so this is a foundation milestone rather than the completed authoring
-shape.
+Generated Rust Capability Clients implement the product-neutral
+`CapabilityClient` contract and emit hidden provider/requirement metadata for
+Module compilation. The Agent Loop is the first deep struct-level Module: its
+configuration type derives the package-owned Schema, its Model, Prompt, Tools,
+and Session `Port<Client>` fields derive exact requirements, and its annotated
+Agent Provider implementation derives the endpoint, Descriptor artifact,
+factory, lifecycle connection glue, and link-time registration. Activation
+still receives dependencies only from Plan-owned `ModuleDependencies`; the
+Module writes only its real configuration validation and task-scope hook.
+The public `lenso::module` facade, ergonomic domain-method lowering, broader
+configuration type profile, multi-Capability providers, and migration of the
+remaining Modules remain follow-up work.
 
 All eight executable variants are now authored by source-derived
 `composition/*.app.json` definitions. Their Module packages derive package

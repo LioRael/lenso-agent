@@ -15,30 +15,31 @@ use futures::{
     lock::Mutex,
 };
 use lenso_capability_agent::{
-    AgentEndpoint, AgentInvocationError, AgentProvider, CAPABILITY_ID, RunTurnError,
+    self as agent_capability, AgentInvocationError, AgentProvider, CAPABILITY_ID, RunTurnError,
     RunTurnRequest, RunTurnResponse,
 };
 use lenso_capability_agent_model::{
-    CompleteRequest, CompleteRequestMessagesItem, CompleteRequestMessagesItemRole,
-    CompleteRequestToolsItem, CompleteResponse, CompleteResponseKind, ModelClient, ModelEvent,
+    self as model_capability, CompleteRequest, CompleteRequestMessagesItem,
+    CompleteRequestMessagesItemRole, CompleteRequestToolsItem, CompleteResponse,
+    CompleteResponseKind, ModelEvent,
 };
-use lenso_capability_agent_prompt::{AssembleRequest, PromptClient, PromptInvocationError};
+use lenso_capability_agent_prompt::{
+    self as prompt_capability, AssembleRequest, PromptInvocationError,
+};
 use lenso_capability_agent_session::{
-    AppendError, AppendRequest, AppendRequestEventsItem, AppendRequestEventsItemKind, OpenError,
-    OpenRequest, ReadError, ReadRequest, ReadResponseEventsItem, ReadResponseEventsItemKind,
-    SessionAppendInvocationError, SessionClient, SessionOpenInvocationError,
-    SessionReadInvocationError,
+    self as session_capability, AppendError, AppendRequest, AppendRequestEventsItem,
+    AppendRequestEventsItemKind, OpenError, OpenRequest, ReadError, ReadRequest,
+    ReadResponseEventsItem, ReadResponseEventsItemKind, SessionAppendInvocationError,
+    SessionOpenInvocationError, SessionReadInvocationError,
 };
 use lenso_capability_agent_tools::{
-    CatalogRequest, ExecuteRequest, ToolsClient, ToolsExecuteInvocationError,
+    self as tools_capability, CatalogRequest, ExecuteRequest, ToolsExecuteInvocationError,
 };
 use lenso_kernel::{
     ActivateContext, CancellationToken, InvocationContext, ManagedTaskScope, ModuleFuture,
-    ModuleLifecycle, NativeStreamEndpoint, NativeStreamItem, NativeStreamSession, RuntimeFailure,
-    StreamEvent,
+    NativeStreamItem, NativeStreamSession, RuntimeFailure, StreamEvent,
 };
 use lenso_module_authoring::Port;
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Host-issued Invocation Context key for the leased App Generation identity.
@@ -92,7 +93,7 @@ fn canonical_generation_digest(value: &str) -> bool {
     })
 }
 
-#[derive(Clone, Debug, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Deserialize, lenso_native_adapter::ModuleConfig)]
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
     model: String,
@@ -102,19 +103,23 @@ struct AgentConfig {
     max_history_events: i64,
 }
 
-/// Instantiates one Agent Loop generation.
 #[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[{"capability_id":"lenso.agent@1","descriptor_version":"1.1.0","operations":["run_turn"],"operation_kinds":{"run_turn":"stream"},"default_admission":{"queue_capacity":0,"max_concurrency":1},"operation_admissions":{},"event_admission":null,"cross_lane_transfer":false}],"required_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","cardinality":"one"},{"capability_id":"lenso.agent.prompt@1","descriptor_version":"1.0.0","cardinality":"one"},{"capability_id":"lenso.agent.tools@1","descriptor_version":"1.0.0","cardinality":"one"},{"capability_id":"lenso.agent.session@1","descriptor_version":"1.1.0","cardinality":"one"}]}"#,
-    configuration_schema = "config.schema.json"
+    validate = validate_agent_config,
+    activate = activate_agent_loop
 )]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" {
-        return Err(invalid_plan("unsupported Agent Loop entrypoint"));
-    }
-    let config = serde_json::from_str::<AgentConfig>(context.configuration())
-        .map_err(|error| invalid_plan(format!("invalid Agent Loop configuration: {error}")))?;
+#[derive(Clone, Debug)]
+struct AgentLoop {
+    #[config]
+    config: AgentConfig,
+    model: Port<model_capability::ModelClient>,
+    prompt: Port<prompt_capability::PromptClient>,
+    tools: Port<tools_capability::ToolsClient>,
+    session: Port<session_capability::SessionClient>,
+    tasks: Rc<RefCell<Option<ManagedTaskScope>>>,
+    active: Rc<Cell<bool>>,
+}
+
+fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
     if config.model.is_empty()
         || config.max_steps == 0
         || config.max_steps > 64
@@ -124,59 +129,15 @@ fn instantiate(
     {
         return Err(invalid_plan("Agent Loop model or limits are invalid"));
     }
-    let clients = Rc::new(AgentClients::default());
-    let active = Rc::new(Cell::new(false));
-    let endpoint = Rc::new(AgentEndpoint::new(AgentLoop {
-        config,
-        clients: clients.clone(),
-        active,
-    })) as Rc<dyn NativeStreamEndpoint>;
-    Ok(NativeModuleInstance::with_stream_endpoints(
-        vec![endpoint],
-        AgentLifecycle { clients },
-    ))
+    Ok(())
 }
 
-#[derive(Debug)]
-struct AgentClients {
-    model: Port<ModelClient>,
-    prompt: Port<PromptClient>,
-    tools: Port<ToolsClient>,
-    session: Port<SessionClient>,
-    tasks: RefCell<Option<ManagedTaskScope>>,
+fn activate_agent_loop(module: &AgentLoop, context: &ActivateContext) -> ModuleFuture {
+    module.tasks.replace(Some(context.tasks().clone()));
+    Box::pin(ready(Ok(())))
 }
 
-impl Default for AgentClients {
-    fn default() -> Self {
-        Self {
-            model: Port::new(),
-            prompt: Port::new(),
-            tools: Port::new(),
-            session: Port::new(),
-            tasks: RefCell::new(None),
-        }
-    }
-}
-
-impl AgentClients {
-    fn connect(
-        &self,
-        dependencies: &lenso_kernel::ModuleDependencies,
-    ) -> Result<(), RuntimeFailure> {
-        self.model.connect(dependencies)?;
-        self.prompt.connect(dependencies)?;
-        self.tools.connect(dependencies)?;
-        self.session.connect(dependencies)
-    }
-}
-
-#[derive(Clone, Debug)]
-struct AgentLoop {
-    config: AgentConfig,
-    clients: Rc<AgentClients>,
-    active: Rc<Cell<bool>>,
-}
-
+#[lenso_native_adapter::provides(agent_capability::Agent)]
 impl AgentProvider for AgentLoop {
     fn run_turn(
         &self,
@@ -193,7 +154,7 @@ impl AgentProvider for AgentLoop {
                 RunTurnError::ConcurrentTurn,
             ))));
         }
-        let Some(tasks) = self.clients.tasks.borrow().clone() else {
+        let Some(tasks) = self.tasks.borrow().clone() else {
             self.active.set(false);
             return Box::pin(futures::future::ready(Err(AgentInvocationError::Runtime(
                 RuntimeFailure::Unavailable {
@@ -201,14 +162,13 @@ impl AgentProvider for AgentLoop {
                 },
             ))));
         };
-        let config = self.config.clone();
         let active = self.active.clone();
         let cancellation = context.cancellation();
         let (sender, receiver) = mpsc::channel(1);
-        let clients = self.clients.clone();
+        let module = self.clone();
         let task = tasks.spawn_local(Box::pin(async move {
             let _turn = ActiveTurn(active);
-            produce_turn(clients, config, context, request, sender).await;
+            produce_turn(module, context, request, sender).await;
         }));
         match task {
             Ok(_) => Box::pin(ready(Ok(
@@ -305,29 +265,13 @@ impl NativeStreamSession for AgentTurnStream {
     }
 }
 
-#[derive(Debug)]
-struct AgentLifecycle {
-    clients: Rc<AgentClients>,
-}
-
-impl ModuleLifecycle for AgentLifecycle {
-    fn activate(&self, context: ActivateContext) -> ModuleFuture {
-        if let Err(error) = self.clients.connect(context.dependencies()) {
-            return Box::pin(futures::future::ready(Err(error)));
-        }
-        self.clients.tasks.replace(Some(context.tasks().clone()));
-        Box::pin(futures::future::ready(Ok(())))
-    }
-}
-
 async fn produce_turn(
-    clients: Rc<AgentClients>,
-    config: AgentConfig,
+    module: AgentLoop,
     context: InvocationContext,
     request: RunTurnRequest,
     mut sender: mpsc::Sender<AgentChannelItem>,
 ) {
-    match run_turn(&clients, &config, &context, request, &mut sender).await {
+    match run_turn(&module, &module.config, &context, request, &mut sender).await {
         Ok(()) => {
             let _ = sender.send(Ok(NativeStreamItem::PeerHalfClosed)).await;
             let _ = sender.send(Ok(NativeStreamItem::Terminal(Ok(())))).await;
@@ -347,7 +291,7 @@ async fn produce_turn(
 }
 
 async fn run_turn(
-    clients: &AgentClients,
+    clients: &AgentLoop,
     config: &AgentConfig,
     context: &InvocationContext,
     request: RunTurnRequest,
@@ -430,7 +374,7 @@ fn generation_spec_digest(context: &InvocationContext) -> Result<&str, AgentInvo
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn execute_steps(
-    clients: &AgentClients,
+    clients: &AgentLoop,
     config: &AgentConfig,
     context: &InvocationContext,
     session_id: &str,
@@ -650,7 +594,7 @@ struct ModelStep {
 }
 
 async fn stream_model(
-    clients: &AgentClients,
+    clients: &AgentLoop,
     context: &InvocationContext,
     request: CompleteRequest,
     session_id: &str,
@@ -733,7 +677,7 @@ async fn send_agent_message(
 }
 
 async fn read_history(
-    clients: &AgentClients,
+    clients: &AgentLoop,
     context: &InvocationContext,
     session_id: &str,
     current_revision: &str,
@@ -851,7 +795,7 @@ fn assistant_tool_message(tool_call: &CompleteResponse) -> CompleteRequestMessag
 }
 
 async fn record_turn_failure(
-    clients: &AgentClients,
+    clients: &AgentLoop,
     context: &InvocationContext,
     session_id: &str,
     turn_id: &str,
@@ -906,7 +850,7 @@ fn turn_error_code(error: &AgentInvocationError, cancelled: bool) -> &'static st
 }
 
 async fn append_events(
-    clients: &AgentClients,
+    clients: &AgentLoop,
     context: &InvocationContext,
     session_id: &str,
     expected_revision: String,
@@ -1020,6 +964,35 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn struct_authoring_derives_the_complete_module_descriptor() {
+        let descriptor: serde_json::Value = serde_json::from_str(MODULE_DESCRIPTOR_JSON).unwrap();
+        assert_eq!(descriptor["package_id"], "lenso.agent.loop");
+        assert_eq!(
+            descriptor["provided_capabilities"][0]["capability_id"],
+            "lenso.agent@1"
+        );
+        let requirements = descriptor["required_capabilities"]
+            .as_array()
+            .expect("requirements must be an array");
+        assert_eq!(requirements.len(), 4);
+        assert!(
+            requirements
+                .iter()
+                .all(|requirement| requirement["cardinality"] == "one")
+        );
+        assert_eq!(
+            descriptor["configuration_schema"]["required"],
+            serde_json::json!([
+                "model",
+                "max_steps",
+                "max_tool_calls",
+                "max_output_tokens",
+                "max_history_events"
+            ])
+        );
+    }
 
     fn history_event(
         revision: &str,
