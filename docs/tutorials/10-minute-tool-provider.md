@@ -1,14 +1,26 @@
 # Build and run a Tool Provider in 10 minutes
 
-This tutorial starts from the checked-in `text.uppercase` Tool Provider so the
+This tutorial starts from the checked-in `uppercase` Tool so the
 whole path runs without credentials or network APIs.
 
 ## 1. Inspect the typed Tool
 
 Open `crates/lenso-agent-text-tools-module/src/lib.rs`. The argument type owns
-its JSON Schema, while the Module exposes `catalog` and `execute` through the
-generated Tool Provider Capability. Invalid JSON becomes the portable
-`InvalidArguments` Domain Error; the Module never hand-writes an endpoint.
+its JSON Schema. `#[tool_provider]` derives `catalog`, typed JSON decoding, and
+dispatch from the method marked `#[tool(...)]`:
+
+```rust
+#[tool_provider]
+impl TextTools {
+    #[tool(name = "uppercase", description = "Convert bounded text to uppercase.")]
+    fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteError> {
+        // Product behavior only.
+    }
+}
+```
+
+Invalid JSON becomes the portable `InvalidArguments` Domain Error; the Module
+never hand-writes an endpoint or Provider factory.
 
 Change the description or the `uppercase` function, keeping the bounded input
 and output checks.
