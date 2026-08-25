@@ -1,0 +1,17 @@
+[package]
+name = "external-wasm-http-fetch"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lenso-capability-agent-http-fetch = { git = "https://github.com/LioRael/lenso-agent-harness.git", rev = "684201fe3b491eb55b7e77fe9b5939f863a8e807" }
+lenso-guest-sdk = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "ffb07bc8dc7103b58c864b59225ca0f4609b6fdf" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wit-bindgen = "0.60"
+
+[workspace]

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_url" },
+    { "const": "permission_denied" },
+    { "const": "response_not_utf8" },
+    { "const": "output_limit_exceeded" },
+    {
+      "type": "object",
+      "required": ["code", "payload"],
+      "properties": {
+        "code": { "const": "execution_failed" },
+        "payload": {
+          "type": "object",
+          "required": ["reason_code", "message", "details_json"],
+          "properties": {
+            "reason_code": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "message": { "type": "string", "maxLength": 4096 },
+            "details_json": { "type": "string", "minLength": 2, "maxLength": 65536 }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+[package]
+name = "lenso-agent-tool-sdk"
+version = "0.1.0"
+description = "Typed Tool Provider authoring for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish = false
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+package-id = "lenso.agent.tool-sdk.fixture"
+
+[dependencies]
+lenso-agent-tool-sdk-macros = { version = "0.1.0", path = "../lenso-agent-tool-sdk-macros" }
+lenso-capability-agent-tool-provider = { version = "0.1.0", path = "../lenso-capability-agent-tool-provider" }
+schemars.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-kernel.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

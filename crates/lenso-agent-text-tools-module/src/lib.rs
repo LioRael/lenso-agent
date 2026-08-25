@@ -1,14 +1,7 @@
 //! Removable, stateless text Tool Provider Plugin Module.
 
-use lenso::prelude::*;
-use lenso_capability_agent_tool_provider::{
-    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
-    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition,
-};
+use lenso_agent_tool_sdk::prelude::*;
 use schemars::JsonSchema;
-
-/// Stable Tool name exposed only while the Plugin is active.
-pub const UPPERCASE_TOOL: &str = "uppercase";
 
 const MAX_TEXT_BYTES: usize = 4_096;
 
@@ -19,77 +12,45 @@ struct UppercaseArguments {
     text: String,
 }
 
-fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteError> {
-    if arguments.text.len() > MAX_TEXT_BYTES {
-        return Err(ExecuteError::OutputLimitExceeded);
-    }
-    let UppercaseArguments { text } = arguments;
-    let content = text.to_uppercase();
-    if content.len() > MAX_TEXT_BYTES {
-        return Err(ExecuteError::OutputLimitExceeded);
-    }
-    Ok(ExecuteResponse {
-        content,
-        content_type: ContentType::Text,
-        metadata_json: r#"{"operation":"uppercase"}"#
-            .to_owned()
-            .try_into()
-            .expect("static Tool metadata must be valid JSON"),
-    })
-}
-
 #[lenso::module]
 #[derive(Clone, Copy, Debug)]
 struct TextTools {}
 
-#[lenso::provides(tool_provider_contract::ToolProvider)]
+#[lenso_agent_tool_sdk::tool_provider]
 impl TextTools {
-    async fn catalog(
-        &self,
-        _context: Ctx,
-        _request: CatalogRequest,
-    ) -> ModuleResult<CatalogResponse, CatalogError> {
-        static INPUT_SCHEMA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        let input_schema_json = INPUT_SCHEMA
-            .get_or_init(|| {
-                serde_json::to_string(&schemars::schema_for!(UppercaseArguments))
-                    .expect("derived Tool input Schema must serialize")
-            })
-            .clone();
-        Ok(CatalogResponse {
-            tools: vec![ToolDefinition {
-                name: UPPERCASE_TOOL.to_owned(),
-                description: "Convert one bounded UTF-8 string to uppercase.".to_owned(),
-                input_schema_json: input_schema_json
-                    .try_into()
-                    .expect("derived Tool input Schema must be valid JSON"),
-            }],
-        })
-    }
-
-    async fn execute(
-        &self,
-        _context: Ctx,
-        request: ExecuteRequest,
-    ) -> ModuleResult<ExecuteResponse, ExecuteError> {
-        if request.name == UPPERCASE_TOOL {
-            let arguments = serde_json::from_str(request.arguments_json.as_str())
-                .map_err(|_| ModuleError::domain(ExecuteError::InvalidArguments))?;
-            uppercase(arguments).map_err(ModuleError::domain)
-        } else {
-            Err(ModuleError::domain(ExecuteError::NotFound))
+    #[tool(
+        name = "uppercase",
+        description = "Convert one bounded UTF-8 string to uppercase."
+    )]
+    fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteError> {
+        if arguments.text.len() > MAX_TEXT_BYTES {
+            return Err(ExecuteError::OutputLimitExceeded);
         }
+        let UppercaseArguments { text } = arguments;
+        let content = text.to_uppercase();
+        if content.len() > MAX_TEXT_BYTES {
+            return Err(ExecuteError::OutputLimitExceeded);
+        }
+        Ok(ExecuteResponse {
+            content,
+            content_type: ContentType::Text,
+            metadata_json: r#"{"operation":"uppercase"}"#
+                .try_into()
+                .expect("static Tool metadata must be valid JSON"),
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso::{Ctx, ModuleError};
+    use lenso_capability_agent_tool_provider::{CatalogRequest, ExecuteRequest};
     use lenso_kernel::CancellationToken;
 
     #[test]
     fn uppercase_is_bounded() {
-        let response = uppercase(UppercaseArguments {
+        let response = TextTools::uppercase(UppercaseArguments {
             text: "Lenso plugin".to_owned(),
         })
         .unwrap();
@@ -97,7 +58,7 @@ mod tests {
 
         let oversized = "x".repeat(MAX_TEXT_BYTES + 1);
         assert!(matches!(
-            uppercase(UppercaseArguments { text: oversized }),
+            TextTools::uppercase(UppercaseArguments { text: oversized }),
             Err(ExecuteError::OutputLimitExceeded)
         ));
     }
@@ -113,6 +74,17 @@ mod tests {
             serde_json::from_str(catalog.tools[0].input_schema_json.as_str()).unwrap();
         assert_eq!(schema["properties"]["text"]["maxLength"], 4096);
         assert_eq!(schema["additionalProperties"], false);
+        let tool_name = catalog.tools[0].name.clone();
+
+        let valid = futures::executor::block_on(TextTools {}.execute(
+            context(),
+            ExecuteRequest {
+                name: tool_name.clone(),
+                arguments_json: r#"{"text":"Lenso plugin"}"#.try_into().unwrap(),
+            },
+        ))
+        .unwrap();
+        assert_eq!(valid.content, "LENSO PLUGIN");
 
         let unknown = futures::executor::block_on(TextTools {}.execute(
             context(),
@@ -129,7 +101,7 @@ mod tests {
         let invalid = futures::executor::block_on(TextTools {}.execute(
             context(),
             ExecuteRequest {
-                name: UPPERCASE_TOOL.to_owned(),
+                name: tool_name,
                 arguments_json: r#"{"extra":true,"text":"x"}"#.to_owned().try_into().unwrap(),
             },
         ));

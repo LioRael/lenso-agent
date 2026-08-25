@@ -41,7 +41,12 @@ Its configuration type derives the package-owned Schema, `Port<Client>` and
 `ManyPort<Client>` fields derive exact requirements, annotated Provider
 implementations derive endpoints, and `#[module(lifecycle)]` exposes only the
 prepare, activate, and deactivate hooks that the Module actually owns. The
-former Harness-specific Module authoring and proc-macro crates are removed.
+former Harness-specific Module authoring and proc-macro crates are removed. The
+focused `lenso-agent-tool-sdk` is not a second Module authoring authority: it
+wraps the public `lenso::provides` facade and derives only Agent Tool catalog,
+Schema, argument decoding, and dispatch boilerplate. Capability contracts,
+Module Descriptors, factories, endpoints, and Host registration remain
+source-first and package-owned.
 The CLI and TUI Shell Modules remain deliberate compatibility exceptions: they
 are consumer-only identities used to anchor terminal-surface bindings, while the
 current source-first facade finalizes Module metadata from a Provider
@@ -150,19 +155,22 @@ entry plus reviewed workspace-edit, Skills, local-process, and Model Profiles;
 one package-independent isolated Wasm Tool Provider shape with the same
 bounded attachment, one restricted fixture Model Provider replace-`one` entry,
 one package-independent reviewed Wasm Tool variant with a fixed
-`lenso.agent.workspace-read@1/read_text` Host import, and one experimental
-Codex Direct replacement set. The pure Wasm Tool shape fixes
+`lenso.agent.workspace-read@1/read_text` Host import, one reviewed network
+variant with a fixed `lenso.agent.http-fetch@1/get` import and exact-origin
+approved grant, and one experimental Codex Direct replacement set. The pure Wasm Tool shape fixes
 the Capability, operations, execution class, empty configuration, and absence
 of Host imports, permissions, state, Data mounts, and binding templates; it
 still requires review evidence. The workspace-reader variant has the same
 limits except for its single exact requirement, which the Host Profile binds
 to the dedicated base `workspace-import-read` Instance; the Bundle cannot select the provider
-or add another requirement. The Codex set closes exact Model and Auth
+or add another requirement. The network variant additionally requires its
+reviewed scope to fit the base App's HTTP Provider allowlist, which is empty by
+default and enforced again for every request. The Codex set closes exact Model and Auth
 contributions, their intra-Plugin `one` binding, and the compatible base Agent
 model configuration. Replacement requires the exact base edge and allowlisted
 displaced package; removal restores the base Plan for the next Generation.
 Package presence or Catalog extensibility is not a claim that arbitrary
-executable Plugins, general permissioned Host imports, general provider replacement,
+executable Plugins, other permissioned Host imports, general provider replacement,
 Generation deletion, or Plugin Store collection are ready. The CLI exposes
 bundled `plugins enable` and `plugins disable` selection and persists the exact
 result in the Active Set without another App Definition.

@@ -23,6 +23,7 @@ lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
 lenso-agent-tui-static-module = { path = "../../crates/lenso-agent-tui-static-module" }
 lenso-agent-auth-openai-codex-module = { path = "../../crates/lenso-agent-auth-openai-codex-module" }
 lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
+lenso-agent-http-fetch-module = { path = "../../crates/lenso-agent-http-fetch-module" }
 lenso-agent-model-fixture-module = { path = "../../crates/lenso-agent-model-fixture-module" }
 lenso-agent-model-openai-compatible-module = { path = "../../crates/lenso-agent-model-openai-compatible-module" }
 lenso-agent-model-openai-codex-direct-module = { path = "../../crates/lenso-agent-model-openai-codex-direct-module" }
@@ -40,6 +41,7 @@ lenso-agent-workspace-import-read-module = { path = "../../crates/lenso-agent-wo
 lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-auth-openai-codex = { path = "../../crates/lenso-capability-agent-auth-openai-codex" }
+lenso-capability-agent-http-fetch = { path = "../../crates/lenso-capability-agent-http-fetch" }
 lenso-capability-agent-model = { path = "../../crates/lenso-capability-agent-model" }
 lenso-capability-agent-prompt = { path = "../../crates/lenso-capability-agent-prompt" }
 lenso-capability-agent-prompt-provider = { path = "../../crates/lenso-capability-agent-prompt-provider" }
@@ -60,6 +62,7 @@ lenso-native-adapter.workspace = true
 lenso-plugin-control-plane.workspace = true
 lenso-runner.workspace = true
 ratatui.workspace = true
+reqwest.workspace = true
 lenso-secrets-env-module.workspace = true
 serde.workspace = true
 serde_json.workspace = true

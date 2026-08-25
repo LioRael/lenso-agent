@@ -9,6 +9,7 @@ members = [
     "crates/lenso-capability-agent-prompt",
     "crates/lenso-capability-agent-prompt-provider",
     "crates/lenso-capability-agent-process",
+    "crates/lenso-capability-agent-http-fetch",
     "crates/lenso-capability-agent-workspace-read",
     "crates/lenso-capability-agent-tools",
     "crates/lenso-capability-agent-tool-provider",
@@ -28,8 +29,11 @@ members = [
     "crates/lenso-agent-skills-filesystem-module",
     "crates/lenso-agent-tools-module",
     "crates/lenso-agent-text-tools-module",
+    "crates/lenso-agent-tool-sdk",
+    "crates/lenso-agent-tool-sdk-macros",
     "crates/lenso-agent-workspace-edit-module",
     "crates/lenso-agent-workspace-import-read-module",
+    "crates/lenso-agent-http-fetch-module",
     "crates/lenso-agent-workspace-read-module",
     "crates/lenso-agent-cli-module",
     "crates/lenso-agent-tui-module",
@@ -51,6 +55,8 @@ crossterm = { version = "0.29", features = ["event-stream"] }
 directories = "6.0"
 fs2 = "0.4"
 futures = "0.3"
+proc-macro2 = "1"
+quote = "1"
 lenso-capability-secrets = { git = "https://github.com/LioRael/lenso-secrets-module.git", rev = "78d8823cf71672f55cf89bbb8dc603e4d8d38e37" }
 lenso-app-plan = "0.1.5"
 lenso = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "1f79f3b4911a8d33323eb265668babcda7b22f34" }
@@ -74,6 +80,7 @@ ratatui = { version = "0.30", default-features = false, features = ["crossterm_0
 schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+syn = { version = "2", features = ["full"] }
 sha2 = { version = "0.10", features = ["asm"] }
 tempfile = "3.23"
 time = { version = "0.3", features = ["formatting"] }
