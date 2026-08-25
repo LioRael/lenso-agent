@@ -6,8 +6,8 @@
     {
       "id": "agent-js",
       "kind": "quick_js_module",
-      "digest": "sha256:9026061b0e8eae841b9d78563c8d632d12bad172c15bf221e0d30a35f9092e8c",
-      "size": 1431,
+      "digest": "sha256:eccb4184935dc5240539b294a0c8b03a65c9dd367c128819573f0f88fa169963",
+      "size": 3982,
       "media_type": "text/javascript",
       "path": "plugin.mjs",
       "targets": [
@@ -32,7 +32,28 @@
           "operation_kinds": { "run_turn": "stream" }
         }
       ],
-      "requires": [],
+      "requires": [
+        {
+          "capability_id": "lenso.agent.model@1",
+          "descriptor_version": "1.1.0",
+          "cardinality": "one"
+        },
+        {
+          "capability_id": "lenso.agent.prompt@1",
+          "descriptor_version": "1.0.0",
+          "cardinality": "one"
+        },
+        {
+          "capability_id": "lenso.agent.session@1",
+          "descriptor_version": "1.1.0",
+          "cardinality": "one"
+        },
+        {
+          "capability_id": "lenso.agent.tools@1",
+          "descriptor_version": "1.0.0",
+          "cardinality": "one"
+        }
+      ],
       "implementations": [
         {
           "id": "quickjs",

@@ -29,7 +29,10 @@ lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-auth-openai-codex = { path = "../../crates/lenso-capability-agent-auth-openai-codex" }
 lenso-capability-agent-model = { path = "../../crates/lenso-capability-agent-model" }
+lenso-capability-agent-prompt = { path = "../../crates/lenso-capability-agent-prompt" }
+lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
+lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
 futures.workspace = true
 fs2.workspace = true
 lenso-app-plan.workspace = true

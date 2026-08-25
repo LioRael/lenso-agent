@@ -8,7 +8,7 @@ use std::{
 use lenso_app_plan::{CapabilityBinding, ModuleInstancePlan, ResolvedAppPlan};
 use lenso_plugin_control_plane::{
     AdmissionPolicy, CanonicalDocument, ControlPlaneError, LockedInstance, LockedPlugin,
-    PluginBundle, PluginManifest, PluginSetLock, PluginStore,
+    ModuleContribution, PluginBundle, PluginManifest, PluginSetLock, PluginStore,
 };
 use serde::{Deserialize, Serialize};
 
@@ -527,7 +527,8 @@ fn install(
     if features.len() != feature_count {
         return Err("selected Plugin Features contain a duplicate".to_owned());
     }
-    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let selected =
+        validate_selection(manifest.value(), &features, &profiles).map_err(control_error)?;
     let (evidence, governance) = admission_evidence(
         evidence,
         &profiles,
@@ -696,7 +697,8 @@ async fn upgrade(
     if features.len() != feature_count {
         return Err("selected Plugin Features contain a duplicate".to_owned());
     }
-    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let selected =
+        validate_selection(manifest.value(), &features, &profiles).map_err(control_error)?;
     let (evidence, governance) = admission_evidence(
         evidence,
         &profiles,
@@ -774,7 +776,8 @@ fn replacement_active_set(
     store: &PluginStore,
     profiles: &PluginProfileCatalog,
 ) -> Result<CanonicalDocument<ActivePluginSet>, String> {
-    let selected = validate_selection(manifest.value(), &features).map_err(control_error)?;
+    let selected =
+        validate_selection(manifest.value(), &features, profiles).map_err(control_error)?;
     let mut candidate = current.value().clone();
     let locked = LockedPlugin {
         plugin_id: manifest.value().plugin_id.clone(),
@@ -965,11 +968,7 @@ pub(crate) fn generation_composition(
 ) -> Result<GenerationComposition, String> {
     let profiles = harness_plugin_profiles()?;
     if authority.lock.value().instances.is_empty() {
-        return Ok(GenerationComposition {
-            base_instances: base_plan.module_instances().to_vec(),
-            bindings: base_plan.capability_bindings().to_vec(),
-            preserved_base_bindings: base_plan.capability_bindings().to_vec(),
-        });
+        return Ok(base_generation_composition(base_plan));
     }
     let mut base_instances = base_plan.module_instances().to_vec();
     let mut preserved_base_bindings = base_plan.capability_bindings().to_vec();
@@ -1010,6 +1009,13 @@ pub(crate) fn generation_composition(
                         "more than one Plugin replacement targets Instance `{displaced_provider_instance}`"
                     ));
                 }
+                plugin_bindings.extend(inherited_host_bindings(
+                    manifest.value(),
+                    contribution,
+                    base_plan,
+                    &displaced_provider_instance,
+                    &instance.instance_key,
+                )?);
                 base_instances
                     .retain(|candidate| candidate.instance_key() != displaced_provider_instance);
                 preserved_base_bindings.retain(|candidate| {
@@ -1057,6 +1063,55 @@ pub(crate) fn generation_composition(
         bindings,
         preserved_base_bindings,
     })
+}
+
+fn base_generation_composition(base_plan: &ResolvedAppPlan) -> GenerationComposition {
+    GenerationComposition {
+        base_instances: base_plan.module_instances().to_vec(),
+        bindings: base_plan.capability_bindings().to_vec(),
+        preserved_base_bindings: base_plan.capability_bindings().to_vec(),
+    }
+}
+
+fn inherited_host_bindings(
+    manifest: &PluginManifest,
+    contribution: &ModuleContribution,
+    base_plan: &ResolvedAppPlan,
+    displaced_instance: &str,
+    consumer_instance: &str,
+) -> Result<Vec<CapabilityBinding>, String> {
+    let mut bindings = Vec::new();
+    for requirement in &contribution.requires {
+        let is_intra_plugin = manifest.binding_templates.iter().any(|template| {
+            template.consumer_contribution_id == contribution.id
+                && template.capability_id == requirement.capability_id
+        });
+        if is_intra_plugin {
+            continue;
+        }
+        let inherited = base_plan
+            .capability_bindings()
+            .iter()
+            .filter(|candidate| {
+                candidate.consumer_instance() == displaced_instance
+                    && candidate.capability_id() == requirement.capability_id
+                    && candidate.descriptor_version() == requirement.descriptor_version
+            })
+            .collect::<Vec<_>>();
+        let [inherited] = inherited.as_slice() else {
+            return Err(format!(
+                "Plugin replacement `{}` cannot inherit exactly one Host binding for `{}@{}` from Instance `{displaced_instance}`",
+                contribution.id, requirement.capability_id, requirement.descriptor_version
+            ));
+        };
+        bindings.push(CapabilityBinding::new(
+            consumer_instance,
+            &requirement.capability_id,
+            &requirement.descriptor_version,
+            inherited.provider_instance(),
+        ));
+    }
+    Ok(bindings)
 }
 
 fn intra_plugin_bindings(
@@ -1136,7 +1191,7 @@ fn validate_active_set(
                 locked.plugin_id
             ));
         }
-        let selected = validate_selection(manifest.value(), &locked.selected_features)
+        let selected = validate_selection(manifest.value(), &locked.selected_features, profiles)
             .map_err(control_error)?;
         if selected.product_metadata_digests != locked.product_metadata_digests {
             return Err(format!(
@@ -1229,6 +1284,7 @@ fn validate_supported_manifest(
 fn validate_selection(
     manifest: &PluginManifest,
     features: &[String],
+    profiles: &PluginProfileCatalog,
 ) -> Result<SelectedContent, ControlPlaneError> {
     if features.windows(2).any(|pair| pair[0] >= pair[1]) {
         return rejected("selected Plugin Features must be sorted and unique");
@@ -1306,13 +1362,15 @@ fn validate_selection(
         .iter()
         .filter(|contribution| module_contribution_ids.contains(&contribution.id))
     {
+        let permits_host_requirements =
+            profiles.permits_host_requirements(contribution, &target)?;
         for requirement in &contribution.requires {
             let provider_is_selected = manifest.binding_templates.iter().any(|template| {
                 template.consumer_contribution_id == contribution.id
                     && template.capability_id == requirement.capability_id
                     && module_contribution_ids.contains(&template.provider_contribution_id)
             });
-            if !provider_is_selected {
+            if !provider_is_selected && !permits_host_requirements {
                 return rejected(format!(
                     "selected Plugin contribution `{}` is missing provider `{}`",
                     contribution.id, requirement.capability_id
@@ -1931,8 +1989,22 @@ mod tests {
                 )
                 .unwrap();
 
+                let mut plan_value: serde_json::Value = serde_json::from_slice(PLAN).unwrap();
+                let sessions = plan_value["module_instances"]
+                    .as_array_mut()
+                    .unwrap()
+                    .iter_mut()
+                    .find(|instance| instance["instance_key"] == "sessions")
+                    .unwrap();
+                sessions["configuration"] = serde_json::to_string(&serde_json::json!({
+                    "directory": root.path().join("sessions")
+                }))
+                .unwrap()
+                .into();
+                let plan = serde_json::to_vec(&plan_value).unwrap();
+
                 let generation =
-                    crate::generation::resolve_initial_generation(PLAN, root.path()).unwrap();
+                    crate::generation::resolve_initial_generation(&plan, root.path()).unwrap();
                 assert!(generation.plan.module_instance("agent").is_none());
                 let guest = generation
                     .plan
@@ -1941,8 +2013,18 @@ mod tests {
                     .find(|instance| instance.package_id() == "lenso.agent.guest")
                     .unwrap();
                 assert_eq!(guest.execution_class().as_str(), QUICKJS_EXECUTION_CLASS);
+                assert_eq!(guest.required_capabilities().len(), 4);
+                assert_eq!(
+                    generation
+                        .plan
+                        .capability_bindings()
+                        .iter()
+                        .filter(|binding| binding.consumer_instance() == guest.instance_key())
+                        .count(),
+                    4
+                );
 
-                let mut app = crate::generation::AgentApp::start_with_store(PLAN, root.path())
+                let mut app = crate::generation::AgentApp::start_with_store(&plan, root.path())
                     .await
                     .unwrap();
                 let turn = app.lease_turn().await.unwrap();
@@ -1960,14 +2042,20 @@ mod tests {
                     .await
                     .unwrap()
                     .unwrap();
-                let StreamEvent::Message(message) = stream.receive().await.unwrap() else {
-                    panic!("guest Agent did not emit a message");
-                };
-                assert_eq!(message.text, "QuickJS plugin: hello guest");
-                assert!(matches!(
-                    stream.receive().await.unwrap(),
-                    StreamEvent::Terminal(Ok(()))
-                ));
+                let mut text = String::new();
+                let mut session_id = None;
+                loop {
+                    match stream.receive().await.unwrap() {
+                        StreamEvent::Message(message) => {
+                            text.push_str(&message.text);
+                            session_id = message.session_id;
+                        }
+                        StreamEvent::Terminal(Ok(())) => break,
+                        other => panic!("unexpected guest Agent frame: {other:?}"),
+                    }
+                }
+                assert_eq!(text, "Plugin: Direct answer.");
+                assert!(session_id.is_some());
                 drop(stream);
                 drop(turn);
                 app.shutdown().await.unwrap();

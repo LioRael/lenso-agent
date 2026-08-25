@@ -19,7 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 
 [build-dependencies]
-lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "a4e62253efeda64a4da03ab54501e755decf3e66" }
+lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "c732d0612d782c47ca4616da672fc81ae8e38652" }
 
 [lints]
 workspace = true

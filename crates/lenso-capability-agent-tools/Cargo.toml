@@ -14,6 +14,7 @@ futures.workspace = true
 lenso-contract-runtime.workspace = true
 lenso-kernel.workspace = true
 lenso-module-authoring.workspace = true
+lenso-runtime-codec.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

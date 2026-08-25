@@ -359,6 +359,34 @@ impl lenso_runtime_codec::JsonCapabilityCodec for AgentJsonCodec {
             _ => Err(runtime_codec_unknown_operation(operation)),
         }
     }
+
+    fn invoke_host_request(&self, _dependency: lenso_kernel::ModuleDependencyHandle, operation: String, _request: serde_json::Value, _context: InvocationContext) -> lenso_runtime_codec::JsonHostRequestFuture {
+        Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
+    }
+
+    fn open_host_stream(&self, dependency: lenso_kernel::ModuleStreamDependencyHandle, operation: String, request: serde_json::Value, context: InvocationContext) -> lenso_runtime_codec::JsonHostStreamOpenFuture {
+        match operation.as_str() {
+            RUN_TURN_OPERATION => {
+                let request = serde_json::from_value::<RunTurnRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                Box::pin(async move {
+                    let request = request?;
+                    let handle = dependency.typed::<Agent>()?;
+                    match handle.open_with_context(RUN_TURN_OPERATION, context, request).await? {
+                        Ok(stream) => Ok(Ok(lenso_runtime_codec::json_host_stream::<Agent>(
+                            stream,
+                            |value| serde_json::from_value::<RunTurnResponse>(value).map_err(|_| runtime_codec_protocol_failure()),
+                            |message| serde_json::to_value(message).map_err(|_| runtime_codec_protocol_failure()),
+                            |error| serde_json::to_value(error).map_err(|_| runtime_codec_protocol_failure()),
+                        ))),
+                        Err(error) => serde_json::to_value(error)
+                            .map(Err)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                    }
+                })
+            },
+            _ => Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation)))),
+        }
+    }
 }
 
 fn runtime_codec_protocol_failure() -> RuntimeFailure { RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID } }

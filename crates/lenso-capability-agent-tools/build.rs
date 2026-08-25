@@ -9,7 +9,7 @@ fn main() {
 
     check_projection(
         Path::new("capability.json"),
-        ProjectionLanguage::Rust,
+        ProjectionLanguage::RustRuntime,
         Path::new("src/generated.rs"),
     )
     .unwrap_or_else(|error| panic!("Agent Tools generated artifacts are stale: {error}"));
