@@ -19,3 +19,4 @@
 - [0017 — Run the Host through durable Generation control](0017-run-the-host-through-durable-generation-control.md)
 - [0018 — Admit isolated third-party Wasm Tool Providers](0018-admit-isolated-third-party-wasm-tools.md)
 - [0019 — Use portable model-visible Tool names](0019-use-portable-model-visible-tool-names.md)
+- [0020 — Enter a composed TUI from the product entrypoint](0020-enter-a-composed-tui-from-the-product-entrypoint.md)
