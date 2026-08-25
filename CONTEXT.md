@@ -57,9 +57,9 @@ existing canonical Plan byte-for-byte. Legacy Composition fragments have no
 remaining authority and are removed.
 
 The current host baseline selects released `lenso-app-plan 0.1.4` and
-`lenso-kernel 0.1.9`. It pins `lenso-runner`, `lenso-native-adapter`, and
-`lenso-plugin-control-plane` to `lenso-runtime-rust` revision
-`1a835b8a213d24635171297160f3b534e5602cce`. That Runtime includes the durable
+`lenso-kernel 0.1.9`. It pins its Host Runtime crates to `lenso-runtime-rust`
+revision `a6fdfd4081c4f6c71be1aad7d46bee72fff6d337` and its standalone Plugin Bundle
+builder to revision `6d504b530b268fe6b08b5b4253956af05697f733`. That Runtime includes the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native
 dylib Adapter, and the source-derived native Module factory catalog. The catalog
