@@ -9,9 +9,8 @@ use std::{
 use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
-    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse,
-    CatalogResponseToolsItem, ExecuteError, ExecuteRequest, ExecuteResponse,
-    ExecuteResponseContentType, ToolProviderProvider,
+    self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
+    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolProviderProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
@@ -286,12 +285,12 @@ impl ToolProviderProvider for WorkspaceEditProvider {
     {
         Box::pin(ready(Ok(Ok(CatalogResponse {
             tools: vec![
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: EDIT_TOOL.to_owned(),
                     description: "Replace one unique, exact UTF-8 string in an existing workspace file. The call fails if old_text is absent or not unique.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned(),
                 },
-                CatalogResponseToolsItem {
+                ToolDefinition {
                     name: CREATE_FILE_TOOL.to_owned(),
                     description: "Create one new UTF-8 workspace file below an existing directory. Existing targets are never overwritten.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned(),
@@ -334,7 +333,7 @@ fn success_response(
 ) -> ExecuteResponse {
     ExecuteResponse {
         content: format!("{operation} {path}"),
-        content_type: ExecuteResponseContentType::Text,
+        content_type: ContentType::Text,
         metadata_json: serde_json::json!({
             "operation": operation,
             "path": path,
@@ -356,7 +355,7 @@ fn map_path_error(error: &std::io::Error) -> ExecuteError {
 
 fn execution_failed(reason_code: &str, message: &str) -> WorkspaceEditFailure {
     WorkspaceEditFailure::Domain(ExecuteError::ExecutionFailed {
-        payload: lenso_capability_agent_tool_provider::ExecuteErrorExecutionFailedPayload {
+        payload: lenso_capability_agent_tool_provider::ExecutionFailedPayload {
             reason_code: reason_code.to_owned(),
             message: message.to_owned(),
             details_json: "{}".to_owned(),

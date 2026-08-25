@@ -29,13 +29,13 @@ pub use lenso_contract_runtime::{Uint64, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CompleteRequest {
+pub struct CompleteOpen {
     #[serde(rename = "max_output_tokens")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub max_output_tokens: i64,
     #[serde(rename = "messages")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub messages: Vec<CompleteRequestMessagesItem>,
+    pub messages: Vec<CompleteMessageInput>,
     #[serde(rename = "model")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub model: String,
@@ -44,11 +44,11 @@ pub struct CompleteRequest {
     pub temperature: f64,
     #[serde(rename = "tools")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub tools: Vec<CompleteRequestToolsItem>,
+    pub tools: Vec<CompleteTool>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CompleteRequestMessagesItem {
+pub struct CompleteMessageInput {
     #[serde(rename = "arguments_json")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arguments_json: Option<String>,
@@ -57,7 +57,7 @@ pub struct CompleteRequestMessagesItem {
     pub content: String,
     #[serde(rename = "role")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub role: CompleteRequestMessagesItemRole,
+    pub role: CompleteMessageRole,
     #[serde(rename = "tool_call_id")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -67,7 +67,7 @@ pub struct CompleteRequestMessagesItem {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum CompleteRequestMessagesItemRole {
+pub enum CompleteMessageRole {
     #[serde(rename = "system")]
     System,
     #[serde(rename = "user")]
@@ -79,7 +79,7 @@ pub enum CompleteRequestMessagesItemRole {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CompleteRequestToolsItem {
+pub struct CompleteTool {
     #[serde(rename = "description")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub description: String,
@@ -92,7 +92,7 @@ pub struct CompleteRequestToolsItem {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct CompleteResponse {
+pub struct CompleteMessage {
     #[serde(rename = "arguments_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub arguments_json: String,
@@ -101,7 +101,7 @@ pub struct CompleteResponse {
     pub input_tokens: Uint64,
     #[serde(rename = "kind")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub kind: CompleteResponseKind,
+    pub kind: CompleteMessageKind,
     #[serde(rename = "output_tokens")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub output_tokens: Uint64,
@@ -120,7 +120,7 @@ pub struct CompleteResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub enum CompleteResponseKind {
+pub enum CompleteMessageKind {
     #[serde(rename = "text_delta")]
     TextDelta,
     #[serde(rename = "tool_call")]
@@ -129,20 +129,34 @@ pub enum CompleteResponseKind {
     Usage,
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProviderFailurePayload {
+    #[serde(rename = "message")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub message: String,
+    #[serde(rename = "reason_code")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub reason_code: String,
+    #[serde(rename = "retryable")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub retryable: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompleteError {
     ContentRejected,
     InvalidRequest,
+    ProviderFailure { payload: ProviderFailurePayload },
     UnsupportedModel,
     Unknown(UnknownDomainError),
 }
 
 #[derive(Debug)]
 pub struct Model;
-pub type ModelEvent = StreamEvent<CompleteResponse, CompleteError>;
+pub type ModelEvent = StreamEvent<CompleteMessage, CompleteError>;
 impl StreamCapability for Model {
-    type OpenRequest = CompleteRequest;
-    type Message = CompleteResponse;
+    type OpenRequest = CompleteOpen;
+    type Message = CompleteMessage;
     type DomainError = CompleteError;
     const ID: &'static str = CAPABILITY_ID;
     const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
@@ -157,6 +171,12 @@ impl serde::Serialize for CompleteError {
         match self {
             Self::ContentRejected => serializer.serialize_str("content_rejected"),
             Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::ProviderFailure { payload } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("code", "provider_failure")?;
+                map.serialize_entry("payload", payload)?;
+                map.end()
+            },
             Self::UnsupportedModel => serializer.serialize_str("unsupported_model"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -190,19 +210,28 @@ impl<'de> serde::Deserialize<'de> for CompleteError {
                 let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
                     return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
                 };
-                let payload = object.remove("payload");
-                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
-                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+                match code.as_str() {
+                    "provider_failure" => {
+                        let payload = object.remove("payload").ok_or_else(|| serde::de::Error::custom("structured Domain Error is missing a payload"))?;
+                        let payload = serde_json::from_value(payload).map_err(serde::de::Error::custom)?;
+                        Ok(Self::ProviderFailure { payload })
+                    },
+                    _ => {
+                        let payload = object.remove("payload");
+                        let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                        Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+                    }
+                }
             }
             other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
         }
     }
 }
 
-pub fn encode_complete_request(value: &CompleteRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
-pub fn decode_complete_request(wire: &str) -> Result<CompleteRequest, serde_json::Error> { decode_portable_json(wire) }
-pub fn encode_complete_response(value: &CompleteResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
-pub fn decode_complete_response(wire: &str) -> Result<CompleteResponse, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_complete_request(value: &CompleteOpen) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_complete_request(wire: &str) -> Result<CompleteOpen, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_complete_response(value: &CompleteMessage) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_complete_response(wire: &str) -> Result<CompleteMessage, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_complete_error(value: &CompleteError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_complete_error(wire: &str) -> Result<CompleteError, serde_json::Error> { decode_portable_json(wire) }
 
@@ -241,7 +270,7 @@ where
 }
 
 pub trait ModelProvider: fmt::Debug + 'static {
-    fn complete(&self, context: InvocationContext, request: CompleteRequest) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>>;
+    fn complete(&self, context: InvocationContext, request: CompleteOpen) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>>;
 }
 
 #[doc(hidden)]
@@ -250,7 +279,7 @@ macro_rules! __lenso_native_lower_model {
     ($module:ty, $support:path) => {
         use $support as __LensoNativeSupportModel;
         impl $crate::ModelProvider for $module {
-        fn complete(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CompleteRequest) -> __LensoNativeSupportModel::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportModel::NativeStreamSession>, $crate::ModelInvocationError>> {
+        fn complete(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CompleteOpen) -> __LensoNativeSupportModel::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportModel::NativeStreamSession>, $crate::ModelInvocationError>> {
             let module = self.clone();
             ::std::boxed::Box::pin(async move {
                 let result = <$module>::complete(&module, context, request).await;
@@ -276,7 +305,7 @@ impl<P: ModelProvider> NativeStreamEndpoint for ModelEndpoint<P> {
     fn open(&self, operation: &str, request: Box<dyn std::any::Any>, context: InvocationContext) -> LocalBoxFuture<'static, Result<Result<Box<dyn NativeStreamSession>, Box<dyn std::any::Any>>, RuntimeFailure>> {
         match operation {
             COMPLETE_OPERATION => {
-                let Ok(request) = request.downcast::<CompleteRequest>() else {
+                let Ok(request) = request.downcast::<CompleteOpen>() else {
                     return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
                 };
                 let provider = Rc::clone(&self.provider);
@@ -336,13 +365,13 @@ impl ModelClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
-    pub async fn complete(&self, request: CompleteRequest) -> Result<NativeStream<Model>, ModelInvocationError> {
+    pub async fn complete(&self, request: CompleteOpen) -> Result<NativeStream<Model>, ModelInvocationError> {
         self.complete.open(COMPLETE_OPERATION, request).await
             .map_err(ModelInvocationError::Runtime)?
             .map_err(ModelInvocationError::Domain)
     }
 
-    pub async fn complete_with_context(&self, context: InvocationContext, request: CompleteRequest) -> Result<NativeStream<Model>, ModelInvocationError> {
+    pub async fn complete_with_context(&self, context: InvocationContext, request: CompleteOpen) -> Result<NativeStream<Model>, ModelInvocationError> {
         self.complete.open_with_context(COMPLETE_OPERATION, context, request).await
             .map_err(ModelInvocationError::Runtime)?
             .map_err(ModelInvocationError::Domain)
@@ -407,7 +436,7 @@ impl<'a, H: lenso_guest_sdk::HostImports> ModelGuestClient<'a, H> {
             .map(|capability| Self { capability })
     }
 
-    pub fn complete(&self, request: &CompleteRequest) -> Result<lenso_guest_sdk::GuestStream<H, CompleteResponse, CompleteError>, lenso_guest_sdk::GuestError<CompleteError>> {
+    pub fn complete(&self, request: &CompleteOpen) -> Result<lenso_guest_sdk::GuestStream<H, CompleteMessage, CompleteError>, lenso_guest_sdk::GuestError<CompleteError>> {
         self.capability.open_stream(COMPLETE_OPERATION, request)
     }
 }
@@ -438,7 +467,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ModelJsonCodec {
     fn encode_stream_open(&self, operation: &str, request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         match operation {
             COMPLETE_OPERATION => {
-                let value = request.downcast_ref::<CompleteRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                let value = request.downcast_ref::<CompleteOpen>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
             },
             _ => Err(runtime_codec_unknown_operation(operation)),
@@ -448,7 +477,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ModelJsonCodec {
     fn encode_stream_message(&self, operation: &str, message: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         match operation {
             COMPLETE_OPERATION => {
-                let value = message.downcast_ref::<CompleteResponse>().ok_or_else(runtime_codec_protocol_failure)?;
+                let value = message.downcast_ref::<CompleteMessage>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
             },
             _ => Err(runtime_codec_unknown_operation(operation)),
@@ -457,7 +486,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ModelJsonCodec {
 
     fn decode_stream_message(&self, operation: &str, value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
         match operation {
-            COMPLETE_OPERATION => serde_json::from_value::<CompleteResponse>(value)
+            COMPLETE_OPERATION => serde_json::from_value::<CompleteMessage>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             _ => Err(runtime_codec_unknown_operation(operation)),
@@ -480,14 +509,14 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ModelJsonCodec {
     fn open_host_stream(&self, dependency: lenso_kernel::ModuleStreamDependencyHandle, operation: String, request: serde_json::Value, context: InvocationContext) -> lenso_runtime_codec::JsonHostStreamOpenFuture {
         match operation.as_str() {
             COMPLETE_OPERATION => {
-                let request = serde_json::from_value::<CompleteRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                let request = serde_json::from_value::<CompleteOpen>(request).map_err(|_| runtime_codec_protocol_failure());
                 Box::pin(async move {
                     let request = request?;
                     let handle = dependency.typed::<Model>()?;
                     match handle.open_with_context(COMPLETE_OPERATION, context, request).await? {
                         Ok(stream) => Ok(Ok(lenso_runtime_codec::json_host_stream::<Model>(
                             stream,
-                            |value| serde_json::from_value::<CompleteResponse>(value).map_err(|_| runtime_codec_protocol_failure()),
+                            |value| serde_json::from_value::<CompleteMessage>(value).map_err(|_| runtime_codec_protocol_failure()),
                             |message| serde_json::to_value(message).map_err(|_| runtime_codec_protocol_failure()),
                             |error| serde_json::to_value(error).map_err(|_| runtime_codec_protocol_failure()),
                         ))),

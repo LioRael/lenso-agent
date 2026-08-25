@@ -129,13 +129,17 @@ impl AgentApp {
                 .map(|record| record.generation_spec_digest.as_str())
                 .collect::<BTreeSet<_>>();
             let recoverable = resolve_retained_generations(plan_bytes, store_root)?;
-            if !live_digests
+            let missing = live_digests
                 .iter()
-                .all(|digest| recoverable.contains_key(*digest))
-            {
-                return Err(
-                    "durable Generation recovery lacks retained exact Plugin authority".to_owned(),
-                );
+                .filter(|digest| !recoverable.contains_key(**digest))
+                .copied()
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "durable Generation recovery lacks retained exact Plugin authority for {}; recoverable Generation Specs: {}",
+                    missing.join(", "),
+                    recoverable.keys().cloned().collect::<Vec<_>>().join(", ")
+                ));
             }
             DurableGenerationSupervisor::recover(
                 APP_ID,

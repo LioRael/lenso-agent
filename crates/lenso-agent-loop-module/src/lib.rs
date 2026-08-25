@@ -11,18 +11,18 @@ use lenso_capability_agent::{
     self as agent_capability, CAPABILITY_ID, RunTurnError, RunTurnRequest, RunTurnResponse,
 };
 use lenso_capability_agent_model::{
-    self as model_capability, CompleteRequest, CompleteRequestMessagesItem,
-    CompleteRequestMessagesItemRole, CompleteRequestToolsItem, CompleteResponse,
-    CompleteResponseKind, ModelEvent,
+    self as model_capability, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, CompleteTool, ModelEvent,
+    ModelInvocationError,
 };
 use lenso_capability_agent_prompt::{
     self as prompt_capability, AssembleRequest, PromptInvocationError,
 };
 use lenso_capability_agent_session::{
-    self as session_capability, AppendError, AppendRequest, AppendRequestEventsItem,
-    AppendRequestEventsItemKind, OpenError, OpenRequest, ReadError, ReadRequest,
-    ReadResponseEventsItem, ReadResponseEventsItemKind, SessionAppendInvocationError,
-    SessionOpenInvocationError, SessionReadInvocationError,
+    self as session_capability, AppendError, AppendSessionRequest, AppendSessionRequestEventsItem,
+    AppendSessionRequestEventsItemKind, OpenError, OpenSessionRequest, ReadError,
+    ReadSessionRequest, ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind,
+    SessionAppendInvocationError, SessionOpenInvocationError, SessionReadInvocationError,
 };
 use lenso_capability_agent_tools::{
     self as tools_capability, CatalogRequest, ExecuteRequest, ToolsExecuteInvocationError,
@@ -59,12 +59,14 @@ impl RunScope {
 
     /// Attaches this scope to one root Invocation Context.
     pub fn attach(self, context: InvocationContext) -> Result<InvocationContext, String> {
-        let bytes = serde_json::to_vec(&self)
-            .map_err(|error| format!("failed to encode Run Scope: {error}"))?;
         context
-            .with_extension(RUN_SCOPE_EXTENSION, bytes)
+            .with_typed_extension(&self)
             .map_err(|error| format!("failed to attach Run Scope: {error}"))
     }
+}
+
+impl TypedExtension for RunScope {
+    const KEY: &'static str = RUN_SCOPE_EXTENSION;
 }
 
 type TurnFailure = ModuleError<RunTurnError, RuntimeFailure>;
@@ -167,7 +169,6 @@ impl Lifecycle for AgentLoop {
 
 #[lenso::provides(agent_capability::Agent)]
 impl AgentLoop {
-    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn run_turn(
         &self,
         context: Ctx,
@@ -219,19 +220,8 @@ async fn produce_turn(
     request: RunTurnRequest,
     mut channel: ProviderStreamChannel<agent_capability::Agent>,
 ) {
-    match run_turn(&module, &module.config, &context, request, &mut channel).await {
-        Ok(()) => {
-            let _ = channel.close_send().await;
-            let _ = channel.finish().await;
-        }
-        Err(ModuleError::Domain(error)) => {
-            let _ = channel.close_send().await;
-            let _ = channel.fail(error).await;
-        }
-        Err(ModuleError::Runtime(error)) => {
-            let _ = channel.fail_runtime(error).await;
-        }
-    }
+    let result = run_turn(&module, &module.config, &context, request, &mut channel).await;
+    let _ = channel.complete(result).await;
 }
 
 async fn run_turn(
@@ -247,7 +237,7 @@ async fn run_turn(
         .session
         .open_with_context(
             context.clone(),
-            OpenRequest {
+            OpenSessionRequest {
                 session_id: request.session_id,
             },
         )
@@ -271,14 +261,14 @@ async fn run_turn(
     let mut initial_events = Vec::new();
     if opened.created {
         initial_events.push(session_event(
-            AppendRequestEventsItemKind::SessionCreated,
+            AppendSessionRequestEventsItemKind::SessionCreated,
             None,
             &serde_json::json!({"session_id": session_id}),
         )?);
     }
     initial_events.extend(interrupted_turn_events(&history)?);
     initial_events.push(session_event(
-        AppendRequestEventsItemKind::TurnStarted,
+        AppendSessionRequestEventsItemKind::TurnStarted,
         Some(&turn_id),
         &serde_json::json!({
             "generation_spec_digest": generation_spec_digest,
@@ -308,16 +298,11 @@ async fn run_turn(
 }
 
 fn run_scope(context: &InvocationContext) -> Result<Option<RunScope>, TurnFailure> {
-    context
-        .extension(RUN_SCOPE_EXTENSION)
-        .map(|bytes| {
-            serde_json::from_slice(bytes).map_err(|error| {
-                ModuleError::runtime(RuntimeFailure::ModuleFailure {
-                    detail: format!("Agent Turn has an invalid Run Scope: {error}"),
-                })
-            })
+    context.typed_extension::<RunScope>().map_err(|error| {
+        ModuleError::runtime(RuntimeFailure::ModuleFailure {
+            detail: format!("Agent Turn has an invalid Run Scope: {error}"),
         })
-        .transpose()
+    })
 }
 
 fn generation_spec_digest(context: &InvocationContext) -> Result<&str, TurnFailure> {
@@ -348,7 +333,7 @@ async fn execute_steps(
     session_id: &str,
     turn_id: &str,
     revision: &mut String,
-    mut messages: Vec<CompleteRequestMessagesItem>,
+    mut messages: Vec<CompleteMessageInput>,
     run_scope: Option<&RunScope>,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
@@ -360,8 +345,8 @@ async fn execute_steps(
     if !prompt.content.is_empty() {
         messages.insert(
             0,
-            CompleteRequestMessagesItem {
-                role: CompleteRequestMessagesItemRole::System,
+            CompleteMessageInput {
+                role: CompleteMessageRole::System,
                 content: prompt.content,
                 tool_call_id: None,
                 tool_name: None,
@@ -397,7 +382,7 @@ async fn execute_steps(
     let tools = static_tools
         .values()
         .filter(|tool| run_scope.is_none_or(|scope| scope.allowed_tools.contains(&tool.name)))
-        .map(|tool| CompleteRequestToolsItem {
+        .map(|tool| CompleteTool {
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema_json: tool.input_schema_json.clone(),
@@ -419,7 +404,7 @@ async fn execute_steps(
             session_id,
             revision.clone(),
             vec![session_event(
-                AppendRequestEventsItemKind::ModelRequested,
+                AppendSessionRequestEventsItemKind::ModelRequested,
                 Some(turn_id),
                 &serde_json::json!({
                     "step": step,
@@ -431,7 +416,7 @@ async fn execute_steps(
         let completion = stream_model(
             clients,
             context,
-            CompleteRequest {
+            CompleteOpen {
                 model: config.model.clone(),
                 messages: messages.clone(),
                 tools: tools.clone(),
@@ -461,12 +446,12 @@ async fn execute_steps(
                 revision.clone(),
                 vec![
                     session_event(
-                        AppendRequestEventsItemKind::ModelOutput,
+                        AppendSessionRequestEventsItemKind::ModelOutput,
                         Some(turn_id),
                         &serde_json::json!({"text": completion.text}),
                     )?,
                     session_event(
-                        AppendRequestEventsItemKind::TurnCompleted,
+                        AppendSessionRequestEventsItemKind::TurnCompleted,
                         Some(turn_id),
                         &serde_json::json!({"output": turn_output}),
                     )?,
@@ -482,14 +467,14 @@ async fn execute_steps(
                 session_id,
                 revision.clone(),
                 vec![session_event(
-                    AppendRequestEventsItemKind::ModelOutput,
+                    AppendSessionRequestEventsItemKind::ModelOutput,
                     Some(turn_id),
                     &serde_json::json!({"step": step, "text": completion.text}),
                 )?],
             )
             .await?;
-            messages.push(CompleteRequestMessagesItem {
-                role: CompleteRequestMessagesItemRole::Assistant,
+            messages.push(CompleteMessageInput {
+                role: CompleteMessageRole::Assistant,
                 content: completion.text.clone(),
                 tool_call_id: None,
                 tool_name: None,
@@ -522,7 +507,7 @@ async fn execute_steps(
                 session_id,
                 revision.clone(),
                 vec![session_event(
-                    AppendRequestEventsItemKind::ToolRequested,
+                    AppendSessionRequestEventsItemKind::ToolRequested,
                     Some(turn_id),
                     &serde_json::json!({
                         "call_id": tool_call.tool_call_id,
@@ -549,7 +534,7 @@ async fn execute_steps(
                 session_id,
                 revision.clone(),
                 vec![session_event(
-                    AppendRequestEventsItemKind::ToolResult,
+                    AppendSessionRequestEventsItemKind::ToolResult,
                     Some(turn_id),
                     &serde_json::json!({
                         "call_id": tool_call.tool_call_id,
@@ -560,8 +545,8 @@ async fn execute_steps(
             )
             .await?;
             messages.push(assistant_tool_message(&tool_call));
-            messages.push(CompleteRequestMessagesItem {
-                role: CompleteRequestMessagesItemRole::Tool,
+            messages.push(CompleteMessageInput {
+                role: CompleteMessageRole::Tool,
                 content: tool_result.content,
                 tool_call_id: Some(tool_call.tool_call_id),
                 tool_name: None,
@@ -575,14 +560,14 @@ async fn execute_steps(
 #[derive(Debug)]
 struct ModelStep {
     text: String,
-    tool_calls: Vec<CompleteResponse>,
+    tool_calls: Vec<CompleteMessage>,
     output_tokens: Option<u64>,
 }
 
 async fn stream_model(
     clients: &AgentLoop,
     context: &InvocationContext,
-    request: CompleteRequest,
+    request: CompleteOpen,
     session_id: &str,
     sequence: &mut u64,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
@@ -591,11 +576,7 @@ async fn stream_model(
         .model
         .complete_with_context(context.clone(), request)
         .await
-        .map_err(|error| {
-            ModuleError::runtime(RuntimeFailure::ModuleFailure {
-                detail: format!("Model completion failed: {error:?}"),
-            })
-        })?;
+        .map_err(map_model_error)?;
     stream.close_send().await.map_err(ModuleError::runtime)?;
     let mut completion = ModelStep {
         text: String::new(),
@@ -605,7 +586,7 @@ async fn stream_model(
     loop {
         match stream.receive().await.map_err(ModuleError::runtime)? {
             ModelEvent::Message(message) => match message.kind {
-                CompleteResponseKind::TextDelta => {
+                CompleteMessageKind::TextDelta => {
                     completion.text.push_str(&message.text);
                     *sequence = sequence.saturating_add(1);
                     send_agent_message(
@@ -619,8 +600,8 @@ async fn stream_model(
                     )
                     .await?;
                 }
-                CompleteResponseKind::ToolCall => completion.tool_calls.push(message),
-                CompleteResponseKind::Usage => {
+                CompleteMessageKind::ToolCall => completion.tool_calls.push(message),
+                CompleteMessageKind::Usage => {
                     completion.output_tokens =
                         Some(message.output_tokens.parse().map_err(|_| {
                             ModuleError::runtime(RuntimeFailure::ModuleFailure {
@@ -631,11 +612,7 @@ async fn stream_model(
             },
             StreamEvent::PeerHalfClosed => {}
             StreamEvent::Terminal(Ok(())) => return Ok(completion),
-            StreamEvent::Terminal(Err(error)) => {
-                return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
-                    detail: format!("Model stream failed: {error:?}"),
-                }));
-            }
+            StreamEvent::Terminal(Err(error)) => return Err(map_model_domain_error(error)),
         }
     }
 }
@@ -657,7 +634,7 @@ async fn read_session_tail(
     session_id: &str,
     current_revision: &str,
     config: &AgentConfig,
-) -> Result<Vec<ReadResponseEventsItem>, TurnFailure> {
+) -> Result<Vec<ReadSessionResponseEventsItem>, TurnFailure> {
     let current_revision = current_revision.parse::<u64>().map_err(|_| {
         ModuleError::runtime(RuntimeFailure::ModuleFailure {
             detail: "Session returned an invalid revision".to_owned(),
@@ -676,7 +653,7 @@ async fn read_session_tail(
         .session
         .read_with_context(
             context.clone(),
-            ReadRequest {
+            ReadSessionRequest {
                 session_id: session_id.to_owned(),
                 after_revision: current_revision.saturating_sub(history_limit).to_string(),
                 limit: i64::try_from(history_limit).map_err(|_| {
@@ -692,20 +669,20 @@ async fn read_session_tail(
 }
 
 fn interrupted_turn_events(
-    events: &[ReadResponseEventsItem],
-) -> Result<Vec<AppendRequestEventsItem>, TurnFailure> {
+    events: &[ReadSessionResponseEventsItem],
+) -> Result<Vec<AppendSessionRequestEventsItem>, TurnFailure> {
     let mut open_turns = BTreeSet::new();
     for event in events {
         let Some(turn_id) = event.turn_id.as_ref() else {
             continue;
         };
         match event.kind {
-            ReadResponseEventsItemKind::TurnStarted => {
+            ReadSessionResponseEventsItemKind::TurnStarted => {
                 open_turns.insert(turn_id.clone());
             }
-            ReadResponseEventsItemKind::TurnCompleted
-            | ReadResponseEventsItemKind::TurnFailed
-            | ReadResponseEventsItemKind::TurnCancelled => {
+            ReadSessionResponseEventsItemKind::TurnCompleted
+            | ReadSessionResponseEventsItemKind::TurnFailed
+            | ReadSessionResponseEventsItemKind::TurnCancelled => {
                 open_turns.remove(turn_id);
             }
             _ => {}
@@ -715,7 +692,7 @@ fn interrupted_turn_events(
         .into_iter()
         .map(|turn_id| {
             session_event(
-                AppendRequestEventsItemKind::TurnFailed,
+                AppendSessionRequestEventsItemKind::TurnFailed,
                 Some(&turn_id),
                 &serde_json::json!({"error": "host_interrupted"}),
             )
@@ -730,8 +707,8 @@ struct HistoricalTurn {
 }
 
 fn reconstruct_history(
-    events: &[ReadResponseEventsItem],
-) -> Result<Vec<CompleteRequestMessagesItem>, TurnFailure> {
+    events: &[ReadSessionResponseEventsItem],
+) -> Result<Vec<CompleteMessageInput>, TurnFailure> {
     let mut turns = BTreeMap::<String, HistoricalTurn>::new();
     let mut turn_order = Vec::new();
     for event in events {
@@ -739,14 +716,14 @@ fn reconstruct_history(
             continue;
         };
         match event.kind {
-            ReadResponseEventsItemKind::TurnStarted => {
+            ReadSessionResponseEventsItemKind::TurnStarted => {
                 if !turns.contains_key(turn_id) {
                     turn_order.push(turn_id.clone());
                 }
                 turns.entry(turn_id.clone()).or_default().input =
                     Some(history_payload_text(event, "input")?);
             }
-            ReadResponseEventsItemKind::TurnCompleted => {
+            ReadSessionResponseEventsItemKind::TurnCompleted => {
                 turns.entry(turn_id.clone()).or_default().output =
                     Some(history_payload_text(event, "output")?);
             }
@@ -760,8 +737,8 @@ fn reconstruct_history(
         };
         if let (Some(input), Some(output)) = (turn.input, turn.output) {
             messages.push(user_message(input));
-            messages.push(CompleteRequestMessagesItem {
-                role: CompleteRequestMessagesItemRole::Assistant,
+            messages.push(CompleteMessageInput {
+                role: CompleteMessageRole::Assistant,
                 content: output,
                 tool_call_id: None,
                 tool_name: None,
@@ -773,7 +750,7 @@ fn reconstruct_history(
 }
 
 fn history_payload_text(
-    event: &ReadResponseEventsItem,
+    event: &ReadSessionResponseEventsItem,
     field: &str,
 ) -> Result<String, TurnFailure> {
     serde_json::from_str::<serde_json::Value>(&event.payload_json)
@@ -786,9 +763,9 @@ fn history_payload_text(
         })
 }
 
-fn user_message(content: String) -> CompleteRequestMessagesItem {
-    CompleteRequestMessagesItem {
-        role: CompleteRequestMessagesItemRole::User,
+fn user_message(content: String) -> CompleteMessageInput {
+    CompleteMessageInput {
+        role: CompleteMessageRole::User,
         content,
         tool_call_id: None,
         tool_name: None,
@@ -796,9 +773,9 @@ fn user_message(content: String) -> CompleteRequestMessagesItem {
     }
 }
 
-fn assistant_tool_message(tool_call: &CompleteResponse) -> CompleteRequestMessagesItem {
-    CompleteRequestMessagesItem {
-        role: CompleteRequestMessagesItemRole::Assistant,
+fn assistant_tool_message(tool_call: &CompleteMessage) -> CompleteMessageInput {
+    CompleteMessageInput {
+        role: CompleteMessageRole::Assistant,
         content: String::new(),
         tool_call_id: Some(tool_call.tool_call_id.clone()),
         tool_name: Some(tool_call.tool_name.clone()),
@@ -816,9 +793,9 @@ async fn record_turn_failure(
 ) {
     let cancelled = context.is_cancelled();
     let kind = if cancelled {
-        AppendRequestEventsItemKind::TurnCancelled
+        AppendSessionRequestEventsItemKind::TurnCancelled
     } else {
-        AppendRequestEventsItemKind::TurnFailed
+        AppendSessionRequestEventsItemKind::TurnFailed
     };
     let Ok(event) = session_event(
         kind,
@@ -827,7 +804,7 @@ async fn record_turn_failure(
     ) else {
         return;
     };
-    let request = AppendRequest {
+    let request = AppendSessionRequest {
         session_id: session_id.to_owned(),
         expected_revision: revision,
         events: vec![event],
@@ -862,13 +839,13 @@ async fn append_events(
     context: &InvocationContext,
     session_id: &str,
     expected_revision: String,
-    events: Vec<AppendRequestEventsItem>,
+    events: Vec<AppendSessionRequestEventsItem>,
 ) -> Result<String, TurnFailure> {
     clients
         .session
         .append_with_context(
             context.clone(),
-            AppendRequest {
+            AppendSessionRequest {
                 session_id: session_id.to_owned(),
                 expected_revision,
                 events,
@@ -880,11 +857,11 @@ async fn append_events(
 }
 
 fn session_event(
-    kind: AppendRequestEventsItemKind,
+    kind: AppendSessionRequestEventsItemKind,
     turn_id: Option<&str>,
     payload: &serde_json::Value,
-) -> Result<AppendRequestEventsItem, TurnFailure> {
-    Ok(AppendRequestEventsItem {
+) -> Result<AppendSessionRequestEventsItem, TurnFailure> {
+    Ok(AppendSessionRequestEventsItem {
         event_id: uuid::Uuid::new_v4().to_string(),
         kind,
         turn_id: turn_id.map(ToOwned::to_owned),
@@ -952,6 +929,21 @@ fn map_prompt_error(error: PromptInvocationError) -> TurnFailure {
     }
 }
 
+fn map_model_error(error: ModelInvocationError) -> TurnFailure {
+    match error {
+        ModelInvocationError::Domain(error) => map_model_domain_error(error),
+        ModelInvocationError::Runtime(error) => ModuleError::runtime(error),
+    }
+}
+
+fn map_model_domain_error(error: CompleteError) -> TurnFailure {
+    let detail = match error {
+        CompleteError::ProviderFailure { payload } => payload.message,
+        error => format!("Model completion failed: {error:?}"),
+    };
+    ModuleError::runtime(RuntimeFailure::ModuleFailure { detail })
+}
+
 fn map_tools_error(error: ToolsExecuteInvocationError) -> TurnFailure {
     match error {
         ToolsExecuteInvocationError::Domain(error) => {
@@ -1005,10 +997,10 @@ mod tests {
 
     fn history_event(
         revision: &str,
-        kind: ReadResponseEventsItemKind,
+        kind: ReadSessionResponseEventsItemKind,
         payload_json: &str,
-    ) -> ReadResponseEventsItem {
-        ReadResponseEventsItem {
+    ) -> ReadSessionResponseEventsItem {
+        ReadSessionResponseEventsItem {
             revision: revision.to_owned(),
             event_id: format!("event-{revision}"),
             kind,
@@ -1023,20 +1015,20 @@ mod tests {
         let messages = reconstruct_history(&[
             history_event(
                 "1",
-                ReadResponseEventsItemKind::TurnStarted,
+                ReadSessionResponseEventsItemKind::TurnStarted,
                 r#"{"input":"hello"}"#,
             ),
             history_event(
                 "2",
-                ReadResponseEventsItemKind::TurnCompleted,
+                ReadSessionResponseEventsItemKind::TurnCompleted,
                 r#"{"output":"world"}"#,
             ),
         ])
         .unwrap();
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[0].role, CompleteRequestMessagesItemRole::User);
+        assert_eq!(messages[0].role, CompleteMessageRole::User);
         assert_eq!(messages[0].content, "hello");
-        assert_eq!(messages[1].role, CompleteRequestMessagesItemRole::Assistant);
+        assert_eq!(messages[1].role, CompleteMessageRole::Assistant);
         assert_eq!(messages[1].content, "world");
     }
 
@@ -1095,14 +1087,17 @@ mod tests {
     fn interrupted_turn_is_closed_before_a_resumed_turn_starts() {
         let events = [history_event(
             "1",
-            ReadResponseEventsItemKind::TurnStarted,
+            ReadSessionResponseEventsItemKind::TurnStarted,
             r#"{"input":"hello"}"#,
         )];
 
         let recovery = interrupted_turn_events(&events).unwrap();
 
         assert_eq!(recovery.len(), 1);
-        assert_eq!(recovery[0].kind, AppendRequestEventsItemKind::TurnFailed);
+        assert_eq!(
+            recovery[0].kind,
+            AppendSessionRequestEventsItemKind::TurnFailed
+        );
         assert_eq!(recovery[0].turn_id.as_deref(), Some("turn-1"));
         assert!(recovery[0].payload_json.contains("host_interrupted"));
     }
@@ -1112,12 +1107,12 @@ mod tests {
         let events = [
             history_event(
                 "1",
-                ReadResponseEventsItemKind::TurnStarted,
+                ReadSessionResponseEventsItemKind::TurnStarted,
                 r#"{"input":"hello"}"#,
             ),
             history_event(
                 "2",
-                ReadResponseEventsItemKind::TurnCompleted,
+                ReadSessionResponseEventsItemKind::TurnCompleted,
                 r#"{"output":"world"}"#,
             ),
         ];

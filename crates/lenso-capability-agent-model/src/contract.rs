@@ -87,6 +87,17 @@ pub enum CompleteError {
     InvalidRequest,
     UnsupportedModel,
     ContentRejected,
+    ProviderFailure { payload: ProviderFailurePayload },
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ProviderFailurePayload {
+    #[schemars(length(min = 1, max = 128))]
+    pub reason_code: String,
+    #[schemars(length(min = 1, max = 4_096))]
+    pub message: String,
+    pub retryable: bool,
 }
 
 #[lenso::capability(
