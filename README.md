@@ -153,17 +153,15 @@ small read-only base. Optional Modules are selected through the persisted Plugin
 Active Set, so combinations do not create more App files.
 
 Before boot, the Host validates the definition and selected Plugins, then
-materializes one immutable Resolved App Plan in ignored Host state. App authors
-can check or reproduce that artifact:
+resolves one immutable App Plan in memory for the candidate Generation. App
+authors can validate the source intent without materializing a generated file:
 
 ```sh
 lenso app check --definition lenso.app.json
-lenso app resolve --definition lenso.app.json \
-  --output .lenso/resolved-plan.json
 ```
 
 `--plan <path>` remains an advanced escape hatch for exact Plan replay.
-Resolved Plans are generated Host input and are never hand-edited or committed.
+Resolved Plans are runtime values and are never hand-edited or committed.
 `scripts/check-removal.sh` proves static optional providers can be removed while
 the remaining graph still resolves; Plugin tests prove independent Skills,
 process, and workspace-edit removal. The TUI proof additionally removes every

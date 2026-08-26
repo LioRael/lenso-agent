@@ -1,5 +1,5 @@
 use std::{
-    env, fs,
+    env,
     io::{self, Write},
     path::PathBuf,
     process::{Command, ExitCode},
@@ -10,7 +10,7 @@ use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_agent_cli::{default_plan, generation, plugins, provenance};
+use lenso_agent_cli::{generation, plan_bytes, plugins, provenance};
 use lenso_agent_loop_module::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
@@ -18,7 +18,7 @@ use lenso_kernel::StreamEvent;
 #[derive(Debug)]
 struct Args {
     allowed_tools: Option<Vec<String>>,
-    plan: PathBuf,
+    plan: Option<PathBuf>,
     prompt: String,
     session: Option<String>,
 }
@@ -73,8 +73,7 @@ async fn run() -> Result<(), String> {
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
     };
-    let bytes = fs::read(&args.plan)
-        .map_err(|error| format!("failed to read {}: {error}", args.plan.display()))?;
+    let bytes = plan_bytes(args.plan.as_deref())?;
     let mut app = generation::AgentApp::start(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
@@ -228,10 +227,7 @@ fn parse_args() -> Result<CliCommand, String> {
     }
     Ok(CliCommand::Run(Args {
         allowed_tools,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         prompt: prompt.ok_or_else(|| "a prompt is required".to_owned())?,
         session,
     }))

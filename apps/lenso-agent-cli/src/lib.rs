@@ -1,4 +1,9 @@
-use std::{env, fs, path::PathBuf, process::Command};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+
+use lenso_authoring::CargoAppDefinition;
 
 mod authority;
 pub mod channel;
@@ -13,41 +18,26 @@ pub mod telegram;
 mod test_support;
 pub mod tui;
 
-/// Resolves the single product App Definition unless an exact Plan override is supplied.
-pub fn default_plan() -> Result<PathBuf, String> {
-    env::var_os("LENSO_RESOLVED_PLAN")
+/// Loads an exact Plan override or resolves the product App Definition in memory.
+pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {
+    explicit_plan
         .map(PathBuf::from)
-        .map_or_else(resolve_base_plan, Ok)
+        .or_else(|| env::var_os("LENSO_RESOLVED_PLAN").map(PathBuf::from))
+        .map_or_else(resolve_base_plan, |plan| {
+            fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))
+        })
 }
 
-fn resolve_base_plan() -> Result<PathBuf, String> {
+fn resolve_base_plan() -> Result<Vec<u8>, String> {
     let definition = env::var_os("LENSO_APP_DEFINITION")
         .map_or_else(|| PathBuf::from("lenso.app.json"), PathBuf::from);
-    let plan = PathBuf::from(".lenso").join("resolved-plan.json");
-    let parent = plan
-        .parent()
-        .ok_or_else(|| format!("App Plan path `{}` has no parent", plan.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
-    let lenso = env::var_os("LENSO_BIN").unwrap_or_else(|| "lenso".into());
-    let output = Command::new(&lenso)
-        .args(["app", "resolve", "--definition"])
-        .arg(&definition)
-        .arg("--output")
-        .arg(&plan)
-        .output()
-        .map_err(|error| {
-            format!(
-                "failed to run `{}`: {error}",
-                PathBuf::from(&lenso).display()
-            )
-        })?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to resolve the App from {}: {}",
-            definition.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
-    }
-    Ok(plan)
+    let app = CargoAppDefinition::load(&definition)
+        .map_err(|error| format!("failed to load {}: {error}", definition.display()))?;
+    let root = definition.parent().unwrap_or_else(|| Path::new("."));
+    app.resolve_canonical(root).map_err(|error| {
+        format!(
+            "failed to resolve the App from {}: {error}",
+            definition.display()
+        )
+    })
 }

@@ -57,12 +57,12 @@ pub enum PluginCommand {
     Enable {
         bundled: String,
         evidence: Option<String>,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Disable {
         plugin_id: String,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Available,
@@ -81,12 +81,12 @@ pub enum PluginCommand {
         evidence: Option<String>,
         features: Vec<String>,
         expected_manifest: Option<String>,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Rollback {
         to: String,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Status {
@@ -127,12 +127,12 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             evidence,
             plan,
             root,
-        } => run_enable(&bundled, evidence.as_deref(), &plan, &root).await,
+        } => run_enable(&bundled, evidence.as_deref(), plan.as_deref(), &root).await,
         PluginCommand::Disable {
             plugin_id,
             plan,
             root,
-        } => run_disable(&plugin_id, &plan, &root).await,
+        } => run_disable(&plugin_id, plan.as_deref(), &root).await,
         PluginCommand::Available => {
             print_available();
             Ok(())
@@ -189,7 +189,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
                 evidence.as_deref(),
                 features,
                 expected_manifest.as_deref(),
-                &plan,
+                plan.as_deref(),
             )
             .await?;
             println!(
@@ -207,7 +207,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             Ok(())
         }
         PluginCommand::Rollback { to, plan, root } => {
-            let outcome = rollback(&root, &to, &plan).await?;
+            let outcome = rollback(&root, &to, plan.as_deref()).await?;
             println!("rolled-back-to: {}", outcome.active_set);
             println!("previous-active-set: {}", outcome.previous_active_set);
             println!("generation: {}", outcome.generation_spec);
@@ -224,10 +224,11 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
 async fn run_enable(
     bundled: &str,
     evidence: Option<&str>,
-    plan: &Path,
+    plan: Option<&Path>,
     root: &Path,
 ) -> Result<(), String> {
-    let outcome = enable_loaded(root, bundled_plugin(bundled)?, evidence, plan).await?;
+    let plan = crate::plan_bytes(plan)?;
+    let outcome = enable_loaded(root, bundled_plugin(bundled)?, evidence, &plan).await?;
     println!("enabled: {bundled}");
     println!("release: {}@{}", outcome.plugin_id, outcome.release_version);
     println!("manifest: {}", outcome.manifest_digest);
@@ -239,9 +240,10 @@ async fn run_enable(
     Ok(())
 }
 
-async fn run_disable(plugin: &str, plan: &Path, root: &Path) -> Result<(), String> {
+async fn run_disable(plugin: &str, plan: Option<&Path>, root: &Path) -> Result<(), String> {
     let plugin_id = bundled_plugin_id(plugin).unwrap_or(plugin);
-    let outcome = disable(root, plugin_id, plan).await?;
+    let plan = crate::plan_bytes(plan)?;
+    let outcome = disable(root, plugin_id, &plan).await?;
     println!("disabled: {plugin_id}");
     println!("plugin-set: {}", outcome.plugin_set);
     println!("active-set: {}", outcome.active_set);
@@ -379,10 +381,7 @@ fn parse_enable(arguments: &[String]) -> Result<PluginCommand, String> {
     Ok(PluginCommand::Enable {
         bundled: bundled.ok_or_else(usage)?,
         evidence,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -404,10 +403,7 @@ fn parse_disable(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Disable {
         plugin_id: plugin.ok_or_else(usage)?,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -495,10 +491,7 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
         evidence,
         features,
         expected_manifest,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -520,10 +513,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Rollback {
         to: to.ok_or_else(usage)?,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -534,10 +524,6 @@ fn usage() -> String {
 
 fn default_root() -> PathBuf {
     PathBuf::from(".lenso/plugins")
-}
-
-fn default_plan() -> Result<PathBuf, String> {
-    crate::default_plan()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -815,7 +801,7 @@ async fn enable_loaded(
     root: &Path,
     bundle: LoadedBundle,
     evidence: Option<&str>,
-    plan_path: &Path,
+    plan: &[u8],
 ) -> Result<EnableOutcome, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
@@ -865,12 +851,10 @@ async fn enable_loaded(
         &store,
         &profiles,
     )?;
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
-        &plan,
+        plan,
         current_authority,
         candidate_authority,
         root,
@@ -997,7 +981,7 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     Ok(lock.digest().to_owned())
 }
 
-async fn disable(root: &Path, plugin_id: &str, plan_path: &Path) -> Result<DisableOutcome, String> {
+async fn disable(root: &Path, plugin_id: &str, plan: &[u8]) -> Result<DisableOutcome, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
@@ -1025,12 +1009,10 @@ async fn disable(root: &Path, plugin_id: &str, plan_path: &Path) -> Result<Disab
         .releases
         .retain(|release| release.plugin_id != plugin_id);
     let candidate = validate_active_set(candidate, &store, &profiles)?;
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
-        &plan,
+        plan,
         current_authority,
         candidate_authority,
         root,
@@ -1055,8 +1037,9 @@ async fn upgrade(
     evidence: Option<&str>,
     mut features: Vec<String>,
     expected_manifest: Option<&str>,
-    plan_path: &Path,
+    plan_path: Option<&Path>,
 ) -> Result<UpgradeOutcome, String> {
+    let plan = crate::plan_bytes(plan_path)?;
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
@@ -1123,8 +1106,6 @@ async fn upgrade(
         &store,
         &profiles,
     )?;
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
@@ -1229,7 +1210,12 @@ fn replacement_active_set(
     validate_active_set(candidate, store, profiles)
 }
 
-async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOutcome, String> {
+async fn rollback(
+    root: &Path,
+    to: &str,
+    plan_path: Option<&Path>,
+) -> Result<RollbackOutcome, String> {
+    let plan = crate::plan_bytes(plan_path)?;
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
@@ -1242,8 +1228,6 @@ async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOut
     if target.digest() != to {
         return Err("rollback Plugin Set does not match its requested digest".to_owned());
     }
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let target_authority = generation_authority_from_active(root, target.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
@@ -2519,13 +2503,11 @@ mod tests {
         local
             .run_until(async {
                 let root = tempfile::tempdir().unwrap();
-                let plan_path = root.path().join("base-plan.json");
-                fs::write(&plan_path, plan()).unwrap();
                 enable_loaded(
                     root.path(),
                     bundled_plugin("approval").unwrap(),
                     Some("review-ticket-approval"),
-                    &plan_path,
+                    plan(),
                 )
                 .await
                 .unwrap();
@@ -2555,7 +2537,7 @@ mod tests {
                         })
                 }));
 
-                disable(root.path(), "lenso.approval", &plan_path)
+                disable(root.path(), "lenso.approval", plan())
                     .await
                     .unwrap();
                 let generation =
