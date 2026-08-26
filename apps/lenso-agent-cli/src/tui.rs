@@ -1,5 +1,6 @@
 //! Interactive terminal surface for the composed Agent App.
 
+mod blocks;
 mod markdown;
 
 use std::{io, path::Path, time::Duration};
@@ -7,7 +8,7 @@ use std::{io, path::Path, time::Duration};
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, MouseEventKind,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -32,6 +33,7 @@ use ratatui::{
 };
 
 use crate::generation::{AgentApp, TurnGeneration};
+use blocks::{ToolCard, ToolStatus, render_tool_block};
 use markdown::lines as markdown_lines;
 
 const EVENT_TICK: Duration = Duration::from_millis(250);
@@ -53,7 +55,7 @@ impl Palette {
     const QUIET: Color = Color::DarkGray;
     const CODE: Color = Color::LightYellow;
     const HEADING: Color = Color::LightBlue;
-    const SURFACE: Color = Color::Rgb(45, 45, 48);
+    const SURFACE: Color = Color::DarkGray;
     const SURFACE_TEXT: Color = Color::White;
 }
 
@@ -114,24 +116,13 @@ enum TranscriptEntry {
     Tool(ToolCard),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ToolStatus {
-    Running,
-    Completed,
-    Failed,
-}
-
-#[derive(Debug)]
-struct ToolCard {
-    call_id: String,
-    name: String,
-    arguments_json: Option<String>,
-    content: Option<String>,
-    metadata_json: Option<String>,
-    duration_ms: Option<u64>,
-    error: Option<String>,
-    status: ToolStatus,
-    expanded: bool,
+#[derive(Clone, Copy, Debug)]
+struct ToolHitTarget {
+    column_start: u16,
+    column_end: u16,
+    row_start: u16,
+    row_end: u16,
+    entry_index: usize,
 }
 
 #[derive(Debug)]
@@ -222,6 +213,8 @@ struct TuiState {
     scroll: ScrollState,
     workspace: String,
     show_shortcuts: bool,
+    panel_open: bool,
+    tool_hit_targets: Vec<ToolHitTarget>,
     animation_tick: u64,
 }
 
@@ -249,6 +242,8 @@ impl TuiState {
             scroll: ScrollState::default(),
             workspace: current_workspace_label(),
             show_shortcuts: false,
+            panel_open: false,
+            tool_hit_targets: Vec::new(),
             animation_tick: 0,
         }
     }
@@ -443,17 +438,12 @@ impl TuiState {
             self.push_system("Ignored a Tool event without a name");
             return;
         };
-        self.transcript.push(TranscriptEntry::Tool(ToolCard {
-            call_id,
-            name,
-            arguments_json: message.arguments_json.map(|value| value.to_string()),
-            content: None,
-            metadata_json: None,
-            duration_ms: None,
-            error: None,
-            status: ToolStatus::Running,
-            expanded: false,
-        }));
+        self.transcript
+            .push(TranscriptEntry::Tool(ToolCard::running(
+                call_id,
+                name,
+                message.arguments_json.map(|value| value.to_string()),
+            )));
         self.selected_tool = Some(self.transcript.len() - 1);
     }
 
@@ -515,6 +505,33 @@ impl TuiState {
             current.map_or(0, |position| (position + 1) % tools.len())
         };
         self.selected_tool = Some(tools[next]);
+    }
+
+    fn toggle_tool_at(&mut self, column: u16, row: u16) {
+        let Some(target) = self
+            .tool_hit_targets
+            .iter()
+            .find(|target| {
+                column >= target.column_start
+                    && column <= target.column_end
+                    && row >= target.row_start
+                    && row <= target.row_end
+            })
+            .copied()
+        else {
+            return;
+        };
+        self.selected_tool = Some(target.entry_index);
+        self.toggle_tool_details();
+    }
+
+    fn active_tool_activity(&self) -> Option<String> {
+        self.transcript.iter().rev().find_map(|entry| match entry {
+            TranscriptEntry::Tool(card) if card.status == ToolStatus::Running => {
+                Some(card.activity())
+            }
+            _ => None,
+        })
     }
 }
 
@@ -618,6 +635,9 @@ fn handle_terminal_event(
             match mouse.kind {
                 MouseEventKind::ScrollUp => state.scroll.scroll_up(WHEEL_SCROLL_LINES),
                 MouseEventKind::ScrollDown => state.scroll.scroll_down(WHEEL_SCROLL_LINES),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    state.toggle_tool_at(mouse.column, mouse.row);
+                }
                 _ => {}
             }
             Ok(false)
@@ -661,14 +681,12 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
     }
     match key.code {
         KeyCode::Tab if !state.panels.is_empty() => {
-            state.selected_panel = (state.selected_panel + 1) % state.panels.len();
+            state.panel_open = !state.panel_open;
             false
         }
         KeyCode::BackTab if !state.panels.is_empty() => {
-            state.selected_panel = state
-                .selected_panel
-                .checked_sub(1)
-                .unwrap_or(state.panels.len() - 1);
+            state.panel_open = true;
+            state.selected_panel = (state.selected_panel + 1) % state.panels.len();
             false
         }
         _ => false,
@@ -853,16 +871,16 @@ fn runtime_failure_message(error: lenso_kernel::RuntimeFailure) -> String {
 fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let area = content_area(frame.area());
     let compact = area.height <= 16;
-    let input_width = area.width.saturating_sub(4).max(1);
+    let input_width = area.width.saturating_sub(2).max(1);
     let input_rows = visual_input_rows(&state.input, usize::from(input_width));
     let composer_height = if compact {
-        3
+        2
     } else {
-        u16::try_from(input_rows.saturating_add(2))
-            .unwrap_or(7)
-            .clamp(4, 7)
+        u16::try_from(input_rows.saturating_add(1))
+            .unwrap_or(6)
+            .clamp(2, 6)
     };
-    let [header, body, activity, composer, shortcuts] = Layout::vertical([
+    let [header, body, activity, composer, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(4),
         Constraint::Length(1),
@@ -873,7 +891,7 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
 
     render_header(frame, header, state);
 
-    if state.panels.is_empty() || body.width < PANEL_BREAKPOINT {
+    if !state.panel_open || state.panels.is_empty() || body.width < PANEL_BREAKPOINT {
         render_transcript(frame, body, state);
     } else {
         let panel_width = body
@@ -893,14 +911,14 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
 
     render_activity(frame, activity, state);
     render_composer(frame, composer, state);
-    render_shortcuts(frame, shortcuts, state);
+    render_status_line(frame, status, state);
     if state.show_shortcuts {
         render_shortcuts_overlay(frame, area);
     }
 }
 
 fn content_area(area: Rect) -> Rect {
-    let horizontal = if area.width >= 64 { 2 } else { 1 };
+    let horizontal = if area.width >= 100 { 3 } else { 1 };
     let vertical = u16::from(area.height >= 18);
     Rect {
         x: area.x.saturating_add(horizontal),
@@ -917,13 +935,13 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "▣ ",
+                "◆ ",
                 Style::default()
                     .fg(Palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                state.workspace.clone(),
+                format!("lenso  {}", state.workspace),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ])),
@@ -941,7 +959,39 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     let transcript_area = Block::default()
         .padding(Padding::new(1, 1, 1, 0))
         .inner(area);
+    let (lines, tool_rows) = transcript_lines(state, usize::from(transcript_area.width));
+    let rendered_line_count = visual_rows(&lines, usize::from(transcript_area.width));
+    state
+        .scroll
+        .update_metrics(rendered_line_count, usize::from(transcript_area.height));
+    state.tool_hit_targets = visible_tool_targets(tool_rows, transcript_area, &state.scroll);
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let scroll = state.scroll.top.try_into().unwrap_or(u16::MAX);
+    frame.render_widget(paragraph.scroll((scroll, 0)), transcript_area);
+    if state.scroll.max_top > 0 {
+        let mut scrollbar_state = ScrollbarState::new(rendered_line_count)
+            .position(state.scroll.top)
+            .viewport_content_length(usize::from(transcript_area.height));
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None)
+                .track_symbol(Some("│"))
+                .track_style(Style::default().fg(Palette::QUIET))
+                .thumb_symbol("┃")
+                .thumb_style(Style::default().fg(Palette::MUTED)),
+            transcript_area,
+            &mut scrollbar_state,
+        );
+    }
+}
+
+fn transcript_lines(
+    state: &TuiState,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<(usize, usize, usize)>) {
     let mut lines = Vec::new();
+    let mut tool_rows = Vec::new();
     if state.transcript.is_empty() {
         lines.push(Line::from(Span::styled(
             "Lenso Agent",
@@ -965,10 +1015,7 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
                     lines.push(Line::default());
                     for (index, content) in text.lines().enumerate() {
                         let prefix = if index == 0 { "› " } else { "  " };
-                        lines.push(surface_line(
-                            format!("{prefix}{content}"),
-                            usize::from(transcript_area.width),
-                        ));
+                        lines.push(surface_line(format!("{prefix}{content}"), width));
                     }
                 }
                 Speaker::Agent => lines.extend(markdown_lines(text)),
@@ -987,206 +1034,56 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
                 ])),
             },
             TranscriptEntry::Tool(card) => {
-                render_tool_card(&mut lines, card, state.selected_tool == Some(entry_index));
+                let start = visual_rows(&lines, width);
+                render_tool_block(&mut lines, card, state.selected_tool == Some(entry_index));
+                let end = visual_rows(&lines, width).saturating_sub(1);
+                tool_rows.push((start, end, entry_index));
             }
         }
         lines.push(Line::default());
     }
-    let wrap_width = usize::from(transcript_area.width).max(1);
-    let rendered_line_count = lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum::<usize>();
-    state
-        .scroll
-        .update_metrics(rendered_line_count, usize::from(transcript_area.height));
-    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
-    let scroll = state.scroll.top.try_into().unwrap_or(u16::MAX);
-    frame.render_widget(paragraph.scroll((scroll, 0)), transcript_area);
-    if state.scroll.max_top > 0 {
-        let mut scrollbar_state = ScrollbarState::new(rendered_line_count)
-            .position(state.scroll.top)
-            .viewport_content_length(usize::from(transcript_area.height));
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None)
-                .track_symbol(Some("│"))
-                .track_style(Style::default().fg(Palette::QUIET))
-                .thumb_symbol("┃")
-                .thumb_style(Style::default().fg(Palette::MUTED)),
-            transcript_area,
-            &mut scrollbar_state,
-        );
-    }
+    (lines, tool_rows)
 }
 
-fn render_tool_card(lines: &mut Vec<Line<'static>>, card: &ToolCard, selected: bool) {
-    let (symbol, color, status) = match card.status {
-        ToolStatus::Running => ("◆", Palette::AGENT, "running"),
-        ToolStatus::Completed => ("✓", Color::LightGreen, "done"),
-        ToolStatus::Failed => ("×", Palette::ERROR, "failed"),
-    };
-    let disclosure = if card.expanded { "▾" } else { "▸" };
-    let mut header = vec![
-        Span::styled(
-            format!("{disclosure} {symbol} "),
-            Style::default().fg(if selected { Palette::ACCENT } else { color }),
-        ),
-        Span::styled(
-            card.name.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ];
-    if let Some(summary) = tool_summary(card) {
-        header.push(Span::styled(
-            format!("  {summary}"),
-            Style::default().fg(Palette::MUTED),
-        ));
-    }
-    header.push(Span::styled(
-        format!("  {status}"),
-        Style::default().fg(color),
-    ));
-    if let Some(duration_ms) = card.duration_ms {
-        header.push(Span::styled(
-            format!("  {}", format_duration(duration_ms)),
-            Style::default().fg(Palette::QUIET),
-        ));
-    }
-    if selected {
-        header.push(Span::styled(
-            "  ctrl+o details",
-            Style::default().fg(Palette::QUIET),
-        ));
-    }
-    lines.push(Line::from(header));
-
-    if !card.expanded {
-        return;
-    }
-    if let Some(arguments) = card.arguments_json.as_deref() {
-        push_tool_detail(lines, "arguments", arguments, true);
-    }
-    if let Some(content) = card.content.as_deref()
-        && !content.is_empty()
-    {
-        push_tool_detail(lines, "output", content, false);
-    }
-    if let Some(metadata) = card.metadata_json.as_deref() {
-        push_tool_detail(lines, "metadata", metadata, true);
-    }
-    if let Some(error) = card.error.as_deref() {
-        push_tool_detail(lines, "error", error, false);
-    }
-}
-
-fn push_tool_detail(
-    lines: &mut Vec<Line<'static>>,
-    label: &'static str,
-    value: &str,
-    pretty_json: bool,
-) {
-    lines.push(Line::from(vec![
-        Span::styled("  │ ", Style::default().fg(Palette::BORDER)),
-        Span::styled(label, Style::default().fg(Palette::QUIET)),
-    ]));
-    let value = if pretty_json {
-        serde_json::from_str::<serde_json::Value>(value)
-            .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or_else(|| value.to_owned())
-    } else {
-        value.to_owned()
-    };
-    for line in bounded_preview(&value, 24, 4096).lines() {
-        lines.push(Line::from(vec![
-            Span::styled("  │   ", Style::default().fg(Palette::BORDER)),
-            Span::styled(line.to_owned(), Style::default().fg(Palette::CODE)),
-        ]));
-    }
-}
-
-fn bounded_preview(value: &str, max_lines: usize, max_characters: usize) -> String {
-    let mut preview = String::new();
-    let mut characters = 0;
-    let mut truncated = false;
-    for (index, line) in value.lines().enumerate() {
-        if index >= max_lines || characters >= max_characters {
-            truncated = true;
-            break;
-        }
-        if index > 0 {
-            preview.push('\n');
-            characters += 1;
-        }
-        let remaining = max_characters.saturating_sub(characters);
-        let accepted = line.chars().take(remaining).collect::<String>();
-        characters += accepted.chars().count();
-        preview.push_str(&accepted);
-        if accepted.chars().count() < line.chars().count() {
-            truncated = true;
-            break;
-        }
-    }
-    if truncated {
-        preview.push_str("\n… output truncated in TUI");
-    }
-    preview
-}
-
-fn tool_summary(card: &ToolCard) -> Option<String> {
-    let metadata = card
-        .metadata_json
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
-    if let Some(metadata) = metadata.as_ref() {
-        if let (Some(operation), Some(path)) = (
-            metadata
-                .get("operation")
-                .and_then(serde_json::Value::as_str),
-            metadata.get("path").and_then(serde_json::Value::as_str),
-        ) {
-            let bytes = metadata
-                .get("bytes_written")
-                .and_then(serde_json::Value::as_u64)
-                .map(|bytes| format!(" · {bytes} B"))
-                .unwrap_or_default();
-            return Some(format!("{operation} {path}{bytes}"));
-        }
-        if let Some(path) = metadata.get("path").and_then(serde_json::Value::as_str) {
-            return Some(path.to_owned());
-        }
-        if let Some(program) = metadata.get("program").and_then(serde_json::Value::as_str) {
-            let exit = metadata
-                .get("exit_code")
-                .and_then(serde_json::Value::as_str)
-                .map(|code| format!(" · exit {code}"))
-                .unwrap_or_default();
-            return Some(format!("{program}{exit}"));
-        }
-    }
-    card.arguments_json
-        .as_deref()
-        .and_then(|arguments| serde_json::from_str::<serde_json::Value>(arguments).ok())
-        .and_then(|arguments| {
-            arguments
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
+fn visible_tool_targets(
+    tool_rows: Vec<(usize, usize, usize)>,
+    transcript_area: Rect,
+    scroll: &ScrollState,
+) -> Vec<ToolHitTarget> {
+    tool_rows
+        .into_iter()
+        .filter_map(|(start, end, entry_index)| {
+            let viewport_end = scroll
+                .top
+                .saturating_add(usize::from(transcript_area.height));
+            if end < scroll.top || start >= viewport_end {
+                return None;
+            }
+            let visible_start = start.saturating_sub(scroll.top);
+            let visible_end = end
+                .saturating_sub(scroll.top)
+                .min(usize::from(transcript_area.height.saturating_sub(1)));
+            Some(ToolHitTarget {
+                column_start: transcript_area.x,
+                column_end: transcript_area.right().saturating_sub(1),
+                row_start: transcript_area
+                    .y
+                    .saturating_add(visible_start.try_into().ok()?),
+                row_end: transcript_area
+                    .y
+                    .saturating_add(visible_end.try_into().ok()?),
+                entry_index,
+            })
         })
+        .collect()
 }
 
-fn format_duration(duration_ms: u64) -> String {
-    if duration_ms < 1_000 {
-        format!("{duration_ms}ms")
-    } else {
-        format!(
-            "{}.{:01}s",
-            duration_ms / 1_000,
-            (duration_ms % 1_000) / 100
-        )
-    }
+fn visual_rows(lines: &[Line<'_>], width: usize) -> usize {
+    let width = width.max(1);
+    lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum()
 }
 
 fn surface_line(text: String, width: usize) -> Line<'static> {
@@ -1227,8 +1124,7 @@ fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
             .block(
                 Block::default()
                     .title(Span::styled(title, Style::default().fg(Palette::MUTED)))
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
+                    .borders(Borders::LEFT)
                     .border_style(Style::default().fg(Palette::BORDER))
                     .padding(Padding::horizontal(1)),
             )
@@ -1253,7 +1149,9 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     ])
     .areas(area);
 
-    if let Some((label, color)) = state.phase.activity(state.animation_tick) {
+    if let Some((fallback, color)) = state.phase.activity(state.animation_tick) {
+        let activity = state.active_tool_activity();
+        let label = activity.as_deref().unwrap_or(fallback);
         let suffix = if state.phase == UiPhase::Active {
             "  Esc cancel"
         } else {
@@ -1285,13 +1183,8 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         Palette::BORDER
     };
     let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .borders(Borders::TOP)
         .border_style(Style::default().fg(border))
-        .title_bottom(Span::styled(
-            format!(" {} · normal ", state.tool_scope),
-            Style::default().fg(Palette::QUIET),
-        ))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1299,7 +1192,10 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let input = if state.input.is_empty() {
         vec![Line::from(vec![
             Span::styled("❯ ", Style::default().fg(border)),
-            Span::styled("Message Lenso Agent…", Style::default().fg(Palette::QUIET)),
+            Span::styled(
+                "Ask anything, @ mention files, or paste an error",
+                Style::default().fg(Palette::QUIET),
+            ),
         ])]
     } else {
         state
@@ -1364,45 +1260,42 @@ fn composer_cursor(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     (2, 0)
 }
 
-fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
-    let mut spans = Vec::new();
-    if state.active.is_none() {
-        spans.extend(shortcut("enter", "send"));
-        if area.width >= 50 {
-            spans.push(Span::raw("   "));
-            spans.extend(shortcut("shift+enter", "newline"));
-        }
-        spans.push(Span::raw("   "));
-    }
-    spans.extend(shortcut(
-        "esc",
-        if state.active.is_some() {
-            "cancel"
-        } else {
-            "quit"
-        },
-    ));
-    if !state.panels.is_empty() && area.width >= PANEL_BREAKPOINT {
-        spans.push(Span::raw("   "));
-        spans.extend(shortcut("tab", "panels"));
-    }
-    if state.scroll.max_top > 0 && area.width >= 58 {
-        spans.push(Span::raw("   "));
-        if state.scroll.follow_tail {
-            spans.extend(shortcut("pgup/pgdn", "scroll"));
-        } else {
-            spans.extend(shortcut("end", "follow"));
-        }
-    }
-    if state.selected_tool.is_some() && area.width >= 68 {
-        spans.push(Span::raw("   "));
-        spans.extend(shortcut("ctrl+o", "details"));
-    }
-    if area.width >= 72 {
-        spans.push(Span::raw("   "));
-        spans.extend(shortcut("ctrl+.", "shortcuts"));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+fn render_status_line(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let [left, right] =
+        Layout::horizontal([Constraint::Min(20), Constraint::Length(36)]).areas(area);
+    let mode = if state.active.is_some() {
+        "working"
+    } else {
+        "normal"
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                mode,
+                Style::default()
+                    .fg(Palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", state.tool_scope),
+                Style::default().fg(Palette::QUIET),
+            ),
+        ])),
+        left,
+    );
+    let hint = if state.panel_open {
+        "tab close context  ctrl+. shortcuts"
+    } else if state.panels.is_empty() {
+        "ctrl+. shortcuts"
+    } else {
+        "tab context  ctrl+. shortcuts"
+    };
+    frame.render_widget(
+        Paragraph::new(hint)
+            .alignment(ratatui::layout::Alignment::Right)
+            .style(Style::default().fg(Palette::QUIET)),
+        right,
+    );
 }
 
 fn render_shortcuts_overlay(frame: &mut Frame<'_>, area: Rect) {
@@ -1458,18 +1351,6 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         width,
         height,
     }
-}
-
-fn shortcut(key: &'static str, label: &'static str) -> [Span<'static>; 2] {
-    [
-        Span::styled(
-            key,
-            Style::default()
-                .fg(Palette::MUTED)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {label}"), Style::default().fg(Palette::QUIET)),
-    ]
 }
 
 struct TerminalSession {
@@ -1543,7 +1424,7 @@ mod tests {
 
     #[test]
     fn renders_composed_panel_and_input() {
-        let backend = TestBackend::new(100, 24);
+        let backend = TestBackend::new(120, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = TuiState::new(
             &TuiOptions::default(),
@@ -1558,10 +1439,14 @@ mod tests {
         let content = terminal.backend().to_string();
         assert!(content.contains("Lenso Agent"));
         assert!(content.contains("What do you want to build?"));
-        assert!(content.contains("Help"));
+        assert!(!content.contains("Esc quits"));
         assert!(content.contains("hello"));
-        assert!(content.contains("enter send"));
+        assert!(content.contains("tab context"));
         assert!(!content.contains("Conversation"));
+
+        handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut state);
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        assert!(terminal.backend().to_string().contains("Esc quits"));
     }
 
     #[test]
@@ -1579,7 +1464,7 @@ mod tests {
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("What do you want to build?"));
-        assert!(content.contains("Message Lenso Agent…"));
+        assert!(content.contains("Ask anything"));
         assert!(!content.contains("Esc quits"));
         assert!(!content.contains("tab panels"));
     }
@@ -1594,7 +1479,7 @@ mod tests {
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("draft"));
-        assert!(content.contains("enter send"));
+        assert!(content.contains("normal"));
     }
 
     #[test]
@@ -1669,18 +1554,18 @@ mod tests {
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
-        let collapsed = terminal.backend().to_string();
-        assert!(collapsed.contains("edit"));
-        assert!(collapsed.contains("edited src/lib.rs · 42 B"));
-        assert!(collapsed.contains("done  12ms"));
-        assert!(!collapsed.contains("old_text"));
+        let expanded = terminal.backend().to_string();
+        assert!(expanded.contains("Edited src/lib.rs"));
+        assert!(expanded.contains("42 B  12ms"));
+        assert!(expanded.contains("- a"));
+        assert!(expanded.contains("+ b"));
+        assert!(!expanded.contains("old_text"));
 
         handle_control_key(KeyCode::Char('o'), &mut state);
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
-        let expanded = terminal.backend().to_string();
-        assert!(expanded.contains("arguments"));
-        assert!(expanded.contains("old_text"));
-        assert!(expanded.contains("metadata"));
+        let collapsed = terminal.backend().to_string();
+        assert!(collapsed.contains("Edited src/lib.rs"));
+        assert!(!collapsed.contains("- a"));
     }
 
     #[test]
@@ -1852,6 +1737,38 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_tool_block_toggles_its_details() {
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state
+            .transcript
+            .push(TranscriptEntry::Tool(ToolCard::running(
+                "call-1".to_owned(),
+                "read".to_owned(),
+                Some(r#"{"path":"src/lib.rs"}"#.to_owned()),
+            )));
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let target = state.tool_hit_targets[0];
+
+        handle_terminal_event(
+            Some(Ok(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: target.column_start,
+                row: target.row_start,
+                modifiers: KeyModifiers::NONE,
+            }))),
+            &mut state,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            state.transcript.first(),
+            Some(TranscriptEntry::Tool(ToolCard { expanded: true, .. }))
+        ));
+    }
+
+    #[test]
     fn rendered_history_exposes_scroll_position_and_follow_control() {
         let backend = TestBackend::new(80, 16);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1875,6 +1792,5 @@ mod tests {
         let content = terminal.backend().to_string();
         assert!(content.contains("reading history"));
         assert!(content.contains("End follow"));
-        assert!(content.contains("end follow"));
     }
 }
