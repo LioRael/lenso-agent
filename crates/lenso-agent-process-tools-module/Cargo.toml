@@ -16,6 +16,7 @@ futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-tool-progress = { path = "../lenso-capability-agent-tool-progress" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 serde.workspace = true

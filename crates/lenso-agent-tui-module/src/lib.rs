@@ -1,20 +1,46 @@
 //! Endpoint-free TUI Shell consumer Module.
 
-use lenso_kernel::RuntimeFailure;
-use lenso_native_adapter::{NativeModuleFactoryContext, NativeModuleInstance};
+use lenso::{ManyPort, Port, module};
+use lenso_capability_agent as agent_capability;
+use lenso_capability_agent_tui_contribution as tui_capability;
+use lenso_capability_agent_tui_suggestion as suggestion_capability;
 
-/// Instantiates the endpoint-free TUI Shell identity.
-#[lenso_native_adapter::module(
-    descriptor = r#"{"provided_capabilities":[],"required_capabilities":[{"capability_id":"lenso.agent@1","descriptor_version":"1.2.0","cardinality":"one"},{"capability_id":"lenso.agent.tui-contribution@1","descriptor_version":"1.0.0","cardinality":"many"}]}"#
-)]
-fn instantiate(
-    context: NativeModuleFactoryContext<'_>,
-) -> Result<NativeModuleInstance, RuntimeFailure> {
-    if context.entrypoint() != "default" || context.configuration() != "{}" {
-        return Err(RuntimeFailure::InvalidResolvedPlan {
-            detail: "TUI Shell Module requires entrypoint `default` and empty configuration"
-                .to_owned(),
-        });
+/// Statically linked binding anchor used only by the TUI Host.
+#[module(consumer)]
+#[derive(Clone, Debug)]
+struct AgentTuiShell {
+    agent: Port<agent_capability::AgentClient>,
+    contributions: ManyPort<tui_capability::TuiContributionClient>,
+    suggestions: ManyPort<suggestion_capability::TuiSuggestionClient>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn consumer_descriptor_is_derived_from_typed_terminal_ports() {
+        let descriptor: serde_json::Value = serde_json::from_str(MODULE_DESCRIPTOR_JSON).unwrap();
+        assert_eq!(descriptor["provided_capabilities"], serde_json::json!([]));
+        assert_eq!(
+            descriptor["required_capabilities"],
+            serde_json::json!([
+                {
+                    "capability_id": "lenso.agent@3",
+                    "descriptor_version": "3.0.0",
+                    "cardinality": "one"
+                },
+                {
+                    "capability_id": "lenso.agent.tui-contribution@1",
+                    "descriptor_version": "1.0.0",
+                    "cardinality": "many"
+                },
+                {
+                    "capability_id": "lenso.agent.tui-suggestion@1",
+                    "descriptor_version": "1.0.0",
+                    "cardinality": "many"
+                }
+            ])
+        );
     }
-    Ok(NativeModuleInstance::default())
 }

@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["root", "max_files", "max_entries", "exclude_directories"],
+  "properties": {
+    "root": { "type": "string" },
+    "max_files": { "type": "integer" },
+    "max_entries": { "type": "integer" },
+    "exclude_directories": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

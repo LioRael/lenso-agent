@@ -15,6 +15,8 @@
     "lenso.agent.tui": "lenso-agent-tui-module",
     "lenso.agent.tui.static": "lenso-agent-tui-static-module",
     "lenso.agent.telegram": "lenso-agent-telegram-module",
+    "lenso.agent.tui-command-suggestions": "lenso-agent-tui-command-suggestions-module",
+    "lenso.agent.tui-workspace-suggestions": "lenso-agent-tui-workspace-suggestions-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
     "lenso.agent.workspace-read-tools": "lenso-agent-workspace-read-tools-module",
     "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
@@ -43,20 +45,6 @@
         "key": "discord",
         "package": "lenso.agent.discord",
         "configuration": {}
-      },
-      {
-        "key": "fixture-instructions",
-        "package": "lenso.agent.prompt.static",
-        "configuration": {
-          "contributions": [
-            {
-              "id": "fixture.behavior",
-              "version": "1.0.0",
-              "kind": "instruction",
-              "content": "Prefix direct answers with `Plugin: `."
-            }
-          ]
-        }
       },
       {
         "key": "http-fetch",
@@ -149,6 +137,42 @@
         "configuration": {}
       },
       {
+        "key": "tui-commands",
+        "package": "lenso.agent.tui-command-suggestions",
+        "configuration": {
+          "commands": [
+            {
+              "id": "agent.command.help",
+              "label": "/help",
+              "insert_text": "/help",
+              "description": "Show keyboard shortcuts"
+            },
+            {
+              "id": "agent.command.clear",
+              "label": "/clear",
+              "insert_text": "/clear",
+              "description": "Clear the visible conversation"
+            },
+            {
+              "id": "agent.command.new",
+              "label": "/new",
+              "insert_text": "/new",
+              "description": "Start a new session"
+            }
+          ]
+        }
+      },
+      {
+        "key": "tui-workspace-suggestions",
+        "package": "lenso.agent.tui-workspace-suggestions",
+        "configuration": {
+          "root": ".",
+          "max_files": 2048,
+          "max_entries": 20000,
+          "exclude_directories": ["node_modules", "target"]
+        }
+      },
+      {
         "key": "workspace-import-read",
         "package": "lenso.agent.workspace-import-read",
         "configuration": {
@@ -206,12 +230,12 @@
       },
       {
         "consumer": "cli",
-        "capability_id": "lenso.agent@1",
+        "capability_id": "lenso.agent@3",
         "provider": "agent"
       },
       {
         "consumer": "discord",
-        "capability_id": "lenso.agent@1",
+        "capability_id": "lenso.agent@3",
         "provider": "agent"
       },
       {
@@ -221,12 +245,12 @@
       },
       {
         "consumer": "telegram",
-        "capability_id": "lenso.agent@1",
+        "capability_id": "lenso.agent@3",
         "provider": "agent"
       },
       {
         "consumer": "tui",
-        "capability_id": "lenso.agent@1",
+        "capability_id": "lenso.agent@3",
         "provider": "agent"
       }
     ],

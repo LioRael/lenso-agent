@@ -4,8 +4,8 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, RuntimeFailure, StreamCapability, StreamEvent};
 
 use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
-pub const CAPABILITY_ID: &str = "lenso.agent@1";
-pub const DESCRIPTOR_VERSION: &str = "1.2.0";
+pub const CAPABILITY_ID: &str = "lenso.agent@3";
+pub const DESCRIPTOR_VERSION: &str = "3.0.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AGENT_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const AGENT_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.2.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_agent_client { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_agent_client { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const RUN_TURN_OPERATION: &str = "run_turn";
 
@@ -58,6 +58,12 @@ pub struct RunTurnResponse {
     #[serde(rename = "metadata_json")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_json: Option<RawJson>,
+    #[serde(rename = "progress_channel")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress_channel: Option<RunTurnResponseProgressChannel>,
+    #[serde(rename = "reasoning_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_id: Option<String>,
     #[serde(rename = "sequence")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub sequence: Uint64,
@@ -77,14 +83,28 @@ pub struct RunTurnResponse {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum RunTurnResponseKind {
+    #[serde(rename = "reasoning_delta")]
+    ReasoningDelta,
+    #[serde(rename = "reasoning_completed")]
+    ReasoningCompleted,
     #[serde(rename = "text_delta")]
     TextDelta,
     #[serde(rename = "tool_started")]
     ToolStarted,
+    #[serde(rename = "tool_progress")]
+    ToolProgress,
     #[serde(rename = "tool_completed")]
     ToolCompleted,
     #[serde(rename = "tool_failed")]
     ToolFailed,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum RunTurnResponseProgressChannel {
+    #[serde(rename = "stdout")]
+    Stdout,
+    #[serde(rename = "stderr")]
+    Stderr,
 }
 
 #[derive(Clone, Debug, PartialEq)]

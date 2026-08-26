@@ -48,20 +48,43 @@ wraps the public `lenso::provides` facade and derives only Agent Tool catalog,
 Schema, argument decoding, and dispatch boilerplate. Capability contracts,
 Module Descriptors, factories, endpoints, and Host registration remain
 source-first and package-owned.
-The CLI, Telegram, and Discord surface Modules are source-derived consumer-only
-identities that anchor their exact Agent bindings. The TUI Shell remains a
-deliberate compatibility factory while it binds one Agent plus explicit `many`
-semantic panel Contributions. The native Host surface snapshots those resolved
-providers and rejects cross-provider panel ID collisions before entering
-terminal raw mode. The Telegram Host surface owns Bot API transport, its
-durable update cursor and conversation-to-Session mapping, while the Session
-Module remains the sole owner and creator of Session identity and history.
-Every accepted Telegram message leases the current App Generation separately;
-the long poll never pins future messages to an old Generation.
-The Discord Host similarly owns Gateway heartbeats and resume state, REST
-delivery, channel authorization, and channel-to-Session mapping. Mention/reply
-handling avoids privileged message-content access by default, and every
-accepted Discord message receives its own Generation lease.
+The CLI, TUI Shell, Telegram, and Discord surface Modules are source-first
+consumer-only identities. Their typed
+`Port<Client>` and `ManyPort<Client>` fields derive exact requirements while
+`#[lenso::module(consumer)]` derives the endpoint-free Descriptor and linked
+factory without inventing a fake Provider. The TUI Shell binds one Agent plus
+many semantic panel and composer suggestion providers. Suggestion providers
+return bounded immutable startup snapshots; the Shell filters them in memory
+for `/` commands and `@` workspace-file tokens without per-keypress I/O.
+The native Host surface snapshots those resolved providers and rejects
+cross-provider panel and suggestion ID collisions before entering terminal raw
+mode.
+
+The Telegram Host surface owns Bot API transport, its durable update cursor
+and conversation-to-Session mapping, while the Session Module remains the sole
+owner and creator of Session identity and history. Every accepted Telegram
+message leases the current App Generation separately; the long poll never pins
+future messages to an old Generation. The Discord Host similarly owns Gateway
+heartbeats and resume state, REST delivery, channel authorization, and
+channel-to-Session mapping. Mention/reply handling avoids privileged
+message-content access by default, and every accepted Discord message receives
+its own Generation lease.
+
+Tool execution has an optional streaming extension. The Tool Runtime retains
+the Tool Provider Request contract, consumes explicit `many`
+`lenso.agent.tool-progress@1` bindings, and exposes one uniform
+`execute_stream`. Providers without progress support produce one completion
+message. The native Process path reads bounded stdout and stderr incrementally,
+and the Agent Turn Stream forwards typed `tool_progress` messages to the TUI.
+Volatile chunks are not persisted; Session keeps stable Tool request and final
+result evidence.
+
+Model Providers may also stream Provider-designated, display-safe reasoning
+summaries through `lenso.agent.model@2`. The Agent Loop projects each Model
+step as ordered `reasoning_delta` and `reasoning_completed` messages on
+`lenso.agent@3`; the TUI owns the provisional `Thinking...` presentation,
+elapsed-time display, folding, and removal of empty provisional blocks. Raw
+private chain-of-thought is not a Capability or durable Session contract.
 
 Source-derived Provider Descriptors use the standard fail-fast admission
 default (`max_concurrency: 1`, `queue_capacity: 0`). The regenerated canonical
@@ -236,6 +259,9 @@ completed-turn history from the Session log.
 - **TUI Contribution Modules** own bounded panel content. They do not own raw
   terminal state, the event loop, arbitrary `ratatui` widgets, or ambient
   Capability access.
+- **TUI Suggestion Modules** own bounded semantic command or file candidates.
+  They do not own composer input, keyboard handling, layout, or action
+  authority.
 - **App Composition** owns exact Module Instances, configuration, bindings,
   execution classes, and admission limits.
 - **Agent Host control plane** owns the content-addressed Plugin Store, exact
@@ -254,6 +280,9 @@ completed-turn history from the Session log.
   digest. Dropping the lease is required before Generation resource drain.
 - Online Plugin reconciliation can advance routing only between Turns. It must
   never migrate an admitted Turn or mutate either Generation's Kernel graph.
+- Each durable Controller namespace has one OS-backed process-lifetime Host
+  lease. Crash recovery may replace unrecoverable state only after that lease
+  proves the previous process exited; concurrent Hosts fail closed.
 - User-facing Agent plugins are ordinary packages containing one or more
   Modules that provide declared Agent Capabilities.
 - Passive Plugin Bundle admission never authorizes executable contributions.
@@ -267,6 +296,9 @@ completed-turn history from the Session log.
 - No Harness Module may discover dependencies through a global registry.
 - TUI panels come only from explicit `many` bindings in the immutable Plan;
   providers cannot register widgets or mutate the running layout graph.
+- TUI suggestions come only from explicit `many` bindings and immutable
+  startup snapshots; the Shell never discovers providers or performs
+  filesystem I/O for each keypress.
 - The generated native factory catalog is Host build availability, not Module
   dependency discovery; only the immutable Plan may activate and bind an entry.
 - Every invocation is bounded by Plan admission, deadlines, cancellation, and
@@ -298,7 +330,6 @@ The deterministic root base selects these keyed Module Instances:
 - `agent`
 - `model`
 - `prompt`
-- `fixture-instructions`
 - `summary-skill`
 - `subagent-agent`
 - `restricted-read-tools`

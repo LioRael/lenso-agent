@@ -65,33 +65,54 @@ impl AuthorityCoordinator {
         Ok(AuthorityFence { file })
     }
 
+    /// Holds one Controller namespace for the lifetime of a Host process.
+    pub(crate) fn host_lease(&self, namespace: &str) -> Result<AuthorityFence, String> {
+        if namespace.is_empty()
+            || !namespace
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err("Host lease namespace is invalid".to_owned());
+        }
+        let path = self.root.join(format!("{namespace}.host.lock"));
+        let file = open_regular_lock(&path, true)?;
+        FileExt::try_lock_exclusive(&file).map_err(|error| {
+            format!("another Host owns the `{namespace}` Controller namespace: {error}")
+        })?;
+        Ok(AuthorityFence { file })
+    }
+
     fn open_lock(&self, create: bool) -> Result<File, String> {
         let path = self.root.join(LOCK_FILE);
-        match fs::symlink_metadata(&path) {
-            Ok(metadata) => {
-                if !metadata.is_file() || metadata.file_type().is_symlink() {
-                    return Err("Plugin authority lock is not a regular file".to_owned());
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {}
-            Err(error) => {
-                return Err(format!("failed to inspect Plugin authority lock: {error}"));
-            }
-        }
-        let file = OpenOptions::new()
-            .create(create)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&path)
-            .map_err(|error| format!("failed to open Plugin authority lock: {error}"))?;
-        let metadata = fs::symlink_metadata(path)
-            .map_err(|error| format!("failed to recheck Plugin authority lock: {error}"))?;
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            return Err("Plugin authority lock is not a regular file".to_owned());
-        }
-        Ok(file)
+        open_regular_lock(&path, create)
     }
+}
+
+fn open_regular_lock(path: &Path, create: bool) -> Result<File, String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("Plugin authority lock is not a regular file".to_owned());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound && create => {}
+        Err(error) => {
+            return Err(format!("failed to inspect Plugin authority lock: {error}"));
+        }
+    }
+    let file = OpenOptions::new()
+        .create(create)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("failed to open Plugin authority lock: {error}"))?;
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to recheck Plugin authority lock: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Plugin authority lock is not a regular file".to_owned());
+    }
+    Ok(file)
 }
 
 /// RAII ownership of a shared snapshot or exclusive transition fence.

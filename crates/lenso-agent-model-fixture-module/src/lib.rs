@@ -684,8 +684,8 @@ fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<Complete
     vec![
         response(
             "1",
-            CompleteMessageKind::TextDelta,
-            format!("{prefix}Direct "),
+            CompleteMessageKind::ReasoningSummaryDelta,
+            "I’ll answer directly from the current context.",
             "",
             "",
             "{}",
@@ -695,6 +695,16 @@ fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<Complete
         response(
             "2",
             CompleteMessageKind::TextDelta,
+            format!("{prefix}Direct "),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "3",
+            CompleteMessageKind::TextDelta,
             "answer.",
             "",
             "",
@@ -702,7 +712,7 @@ fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<Complete
             "0",
             "0",
         ),
-        response("3", CompleteMessageKind::Usage, "", "", "", "{}", "8", "2"),
+        response("4", CompleteMessageKind::Usage, "", "", "", "{}", "8", "2"),
     ]
 }
 
@@ -738,6 +748,16 @@ fn named_tool_request(
     vec![
         response(
             "1",
+            CompleteMessageKind::ReasoningSummaryDelta,
+            format!("I’ll use {tool_name} for the requested information."),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
             CompleteMessageKind::ToolCall,
             "",
             call_id,
@@ -746,7 +766,7 @@ fn named_tool_request(
             "0",
             "0",
         ),
-        response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
+        response("3", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
     ]
 }
 
@@ -804,6 +824,16 @@ fn summary_response(first_line: &str) -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
+            CompleteMessageKind::ReasoningSummaryDelta,
+            "I’ll summarize the relevant Tool result.",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
             CompleteMessageKind::TextDelta,
             format!("README summary: {first_line}"),
             "",
@@ -813,7 +843,7 @@ fn summary_response(first_line: &str) -> Vec<CompleteMessage> {
             "0",
         ),
         response(
-            "2",
+            "3",
             CompleteMessageKind::Usage,
             "",
             "",

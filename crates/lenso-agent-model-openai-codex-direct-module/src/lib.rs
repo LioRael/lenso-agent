@@ -516,20 +516,11 @@ impl ResponsesDecoder {
         let event = serde_json::from_str::<serde_json::Value>(&data)
             .map_err(|_| protocol_failure("direct Codex emitted invalid SSE JSON"))?;
         match event.get("type").and_then(serde_json::Value::as_str) {
+            Some("response.reasoning_summary_text.delta") => {
+                self.emit_text_delta(CompleteMessageKind::ReasoningSummaryDelta, &event, output);
+            }
             Some("response.output_text.delta") => {
-                if let Some(delta) = event.get("delta").and_then(serde_json::Value::as_str)
-                    && !delta.is_empty()
-                {
-                    output.push(self.message(
-                        CompleteMessageKind::TextDelta,
-                        delta,
-                        "",
-                        "",
-                        "{}",
-                        0,
-                        0,
-                    ));
-                }
+                self.emit_text_delta(CompleteMessageKind::TextDelta, &event, output);
             }
             Some("response.output_item.done") => {
                 let item = event
@@ -591,6 +582,19 @@ impl ResponsesDecoder {
             _ => {}
         }
         Ok(())
+    }
+
+    fn emit_text_delta(
+        &mut self,
+        kind: CompleteMessageKind,
+        event: &serde_json::Value,
+        output: &mut Vec<NativeStreamItem>,
+    ) {
+        if let Some(delta) = event.get("delta").and_then(serde_json::Value::as_str)
+            && !delta.is_empty()
+        {
+            output.push(self.message(kind, delta, "", "", "{}", 0, 0));
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -724,18 +728,27 @@ mod tests {
     }
 
     #[test]
-    fn decoder_streams_text_tool_call_and_usage() {
+    fn decoder_streams_reasoning_text_tool_call_and_usage() {
         let mut decoder = ResponsesDecoder::new(
             4096,
             BTreeMap::from([("read".to_owned(), "read".to_owned())]),
         );
         let frames = concat!(
+            "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"Checking the workspace.\"}\n\n",
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
             "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"read\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}}\n\n",
             "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":3}}}\n\n"
         );
         let events = decoder.push(frames.as_bytes()).unwrap();
-        assert_eq!(events.len(), 5);
+        assert_eq!(events.len(), 6);
+        let first = match &events[0] {
+            NativeStreamItem::Message(message) => message
+                .downcast_ref::<CompleteMessage>()
+                .expect("reasoning message must keep its generated type"),
+            other => panic!("expected reasoning message, got {other:?}"),
+        };
+        assert_eq!(first.kind, CompleteMessageKind::ReasoningSummaryDelta);
+        assert_eq!(first.text, "Checking the workspace.");
         assert!(decoder.terminal);
     }
 }

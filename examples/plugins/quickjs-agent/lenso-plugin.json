@@ -6,7 +6,7 @@
     {
       "id": "agent-js",
       "kind": "quick_js_module",
-      "digest": "sha256:88c11a20e819b69aa34072e5071974c2d86bf5dd10714b32a5d02534674c7f6a",
+      "digest": "sha256:08613a89368a7487e0ec1898fdf58122b7eb43678b13bed170b827cd6810f483",
       "size": 4014,
       "media_type": "text/javascript",
       "path": "plugin.mjs",
@@ -25,17 +25,17 @@
       "configuration_schema_digest": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
       "provides": [
         {
-          "capability_id": "lenso.agent@1",
-          "descriptor_version": "1.2.0",
-          "descriptor_digest": "sha256:ff735c6d0124ea120f87d91995a835b434f6de1b87777be5382e3ca077f219fa",
+          "capability_id": "lenso.agent@3",
+          "descriptor_version": "3.0.0",
+          "descriptor_digest": "sha256:ef9023ff2e265550ae9627a1050a009e08cd86e8c10854f39a262df805155741",
           "request_operations": ["run_turn"],
           "operation_kinds": { "run_turn": "stream" }
         }
       ],
       "requires": [
         {
-          "capability_id": "lenso.agent.model@1",
-          "descriptor_version": "1.1.0",
+          "capability_id": "lenso.agent.model@2",
+          "descriptor_version": "2.0.0",
           "cardinality": "one"
         },
         {
@@ -50,7 +50,7 @@
         },
         {
           "capability_id": "lenso.agent.tools@2",
-          "descriptor_version": "2.0.0",
+          "descriptor_version": "2.1.0",
           "cardinality": "one"
         }
       ],
@@ -67,7 +67,7 @@
             "x86_64-linux",
             "x86_64-macos"
           ],
-          "profiles": ["agent-provider-v1"],
+          "profiles": ["agent-provider-v3"],
           "support_channel": "experimental",
           "trust": "constrained"
         }

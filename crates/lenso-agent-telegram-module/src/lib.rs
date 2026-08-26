@@ -21,8 +21,8 @@ mod tests {
         assert_eq!(
             descriptor["required_capabilities"],
             serde_json::json!([{
-                "capability_id": "lenso.agent@1",
-                "descriptor_version": "1.2.0",
+                "capability_id": "lenso.agent@3",
+                "descriptor_version": "3.0.0",
                 "cardinality": "one"
             }])
         );

@@ -1,0 +1,25 @@
+[package]
+name = "lenso-agent-tui-workspace-suggestions-module"
+version = "0.1.0"
+description = "Bounded workspace file suggestions for the Lenso Agent TUI."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+package-id = "lenso.agent.tui-workspace-suggestions"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
+lenso-kernel.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

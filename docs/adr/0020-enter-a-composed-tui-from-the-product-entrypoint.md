@@ -33,12 +33,20 @@ Because these entrypoints select distinct App Compositions, the TUI owns a
 separate durable Controller namespace while sharing the Plugin Store, retained
 exact Plugin authority, and immutable Generation records with the companion
 CLI. Neither surface attempts to recover the other's Controller lineage.
+Each Controller namespace also holds one OS-backed process-lifetime Host lease.
+A replacement Host may retire unrecoverable state left by a crashed process
+only after acquiring that lease, which proves the previous process exited.
+Concurrent replacement still fails closed; normal shutdown commits suspension
+before releasing the lease.
 
 The interactive surface is an ordinary consumer-only `lenso.agent.tui` Module.
-It requires exactly one `lenso.agent@1` provider and `many`
-`lenso.agent.tui-contribution@1` providers. The current authoring facade cannot
-derive a consumer-only Module without a fake provided Capability, so the TUI
-Shell uses the same explicit compatibility factory shape as the CLI Module.
+It requires exactly one `lenso.agent@2` provider and `many`
+`lenso.agent.tui-contribution@1` providers.
+
+Update, 2026-08-26: the public source-first facade now supports
+`#[lenso::module(consumer)]`. The TUI and CLI anchors derive their endpoint-free
+Descriptors and linked factories from typed Ports; the former explicit native
+factory compatibility form has been removed without adding a fake Capability.
 
 TUI Contribution v1 exposes bounded read-only semantic panel snapshots. The
 Shell invokes all providers in resolved order, rejects duplicate panel IDs,

@@ -101,7 +101,7 @@ fn assert_telegram_exchange(
     assert_eq!(requests[3].1["reply_parameters"]["message_id"], message_id);
     assert_eq!(
         requests[3].1["text"],
-        "Plugin: Direct answer.",
+        "Direct answer.",
         "{}",
         String::from_utf8_lossy(stderr)
     );

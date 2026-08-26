@@ -93,10 +93,7 @@ fn plan_without_prompt_plugins(root: &Path) -> std::path::PathBuf {
     plan["module_instances"]
         .as_array_mut()
         .unwrap()
-        .retain(|module| {
-            module["instance_key"] != "fixture-instructions"
-                && module["instance_key"] != "summary-skill"
-        });
+        .retain(|module| module["instance_key"] != "summary-skill");
     plan["capability_bindings"]
         .as_array_mut()
         .unwrap()
@@ -196,7 +193,7 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
         .unwrap()
         .clone();
     prompt_binding["provider_instance"] = "skills".into();
-    prompt_binding["provider_order"] = 2.into();
+    prompt_binding["provider_order"] = 1.into();
     bindings.push(prompt_binding);
 
     let path = root.join("plan-with-on-demand-skills.json");
@@ -597,10 +594,7 @@ fn direct_answer_finishes_without_a_tool_call() {
         None,
     );
     assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "Plugin: Direct answer.\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
     let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
         .unwrap()
         .next()
@@ -625,8 +619,8 @@ fn direct_answer_finishes_without_a_tool_call() {
     let payload: serde_json::Value =
         serde_json::from_str(requested["payload_json"].as_str().unwrap()).unwrap();
     let contributions = payload["prompt_contributions"].as_array().unwrap();
-    assert_eq!(contributions[0]["id"], "fixture.behavior");
-    assert_eq!(contributions[1]["id"], "workspace.summary");
+    assert_eq!(contributions.len(), 1);
+    assert_eq!(contributions[0]["id"], "workspace.summary");
     assert_eq!(contributions[0]["digest"].as_str().unwrap().len(), 64);
 }
 
@@ -646,10 +640,7 @@ fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environmen
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "Plugin: Direct answer.\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
 }
 
 #[test]
@@ -670,10 +661,7 @@ fn product_runner_resolves_the_single_base_app_without_a_plan_path() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "Plugin: Direct answer.\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
     assert!(temporary.path().join(".lenso/resolved-plan.json").is_file());
 }
 
@@ -732,7 +720,7 @@ fn explicitly_selected_filesystem_skill_reaches_the_model_and_session_manifest()
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        "Filesystem: Plugin: Direct answer.\n"
+        "Filesystem: Direct answer.\n"
     );
 
     let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
@@ -750,17 +738,13 @@ fn explicitly_selected_filesystem_skill_reaches_the_model_and_session_manifest()
         .unwrap();
     let payload: serde_json::Value =
         serde_json::from_str(requested["payload_json"].as_str().unwrap()).unwrap();
-    assert_eq!(
-        payload["prompt_contributions"][1]["id"],
-        "agents.skills/test-skill"
-    );
-    assert_eq!(
-        payload["prompt_contributions"][1]["version"]
-            .as_str()
-            .unwrap()
-            .len(),
-        64
-    );
+    let contribution = payload["prompt_contributions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|contribution| contribution["id"] == "agents.skills/test-skill")
+        .unwrap();
+    assert_eq!(contribution["version"].as_str().unwrap().len(), 64);
 }
 
 #[test]

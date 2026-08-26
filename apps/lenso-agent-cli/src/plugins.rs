@@ -2658,7 +2658,7 @@ mod tests {
                         other => panic!("unexpected guest Agent frame: {other:?}"),
                     }
                 }
-                assert_eq!(text, "Plugin: Direct answer.");
+                assert_eq!(text, "Direct answer.");
                 assert!(session_id.is_some());
                 drop(stream);
                 drop(turn);
@@ -2788,7 +2788,7 @@ mod tests {
                         other => panic!("unexpected Wasm Agent frame: {other:?}"),
                     }
                 }
-                assert_eq!(text, "Plugin: Direct answer.");
+                assert_eq!(text, "Direct answer.");
                 assert!(session_id.is_some());
                 drop(stream);
                 drop(turn);

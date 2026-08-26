@@ -177,7 +177,7 @@
       },
       {
         "consumer": "cli",
-        "capability_id": "lenso.agent@1",
+        "capability_id": "lenso.agent@3",
         "provider": "agent"
       },
       {

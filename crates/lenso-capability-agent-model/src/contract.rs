@@ -77,6 +77,7 @@ pub struct CompleteMessage {
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompleteMessageKind {
+    ReasoningSummaryDelta,
     TextDelta,
     ToolCall,
     Usage,
@@ -102,8 +103,8 @@ pub struct ProviderFailurePayload {
 
 #[lenso::capability(
     id = "lenso.agent.model",
-    major = 1,
-    version = "1.1.0",
+    major = 2,
+    version = "2.0.0",
     portable = true,
     cross_lane_transfer = false
 )]

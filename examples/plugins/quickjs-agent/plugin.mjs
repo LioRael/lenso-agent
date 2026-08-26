@@ -1,7 +1,7 @@
 const sessions = new Map();
 let nextId = 1;
 
-const MODEL = "lenso.agent.model@1";
+const MODEL = "lenso.agent.model@2";
 const PROMPT = "lenso.agent.prompt@1";
 const SESSION = "lenso.agent.session@1";
 const TOOLS = "lenso.agent.tools@2";
@@ -29,16 +29,16 @@ export function describe() {
   return JSON.stringify({
     abi: "lenso.json-host-imports@1",
     capabilities: [{
-      capability_id: "lenso.agent@1",
-      descriptor_version: "1.2.0",
+      capability_id: "lenso.agent@3",
+      descriptor_version: "3.0.0",
       request_operations: [],
       stream_operations: ["run_turn"]
     }],
     required_capabilities: [
-      { capability_id: MODEL, descriptor_version: "1.1.0", cardinality: "one" },
+      { capability_id: MODEL, descriptor_version: "2.0.0", cardinality: "one" },
       { capability_id: PROMPT, descriptor_version: "1.0.0", cardinality: "one" },
       { capability_id: SESSION, descriptor_version: "1.1.0", cardinality: "one" },
-      { capability_id: TOOLS, descriptor_version: "2.0.0", cardinality: "one" }
+      { capability_id: TOOLS, descriptor_version: "2.1.0", cardinality: "one" }
     ]
   });
 }
@@ -48,7 +48,7 @@ export function invoke() {
 }
 
 export function streamOpen(capability, operation, requestJson) {
-  if (capability !== "lenso.agent@1" || operation !== "run_turn") {
+  if (capability !== "lenso.agent@3" || operation !== "run_turn") {
     throw new Error("unsupported Capability or Operation");
   }
   const request = JSON.parse(requestJson);
