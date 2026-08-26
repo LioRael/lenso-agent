@@ -24,6 +24,9 @@ use lenso_agent_process_tools_module::{
 use lenso_agent_skills_filesystem_module::{
     FACTORY_IDENTITY as SKILLS_FACTORY_IDENTITY, PACKAGE_ID as SKILLS_PACKAGE_ID,
 };
+use lenso_agent_subagent_tools_module::{
+    FACTORY_IDENTITY as SUBAGENT_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as SUBAGENT_TOOLS_PACKAGE_ID,
+};
 use lenso_agent_text_tools_module::{
     FACTORY_IDENTITY as TEXT_TOOLS_FACTORY_IDENTITY, PACKAGE_ID as TEXT_TOOLS_PACKAGE_ID,
 };
@@ -94,6 +97,7 @@ pub(crate) const NATIVE_SKILLS_PROFILE: &str = "agent-skills-provider-v1";
 pub(crate) const NATIVE_PROCESS_PROFILE: &str = "agent-process-provider-v1";
 pub(crate) const NATIVE_SECRETS_PROFILE: &str = "secrets-provider-v1";
 pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
+pub(crate) const SUBAGENT_PROVIDER_PROFILE: &str = "agent-subagent-provider-v1";
 pub(crate) const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 pub(crate) const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
 
@@ -112,6 +116,8 @@ const PROCESS_TOOLS_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-process-tools-module/config.schema.json");
 const PROCESS_NATIVE_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-process-native-module/config.schema.json");
+const SUBAGENT_TOOLS_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-subagent-tools-module/config.schema.json");
 const OPENAI_MODEL_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-model-openai-compatible-module/config.schema.json");
 const PROMPT_PROVIDER_DESCRIPTOR: &[u8] =
@@ -141,6 +147,8 @@ const WORKSPACE_EDIT_CONFIGURATION: &str =
 const SKILLS_CONFIGURATION: &str = r#"{"catalog_contribution_id":"agents.skills.catalog","max_catalog_bytes":262144,"max_file_bytes":262144,"max_prompt_catalog_bytes":8000,"max_resource_entries":8192,"max_resource_file_bytes":262144,"max_resource_manifest_bytes":524288,"max_resource_total_bytes":16777216,"max_skills":256,"max_total_bytes":8388608,"root":"~/.agents/skills"}"#;
 const PROCESS_TOOLS_CONFIGURATION: &str = r#"{"default_timeout_ms":120000}"#;
 const PROCESS_NATIVE_CONFIGURATION: &str = r#"{"allowed_programs":["cargo","git","rg"],"environment_allowlist":["PATH","HOME","CARGO_HOME","RUSTUP_HOME","TMPDIR","LANG","LC_ALL"],"max_argument_bytes":131072,"max_output_bytes":262144,"max_timeout_ms":600000,"root":"."}"#;
+const SUBAGENT_TOOLS_CONFIGURATION: &str =
+    r#"{"max_output_bytes":1048576,"max_task_bytes":262144}"#;
 const OPENAI_MODEL_CONFIGURATION: &str = r#"{"api_key_ref":"model/openai-api-key","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#;
 const OPENAI_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-4o-mini"}"#;
 const SECRETS_CONFIGURATION: &str = r#"{"references":{"model/openai-api-key":"OPENAI_API_KEY"}}"#;
@@ -1186,6 +1194,7 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(skills_profile())?
         .register(process_native_profile())?
         .register(process_tools_profile())?
+        .register(subagent_tools_profile())?
         .register(fixture_model_profile())?
         .register(openai_model_profile())?
         .register(secrets_profile())?
@@ -1206,6 +1215,52 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(third_party_wasm_tool_profile())?
         .register(third_party_wasm_workspace_read_tool_profile())?
         .register(third_party_wasm_http_fetch_tool_profile())
+}
+
+fn subagent_tools_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-subagent-tools-v1".to_owned(),
+        adapter_profile: SUBAGENT_PROVIDER_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(SUBAGENT_TOOLS_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: SUBAGENT_TOOLS_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(SUBAGENT_TOOLS_CONFIGURATION_SCHEMA),
+        configuration: SUBAGENT_TOOLS_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+            request_operations: vec![
+                TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: vec![CapabilityRequirement {
+            capability_id: AGENT_CAPABILITY_ID.to_owned(),
+            descriptor_version: AGENT_DESCRIPTOR_VERSION.to_owned(),
+            cardinality: RequirementCardinality::One,
+        }],
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::AppendMany {
+            consumer_instance: "tools".to_owned(),
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            max_concurrency: 1,
+        },
+        permission_requests: Vec::new(),
+        fixed_host_imports: vec![FixedHostImport {
+            capability_id: AGENT_CAPABILITY_ID.to_owned(),
+            descriptor_version: AGENT_DESCRIPTOR_VERSION.to_owned(),
+            provider_instance: "subagent-agent".to_owned(),
+            allowed_provider_packages: BTreeSet::from([AGENT_LOOP_PACKAGE_ID.to_owned()]),
+        }],
+        inherit_displaced_requirements: false,
+    }
 }
 
 fn skills_profile() -> ExecutablePluginProfile {
@@ -1370,12 +1425,20 @@ fn openai_model_profile() -> ExecutablePluginProfile {
             descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
             displaced_provider_instance: "model".to_owned(),
             allowed_displaced_packages: BTreeSet::from([FIXTURE_MODEL_PACKAGE_ID.to_owned()]),
-            base_configuration_replacements: vec![BaseConfigurationReplacement {
-                instance_key: "agent".to_owned(),
-                allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
-                expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
-                replacement_configuration: OPENAI_AGENT_CONFIGURATION.to_owned(),
-            }],
+            base_configuration_replacements: vec![
+                BaseConfigurationReplacement {
+                    instance_key: "agent".to_owned(),
+                    allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
+                    expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
+                    replacement_configuration: OPENAI_AGENT_CONFIGURATION.to_owned(),
+                },
+                BaseConfigurationReplacement {
+                    instance_key: "subagent-agent".to_owned(),
+                    allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
+                    expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
+                    replacement_configuration: OPENAI_AGENT_CONFIGURATION.to_owned(),
+                },
+            ],
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
@@ -1638,12 +1701,20 @@ fn codex_model_profile() -> ExecutablePluginProfile {
             descriptor_version: MODEL_DESCRIPTOR_VERSION.to_owned(),
             displaced_provider_instance: "model".to_owned(),
             allowed_displaced_packages: BTreeSet::from([FIXTURE_MODEL_PACKAGE_ID.to_owned()]),
-            base_configuration_replacements: vec![BaseConfigurationReplacement {
-                instance_key: "agent".to_owned(),
-                allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
-                expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
-                replacement_configuration: CODEX_AGENT_CONFIGURATION.to_owned(),
-            }],
+            base_configuration_replacements: vec![
+                BaseConfigurationReplacement {
+                    instance_key: "agent".to_owned(),
+                    allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
+                    expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
+                    replacement_configuration: CODEX_AGENT_CONFIGURATION.to_owned(),
+                },
+                BaseConfigurationReplacement {
+                    instance_key: "subagent-agent".to_owned(),
+                    allowed_package: AGENT_LOOP_PACKAGE_ID.to_owned(),
+                    expected_configuration: FIXTURE_AGENT_CONFIGURATION.to_owned(),
+                    replacement_configuration: CODEX_AGENT_CONFIGURATION.to_owned(),
+                },
+            ],
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),

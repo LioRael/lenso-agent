@@ -281,8 +281,12 @@ completed-turn history from the Session log.
   workspace. Workspace mutation exists only when its Plugin is enabled.
 - The coding profile has create-only and unique exact-edit Tools. Process
   execution exists only in the higher-authority local-coding profile, with no
-  shell-string parsing, generic overwrite/delete, approval workflow, subagents,
-  automatic compaction, runtime code replacement, or hostile-code isolation.
+  shell-string parsing, generic overwrite/delete, or approval workflow. The
+  optional subagent Plugin can delegate only to a separately composed child
+  Agent whose Tool Runtime exposes the reviewed workspace-read Capability; it
+  does not inherit root mutation or process authority. There is no parallel
+  child pool, automatic compaction, runtime code replacement, or hostile-code
+  isolation.
 
 ## First executable slice
 
@@ -294,6 +298,8 @@ The deterministic root base selects these keyed Module Instances:
 - `prompt`
 - `fixture-instructions`
 - `summary-skill`
+- `subagent-agent`
+- `subagent-tools`
 - `tools`
 - `tui`
 - `tui-help`
@@ -358,12 +364,20 @@ kills the whole Unix process group on timeout, cancellation, output overflow,
 or dropped invocation.
 Users enable `workspace-edit` separately when both authorities are required.
 
+The opt-in `subagent` Plugin adds one exclusive `delegate` Tool. It invokes the
+base `subagent-agent` Instance, whose separate `subagent-tools` Runtime can call
+only `lenso.agent.workspace-read@1/read_text`. Each delegated task opens a
+durable child Session, and the parent Tool result records that child identity.
+Disabling the Plugin removes delegation without changing the Kernel or either
+Agent contract.
+
 ## Deferred direction
 
 Web UI, approval policy, hostile-code sandboxing, marketplace Skill
 installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
-scheduling, sandboxed Code Mode, Creator experiments, additional production
+scheduling and parallel child pools, sandboxed Code Mode, Creator experiments,
+additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, third-party Host
 Capability permissions, automatic rollback,

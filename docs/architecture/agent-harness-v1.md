@@ -181,13 +181,17 @@ make both the workspace root and model endpoint visible before execution.
 21. Two parallel-safe Tools can complete out of order under a bounded pool but
     are persisted and returned to the Model in request order; an exclusive
     Tool between safe calls drains the preceding wave and blocks the next one.
+22. Enabling the reviewed subagent Plugin adds one exclusive `delegate` Tool.
+    It invokes a separately composed child Agent with a narrow read-only Tool
+    Runtime, persists a distinct child Session, and records that child identity
+    in the parent Tool result. Disabling the Plugin removes delegation.
 
 ## Deferred
 
 Web UI, approval workflows, marketplace Skill installation, live Skill
 watching, ordered Hooks, automatic compaction, per-call resource-keyed Tool
 classification, Trajectory UI, replay
-inspection, re-execution, subagents, scheduling, generic overwrite/delete,
+inspection, re-execution, parallel child pools, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding
 replacement, distributed coordination, automatic rollback, Generation deletion,

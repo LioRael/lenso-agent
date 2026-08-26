@@ -18,7 +18,15 @@ remove_modules() {
   keys="$(printf '%s\n' "$@" | jq -R . | jq -s .)"
   jq --argjson keys "${keys}" \
     '.manifest = "../../Cargo.toml" |
-      .app.modules |= map(select(.key as $key | ($keys | index($key) | not)))' \
+      .app.modules |= map(select(.key as $key | ($keys | index($key) | not))) |
+      .app.binding_policies |= map(select(
+        (.consumer as $consumer | ($keys | index($consumer) | not)) and
+        (.provider as $provider | ($keys | index($provider) | not))
+      )) |
+      .app.decisions |= map(select(
+        (.consumer as $consumer | ($keys | index($consumer) | not)) and
+        (.provider as $provider | ($keys | index($provider) | not))
+      ))' \
     "${source}" > "${target}"
   "${lenso_bin}" app check --definition "${target}"
 }

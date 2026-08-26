@@ -12,7 +12,8 @@
     "lenso.agent.session.file": "lenso-agent-session-file-module",
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
-    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
+    "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module",
+    "lenso.agent.workspace-read-tools": "lenso-agent-workspace-read-tools-module"
   },
   "app": {
     "name": "openai-readonly",
@@ -101,6 +102,23 @@
         "configuration": {}
       },
       {
+        "key": "subagent-agent",
+        "package": "lenso.agent.loop",
+        "configuration": {
+          "max_history_events": 200,
+          "max_output_tokens": 1024,
+          "max_steps": 8,
+          "max_tool_calls": 4,
+          "max_parallel_tool_calls": 4,
+          "model": "gpt-4o-mini"
+        }
+      },
+      {
+        "key": "subagent-tools",
+        "package": "lenso.agent.workspace-read-tools",
+        "configuration": {}
+      },
+      {
         "key": "workspace-import-read",
         "package": "lenso.agent.workspace-import-read",
         "configuration": {
@@ -139,9 +157,34 @@
           "queue_capacity": 0,
           "max_concurrency": 4
         }
+      },
+      {
+        "consumer": "subagent-agent",
+        "capability_id": "lenso.agent.tools@2",
+        "provider": "subagent-tools",
+        "admission": {
+          "queue_capacity": 0,
+          "max_concurrency": 4
+        }
       }
     ],
-    "decisions": [],
+    "decisions": [
+      {
+        "consumer": "agent",
+        "capability_id": "lenso.agent.tools@2",
+        "provider": "tools"
+      },
+      {
+        "consumer": "cli",
+        "capability_id": "lenso.agent@1",
+        "provider": "agent"
+      },
+      {
+        "consumer": "subagent-agent",
+        "capability_id": "lenso.agent.tools@2",
+        "provider": "subagent-tools"
+      }
+    ],
     "execution_lanes": [
       {
         "id": "main"

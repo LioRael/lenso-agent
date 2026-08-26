@@ -112,6 +112,12 @@ impl FixtureModel {
         if current_user == "Use the workspace Plugin to read README.md." {
             return workspace_plugin_response(request, &tool_results);
         }
+        if current_user == "Delegate a README.md summary." {
+            return subagent_root_response(request, &tool_results);
+        }
+        if current_user == "Summarize README.md for the parent Agent." {
+            return subagent_child_response(request, &tool_results);
+        }
         if let Some(url) = current_user
             .strip_prefix("Use the network Plugin to fetch ")
             .and_then(|value| value.strip_suffix('.'))
@@ -136,6 +142,75 @@ impl FixtureModel {
             return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
         }
         Ok(tool_request(1))
+    }
+}
+
+fn subagent_root_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "delegate") {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-delegate-readme",
+            "delegate",
+            r#"{"task":"Summarize README.md for the parent Agent."}"#,
+        )),
+        [result] if result.content == "Child summary: # Plugin Fixture" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Delegated result: Child summary: # Plugin Fixture",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "28",
+                "12",
+            ),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn subagent_child_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "read_text") {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-child-readme",
+            "read_text",
+            r#"{"path":"README.md"}"#,
+        )),
+        [result] if result.content == "# Plugin Fixture\n" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Child summary: # Plugin Fixture",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response("2", CompleteMessageKind::Usage, "", "", "", "{}", "20", "8"),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }
 
