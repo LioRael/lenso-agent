@@ -27,6 +27,36 @@ pub(super) enum ToolKind {
     Other,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ToolGroupKind {
+    Read,
+    Search,
+    List,
+    Execute,
+    Edit,
+}
+
+impl ToolGroupKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Read | Self::Edit => "files",
+            Self::Search => "searches",
+            Self::List => "directories",
+            Self::Execute => "commands",
+        }
+    }
+
+    const fn verb(self) -> &'static str {
+        match self {
+            Self::Read => "Read",
+            Self::Search => "Searched",
+            Self::List => "Listed",
+            Self::Execute => "Ran",
+            Self::Edit => "Edited",
+        }
+    }
+}
+
 impl ToolKind {
     fn from_name(name: &str) -> Self {
         match name {
@@ -108,6 +138,20 @@ impl ToolCard {
         format!("{} {}", self.kind.verb(false), self.subject())
     }
 
+    pub(super) fn group_kind(&self) -> Option<ToolGroupKind> {
+        if self.status != ToolStatus::Completed || self.error.is_some() {
+            return None;
+        }
+        match self.kind {
+            ToolKind::Read | ToolKind::Skill => Some(ToolGroupKind::Read),
+            ToolKind::Search => Some(ToolGroupKind::Search),
+            ToolKind::List => Some(ToolGroupKind::List),
+            ToolKind::Execute => Some(ToolGroupKind::Execute),
+            ToolKind::Edit | ToolKind::Create => Some(ToolGroupKind::Edit),
+            ToolKind::Other => None,
+        }
+    }
+
     fn subject(&self) -> String {
         let arguments = self.arguments();
         match self.kind {
@@ -136,6 +180,48 @@ impl ToolCard {
             .as_deref()
             .and_then(|value| serde_json::from_str(value).ok())
     }
+}
+
+pub(super) fn render_tool_group(
+    lines: &mut Vec<Line<'static>>,
+    kind: ToolGroupKind,
+    cards: &[&ToolCard],
+    expanded: bool,
+    selected: bool,
+) {
+    let disclosure = if expanded { "▾" } else { "▸" };
+    let count = cards.len();
+    let duration = cards
+        .iter()
+        .filter_map(|card| card.duration_ms)
+        .reduce(u64::saturating_add);
+    let color = match kind {
+        ToolGroupKind::Read | ToolGroupKind::List => Color::LightBlue,
+        ToolGroupKind::Search => Color::LightMagenta,
+        ToolGroupKind::Execute => Color::LightCyan,
+        ToolGroupKind::Edit => Color::LightGreen,
+    };
+    let mut header = vec![
+        Span::styled(
+            format!("{disclosure} ◆ "),
+            Style::default().fg(if selected { Palette::ACCENT } else { color }),
+        ),
+        Span::styled(
+            format!("{} ", kind.verb()),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{count} {}", kind.label()),
+            Style::default().fg(Palette::MUTED),
+        ),
+    ];
+    if let Some(duration) = duration {
+        header.push(Span::styled(
+            format!("  {}", format_duration(duration)),
+            Style::default().fg(Palette::QUIET),
+        ));
+    }
+    lines.push(Line::from(header));
 }
 
 pub(super) fn render_tool_block(lines: &mut Vec<Line<'static>>, card: &ToolCard, selected: bool) {
@@ -189,12 +275,28 @@ pub(super) fn render_tool_block(lines: &mut Vec<Line<'static>>, card: &ToolCard,
     }
 }
 
+pub(super) fn render_grouped_tool_block(
+    lines: &mut Vec<Line<'static>>,
+    card: &ToolCard,
+    selected: bool,
+) {
+    let mut nested = Vec::new();
+    render_tool_block(&mut nested, card, selected);
+    for mut line in nested {
+        line.spans.insert(
+            0,
+            Span::styled("  │ ", Style::default().fg(Palette::BORDER)),
+        );
+        lines.push(line);
+    }
+}
+
 fn render_process(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
     if let Some(command) = command(card.arguments().as_ref()) {
         detail_line(lines, "$ ", &command, Palette::CODE);
     }
     if let Some(content) = card.content.as_deref().filter(|value| !value.is_empty()) {
-        for line in bounded_preview(content, 12, 4096).lines() {
+        for line in bounded_tail(content, 12, 4096).lines() {
             detail_line(lines, "  ", line, Palette::MUTED);
         }
     }
@@ -209,23 +311,46 @@ fn render_edit(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
     let new = arguments
         .as_ref()
         .and_then(|value| string_field(value, &["new_text", "content"]));
+    let start_line = card
+        .metadata_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Value>(value).ok())
+        .and_then(|value| value.get("start_line").and_then(Value::as_u64))
+        .and_then(|line| usize::try_from(line).ok())
+        .unwrap_or(1);
+    let old_lines = old.as_deref().map_or(0, |text| text.lines().count());
+    let new_lines = new.as_deref().map_or(0, |text| text.lines().count());
+    lines.push(Line::from(Span::styled(
+        format!("  @@ -{start_line},{old_lines} +{start_line},{new_lines} @@"),
+        Style::default().fg(Palette::QUIET),
+    )));
     if let Some(old) = old {
-        for line in bounded_preview(&old, 10, 2048).lines() {
-            lines.push(Line::from(vec![
-                Span::styled("  - ", Style::default().fg(Color::LightRed)),
-                Span::styled(line.to_owned(), Style::default().fg(Color::LightRed)),
-            ]));
-        }
+        render_diff_side(lines, &old, start_line, true);
     }
     if let Some(new) = new {
-        for line in bounded_preview(&new, 10, 2048).lines() {
-            lines.push(Line::from(vec![
-                Span::styled("  + ", Style::default().fg(Color::LightGreen)),
-                Span::styled(line.to_owned(), Style::default().fg(Color::LightGreen)),
-            ]));
-        }
+        render_diff_side(lines, &new, start_line, false);
     }
     render_error(lines, card);
+}
+
+fn render_diff_side(lines: &mut Vec<Line<'static>>, text: &str, start_line: usize, removed: bool) {
+    let (marker, color) = if removed {
+        ("-", Color::LightRed)
+    } else {
+        ("+", Color::LightGreen)
+    };
+    for (offset, content) in bounded_preview(text, 14, 4096).lines().enumerate() {
+        let line = start_line.saturating_add(offset);
+        let number = if removed {
+            format!("{line:>4}     ")
+        } else {
+            format!("     {line:>4}")
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {number} {marker} "), Style::default().fg(color)),
+            Span::styled(content.to_owned(), Style::default().fg(color)),
+        ]));
+    }
 }
 
 fn render_read(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
@@ -399,6 +524,35 @@ fn bounded_preview(value: &str, max_lines: usize, max_characters: usize) -> Stri
     preview
 }
 
+fn bounded_tail(value: &str, max_lines: usize, max_characters: usize) -> String {
+    let all_lines = value.lines().collect::<Vec<_>>();
+    let omitted = all_lines.len().saturating_sub(max_lines);
+    let tail = all_lines
+        .into_iter()
+        .skip(omitted)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let clipped = tail.chars().count().saturating_sub(max_characters);
+    let mut preview = if clipped == 0 {
+        tail
+    } else {
+        tail.chars()
+            .rev()
+            .take(max_characters)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect()
+    };
+    if clipped > 0 {
+        preview.insert_str(0, &format!("\u{2026} {clipped} earlier characters\n"));
+    }
+    if omitted > 0 {
+        preview.insert_str(0, &format!("\u{2026} {omitted} earlier lines\n"));
+    }
+    preview
+}
+
 fn format_duration(duration_ms: u64) -> String {
     if duration_ms < 1_000 {
         format!("{duration_ms}ms")
@@ -423,6 +577,7 @@ mod tests {
             Some(r#"{"path":"src/lib.rs","old_text":"old","new_text":"new"}"#.to_owned()),
         );
         card.status = ToolStatus::Completed;
+        card.metadata_json = Some(r#"{"start_line":12}"#.to_owned());
         let mut lines = Vec::new();
         render_tool_block(&mut lines, &card, false);
         let text = lines
@@ -431,6 +586,8 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
         assert!(text.contains("Edited src/lib.rs"));
+        assert!(text.contains("@@ -12,1 +12,1 @@"));
+        assert!(text.contains("12"));
         assert!(text.contains("- old"));
         assert!(text.contains("+ new"));
     }
@@ -443,5 +600,31 @@ mod tests {
             Some(r#"{"program":"cargo","arguments":["test","-q"]}"#.to_owned()),
         );
         assert_eq!(card.activity(), "Running cargo test -q");
+    }
+
+    #[test]
+    fn process_output_keeps_the_recent_tail() {
+        let mut card = ToolCard::running(
+            "call-1".to_owned(),
+            "run_process".to_owned(),
+            Some(r#"{"program":"cargo","arguments":["test"]}"#.to_owned()),
+        );
+        card.status = ToolStatus::Completed;
+        card.content = Some(
+            (1..=20)
+                .map(|line| format!("line {line}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let mut lines = Vec::new();
+        render_tool_block(&mut lines, &card, false);
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("8 earlier lines"));
+        assert!(!text.contains("line 8"));
+        assert!(text.contains("line 20"));
     }
 }

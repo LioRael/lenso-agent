@@ -3,7 +3,7 @@
 mod blocks;
 mod markdown;
 
-use std::{io, path::Path, time::Duration};
+use std::{collections::BTreeSet, io, path::Path, time::Duration};
 
 use crossterm::{
     event::{
@@ -33,7 +33,9 @@ use ratatui::{
 };
 
 use crate::generation::{AgentApp, TurnGeneration};
-use blocks::{ToolCard, ToolStatus, render_tool_block};
+use blocks::{
+    ToolCard, ToolStatus, render_grouped_tool_block, render_tool_block, render_tool_group,
+};
 use markdown::lines as markdown_lines;
 
 const EVENT_TICK: Duration = Duration::from_millis(250);
@@ -122,7 +124,27 @@ struct ToolHitTarget {
     column_end: u16,
     row_start: u16,
     row_end: u16,
-    entry_index: usize,
+    selection: ToolSelection,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolSelection {
+    Tool(usize),
+    Group { start: usize, end: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RenderedToolRow {
+    start_row: usize,
+    end_row: usize,
+    selection: ToolSelection,
+}
+
+#[derive(Debug)]
+struct PromptAnchor {
+    start_row: usize,
+    end_row: usize,
+    text: String,
 }
 
 #[derive(Debug)]
@@ -203,7 +225,9 @@ struct TuiState {
     history_cursor: Option<usize>,
     history_draft: String,
     transcript: Vec<TranscriptEntry>,
-    selected_tool: Option<usize>,
+    selected_block: Option<ToolSelection>,
+    expanded_groups: BTreeSet<usize>,
+    visible_tool_blocks: Vec<ToolSelection>,
     panels: Vec<SnapshotResponsePanelsItem>,
     selected_panel: usize,
     session_id: Option<String>,
@@ -228,7 +252,9 @@ impl TuiState {
             history_cursor: None,
             history_draft: String::new(),
             transcript: Vec::new(),
-            selected_tool: None,
+            selected_block: None,
+            expanded_groups: BTreeSet::new(),
+            visible_tool_blocks: Vec::new(),
             panels,
             selected_panel: 0,
             session_id: options.session_id.clone(),
@@ -444,7 +470,7 @@ impl TuiState {
                 name,
                 message.arguments_json.map(|value| value.to_string()),
             )));
-        self.selected_tool = Some(self.transcript.len() - 1);
+        self.selected_block = Some(ToolSelection::Tool(self.transcript.len() - 1));
     }
 
     fn finish_tool(&mut self, message: RunTurnResponse, status: ToolStatus) {
@@ -471,40 +497,47 @@ impl TuiState {
             .and_then(|value| value.parse::<u64>().ok());
         card.error = message.error;
         card.status = status;
-        self.selected_tool = Some(index);
+        self.selected_block = Some(ToolSelection::Tool(index));
     }
 
     fn toggle_tool_details(&mut self) {
-        let Some(index) = self.selected_tool else {
+        let Some(selection) = self.selected_block else {
             return;
         };
-        if let Some(TranscriptEntry::Tool(card)) = self.transcript.get_mut(index) {
-            card.expanded = !card.expanded;
+        match selection {
+            ToolSelection::Tool(index) => {
+                if let Some(TranscriptEntry::Tool(card)) = self.transcript.get_mut(index) {
+                    card.expanded = !card.expanded;
+                }
+            }
+            ToolSelection::Group { start, .. } => {
+                if !self.expanded_groups.remove(&start) {
+                    self.expanded_groups.insert(start);
+                }
+            }
         }
     }
 
     fn select_adjacent_tool(&mut self, previous: bool) {
-        let tools = self
-            .transcript
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| matches!(entry, TranscriptEntry::Tool(_)).then_some(index))
-            .collect::<Vec<_>>();
-        if tools.is_empty() {
-            self.selected_tool = None;
+        if self.visible_tool_blocks.is_empty() {
+            self.selected_block = None;
             return;
         }
-        let current = self
-            .selected_tool
-            .and_then(|selected| tools.iter().position(|index| *index == selected));
+        let current = self.selected_block.and_then(|selected| {
+            self.visible_tool_blocks
+                .iter()
+                .position(|item| *item == selected)
+        });
         let next = if previous {
             current
                 .and_then(|position| position.checked_sub(1))
-                .unwrap_or(tools.len() - 1)
+                .unwrap_or(self.visible_tool_blocks.len() - 1)
         } else {
-            current.map_or(0, |position| (position + 1) % tools.len())
+            current.map_or(0, |position| {
+                (position + 1) % self.visible_tool_blocks.len()
+            })
         };
-        self.selected_tool = Some(tools[next]);
+        self.selected_block = Some(self.visible_tool_blocks[next]);
     }
 
     fn toggle_tool_at(&mut self, column: u16, row: u16) {
@@ -521,7 +554,7 @@ impl TuiState {
         else {
             return;
         };
-        self.selected_tool = Some(target.entry_index);
+        self.selected_block = Some(target.selection);
         self.toggle_tool_details();
     }
 
@@ -959,15 +992,35 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     let transcript_area = Block::default()
         .padding(Padding::new(1, 1, 1, 0))
         .inner(area);
-    let (lines, tool_rows) = transcript_lines(state, usize::from(transcript_area.width));
+    let (lines, tool_rows, prompt_anchors) =
+        transcript_lines(state, usize::from(transcript_area.width));
     let rendered_line_count = visual_rows(&lines, usize::from(transcript_area.width));
     state
         .scroll
         .update_metrics(rendered_line_count, usize::from(transcript_area.height));
-    state.tool_hit_targets = visible_tool_targets(tool_rows, transcript_area, &state.scroll);
+    let sticky_prompt = sticky_prompt(&prompt_anchors, state.scroll.top);
+    state.visible_tool_blocks = tool_rows.iter().map(|row| row.selection).collect();
+    state.tool_hit_targets = visible_tool_targets(
+        &tool_rows,
+        transcript_area,
+        &state.scroll,
+        sticky_prompt.is_some(),
+    );
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     let scroll = state.scroll.top.try_into().unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((scroll, 0)), transcript_area);
+    if let Some(prompt) = sticky_prompt {
+        frame.render_widget(
+            Paragraph::new(surface_line(
+                format!("› {}", prompt.lines().next().unwrap_or_default()),
+                usize::from(transcript_area.width),
+            )),
+            Rect {
+                height: 1,
+                ..transcript_area
+            },
+        );
+    }
     if state.scroll.max_top > 0 {
         let mut scrollbar_state = ScrollbarState::new(rendered_line_count)
             .position(state.scroll.top)
@@ -989,9 +1042,10 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
 fn transcript_lines(
     state: &TuiState,
     width: usize,
-) -> (Vec<Line<'static>>, Vec<(usize, usize, usize)>) {
+) -> (Vec<Line<'static>>, Vec<RenderedToolRow>, Vec<PromptAnchor>) {
     let mut lines = Vec::new();
     let mut tool_rows = Vec::new();
+    let mut prompt_anchors = Vec::new();
     if state.transcript.is_empty() {
         lines.push(Line::from(Span::styled(
             "Lenso Agent",
@@ -1008,61 +1062,228 @@ fn transcript_lines(
             Style::default().fg(Palette::MUTED),
         )));
     }
-    for (entry_index, entry) in state.transcript.iter().enumerate() {
+    let mut entry_index = 0;
+    while entry_index < state.transcript.len() {
+        let entry = &state.transcript[entry_index];
         match entry {
-            TranscriptEntry::Message { speaker, text } => match speaker {
-                Speaker::User => {
-                    lines.push(Line::default());
-                    for (index, content) in text.lines().enumerate() {
-                        let prefix = if index == 0 { "› " } else { "  " };
-                        lines.push(surface_line(format!("{prefix}{content}"), width));
-                    }
-                }
-                Speaker::Agent => lines.extend(markdown_lines(text)),
-                Speaker::System => lines.push(Line::from(vec![
-                    Span::styled("• ", Style::default().fg(Palette::MUTED)),
-                    Span::styled(text.clone(), Style::default().fg(Palette::MUTED)),
-                ])),
-                Speaker::Error => lines.push(Line::from(vec![
-                    Span::styled(
-                        "● ",
-                        Style::default()
-                            .fg(Palette::ERROR)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(text.clone(), Style::default().fg(Palette::ERROR)),
-                ])),
-            },
+            TranscriptEntry::Message { speaker, text } => {
+                render_message_entry(&mut lines, &mut prompt_anchors, *speaker, text, width);
+            }
             TranscriptEntry::Tool(card) => {
-                let start = visual_rows(&lines, width);
-                render_tool_block(&mut lines, card, state.selected_tool == Some(entry_index));
-                let end = visual_rows(&lines, width).saturating_sub(1);
-                tool_rows.push((start, end, entry_index));
+                if let Some(group_end) =
+                    render_tool_entry(state, entry_index, card, &mut lines, &mut tool_rows, width)
+                {
+                    entry_index = group_end;
+                    lines.push(Line::default());
+                    continue;
+                }
             }
         }
         lines.push(Line::default());
+        entry_index += 1;
     }
-    (lines, tool_rows)
+    (lines, tool_rows, prompt_anchors)
+}
+
+fn render_message_entry(
+    lines: &mut Vec<Line<'static>>,
+    prompt_anchors: &mut Vec<PromptAnchor>,
+    speaker: Speaker,
+    text: &str,
+    width: usize,
+) {
+    match speaker {
+        Speaker::User => {
+            lines.push(Line::default());
+            let start_row = visual_rows(lines, width);
+            for (index, content) in text.lines().enumerate() {
+                let prefix = if index == 0 { "› " } else { "  " };
+                lines.push(surface_line(format!("{prefix}{content}"), width));
+            }
+            prompt_anchors.push(PromptAnchor {
+                start_row,
+                end_row: visual_rows(lines, width).saturating_sub(1),
+                text: text.to_owned(),
+            });
+        }
+        Speaker::Agent => lines.extend(markdown_lines(text)),
+        Speaker::System => lines.push(Line::from(vec![
+            Span::styled("• ", Style::default().fg(Palette::MUTED)),
+            Span::styled(text.to_owned(), Style::default().fg(Palette::MUTED)),
+        ])),
+        Speaker::Error => lines.push(Line::from(vec![
+            Span::styled(
+                "● ",
+                Style::default()
+                    .fg(Palette::ERROR)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(text.to_owned(), Style::default().fg(Palette::ERROR)),
+        ])),
+    }
+}
+
+fn render_tool_entry(
+    state: &TuiState,
+    entry_index: usize,
+    card: &ToolCard,
+    lines: &mut Vec<Line<'static>>,
+    tool_rows: &mut Vec<RenderedToolRow>,
+    width: usize,
+) -> Option<usize> {
+    let Some((kind, group_end)) = tool_group_at(&state.transcript, entry_index) else {
+        let selection = ToolSelection::Tool(entry_index);
+        push_tool_row(
+            lines,
+            tool_rows,
+            card,
+            selection,
+            state.selected_block,
+            width,
+        );
+        return None;
+    };
+    let selection = ToolSelection::Group {
+        start: entry_index,
+        end: group_end,
+    };
+    let expanded = state.expanded_groups.contains(&entry_index);
+    let cards = state.transcript[entry_index..group_end]
+        .iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::Tool(card) => Some(card),
+            TranscriptEntry::Message { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let start_row = visual_rows(lines, width);
+    render_tool_group(
+        lines,
+        kind,
+        &cards,
+        expanded,
+        selection_is(state.selected_block, selection),
+    );
+    tool_rows.push(RenderedToolRow {
+        start_row,
+        end_row: visual_rows(lines, width).saturating_sub(1),
+        selection,
+    });
+    if expanded {
+        for (offset, card) in cards.into_iter().enumerate() {
+            push_nested_tool_row(
+                lines,
+                tool_rows,
+                card,
+                ToolSelection::Tool(entry_index + offset),
+                state.selected_block,
+                width,
+            );
+        }
+    }
+    Some(group_end)
+}
+
+fn push_tool_row(
+    lines: &mut Vec<Line<'static>>,
+    tool_rows: &mut Vec<RenderedToolRow>,
+    card: &ToolCard,
+    selection: ToolSelection,
+    selected: Option<ToolSelection>,
+    width: usize,
+) {
+    let start_row = visual_rows(lines, width);
+    render_tool_block(lines, card, selection_is(selected, selection));
+    tool_rows.push(RenderedToolRow {
+        start_row,
+        end_row: visual_rows(lines, width).saturating_sub(1),
+        selection,
+    });
+}
+
+fn push_nested_tool_row(
+    lines: &mut Vec<Line<'static>>,
+    tool_rows: &mut Vec<RenderedToolRow>,
+    card: &ToolCard,
+    selection: ToolSelection,
+    selected: Option<ToolSelection>,
+    width: usize,
+) {
+    let start_row = visual_rows(lines, width);
+    render_grouped_tool_block(lines, card, selection_is(selected, selection));
+    tool_rows.push(RenderedToolRow {
+        start_row,
+        end_row: visual_rows(lines, width).saturating_sub(1),
+        selection,
+    });
+}
+
+fn tool_group_at(
+    transcript: &[TranscriptEntry],
+    start: usize,
+) -> Option<(blocks::ToolGroupKind, usize)> {
+    let TranscriptEntry::Tool(first) = transcript.get(start)? else {
+        return None;
+    };
+    let kind = first.group_kind()?;
+    let mut end = start + 1;
+    while let Some(TranscriptEntry::Tool(card)) = transcript.get(end) {
+        if card.group_kind() != Some(kind) {
+            break;
+        }
+        end += 1;
+    }
+    (end.saturating_sub(start) >= 2).then_some((kind, end))
+}
+
+fn selection_is(selected: Option<ToolSelection>, candidate: ToolSelection) -> bool {
+    match (selected, candidate) {
+        (
+            Some(ToolSelection::Group {
+                start: selected, ..
+            }),
+            ToolSelection::Group {
+                start: candidate, ..
+            },
+        ) => selected == candidate,
+        (Some(selected), candidate) => selected == candidate,
+        (None, _) => false,
+    }
+}
+
+fn sticky_prompt(anchors: &[PromptAnchor], scroll_top: usize) -> Option<&str> {
+    anchors
+        .iter()
+        .rev()
+        .find(|anchor| anchor.start_row <= scroll_top && anchor.end_row < scroll_top)
+        .map(|anchor| anchor.text.as_str())
 }
 
 fn visible_tool_targets(
-    tool_rows: Vec<(usize, usize, usize)>,
+    tool_rows: &[RenderedToolRow],
     transcript_area: Rect,
     scroll: &ScrollState,
+    sticky_prompt: bool,
 ) -> Vec<ToolHitTarget> {
     tool_rows
-        .into_iter()
-        .filter_map(|(start, end, entry_index)| {
+        .iter()
+        .filter_map(|row| {
             let viewport_end = scroll
                 .top
                 .saturating_add(usize::from(transcript_area.height));
-            if end < scroll.top || start >= viewport_end {
+            if row.end_row < scroll.top || row.start_row >= viewport_end {
                 return None;
             }
-            let visible_start = start.saturating_sub(scroll.top);
-            let visible_end = end
+            let visible_start = row
+                .start_row
+                .saturating_sub(scroll.top)
+                .max(usize::from(u8::from(sticky_prompt)));
+            let visible_end = row
+                .end_row
                 .saturating_sub(scroll.top)
                 .min(usize::from(transcript_area.height.saturating_sub(1)));
+            if visible_start > visible_end {
+                return None;
+            }
             Some(ToolHitTarget {
                 column_start: transcript_area.x,
                 column_end: transcript_area.right().saturating_sub(1),
@@ -1072,7 +1293,7 @@ fn visible_tool_targets(
                 row_end: transcript_area
                     .y
                     .saturating_add(visible_end.try_into().ok()?),
-                entry_index,
+                selection: row.selection,
             })
         })
         .collect()
@@ -1766,6 +1987,54 @@ mod tests {
             state.transcript.first(),
             Some(TranscriptEntry::Tool(ToolCard { expanded: true, .. }))
         ));
+    }
+
+    #[test]
+    fn consecutive_completed_tools_collapse_into_one_semantic_group() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        for (call_id, path) in [("call-1", "src/lib.rs"), ("call-2", "src/main.rs")] {
+            let mut card = ToolCard::running(
+                call_id.to_owned(),
+                "read".to_owned(),
+                Some(format!(r#"{{"path":"{path}"}}"#)),
+            );
+            card.status = ToolStatus::Completed;
+            state.transcript.push(TranscriptEntry::Tool(card));
+        }
+
+        let (collapsed, rows, _) = transcript_lines(&state, 100);
+        let collapsed = Text::from(collapsed).to_string();
+        assert!(collapsed.contains("Read 2 files"));
+        assert!(!collapsed.contains("src/lib.rs"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].selection, ToolSelection::Group { start: 0, end: 2 });
+
+        state.selected_block = Some(rows[0].selection);
+        state.toggle_tool_details();
+        let (expanded, rows, _) = transcript_lines(&state, 100);
+        let expanded = Text::from(expanded).to_string();
+        assert!(expanded.contains("src/lib.rs"));
+        assert!(expanded.contains("src/main.rs"));
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn prompt_becomes_sticky_only_after_it_scrolls_above_the_viewport() {
+        let anchors = vec![
+            PromptAnchor {
+                start_row: 4,
+                end_row: 5,
+                text: "first task".to_owned(),
+            },
+            PromptAnchor {
+                start_row: 20,
+                end_row: 20,
+                text: "second task".to_owned(),
+            },
+        ];
+        assert_eq!(sticky_prompt(&anchors, 5), None);
+        assert_eq!(sticky_prompt(&anchors, 8), Some("first task"));
+        assert_eq!(sticky_prompt(&anchors, 24), Some("second task"));
     }
 
     #[test]
