@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
+use lenso_agent_discord_module as _;
 use lenso_agent_http_fetch_module as _;
 use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;
 use lenso_agent_model_fixture_module as _;
@@ -25,6 +26,7 @@ use lenso_agent_prompt_module as _;
 use lenso_agent_prompt_static_module as _;
 use lenso_agent_session_file_module as _;
 use lenso_agent_skills_filesystem_module as _;
+use lenso_agent_telegram_module as _;
 use lenso_agent_tools_module as _;
 use lenso_agent_tui_module as _;
 use lenso_agent_tui_static_module as _;
@@ -72,6 +74,9 @@ const ONLINE_DRAIN_TIMEOUT_NANOS: u64 = 300_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
 const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
+const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
+const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
+const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const RECONCILE_INTERVAL: Duration = Duration::from_millis(250);
 const MAX_RECONCILE_EVENTS: usize = 32;
@@ -151,6 +156,36 @@ impl AgentApp {
 
     pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
         Self::start_tui_with_store(plan_bytes, Path::new(".lenso/plugins")).await
+    }
+
+    /// Starts the Telegram surface with an independent durable Controller lineage.
+    pub async fn start_telegram(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(
+            plan_bytes,
+            Path::new(".lenso/plugins"),
+            TELEGRAM_CONTROL_DIRECTORY,
+        )
+        .await
+    }
+
+    /// Starts the Discord surface with an independent durable Controller lineage.
+    pub async fn start_discord(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(
+            plan_bytes,
+            Path::new(".lenso/plugins"),
+            DISCORD_CONTROL_DIRECTORY,
+        )
+        .await
+    }
+
+    /// Starts all configured messaging surfaces in one durable Controller lineage.
+    pub async fn start_channels(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(
+            plan_bytes,
+            Path::new(".lenso/plugins"),
+            CHANNEL_CONTROL_DIRECTORY,
+        )
+        .await
     }
 
     pub(crate) async fn start_with_store(
@@ -294,6 +329,16 @@ impl AgentApp {
     /// Pins one TUI-submitted Agent Turn to the active App Generation.
     pub async fn lease_tui_turn(&self) -> Result<TurnGeneration, String> {
         self.lease_turn_for("tui").await
+    }
+
+    /// Pins one Telegram message to the active App Generation.
+    pub async fn lease_telegram_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("telegram").await
+    }
+
+    /// Pins one Discord message to the active App Generation.
+    pub async fn lease_discord_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("discord").await
     }
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
@@ -1371,6 +1416,35 @@ mod tests {
                 .await
                 .unwrap();
                 tui.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn channel_host_leases_telegram_and_discord_from_one_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut app = AgentApp::start_with_store_and_control_directory(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    CHANNEL_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+
+                let telegram = app.lease_telegram_turn().await.unwrap();
+                let discord = app.lease_discord_turn().await.unwrap();
+                assert_eq!(
+                    telegram.generation_spec_digest(),
+                    discord.generation_spec_digest()
+                );
+                assert_eq!(telegram.handle().binding_count(), 1);
+                assert_eq!(discord.handle().binding_count(), 1);
+                drop(telegram);
+                drop(discord);
+                app.shutdown().await.unwrap();
             })
             .await;
     }

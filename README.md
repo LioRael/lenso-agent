@@ -28,6 +28,63 @@ cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
+Run Telegram and Discord together through one Channel Host. Copy the reviewed
+example, replace its allowlist placeholders, export the tokens for the Channels
+you selected, and start the Host directly:
+
+```sh
+cp lenso.channels.example.toml lenso.channels.toml
+export TELEGRAM_BOT_TOKEN='<bot-token>'
+export DISCORD_BOT_TOKEN='<bot-token>'
+cargo run -p lenso-agent-cli --bin lenso-agent-channel
+```
+
+Delete either `[telegram]` or `[discord]` from `lenso.channels.toml` to run only
+one Channel. The file contains policy and environment-variable names, never
+token values. One Agent Turn runs at a time across every Channel; the bounded
+shared queue prevents either transport from creating unlimited pending work.
+The Host resolves the root App automatically, so ordinary use does not require
+creating or passing a Plan file.
+
+The focused binaries remain useful for debugging one transport. For Telegram,
+create a Bot with BotFather, export its token, and explicitly select the chats
+that may invoke it:
+
+```sh
+export TELEGRAM_BOT_TOKEN='<bot-token>'
+cargo run -p lenso-agent-cli --bin lenso-agent-telegram -- \
+  --allow-chat '<telegram-chat-id>'
+```
+
+Use `--allow-chat '*'` only as an intentional initial test setting, then
+replace it with exact private or group chat IDs. Telegram Turns have no Tools
+by default; repeat `--allow-tool <name>` to expose only reviewed Tools. Private
+chat text is accepted directly. Group and supergroup text requires an
+`@bot_username` mention or a reply to the Bot unless
+`--respond-all-groups` is explicitly selected. The surface long-polls without
+a public webhook, stores only its update cursor and
+conversation-to-Session mapping in `.lenso/telegram/state.json`, and obtains a
+fresh App Generation lease for every message. Bot tokens remain in the
+environment and never enter the Plan or Session.
+
+For Discord, create an application and Bot in the Discord Developer Portal,
+invite it with permission to view channels, read message history, and send
+messages, then select the channels that may invoke it:
+
+```sh
+export DISCORD_BOT_TOKEN='<bot-token>'
+cargo run -p lenso-agent-cli --bin lenso-agent-discord -- \
+  --allow-channel '<discord-channel-id>'
+```
+
+Direct messages are accepted from allowed channels. Guild messages require an
+`@mention` or reply to the Bot by default, which avoids requesting Discord's
+privileged Message Content Intent. `--respond-all-guilds` requires the explicit
+`--message-content-intent` switch and the matching Developer Portal setting.
+Discord Turns expose no Tools unless repeated `--allow-tool <name>` options
+select them. Gateway resume information and channel-to-Session mappings live
+in `.lenso/discord/state.json`; the Bot token stays in the environment.
+
 The base App in `lenso.app.json` uses a deterministic fixture Model and can only
 read the current workspace. Enable workspace mutation without creating or
 selecting another App definition:

@@ -35,3 +35,9 @@ remove_modules lenso.app.json \
 remove_modules lenso.app.json \
   "${proof_root}/headless-without-http-fetch.app.json" \
   http-fetch
+remove_modules lenso.app.json \
+  "${proof_root}/without-telegram-surface.app.json" \
+  telegram
+remove_modules lenso.app.json \
+  "${proof_root}/without-discord-surface.app.json" \
+  discord

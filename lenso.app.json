@@ -4,6 +4,7 @@
   "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
+    "lenso.agent.discord": "lenso-agent-discord-module",
     "lenso.agent.http-fetch": "lenso-agent-http-fetch-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
     "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
@@ -13,6 +14,7 @@
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.tui": "lenso-agent-tui-module",
     "lenso.agent.tui.static": "lenso-agent-tui-static-module",
+    "lenso.agent.telegram": "lenso-agent-telegram-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
     "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
   },
@@ -34,6 +36,11 @@
       {
         "key": "cli",
         "package": "lenso.agent.cli",
+        "configuration": {}
+      },
+      {
+        "key": "discord",
+        "package": "lenso.agent.discord",
         "configuration": {}
       },
       {
@@ -117,6 +124,11 @@
             }
           ]
         }
+      },
+      {
+        "key": "telegram",
+        "package": "lenso.agent.telegram",
+        "configuration": {}
       },
       {
         "key": "workspace-import-read",

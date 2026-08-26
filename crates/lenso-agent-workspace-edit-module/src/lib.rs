@@ -150,6 +150,7 @@ impl WorkspaceEditProvider {
             &arguments.path,
             arguments.content.as_bytes(),
             None,
+            Some(1),
         ))
     }
 
@@ -220,6 +221,13 @@ impl WorkspaceEditProvider {
             &arguments.path,
             updated.as_bytes(),
             Some(original.len()),
+            Some(
+                original[..start]
+                    .bytes()
+                    .filter(|byte| *byte == b'\n')
+                    .count()
+                    + 1,
+            ),
         ))
     }
 
@@ -333,6 +341,7 @@ fn success_response(
     path: &str,
     content: &[u8],
     previous_bytes: Option<usize>,
+    start_line: Option<usize>,
 ) -> ExecuteResponse {
     ExecuteResponse {
         content: format!("{operation} {path}"),
@@ -342,6 +351,7 @@ fn success_response(
             "path": path,
             "previous_bytes": previous_bytes,
             "bytes_written": content.len(),
+            "start_line": start_line,
             "sha256": format!("{:x}", Sha256::digest(content)),
         })
         .to_string()
@@ -473,6 +483,21 @@ mod tests {
             serde_json::from_str(response.metadata_json.as_str()).unwrap();
         assert_eq!(metadata["operation"], "edited");
         assert_eq!(metadata["previous_bytes"], 20);
+        assert_eq!(metadata["start_line"], 1);
+    }
+
+    #[test]
+    fn edit_metadata_reports_the_real_start_line() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("note.txt");
+        fs::write(&target, "first\nsecond\nthird\n").unwrap();
+        let provider = provider(temporary.path().to_path_buf());
+        let response = provider
+            .edit_text(r#"{"path":"note.txt","old_text":"second","new_text":"updated"}"#)
+            .unwrap();
+        let metadata: serde_json::Value =
+            serde_json::from_str(response.metadata_json.as_str()).unwrap();
+        assert_eq!(metadata["start_line"], 2);
     }
 
     #[test]

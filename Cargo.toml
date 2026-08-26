@@ -38,6 +38,8 @@ members = [
     "crates/lenso-agent-cli-module",
     "crates/lenso-agent-tui-module",
     "crates/lenso-agent-tui-static-module",
+    "crates/lenso-agent-telegram-module",
+    "crates/lenso-agent-discord-module",
 ]
 
 [workspace.package]
@@ -84,7 +86,9 @@ syn = { version = "2", features = ["full"] }
 sha2 = { version = "0.10", features = ["asm"] }
 tempfile = "3.23"
 time = { version = "0.3", features = ["formatting"] }
-tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt", "signal", "time"] }
+tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+toml = "0.9"
 uuid = { version = "1.18", features = ["v4"] }
 
 [workspace.lints.rust]

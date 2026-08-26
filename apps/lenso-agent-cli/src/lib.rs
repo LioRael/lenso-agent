@@ -1,10 +1,14 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 mod authority;
+pub mod channel;
+pub mod channel_host;
+pub mod discord;
 pub mod generation;
 mod plugin_profiles;
 pub mod plugins;
 pub mod provenance;
+pub mod telegram;
 #[cfg(test)]
 mod test_support;
 pub mod tui;

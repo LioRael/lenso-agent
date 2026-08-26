@@ -1,13 +1,14 @@
 //! Interactive terminal surface for the composed Agent App.
 
+mod blocks;
 mod markdown;
 
-use std::{io, path::Path, time::Duration};
+use std::{collections::BTreeSet, io, path::Path, time::Duration};
 
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent,
-        KeyEventKind, KeyModifiers, MouseEventKind,
+        KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -32,6 +33,9 @@ use ratatui::{
 };
 
 use crate::generation::{AgentApp, OnlineGenerationEvent, TurnGeneration};
+use blocks::{
+    ToolCard, ToolStatus, render_grouped_tool_block, render_tool_block, render_tool_group,
+};
 use markdown::lines as markdown_lines;
 
 const EVENT_TICK: Duration = Duration::from_millis(250);
@@ -53,7 +57,7 @@ impl Palette {
     const QUIET: Color = Color::DarkGray;
     const CODE: Color = Color::LightYellow;
     const HEADING: Color = Color::LightBlue;
-    const SURFACE: Color = Color::Rgb(45, 45, 48);
+    const SURFACE: Color = Color::DarkGray;
     const SURFACE_TEXT: Color = Color::White;
 }
 
@@ -114,24 +118,33 @@ enum TranscriptEntry {
     Tool(ToolCard),
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ToolHitTarget {
+    column_start: u16,
+    column_end: u16,
+    row_start: u16,
+    row_end: u16,
+    selection: ToolSelection,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ToolStatus {
-    Running,
-    Completed,
-    Failed,
+enum ToolSelection {
+    Tool(usize),
+    Group { start: usize, end: usize },
+}
+
+#[derive(Clone, Copy, Debug)]
+struct RenderedToolRow {
+    start_row: usize,
+    end_row: usize,
+    selection: ToolSelection,
 }
 
 #[derive(Debug)]
-struct ToolCard {
-    call_id: String,
-    name: String,
-    arguments_json: Option<String>,
-    content: Option<String>,
-    metadata_json: Option<String>,
-    duration_ms: Option<u64>,
-    error: Option<String>,
-    status: ToolStatus,
-    expanded: bool,
+struct PromptAnchor {
+    start_row: usize,
+    end_row: usize,
+    text: String,
 }
 
 #[derive(Debug)]
@@ -212,7 +225,9 @@ struct TuiState {
     history_cursor: Option<usize>,
     history_draft: String,
     transcript: Vec<TranscriptEntry>,
-    selected_tool: Option<usize>,
+    selected_block: Option<ToolSelection>,
+    expanded_groups: BTreeSet<usize>,
+    visible_tool_blocks: Vec<ToolSelection>,
     panels: Vec<SnapshotResponsePanelsItem>,
     selected_panel: usize,
     session_id: Option<String>,
@@ -222,6 +237,8 @@ struct TuiState {
     scroll: ScrollState,
     workspace: String,
     show_shortcuts: bool,
+    panel_open: bool,
+    tool_hit_targets: Vec<ToolHitTarget>,
     animation_tick: u64,
 }
 
@@ -235,7 +252,9 @@ impl TuiState {
             history_cursor: None,
             history_draft: String::new(),
             transcript: Vec::new(),
-            selected_tool: None,
+            selected_block: None,
+            expanded_groups: BTreeSet::new(),
+            visible_tool_blocks: Vec::new(),
             panels,
             selected_panel: 0,
             session_id: options.session_id.clone(),
@@ -249,6 +268,8 @@ impl TuiState {
             scroll: ScrollState::default(),
             workspace: current_workspace_label(),
             show_shortcuts: false,
+            panel_open: false,
+            tool_hit_targets: Vec::new(),
             animation_tick: 0,
         }
     }
@@ -443,18 +464,13 @@ impl TuiState {
             self.push_system("Ignored a Tool event without a name");
             return;
         };
-        self.transcript.push(TranscriptEntry::Tool(ToolCard {
-            call_id,
-            name,
-            arguments_json: message.arguments_json.map(|value| value.to_string()),
-            content: None,
-            metadata_json: None,
-            duration_ms: None,
-            error: None,
-            status: ToolStatus::Running,
-            expanded: false,
-        }));
-        self.selected_tool = Some(self.transcript.len() - 1);
+        self.transcript
+            .push(TranscriptEntry::Tool(ToolCard::running(
+                call_id,
+                name,
+                message.arguments_json.map(|value| value.to_string()),
+            )));
+        self.selected_block = Some(ToolSelection::Tool(self.transcript.len() - 1));
     }
 
     fn finish_tool(&mut self, message: RunTurnResponse, status: ToolStatus) {
@@ -481,40 +497,74 @@ impl TuiState {
             .and_then(|value| value.parse::<u64>().ok());
         card.error = message.error;
         card.status = status;
-        self.selected_tool = Some(index);
+        self.selected_block = Some(ToolSelection::Tool(index));
     }
 
     fn toggle_tool_details(&mut self) {
-        let Some(index) = self.selected_tool else {
+        let Some(selection) = self.selected_block else {
             return;
         };
-        if let Some(TranscriptEntry::Tool(card)) = self.transcript.get_mut(index) {
-            card.expanded = !card.expanded;
+        match selection {
+            ToolSelection::Tool(index) => {
+                if let Some(TranscriptEntry::Tool(card)) = self.transcript.get_mut(index) {
+                    card.expanded = !card.expanded;
+                }
+            }
+            ToolSelection::Group { start, .. } => {
+                if !self.expanded_groups.remove(&start) {
+                    self.expanded_groups.insert(start);
+                }
+            }
         }
     }
 
     fn select_adjacent_tool(&mut self, previous: bool) {
-        let tools = self
-            .transcript
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| matches!(entry, TranscriptEntry::Tool(_)).then_some(index))
-            .collect::<Vec<_>>();
-        if tools.is_empty() {
-            self.selected_tool = None;
+        if self.visible_tool_blocks.is_empty() {
+            self.selected_block = None;
             return;
         }
-        let current = self
-            .selected_tool
-            .and_then(|selected| tools.iter().position(|index| *index == selected));
+        let current = self.selected_block.and_then(|selected| {
+            self.visible_tool_blocks
+                .iter()
+                .position(|item| *item == selected)
+        });
         let next = if previous {
             current
                 .and_then(|position| position.checked_sub(1))
-                .unwrap_or(tools.len() - 1)
+                .unwrap_or(self.visible_tool_blocks.len() - 1)
         } else {
-            current.map_or(0, |position| (position + 1) % tools.len())
+            current.map_or(0, |position| {
+                (position + 1) % self.visible_tool_blocks.len()
+            })
         };
-        self.selected_tool = Some(tools[next]);
+        self.selected_block = Some(self.visible_tool_blocks[next]);
+    }
+
+    fn toggle_tool_at(&mut self, column: u16, row: u16) {
+        let Some(target) = self
+            .tool_hit_targets
+            .iter()
+            .find(|target| {
+                column >= target.column_start
+                    && column <= target.column_end
+                    && row >= target.row_start
+                    && row <= target.row_end
+            })
+            .copied()
+        else {
+            return;
+        };
+        self.selected_block = Some(target.selection);
+        self.toggle_tool_details();
+    }
+
+    fn active_tool_activity(&self) -> Option<String> {
+        self.transcript.iter().rev().find_map(|entry| match entry {
+            TranscriptEntry::Tool(card) if card.status == ToolStatus::Running => {
+                Some(card.activity())
+            }
+            _ => None,
+        })
     }
 }
 
@@ -668,6 +718,9 @@ fn handle_terminal_event(
             match mouse.kind {
                 MouseEventKind::ScrollUp => state.scroll.scroll_up(WHEEL_SCROLL_LINES),
                 MouseEventKind::ScrollDown => state.scroll.scroll_down(WHEEL_SCROLL_LINES),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    state.toggle_tool_at(mouse.column, mouse.row);
+                }
                 _ => {}
             }
             Ok(false)
@@ -711,14 +764,12 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
     }
     match key.code {
         KeyCode::Tab if !state.panels.is_empty() => {
-            state.selected_panel = (state.selected_panel + 1) % state.panels.len();
+            state.panel_open = !state.panel_open;
             false
         }
         KeyCode::BackTab if !state.panels.is_empty() => {
-            state.selected_panel = state
-                .selected_panel
-                .checked_sub(1)
-                .unwrap_or(state.panels.len() - 1);
+            state.panel_open = true;
+            state.selected_panel = (state.selected_panel + 1) % state.panels.len();
             false
         }
         _ => false,
@@ -903,16 +954,16 @@ fn runtime_failure_message(error: lenso_kernel::RuntimeFailure) -> String {
 fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let area = content_area(frame.area());
     let compact = area.height <= 16;
-    let input_width = area.width.saturating_sub(4).max(1);
+    let input_width = area.width.saturating_sub(2).max(1);
     let input_rows = visual_input_rows(&state.input, usize::from(input_width));
     let composer_height = if compact {
-        3
+        2
     } else {
-        u16::try_from(input_rows.saturating_add(2))
-            .unwrap_or(7)
-            .clamp(4, 7)
+        u16::try_from(input_rows.saturating_add(1))
+            .unwrap_or(6)
+            .clamp(2, 6)
     };
-    let [header, body, activity, composer, shortcuts] = Layout::vertical([
+    let [header, body, activity, composer, status] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(4),
         Constraint::Length(1),
@@ -923,7 +974,7 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
 
     render_header(frame, header, state);
 
-    if state.panels.is_empty() || body.width < PANEL_BREAKPOINT {
+    if !state.panel_open || state.panels.is_empty() || body.width < PANEL_BREAKPOINT {
         render_transcript(frame, body, state);
     } else {
         let panel_width = body
@@ -943,14 +994,14 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
 
     render_activity(frame, activity, state);
     render_composer(frame, composer, state);
-    render_shortcuts(frame, shortcuts, state);
+    render_status_line(frame, status, state);
     if state.show_shortcuts {
         render_shortcuts_overlay(frame, area);
     }
 }
 
 fn content_area(area: Rect) -> Rect {
-    let horizontal = if area.width >= 64 { 2 } else { 1 };
+    let horizontal = if area.width >= 100 { 3 } else { 1 };
     let vertical = u16::from(area.height >= 18);
     Rect {
         x: area.x.saturating_add(horizontal),
@@ -967,13 +1018,13 @@ fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "▣ ",
+                "◆ ",
                 Style::default()
                     .fg(Palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                state.workspace.clone(),
+                format!("lenso  {}", state.workspace),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
         ])),
@@ -991,68 +1042,35 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     let transcript_area = Block::default()
         .padding(Padding::new(1, 1, 1, 0))
         .inner(area);
-    let mut lines = Vec::new();
-    if state.transcript.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "Lenso Agent",
-            Style::default()
-                .fg(Palette::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "What do you want to build?",
-            Style::default().add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "Describe a task, ask about the codebase, or paste an error.",
-            Style::default().fg(Palette::MUTED),
-        )));
-    }
-    for (entry_index, entry) in state.transcript.iter().enumerate() {
-        match entry {
-            TranscriptEntry::Message { speaker, text } => match speaker {
-                Speaker::User => {
-                    lines.push(Line::default());
-                    for (index, content) in text.lines().enumerate() {
-                        let prefix = if index == 0 { "› " } else { "  " };
-                        lines.push(surface_line(
-                            format!("{prefix}{content}"),
-                            usize::from(transcript_area.width),
-                        ));
-                    }
-                }
-                Speaker::Agent => lines.extend(markdown_lines(text)),
-                Speaker::System => lines.push(Line::from(vec![
-                    Span::styled("• ", Style::default().fg(Palette::MUTED)),
-                    Span::styled(text.clone(), Style::default().fg(Palette::MUTED)),
-                ])),
-                Speaker::Error => lines.push(Line::from(vec![
-                    Span::styled(
-                        "● ",
-                        Style::default()
-                            .fg(Palette::ERROR)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(text.clone(), Style::default().fg(Palette::ERROR)),
-                ])),
-            },
-            TranscriptEntry::Tool(card) => {
-                render_tool_card(&mut lines, card, state.selected_tool == Some(entry_index));
-            }
-        }
-        lines.push(Line::default());
-    }
-    let wrap_width = usize::from(transcript_area.width).max(1);
-    let rendered_line_count = lines
-        .iter()
-        .map(|line| line.width().max(1).div_ceil(wrap_width))
-        .sum::<usize>();
+    let (lines, tool_rows, prompt_anchors) =
+        transcript_lines(state, usize::from(transcript_area.width));
+    let rendered_line_count = visual_rows(&lines, usize::from(transcript_area.width));
     state
         .scroll
         .update_metrics(rendered_line_count, usize::from(transcript_area.height));
+    let sticky_prompt = sticky_prompt(&prompt_anchors, state.scroll.top);
+    state.visible_tool_blocks = tool_rows.iter().map(|row| row.selection).collect();
+    state.tool_hit_targets = visible_tool_targets(
+        &tool_rows,
+        transcript_area,
+        &state.scroll,
+        sticky_prompt.is_some(),
+    );
     let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
     let scroll = state.scroll.top.try_into().unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((scroll, 0)), transcript_area);
+    if let Some(prompt) = sticky_prompt {
+        frame.render_widget(
+            Paragraph::new(surface_line(
+                format!("› {}", prompt.lines().next().unwrap_or_default()),
+                usize::from(transcript_area.width),
+            )),
+            Rect {
+                height: 1,
+                ..transcript_area
+            },
+        );
+    }
     if state.scroll.max_top > 0 {
         let mut scrollbar_state = ScrollbarState::new(rendered_line_count)
             .position(state.scroll.top)
@@ -1071,172 +1089,272 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     }
 }
 
-fn render_tool_card(lines: &mut Vec<Line<'static>>, card: &ToolCard, selected: bool) {
-    let (symbol, color, status) = match card.status {
-        ToolStatus::Running => ("◆", Palette::AGENT, "running"),
-        ToolStatus::Completed => ("✓", Color::LightGreen, "done"),
-        ToolStatus::Failed => ("×", Palette::ERROR, "failed"),
-    };
-    let disclosure = if card.expanded { "▾" } else { "▸" };
-    let mut header = vec![
-        Span::styled(
-            format!("{disclosure} {symbol} "),
-            Style::default().fg(if selected { Palette::ACCENT } else { color }),
-        ),
-        Span::styled(
-            card.name.clone(),
+fn transcript_lines(
+    state: &TuiState,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<RenderedToolRow>, Vec<PromptAnchor>) {
+    let mut lines = Vec::new();
+    let mut tool_rows = Vec::new();
+    let mut prompt_anchors = Vec::new();
+    if state.transcript.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "Lenso Agent",
+            Style::default()
+                .fg(Palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "What do you want to build?",
             Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ];
-    if let Some(summary) = tool_summary(card) {
-        header.push(Span::styled(
-            format!("  {summary}"),
+        )));
+        lines.push(Line::from(Span::styled(
+            "Describe a task, ask about the codebase, or paste an error.",
             Style::default().fg(Palette::MUTED),
-        ));
+        )));
     }
-    header.push(Span::styled(
-        format!("  {status}"),
-        Style::default().fg(color),
-    ));
-    if let Some(duration_ms) = card.duration_ms {
-        header.push(Span::styled(
-            format!("  {}", format_duration(duration_ms)),
-            Style::default().fg(Palette::QUIET),
-        ));
+    let mut entry_index = 0;
+    while entry_index < state.transcript.len() {
+        let entry = &state.transcript[entry_index];
+        match entry {
+            TranscriptEntry::Message { speaker, text } => {
+                render_message_entry(&mut lines, &mut prompt_anchors, *speaker, text, width);
+            }
+            TranscriptEntry::Tool(card) => {
+                if let Some(group_end) =
+                    render_tool_entry(state, entry_index, card, &mut lines, &mut tool_rows, width)
+                {
+                    entry_index = group_end;
+                    lines.push(Line::default());
+                    continue;
+                }
+            }
+        }
+        lines.push(Line::default());
+        entry_index += 1;
     }
-    if selected {
-        header.push(Span::styled(
-            "  ctrl+o details",
-            Style::default().fg(Palette::QUIET),
-        ));
-    }
-    lines.push(Line::from(header));
-
-    if !card.expanded {
-        return;
-    }
-    if let Some(arguments) = card.arguments_json.as_deref() {
-        push_tool_detail(lines, "arguments", arguments, true);
-    }
-    if let Some(content) = card.content.as_deref()
-        && !content.is_empty()
-    {
-        push_tool_detail(lines, "output", content, false);
-    }
-    if let Some(metadata) = card.metadata_json.as_deref() {
-        push_tool_detail(lines, "metadata", metadata, true);
-    }
-    if let Some(error) = card.error.as_deref() {
-        push_tool_detail(lines, "error", error, false);
-    }
+    (lines, tool_rows, prompt_anchors)
 }
 
-fn push_tool_detail(
+fn render_message_entry(
     lines: &mut Vec<Line<'static>>,
-    label: &'static str,
-    value: &str,
-    pretty_json: bool,
+    prompt_anchors: &mut Vec<PromptAnchor>,
+    speaker: Speaker,
+    text: &str,
+    width: usize,
 ) {
-    lines.push(Line::from(vec![
-        Span::styled("  │ ", Style::default().fg(Palette::BORDER)),
-        Span::styled(label, Style::default().fg(Palette::QUIET)),
-    ]));
-    let value = if pretty_json {
-        serde_json::from_str::<serde_json::Value>(value)
-            .ok()
-            .and_then(|value| serde_json::to_string_pretty(&value).ok())
-            .unwrap_or_else(|| value.to_owned())
-    } else {
-        value.to_owned()
+    match speaker {
+        Speaker::User => {
+            lines.push(Line::default());
+            let start_row = visual_rows(lines, width);
+            for (index, content) in text.lines().enumerate() {
+                let prefix = if index == 0 { "› " } else { "  " };
+                lines.push(surface_line(format!("{prefix}{content}"), width));
+            }
+            prompt_anchors.push(PromptAnchor {
+                start_row,
+                end_row: visual_rows(lines, width).saturating_sub(1),
+                text: text.to_owned(),
+            });
+        }
+        Speaker::Agent => lines.extend(markdown_lines(text)),
+        Speaker::System => lines.push(Line::from(vec![
+            Span::styled("• ", Style::default().fg(Palette::MUTED)),
+            Span::styled(text.to_owned(), Style::default().fg(Palette::MUTED)),
+        ])),
+        Speaker::Error => lines.push(Line::from(vec![
+            Span::styled(
+                "● ",
+                Style::default()
+                    .fg(Palette::ERROR)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(text.to_owned(), Style::default().fg(Palette::ERROR)),
+        ])),
+    }
+}
+
+fn render_tool_entry(
+    state: &TuiState,
+    entry_index: usize,
+    card: &ToolCard,
+    lines: &mut Vec<Line<'static>>,
+    tool_rows: &mut Vec<RenderedToolRow>,
+    width: usize,
+) -> Option<usize> {
+    let Some((kind, group_end)) = tool_group_at(&state.transcript, entry_index) else {
+        let selection = ToolSelection::Tool(entry_index);
+        push_tool_row(
+            lines,
+            tool_rows,
+            card,
+            selection,
+            state.selected_block,
+            width,
+        );
+        return None;
     };
-    for line in bounded_preview(&value, 24, 4096).lines() {
-        lines.push(Line::from(vec![
-            Span::styled("  │   ", Style::default().fg(Palette::BORDER)),
-            Span::styled(line.to_owned(), Style::default().fg(Palette::CODE)),
-        ]));
-    }
-}
-
-fn bounded_preview(value: &str, max_lines: usize, max_characters: usize) -> String {
-    let mut preview = String::new();
-    let mut characters = 0;
-    let mut truncated = false;
-    for (index, line) in value.lines().enumerate() {
-        if index >= max_lines || characters >= max_characters {
-            truncated = true;
-            break;
-        }
-        if index > 0 {
-            preview.push('\n');
-            characters += 1;
-        }
-        let remaining = max_characters.saturating_sub(characters);
-        let accepted = line.chars().take(remaining).collect::<String>();
-        characters += accepted.chars().count();
-        preview.push_str(&accepted);
-        if accepted.chars().count() < line.chars().count() {
-            truncated = true;
-            break;
-        }
-    }
-    if truncated {
-        preview.push_str("\n… output truncated in TUI");
-    }
-    preview
-}
-
-fn tool_summary(card: &ToolCard) -> Option<String> {
-    let metadata = card
-        .metadata_json
-        .as_deref()
-        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
-    if let Some(metadata) = metadata.as_ref() {
-        if let (Some(operation), Some(path)) = (
-            metadata
-                .get("operation")
-                .and_then(serde_json::Value::as_str),
-            metadata.get("path").and_then(serde_json::Value::as_str),
-        ) {
-            let bytes = metadata
-                .get("bytes_written")
-                .and_then(serde_json::Value::as_u64)
-                .map(|bytes| format!(" · {bytes} B"))
-                .unwrap_or_default();
-            return Some(format!("{operation} {path}{bytes}"));
-        }
-        if let Some(path) = metadata.get("path").and_then(serde_json::Value::as_str) {
-            return Some(path.to_owned());
-        }
-        if let Some(program) = metadata.get("program").and_then(serde_json::Value::as_str) {
-            let exit = metadata
-                .get("exit_code")
-                .and_then(serde_json::Value::as_str)
-                .map(|code| format!(" · exit {code}"))
-                .unwrap_or_default();
-            return Some(format!("{program}{exit}"));
-        }
-    }
-    card.arguments_json
-        .as_deref()
-        .and_then(|arguments| serde_json::from_str::<serde_json::Value>(arguments).ok())
-        .and_then(|arguments| {
-            arguments
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
+    let selection = ToolSelection::Group {
+        start: entry_index,
+        end: group_end,
+    };
+    let expanded = state.expanded_groups.contains(&entry_index);
+    let cards = state.transcript[entry_index..group_end]
+        .iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::Tool(card) => Some(card),
+            TranscriptEntry::Message { .. } => None,
         })
+        .collect::<Vec<_>>();
+    let start_row = visual_rows(lines, width);
+    render_tool_group(
+        lines,
+        kind,
+        &cards,
+        expanded,
+        selection_is(state.selected_block, selection),
+    );
+    tool_rows.push(RenderedToolRow {
+        start_row,
+        end_row: visual_rows(lines, width).saturating_sub(1),
+        selection,
+    });
+    if expanded {
+        for (offset, card) in cards.into_iter().enumerate() {
+            push_nested_tool_row(
+                lines,
+                tool_rows,
+                card,
+                ToolSelection::Tool(entry_index + offset),
+                state.selected_block,
+                width,
+            );
+        }
+    }
+    Some(group_end)
 }
 
-fn format_duration(duration_ms: u64) -> String {
-    if duration_ms < 1_000 {
-        format!("{duration_ms}ms")
-    } else {
-        format!(
-            "{}.{:01}s",
-            duration_ms / 1_000,
-            (duration_ms % 1_000) / 100
-        )
+fn push_tool_row(
+    lines: &mut Vec<Line<'static>>,
+    tool_rows: &mut Vec<RenderedToolRow>,
+    card: &ToolCard,
+    selection: ToolSelection,
+    selected: Option<ToolSelection>,
+    width: usize,
+) {
+    let start_row = visual_rows(lines, width);
+    render_tool_block(lines, card, selection_is(selected, selection));
+    tool_rows.push(RenderedToolRow {
+        start_row,
+        end_row: visual_rows(lines, width).saturating_sub(1),
+        selection,
+    });
+}
+
+fn push_nested_tool_row(
+    lines: &mut Vec<Line<'static>>,
+    tool_rows: &mut Vec<RenderedToolRow>,
+    card: &ToolCard,
+    selection: ToolSelection,
+    selected: Option<ToolSelection>,
+    width: usize,
+) {
+    let start_row = visual_rows(lines, width);
+    render_grouped_tool_block(lines, card, selection_is(selected, selection));
+    tool_rows.push(RenderedToolRow {
+        start_row,
+        end_row: visual_rows(lines, width).saturating_sub(1),
+        selection,
+    });
+}
+
+fn tool_group_at(
+    transcript: &[TranscriptEntry],
+    start: usize,
+) -> Option<(blocks::ToolGroupKind, usize)> {
+    let TranscriptEntry::Tool(first) = transcript.get(start)? else {
+        return None;
+    };
+    let kind = first.group_kind()?;
+    let mut end = start + 1;
+    while let Some(TranscriptEntry::Tool(card)) = transcript.get(end) {
+        if card.group_kind() != Some(kind) {
+            break;
+        }
+        end += 1;
     }
+    (end.saturating_sub(start) >= 2).then_some((kind, end))
+}
+
+fn selection_is(selected: Option<ToolSelection>, candidate: ToolSelection) -> bool {
+    match (selected, candidate) {
+        (
+            Some(ToolSelection::Group {
+                start: selected, ..
+            }),
+            ToolSelection::Group {
+                start: candidate, ..
+            },
+        ) => selected == candidate,
+        (Some(selected), candidate) => selected == candidate,
+        (None, _) => false,
+    }
+}
+
+fn sticky_prompt(anchors: &[PromptAnchor], scroll_top: usize) -> Option<&str> {
+    anchors
+        .iter()
+        .rev()
+        .find(|anchor| anchor.start_row <= scroll_top && anchor.end_row < scroll_top)
+        .map(|anchor| anchor.text.as_str())
+}
+
+fn visible_tool_targets(
+    tool_rows: &[RenderedToolRow],
+    transcript_area: Rect,
+    scroll: &ScrollState,
+    sticky_prompt: bool,
+) -> Vec<ToolHitTarget> {
+    tool_rows
+        .iter()
+        .filter_map(|row| {
+            let viewport_end = scroll
+                .top
+                .saturating_add(usize::from(transcript_area.height));
+            if row.end_row < scroll.top || row.start_row >= viewport_end {
+                return None;
+            }
+            let visible_start = row
+                .start_row
+                .saturating_sub(scroll.top)
+                .max(usize::from(u8::from(sticky_prompt)));
+            let visible_end = row
+                .end_row
+                .saturating_sub(scroll.top)
+                .min(usize::from(transcript_area.height.saturating_sub(1)));
+            if visible_start > visible_end {
+                return None;
+            }
+            Some(ToolHitTarget {
+                column_start: transcript_area.x,
+                column_end: transcript_area.right().saturating_sub(1),
+                row_start: transcript_area
+                    .y
+                    .saturating_add(visible_start.try_into().ok()?),
+                row_end: transcript_area
+                    .y
+                    .saturating_add(visible_end.try_into().ok()?),
+                selection: row.selection,
+            })
+        })
+        .collect()
+}
+
+fn visual_rows(lines: &[Line<'_>], width: usize) -> usize {
+    let width = width.max(1);
+    lines
+        .iter()
+        .map(|line| line.width().max(1).div_ceil(width))
+        .sum()
 }
 
 fn surface_line(text: String, width: usize) -> Line<'static> {
@@ -1277,8 +1395,7 @@ fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
             .block(
                 Block::default()
                     .title(Span::styled(title, Style::default().fg(Palette::MUTED)))
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
+                    .borders(Borders::LEFT)
                     .border_style(Style::default().fg(Palette::BORDER))
                     .padding(Padding::horizontal(1)),
             )
@@ -1303,7 +1420,9 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     ])
     .areas(area);
 
-    if let Some((label, color)) = state.phase.activity(state.animation_tick) {
+    if let Some((fallback, color)) = state.phase.activity(state.animation_tick) {
+        let activity = state.active_tool_activity();
+        let label = activity.as_deref().unwrap_or(fallback);
         let suffix = if state.phase == UiPhase::Active {
             "  Esc cancel"
         } else {
@@ -1335,13 +1454,8 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         Palette::BORDER
     };
     let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .borders(Borders::TOP)
         .border_style(Style::default().fg(border))
-        .title_bottom(Span::styled(
-            format!(" {} · normal ", state.tool_scope),
-            Style::default().fg(Palette::QUIET),
-        ))
         .padding(Padding::horizontal(1));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1349,7 +1463,10 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let input = if state.input.is_empty() {
         vec![Line::from(vec![
             Span::styled("❯ ", Style::default().fg(border)),
-            Span::styled("Message Lenso Agent…", Style::default().fg(Palette::QUIET)),
+            Span::styled(
+                "Ask anything, @ mention files, or paste an error",
+                Style::default().fg(Palette::QUIET),
+            ),
         ])]
     } else {
         state
@@ -1414,45 +1531,42 @@ fn composer_cursor(input: &str, cursor: usize, width: usize) -> (usize, usize) {
     (2, 0)
 }
 
-fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
-    let mut spans = Vec::new();
-    if state.active.is_none() {
-        spans.extend(shortcut("enter", "send"));
-        if area.width >= 50 {
-            spans.push(Span::raw("   "));
-            spans.extend(shortcut("shift+enter", "newline"));
-        }
-        spans.push(Span::raw("   "));
-    }
-    spans.extend(shortcut(
-        "esc",
-        if state.active.is_some() {
-            "cancel"
-        } else {
-            "quit"
-        },
-    ));
-    if !state.panels.is_empty() && area.width >= PANEL_BREAKPOINT {
-        spans.push(Span::raw("   "));
-        spans.extend(shortcut("tab", "panels"));
-    }
-    if state.scroll.max_top > 0 && area.width >= 58 {
-        spans.push(Span::raw("   "));
-        if state.scroll.follow_tail {
-            spans.extend(shortcut("pgup/pgdn", "scroll"));
-        } else {
-            spans.extend(shortcut("end", "follow"));
-        }
-    }
-    if state.selected_tool.is_some() && area.width >= 68 {
-        spans.push(Span::raw("   "));
-        spans.extend(shortcut("ctrl+o", "details"));
-    }
-    if area.width >= 72 {
-        spans.push(Span::raw("   "));
-        spans.extend(shortcut("ctrl+.", "shortcuts"));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+fn render_status_line(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+    let [left, right] =
+        Layout::horizontal([Constraint::Min(20), Constraint::Length(36)]).areas(area);
+    let mode = if state.active.is_some() {
+        "working"
+    } else {
+        "normal"
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                mode,
+                Style::default()
+                    .fg(Palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", state.tool_scope),
+                Style::default().fg(Palette::QUIET),
+            ),
+        ])),
+        left,
+    );
+    let hint = if state.panel_open {
+        "tab close context  ctrl+. shortcuts"
+    } else if state.panels.is_empty() {
+        "ctrl+. shortcuts"
+    } else {
+        "tab context  ctrl+. shortcuts"
+    };
+    frame.render_widget(
+        Paragraph::new(hint)
+            .alignment(ratatui::layout::Alignment::Right)
+            .style(Style::default().fg(Palette::QUIET)),
+        right,
+    );
 }
 
 fn render_shortcuts_overlay(frame: &mut Frame<'_>, area: Rect) {
@@ -1508,18 +1622,6 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
         width,
         height,
     }
-}
-
-fn shortcut(key: &'static str, label: &'static str) -> [Span<'static>; 2] {
-    [
-        Span::styled(
-            key,
-            Style::default()
-                .fg(Palette::MUTED)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" {label}"), Style::default().fg(Palette::QUIET)),
-    ]
 }
 
 struct TerminalSession {
@@ -1593,7 +1695,7 @@ mod tests {
 
     #[test]
     fn renders_composed_panel_and_input() {
-        let backend = TestBackend::new(100, 24);
+        let backend = TestBackend::new(120, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = TuiState::new(
             &TuiOptions::default(),
@@ -1608,10 +1710,14 @@ mod tests {
         let content = terminal.backend().to_string();
         assert!(content.contains("Lenso Agent"));
         assert!(content.contains("What do you want to build?"));
-        assert!(content.contains("Help"));
+        assert!(!content.contains("Esc quits"));
         assert!(content.contains("hello"));
-        assert!(content.contains("enter send"));
+        assert!(content.contains("tab context"));
         assert!(!content.contains("Conversation"));
+
+        handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut state);
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        assert!(terminal.backend().to_string().contains("Esc quits"));
     }
 
     #[test]
@@ -1629,7 +1735,7 @@ mod tests {
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("What do you want to build?"));
-        assert!(content.contains("Message Lenso Agent…"));
+        assert!(content.contains("Ask anything"));
         assert!(!content.contains("Esc quits"));
         assert!(!content.contains("tab panels"));
     }
@@ -1644,7 +1750,7 @@ mod tests {
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("draft"));
-        assert!(content.contains("enter send"));
+        assert!(content.contains("normal"));
     }
 
     #[test]
@@ -1719,18 +1825,18 @@ mod tests {
         let backend = TestBackend::new(120, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
-        let collapsed = terminal.backend().to_string();
-        assert!(collapsed.contains("edit"));
-        assert!(collapsed.contains("edited src/lib.rs · 42 B"));
-        assert!(collapsed.contains("done  12ms"));
-        assert!(!collapsed.contains("old_text"));
+        let expanded = terminal.backend().to_string();
+        assert!(expanded.contains("Edited src/lib.rs"));
+        assert!(expanded.contains("42 B  12ms"));
+        assert!(expanded.contains("- a"));
+        assert!(expanded.contains("+ b"));
+        assert!(!expanded.contains("old_text"));
 
         handle_control_key(KeyCode::Char('o'), &mut state);
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
-        let expanded = terminal.backend().to_string();
-        assert!(expanded.contains("arguments"));
-        assert!(expanded.contains("old_text"));
-        assert!(expanded.contains("metadata"));
+        let collapsed = terminal.backend().to_string();
+        assert!(collapsed.contains("Edited src/lib.rs"));
+        assert!(!collapsed.contains("- a"));
     }
 
     #[test]
@@ -1902,6 +2008,86 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_tool_block_toggles_its_details() {
+        let backend = TestBackend::new(100, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state
+            .transcript
+            .push(TranscriptEntry::Tool(ToolCard::running(
+                "call-1".to_owned(),
+                "read".to_owned(),
+                Some(r#"{"path":"src/lib.rs"}"#.to_owned()),
+            )));
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let target = state.tool_hit_targets[0];
+
+        handle_terminal_event(
+            Some(Ok(Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: target.column_start,
+                row: target.row_start,
+                modifiers: KeyModifiers::NONE,
+            }))),
+            &mut state,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            state.transcript.first(),
+            Some(TranscriptEntry::Tool(ToolCard { expanded: true, .. }))
+        ));
+    }
+
+    #[test]
+    fn consecutive_completed_tools_collapse_into_one_semantic_group() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        for (call_id, path) in [("call-1", "src/lib.rs"), ("call-2", "src/main.rs")] {
+            let mut card = ToolCard::running(
+                call_id.to_owned(),
+                "read".to_owned(),
+                Some(format!(r#"{{"path":"{path}"}}"#)),
+            );
+            card.status = ToolStatus::Completed;
+            state.transcript.push(TranscriptEntry::Tool(card));
+        }
+
+        let (collapsed, rows, _) = transcript_lines(&state, 100);
+        let collapsed = Text::from(collapsed).to_string();
+        assert!(collapsed.contains("Read 2 files"));
+        assert!(!collapsed.contains("src/lib.rs"));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].selection, ToolSelection::Group { start: 0, end: 2 });
+
+        state.selected_block = Some(rows[0].selection);
+        state.toggle_tool_details();
+        let (expanded, rows, _) = transcript_lines(&state, 100);
+        let expanded = Text::from(expanded).to_string();
+        assert!(expanded.contains("src/lib.rs"));
+        assert!(expanded.contains("src/main.rs"));
+        assert_eq!(rows.len(), 3);
+    }
+
+    #[test]
+    fn prompt_becomes_sticky_only_after_it_scrolls_above_the_viewport() {
+        let anchors = vec![
+            PromptAnchor {
+                start_row: 4,
+                end_row: 5,
+                text: "first task".to_owned(),
+            },
+            PromptAnchor {
+                start_row: 20,
+                end_row: 20,
+                text: "second task".to_owned(),
+            },
+        ];
+        assert_eq!(sticky_prompt(&anchors, 5), None);
+        assert_eq!(sticky_prompt(&anchors, 8), Some("first task"));
+        assert_eq!(sticky_prompt(&anchors, 24), Some("second task"));
+    }
+
+    #[test]
     fn rendered_history_exposes_scroll_position_and_follow_control() {
         let backend = TestBackend::new(80, 16);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1925,6 +2111,5 @@ mod tests {
         let content = terminal.backend().to_string();
         assert!(content.contains("reading history"));
         assert!(content.contains("End follow"));
-        assert!(content.contains("end follow"));
     }
 }
