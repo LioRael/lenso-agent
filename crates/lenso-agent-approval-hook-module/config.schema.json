@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["directory", "default_decision", "max_records"],
+  "properties": {
+    "directory": { "type": "string", "minLength": 1 },
+    "default_decision": { "type": "string", "enum": ["allow", "ask", "deny"] },
+    "allow_tools": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "ask_tools": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "deny_tools": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "max_records": { "type": "integer", "minimum": 1, "maximum": 10000 }
+  }
+}

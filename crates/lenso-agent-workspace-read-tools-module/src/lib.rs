@@ -2,6 +2,7 @@
 
 use futures::future::ready;
 use lenso::prelude::*;
+use lenso_capability_agent_tool_hook as hook_contract;
 use lenso_capability_agent_tools::{
     self as tools_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
     CatalogResponseToolsItemExecution, ExecuteError, ExecuteErrorToolErrorPayload, ExecuteRequest,
@@ -23,6 +24,7 @@ struct ReadTextArguments {
 #[lenso::module]
 #[derive(Clone, Debug)]
 struct WorkspaceReadToolsModule {
+    hooks: ManyPort<hook_contract::ToolHookClient>,
     workspace: Port<workspace_read_contract::WorkspaceReadClient>,
 }
 
@@ -61,36 +63,111 @@ impl ToolsProvider for WorkspaceReadToolsModule {
         if request.name != READ_TEXT_TOOL {
             return Box::pin(ready(Ok(Err(ExecuteError::UnknownTool))));
         }
-        let Ok(arguments) =
-            serde_json::from_str::<ReadTextArguments>(request.arguments_json.as_str())
+        let Ok(arguments_json) =
+            hook_contract::normalize_arguments(request.arguments_json.as_str())
         else {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        };
+        let Ok(arguments) = serde_json::from_str::<ReadTextArguments>(&arguments_json) else {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         };
         if arguments.path.is_empty() || arguments.path.len() > 4096 {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         }
         let workspace = self.workspace.clone();
+        let hooks = self.hooks.clone();
         Box::pin(async move {
-            match workspace
+            let execution =
+                hook_contract::start_hooks(&hooks, &context, request.name, arguments_json).await?;
+            if let Some(block) = &execution.block {
+                hook_contract::finish_hooks(
+                    &hooks,
+                    &context,
+                    &execution,
+                    hook_contract::HookTerminal::DomainError,
+                    "",
+                    "{}",
+                    block.provider_code,
+                )
+                .await?;
+                return Ok(Err(tool_error(
+                    block.provider_code,
+                    &block.message,
+                    &block.details_json,
+                )));
+            }
+            let result = workspace
                 .read_text_with_context(
-                    context,
+                    context.clone(),
                     ReadTextRequest {
                         path: arguments.path,
                     },
                 )
-                .await
-            {
-                Ok(response) => Ok(Ok(ExecuteResponse {
-                    content: response.content,
-                    content_type: ExecuteResponseContentType::Text,
-                    metadata_json: response.metadata_json,
-                })),
-                Err(WorkspaceReadInvocationError::Domain(error)) => {
-                    Ok(Err(map_workspace_error(error)))
+                .await;
+            match result {
+                Ok(response) => {
+                    hook_contract::finish_hooks(
+                        &hooks,
+                        &context,
+                        &execution,
+                        hook_contract::HookTerminal::Success,
+                        &response.content,
+                        response.metadata_json.as_str(),
+                        "",
+                    )
+                    .await?;
+                    Ok(Ok(ExecuteResponse {
+                        content: response.content,
+                        content_type: ExecuteResponseContentType::Text,
+                        metadata_json: response.metadata_json,
+                    }))
                 }
-                Err(WorkspaceReadInvocationError::Runtime(error)) => Err(error),
+                Err(WorkspaceReadInvocationError::Domain(error)) => {
+                    let error = map_workspace_error(error);
+                    let provider_code = match &error {
+                        ExecuteError::ToolError { payload } => payload.provider_code.as_str(),
+                        _ => "workspace_read_error",
+                    };
+                    hook_contract::finish_hooks(
+                        &hooks,
+                        &context,
+                        &execution,
+                        hook_contract::HookTerminal::DomainError,
+                        "",
+                        "{}",
+                        provider_code,
+                    )
+                    .await?;
+                    Ok(Err(error))
+                }
+                Err(WorkspaceReadInvocationError::Runtime(error)) => {
+                    hook_contract::finish_hooks(
+                        &hooks,
+                        &context,
+                        &execution,
+                        hook_contract::HookTerminal::RuntimeFailure,
+                        "",
+                        "{}",
+                        "runtime_failure",
+                    )
+                    .await?;
+                    Err(error)
+                }
             }
         })
+    }
+}
+
+fn tool_error(provider_code: &str, message: &str, details_json: &str) -> ExecuteError {
+    ExecuteError::ToolError {
+        payload: ExecuteErrorToolErrorPayload {
+            provider_code: provider_code.to_owned(),
+            message: message.to_owned(),
+            details_json: details_json
+                .to_owned()
+                .try_into()
+                .expect("Hook details must be JSON"),
+        },
     }
 }
 

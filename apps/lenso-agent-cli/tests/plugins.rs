@@ -398,6 +398,170 @@ fn reviewed_code_mode_plugin_runs_bounded_parallel_nested_reads_and_records_them
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one scenario proves direct, Code Mode, subagent, and dynamic removal semantics"
+)]
+fn approval_plugin_gates_every_tool_execution_path_with_one_shot_grants() {
+    let _plugin_test_guard = plugin_test_guard();
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    for (plugin, evidence) in [
+        ("workspace-edit", "reviewed workspace mutation"),
+        ("code-mode", "reviewed constrained Code Mode"),
+        ("subagent", "reviewed bounded child Agent delegation"),
+        ("approval", "reviewed one-shot Tool approval"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(workspace.path())
+            .args([
+                "plugins",
+                "enable",
+                plugin,
+                "--evidence",
+                evidence,
+                "--plan",
+            ])
+            .arg(plan_path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{plugin}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let run = |prompt: &str| {
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(workspace.path())
+            .args(["--plan"])
+            .arg(plan_path())
+            .arg(prompt)
+            .output()
+            .unwrap()
+    };
+    let approve_pending = |tool_name: &str| {
+        let list = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(workspace.path())
+            .args(["approvals", "list"])
+            .output()
+            .unwrap();
+        assert!(list.status.success());
+        let records: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
+        let approval_id = records
+            .as_array()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|record| record["tool_name"] == tool_name && record["status"] == "pending")
+            .and_then(|record| record["approval_id"].as_str())
+            .unwrap();
+        let approve = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(workspace.path())
+            .args(["approvals", "approve", approval_id])
+            .output()
+            .unwrap();
+        assert!(
+            approve.status.success(),
+            "{}",
+            String::from_utf8_lossy(&approve.stderr)
+        );
+    };
+
+    let direct = run("Create one approved workspace note.");
+    assert!(!direct.status.success());
+    assert!(String::from_utf8_lossy(&direct.stderr).contains("approval_required"));
+    assert!(!workspace.path().join("approved-note.txt").exists());
+    approve_pending("create_file");
+    let direct = run("Create one approved workspace note.");
+    assert!(
+        direct.status.success(),
+        "{}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.path().join("approved-note.txt")).unwrap(),
+        "approved\n"
+    );
+
+    let code = run("Use Code Mode to compare README.md twice.");
+    assert!(!code.status.success());
+    assert!(String::from_utf8_lossy(&code.stderr).contains("approval_required"));
+    approve_pending("run_code");
+    let code = run("Use Code Mode to compare README.md twice.");
+    assert!(
+        code.status.success(),
+        "{}",
+        String::from_utf8_lossy(&code.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&code.stdout),
+        "Code Mode result: README copies match\n"
+    );
+
+    let delegated = run("Delegate a README.md summary.");
+    assert!(!delegated.status.success());
+    assert!(String::from_utf8_lossy(&delegated.stderr).contains("approval_required"));
+    approve_pending("delegate");
+    let delegated = run("Delegate a README.md summary.");
+    assert!(
+        delegated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&delegated.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&delegated.stdout),
+        "Delegated result: Child summary: # Plugin Fixture\n"
+    );
+
+    let records: serde_json::Value = serde_json::from_slice(
+        &Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(workspace.path())
+            .args(["approvals", "list"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    assert_eq!(
+        records
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|record| record["tool_name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["create_file", "run_code", "delegate"]
+    );
+    assert!(
+        records
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|record| record["status"] == "succeeded")
+    );
+
+    let disable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "disable", "approval", "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        disable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disable.stderr)
+    );
+    fs::remove_file(workspace.path().join("approved-note.txt")).unwrap();
+    let ungated = run("Create one approved workspace note.");
+    assert!(
+        ungated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ungated.stderr)
+    );
+}
+
+#[test]
 fn reviewed_workspace_edit_plugin_composes_with_another_enabled_tool_plugin() {
     let workspace = tempfile::tempdir().unwrap();
     fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();

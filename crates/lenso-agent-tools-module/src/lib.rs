@@ -3,6 +3,7 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use lenso::prelude::*;
+use lenso_capability_agent_tool_hook as hook_contract;
 use lenso_capability_agent_tool_provider as provider_contract;
 use lenso_capability_agent_tools::{
     self as tools_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
@@ -14,6 +15,7 @@ use lenso_kernel::{InvocationContext, RuntimeFailure};
 #[lenso::module(lifecycle)]
 #[derive(Clone, Debug)]
 struct ToolsModule {
+    hooks: ManyPort<hook_contract::ToolHookClient>,
     providers: ManyPort<provider_contract::ToolProviderClient>,
     state: Rc<RefCell<Option<ToolRuntimeState>>>,
 }
@@ -57,27 +59,103 @@ impl ToolsProvider for ToolsModule {
         let Some(index) = route else {
             return Box::pin(futures::future::ready(Ok(Err(ExecuteError::UnknownTool))));
         };
+        let Ok(arguments_json) =
+            hook_contract::normalize_arguments(request.arguments_json.as_str())
+        else {
+            return Box::pin(futures::future::ready(Ok(Err(
+                ExecuteError::InvalidArguments,
+            ))));
+        };
         let providers = self.providers.clone();
+        let hooks = self.hooks.clone();
         Box::pin(async move {
-            match providers[index]
+            let execution = hook_contract::start_hooks(
+                &hooks,
+                &context,
+                request.name.clone(),
+                arguments_json.clone(),
+            )
+            .await?;
+            if let Some(block) = &execution.block {
+                hook_contract::finish_hooks(
+                    &hooks,
+                    &context,
+                    &execution,
+                    hook_contract::HookTerminal::DomainError,
+                    "",
+                    "{}",
+                    block.provider_code,
+                )
+                .await?;
+                return Ok(Err(tool_error(
+                    block.provider_code,
+                    &block.message,
+                    &block.details_json,
+                )));
+            }
+            let result = providers[index]
                 .execute_with_context(
-                    context,
+                    context.clone(),
                     provider_contract::ExecuteRequest {
                         name: request.name,
-                        arguments_json: request.arguments_json,
+                        arguments_json: arguments_json
+                            .try_into()
+                            .expect("normalized arguments must remain JSON"),
                     },
                 )
-                .await
-            {
-                Ok(response) => Ok(Ok(convert_execute_response(response))),
+                .await;
+            match result {
+                Ok(response) => {
+                    hook_contract::finish_hooks(
+                        &hooks,
+                        &context,
+                        &execution,
+                        hook_contract::HookTerminal::Success,
+                        &response.content,
+                        response.metadata_json.as_str(),
+                        "",
+                    )
+                    .await?;
+                    Ok(Ok(convert_execute_response(response)))
+                }
                 Err(provider_contract::ToolProviderExecuteInvocationError::Domain(error)) => {
-                    Ok(Err(convert_execute_error(error)))
+                    let error = convert_execute_error(error);
+                    hook_contract::finish_hooks(
+                        &hooks,
+                        &context,
+                        &execution,
+                        hook_contract::HookTerminal::DomainError,
+                        "",
+                        "{}",
+                        execute_error_code(&error),
+                    )
+                    .await?;
+                    Ok(Err(error))
                 }
                 Err(provider_contract::ToolProviderExecuteInvocationError::Runtime(error)) => {
+                    hook_contract::finish_hooks(
+                        &hooks,
+                        &context,
+                        &execution,
+                        hook_contract::HookTerminal::RuntimeFailure,
+                        "",
+                        "{}",
+                        "runtime_failure",
+                    )
+                    .await?;
                     Err(error)
                 }
             }
         })
+    }
+}
+
+fn execute_error_code(error: &ExecuteError) -> &str {
+    match error {
+        ExecuteError::InvalidArguments => "invalid_arguments",
+        ExecuteError::UnknownTool => "unknown_tool",
+        ExecuteError::ToolError { payload } => &payload.provider_code,
+        ExecuteError::Unknown(unknown) => &unknown.code,
     }
 }
 

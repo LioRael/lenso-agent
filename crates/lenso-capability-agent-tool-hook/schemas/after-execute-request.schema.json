@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "execution_id",
+    "tool_name",
+    "arguments_json",
+    "context_json",
+    "outcome",
+    "content",
+    "metadata_json",
+    "provider_code"
+  ],
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "arguments_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    },
+    "context_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536
+    },
+    "outcome": {
+      "$ref": "#/$defs/HookOutcome"
+    },
+    "content": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "metadata_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536
+    },
+    "provider_code": {
+      "type": "string",
+      "maxLength": 128
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "HookOutcome": {
+      "type": "string",
+      "enum": ["success", "domain_error", "runtime_failure"]
+    }
+  },
+  "title": "AfterExecuteRequest"
+}

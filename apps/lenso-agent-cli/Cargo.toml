@@ -30,6 +30,7 @@ name = "lenso-agent-channel"
 path = "src/channel_main.rs"
 
 [dependencies]
+lenso-agent-approval-hook-module = { path = "../../crates/lenso-agent-approval-hook-module" }
 lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
 lenso-agent-code-mode-tools-module = { path = "../../crates/lenso-agent-code-mode-tools-module" }
 lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
@@ -64,6 +65,7 @@ lenso-capability-agent-prompt = { path = "../../crates/lenso-capability-agent-pr
 lenso-capability-agent-prompt-provider = { path = "../../crates/lenso-capability-agent-prompt-provider" }
 lenso-capability-agent-process = { path = "../../crates/lenso-capability-agent-process" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
+lenso-capability-agent-tool-hook = { path = "../../crates/lenso-capability-agent-tool-hook" }
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
 lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
 lenso-capability-agent-workspace-read = { path = "../../crates/lenso-capability-agent-workspace-read" }

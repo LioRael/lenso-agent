@@ -103,6 +103,9 @@ impl FixtureModel {
         if current_user == "Create and edit a workspace note." {
             return workspace_mutation_response(request, &tool_results);
         }
+        if current_user == "Create one approved workspace note." {
+            return approved_workspace_mutation_response(request, &tool_results);
+        }
         if current_user == "Edit and validate the workspace project." {
             return local_coding_response(request, &tool_results);
         }
@@ -554,6 +557,36 @@ fn workspace_mutation_response(
             r#"{"path":"note.txt"}"#,
         )),
         [_, _, document] if document.content == "after\n" => Ok(mutation_response()),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn approved_workspace_mutation_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "create_file") {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-approved-workspace-write",
+            "create_file",
+            r#"{"path":"approved-note.txt","content":"approved\n"}"#,
+        )),
+        [created] if created.content == "created approved-note.txt" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Approved workspace note created",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response("2", CompleteMessageKind::Usage, "", "", "", "{}", "20", "8"),
+        ]),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["execution_id", "tool_name", "arguments_json"],
+  "properties": {
+    "execution_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "arguments_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    }
+  },
+  "additionalProperties": false,
+  "title": "BeforeExecuteRequest"
+}

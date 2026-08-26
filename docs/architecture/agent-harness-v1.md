@@ -190,11 +190,17 @@ make both the workspace root and model endpoint visible before execution.
     through the separately composed read-only Tool Runtime. The parent Session
     records the nested-call transcript, and disabling the Plugin removes Code
     Mode without changing the Kernel.
+24. Enabling the reviewed approval Plugin binds one ordered Tool Hook to both
+    root and restricted Tool Runtimes. An exact Generation-bound action is
+    denied before Provider execution until its ID is approved; the next exact
+    retry consumes the grant once. Direct mutation, Code Mode, and subagent
+    tests prove the common path, and disabling the Plugin removes both Hook
+    bindings through an App Generation switch.
 
 ## Deferred
 
-Web UI, approval workflows, marketplace Skill installation, live Skill
-watching, ordered Hooks, automatic compaction, per-call resource-keyed Tool
+Web UI, interactive approval prompts, marketplace Skill installation, live Skill
+watching, automatic compaction, per-call resource-keyed Tool
 classification, Trajectory UI, replay
 inspection, re-execution, parallel child pools, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
