@@ -38,6 +38,7 @@ members = [
     "crates/lenso-agent-cli-module",
     "crates/lenso-agent-tui-module",
     "crates/lenso-agent-tui-static-module",
+    "crates/lenso-agent-telegram-module",
 ]
 
 [workspace.package]

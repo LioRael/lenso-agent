@@ -17,10 +17,15 @@ path = "src/main.rs"
 name = "lenso-agent"
 path = "src/tui_main.rs"
 
+[[bin]]
+name = "lenso-agent-telegram"
+path = "src/telegram_main.rs"
+
 [dependencies]
 lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
 lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
 lenso-agent-tui-static-module = { path = "../../crates/lenso-agent-tui-static-module" }
+lenso-agent-telegram-module = { path = "../../crates/lenso-agent-telegram-module" }
 lenso-agent-auth-openai-codex-module = { path = "../../crates/lenso-agent-auth-openai-codex-module" }
 lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
 lenso-agent-http-fetch-module = { path = "../../crates/lenso-agent-http-fetch-module" }

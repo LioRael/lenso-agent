@@ -13,6 +13,7 @@
     "lenso.agent.tools": "lenso-agent-tools-module",
     "lenso.agent.tui": "lenso-agent-tui-module",
     "lenso.agent.tui.static": "lenso-agent-tui-static-module",
+    "lenso.agent.telegram": "lenso-agent-telegram-module",
     "lenso.agent.workspace-read": "lenso-agent-workspace-read-module",
     "lenso.agent.workspace-import-read": "lenso-agent-workspace-import-read-module"
   },
@@ -116,6 +117,11 @@
             }
           ]
         }
+      },
+      {
+        "key": "telegram",
+        "package": "lenso.agent.telegram",
+        "configuration": {}
       },
       {
         "key": "workspace-import-read",

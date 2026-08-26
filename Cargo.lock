@@ -1379,6 +1379,7 @@ dependencies = [
  "lenso-agent-prompt-static-module",
  "lenso-agent-session-file-module",
  "lenso-agent-skills-filesystem-module",
+ "lenso-agent-telegram-module",
  "lenso-agent-text-tools-module",
  "lenso-agent-tools-module",
  "lenso-agent-tui-module",
@@ -1612,6 +1613,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "lenso-agent-telegram-module"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent",
+ "serde_json",
 ]
 
 [[package]]
