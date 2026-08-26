@@ -1,0 +1,18 @@
+schema_version = 1
+
+# One Agent Turn runs at a time. Up to 16 more messages may wait across all
+# configured Channels; later messages receive a brief busy reply.
+queue_capacity = 16
+
+[telegram]
+token_env = "TELEGRAM_BOT_TOKEN"
+allowed_chats = ["<telegram-chat-id>"]
+# allowed_tools = ["read"]
+# respond_all_groups = false
+
+[discord]
+token_env = "DISCORD_BOT_TOKEN"
+allowed_channels = ["<discord-channel-id>"]
+# allowed_tools = ["read"]
+# respond_all_guilds = false
+# message_content_intent = false

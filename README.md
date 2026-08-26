@@ -28,9 +28,27 @@ cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
-Run the same composed Agent through a Telegram Bot by creating a Bot with
-BotFather, exporting its token, and explicitly selecting the chats that may
-invoke it:
+Run Telegram and Discord together through one Channel Host. Copy the reviewed
+example, replace its allowlist placeholders, export the tokens for the Channels
+you selected, and start the Host directly:
+
+```sh
+cp lenso.channels.example.toml lenso.channels.toml
+export TELEGRAM_BOT_TOKEN='<bot-token>'
+export DISCORD_BOT_TOKEN='<bot-token>'
+cargo run -p lenso-agent-cli --bin lenso-agent-channel
+```
+
+Delete either `[telegram]` or `[discord]` from `lenso.channels.toml` to run only
+one Channel. The file contains policy and environment-variable names, never
+token values. One Agent Turn runs at a time across every Channel; the bounded
+shared queue prevents either transport from creating unlimited pending work.
+The Host resolves the root App automatically, so ordinary use does not require
+creating or passing a Plan file.
+
+The focused binaries remain useful for debugging one transport. For Telegram,
+create a Bot with BotFather, export its token, and explicitly select the chats
+that may invoke it:
 
 ```sh
 export TELEGRAM_BOT_TOKEN='<bot-token>'
@@ -49,10 +67,9 @@ conversation-to-Session mapping in `.lenso/telegram/state.json`, and obtains a
 fresh App Generation lease for every message. Bot tokens remain in the
 environment and never enter the Plan or Session.
 
-Run the Agent through Discord by creating an application and Bot in the
-Discord Developer Portal, inviting it with permission to view channels, read
-message history, and send messages, then selecting the channels that may
-invoke it:
+For Discord, create an application and Bot in the Discord Developer Portal,
+invite it with permission to view channels, read message history, and send
+messages, then select the channels that may invoke it:
 
 ```sh
 export DISCORD_BOT_TOKEN='<bot-token>'

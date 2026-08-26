@@ -1,7 +1,8 @@
 use std::{env, fs, path::PathBuf, process::Command};
 
 mod authority;
-mod channel;
+pub mod channel;
+pub mod channel_host;
 pub mod discord;
 pub mod generation;
 mod plugin_profiles;

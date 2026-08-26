@@ -73,6 +73,7 @@ const CONTROL_DIRECTORY: &str = "generation-control";
 const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
 const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
 const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
+const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
@@ -145,6 +146,16 @@ impl AgentApp {
             plan_bytes,
             Path::new(".lenso/plugins"),
             DISCORD_CONTROL_DIRECTORY,
+        )
+        .await
+    }
+
+    /// Starts all configured messaging surfaces in one durable Controller lineage.
+    pub async fn start_channels(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(
+            plan_bytes,
+            Path::new(".lenso/plugins"),
+            CHANNEL_CONTROL_DIRECTORY,
         )
         .await
     }
@@ -1032,6 +1043,35 @@ mod tests {
                 .await
                 .unwrap();
                 tui.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn channel_host_leases_telegram_and_discord_from_one_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut app = AgentApp::start_with_store_and_control_directory(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    CHANNEL_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+
+                let telegram = app.lease_telegram_turn().await.unwrap();
+                let discord = app.lease_discord_turn().await.unwrap();
+                assert_eq!(
+                    telegram.generation_spec_digest(),
+                    discord.generation_spec_digest()
+                );
+                assert_eq!(telegram.handle().binding_count(), 1);
+                assert_eq!(discord.handle().binding_count(), 1);
+                drop(telegram);
+                drop(discord);
+                app.shutdown().await.unwrap();
             })
             .await;
     }
