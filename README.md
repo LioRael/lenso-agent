@@ -182,11 +182,11 @@ Contribution providers leaves the Shell valid with only the conversation.
 
 The host currently resolves `lenso-app-plan 0.2.0` and `lenso-kernel 0.1.12`.
 All runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
-`b91db76d095af9bea9582e4e4ef430b5e979f1e5`; contract authoring and codegen are
+`fe84b16b4362f76b5fd37a0aaba405a1834289f2`; contract authoring and codegen are
 locked to `lenso-protocols` revision
 `8a9b2482278224973417aaac1fd925ba1cfa5370`. App Definition extensions are
 locked to `lenso-cli` revision
-`d7f679cc1755fae2d7bd3f372ddc110ce124dea1`. This closes the generic dynamic
+`5b12da4b267edfc294d8d9d1cd6fc59e12f8b8e8`. This closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
