@@ -75,9 +75,9 @@ tests and have no product composition authority.
 The current host baseline selects released `lenso-app-plan 0.1.5` and
 `lenso-kernel 0.1.11`. Every Runtime package is pinned to
 `lenso-runtime-rust` revision
-`61502d0b575dca5102fbf7625dbab45a8389180d`; the external Secrets packages are
+`fb364b9ff3927d82e4911f1a1e23d9ac006adc6b`; the external Secrets packages are
 pinned to `lenso-secrets-module` revision
-`7c7126d7584195fd33da5c82491321a9043a14c1`, which resolves the same native
+`a52177f8508a23e9b72d9983ff79896c2a7e7695`, which resolves the same native
 Adapter revision. That Runtime includes injected `ManagedTasks`, the durable
 Generation Controller and Host suspension seam, the bounded request ABI shared
 by the preview Wasm Component and QuickJS Adapters, the experimental native

@@ -1,15 +1,18 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
 use lenso_capability_agent::{
-    CAPABILITY_ID as AGENT_CAPABILITY_ID, RunTurnError, RunTurnRequest, RunTurnResponse,
+    self as agent_capability, CAPABILITY_ID as AGENT_CAPABILITY_ID, RunTurnError,
+    RunTurnRequest, RunTurnResponse,
 };
 use lenso_capability_agent_model::{
-    CompleteMessage, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen,
-    CompleteTool, ModelGuestClient,
+    self as model_capability, CompleteMessage, CompleteMessageInput, CompleteMessageKind,
+    CompleteMessageRole, CompleteOpen, CompleteTool, ModelGuestClient,
 };
-use lenso_capability_agent_prompt::{AssembleRequest, PromptGuestClient};
-use lenso_capability_agent_session::{OpenSessionRequest, SessionGuestClient};
-use lenso_capability_agent_tools::{CatalogRequest, ToolsGuestClient};
+use lenso_capability_agent_prompt::{self as prompt_capability, AssembleRequest, PromptGuestClient};
+use lenso_capability_agent_session::{
+    self as session_capability, OpenSessionRequest, SessionGuestClient,
+};
+use lenso_capability_agent_tools::{self as tools_capability, CatalogRequest, ToolsGuestClient};
 use lenso_guest_sdk::{GuestContext, GuestStream, GuestStreamEvent};
 
 wit_bindgen::generate!({
@@ -63,7 +66,18 @@ struct WasmAgent;
 
 impl Guest for WasmAgent {
     fn describe() -> String {
-        r#"{"abi":"lenso.json-host-imports@1","capabilities":[{"capability_id":"lenso.agent@1","descriptor_version":"1.1.0","request_operations":[],"stream_operations":["run_turn"]}],"required_capabilities":[{"capability_id":"lenso.agent.model@1","descriptor_version":"1.1.0","cardinality":"one"},{"capability_id":"lenso.agent.prompt@1","descriptor_version":"1.0.0","cardinality":"one"},{"capability_id":"lenso.agent.session@1","descriptor_version":"1.1.0","cardinality":"one"},{"capability_id":"lenso.agent.tools@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#.to_owned()
+        lenso_guest_sdk::guest_descriptor! {
+            provides: [agent_capability {
+                requests: [],
+                streams: [agent_capability::RUN_TURN_OPERATION],
+            }],
+            requires: [
+                model_capability,
+                prompt_capability,
+                session_capability,
+                tools_capability,
+            ],
+        }
     }
 
     fn invoke(_: String, _: String, _: String) -> Result<String, String> {
