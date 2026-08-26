@@ -15,7 +15,10 @@ cargo run -p lenso-agent-cli --bin lenso-agent
 `--session`, repeated `--allow-tool`, `--no-tools`, or the advanced `--plan`
 flag to narrow that interactive session. Enter submits a Turn, Esc cancels an
 active Turn or exits while idle, and Tab cycles panels contributed by selected
-Modules.
+Modules. The conversation supports mouse, Page Up/Page Down, and Ctrl-U/Ctrl-D
+scrolling without losing the draft; End returns to live tail-following. The
+composer supports cursor editing, multiline input, and in-process prompt
+history. Press Ctrl-. to open the context-sensitive keyboard reference.
 
 The existing companion binary remains available for headless automation and
 Host maintenance:

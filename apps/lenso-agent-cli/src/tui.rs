@@ -1,6 +1,8 @@
 //! Interactive terminal surface for the composed Agent App.
 
-use std::{io, time::Duration};
+mod markdown;
+
+use std::{io, path::Path, time::Duration};
 
 use crossterm::{
     event::{
@@ -24,17 +26,19 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+        Block, BorderType, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
         ScrollbarState, Wrap,
     },
 };
 
 use crate::generation::{AgentApp, TurnGeneration};
+use markdown::lines as markdown_lines;
 
 const EVENT_TICK: Duration = Duration::from_millis(250);
 const MAX_INPUT_CHARACTERS: usize = 262_144;
 const PANEL_BREAKPOINT: u16 = 96;
 const WHEEL_SCROLL_LINES: usize = 3;
+const ACTIVE_TICK: Duration = Duration::from_millis(90);
 
 struct Palette;
 
@@ -47,6 +51,10 @@ impl Palette {
     const ERROR: Color = Color::LightRed;
     const MUTED: Color = Color::Gray;
     const QUIET: Color = Color::DarkGray;
+    const CODE: Color = Color::LightYellow;
+    const HEADING: Color = Color::LightBlue;
+    const SURFACE: Color = Color::Rgb(45, 45, 48);
+    const SURFACE_TEXT: Color = Color::White;
 }
 
 /// App-owned options that narrow one interactive TUI session.
@@ -81,13 +89,22 @@ enum UiPhase {
 }
 
 impl UiPhase {
-    const fn activity(self) -> Option<(&'static str, Color)> {
+    const fn activity(self, tick: u64) -> Option<(&'static str, Color)> {
         match self {
             Self::Idle => None,
             Self::SubmitRequested => Some(("◆ Starting turn", Palette::ACCENT)),
-            Self::Active => Some(("◆ Working", Palette::AGENT)),
+            Self::Active => Some((working_label(tick), Palette::AGENT)),
             Self::Failed => Some(("● Turn failed", Palette::ERROR)),
         }
+    }
+}
+
+const fn working_label(tick: u64) -> &'static str {
+    match tick % 4 {
+        0 => "✦ Working",
+        1 => "✧ Working",
+        2 => "· Working",
+        _ => "⋅ Working",
     }
 }
 
@@ -170,6 +187,10 @@ impl ScrollState {
 struct TuiState {
     input: String,
     input_characters: usize,
+    input_cursor: usize,
+    input_history: Vec<String>,
+    history_cursor: Option<usize>,
+    history_draft: String,
     transcript: Vec<TranscriptEntry>,
     panels: Vec<SnapshotResponsePanelsItem>,
     selected_panel: usize,
@@ -178,6 +199,9 @@ struct TuiState {
     active: Option<ActiveTurn>,
     tool_scope: String,
     scroll: ScrollState,
+    workspace: String,
+    show_shortcuts: bool,
+    animation_tick: u64,
 }
 
 impl TuiState {
@@ -185,6 +209,10 @@ impl TuiState {
         Self {
             input: String::new(),
             input_characters: 0,
+            input_cursor: 0,
+            input_history: Vec::new(),
+            history_cursor: None,
+            history_draft: String::new(),
             transcript: Vec::new(),
             panels,
             selected_panel: 0,
@@ -197,6 +225,9 @@ impl TuiState {
                 Some(tools) => format!("{} scoped tools", tools.len()),
             },
             scroll: ScrollState::default(),
+            workspace: current_workspace_label(),
+            show_shortcuts: false,
+            animation_tick: 0,
         }
     }
 
@@ -224,20 +255,174 @@ impl TuiState {
         let remaining = MAX_INPUT_CHARACTERS.saturating_sub(self.input_characters);
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         let accepted: String = normalized.chars().take(remaining).collect();
-        self.input_characters += accepted.chars().count();
-        self.input.push_str(&accepted);
+        let accepted_characters = accepted.chars().count();
+        let byte = char_to_byte(&self.input, self.input_cursor);
+        self.input.insert_str(byte, &accepted);
+        self.input_characters += accepted_characters;
+        self.input_cursor += accepted_characters;
+        self.leave_history();
     }
 
     fn pop_input(&mut self) {
-        if self.input.pop().is_some() {
-            self.input_characters = self.input_characters.saturating_sub(1);
+        if self.input_cursor == 0 {
+            return;
         }
+        let end = char_to_byte(&self.input, self.input_cursor);
+        let start = char_to_byte(&self.input, self.input_cursor - 1);
+        self.input.replace_range(start..end, "");
+        self.input_cursor -= 1;
+        self.input_characters -= 1;
+        self.leave_history();
+    }
+
+    fn delete_input(&mut self) {
+        if self.input_cursor >= self.input_characters {
+            return;
+        }
+        let start = char_to_byte(&self.input, self.input_cursor);
+        let end = char_to_byte(&self.input, self.input_cursor + 1);
+        self.input.replace_range(start..end, "");
+        self.input_characters -= 1;
+        self.leave_history();
+    }
+
+    fn move_cursor(&mut self, delta: isize) {
+        self.input_cursor = self
+            .input_cursor
+            .saturating_add_signed(delta)
+            .min(self.input_characters);
+    }
+
+    fn move_line_edge(&mut self, end: bool) {
+        let chars: Vec<char> = self.input.chars().collect();
+        if end {
+            self.input_cursor += chars[self.input_cursor..]
+                .iter()
+                .position(|character| *character == '\n')
+                .unwrap_or(chars.len() - self.input_cursor);
+        } else {
+            self.input_cursor = chars[..self.input_cursor]
+                .iter()
+                .rposition(|character| *character == '\n')
+                .map_or(0, |position| position + 1);
+        }
+    }
+
+    fn move_vertical(&mut self, up: bool) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let line_start = chars[..self.input_cursor]
+            .iter()
+            .rposition(|character| *character == '\n')
+            .map_or(0, |position| position + 1);
+        let column = self.input_cursor - line_start;
+        if up {
+            if line_start == 0 {
+                return;
+            }
+            let previous_end = line_start - 1;
+            let previous_start = chars[..previous_end]
+                .iter()
+                .rposition(|character| *character == '\n')
+                .map_or(0, |position| position + 1);
+            self.input_cursor = previous_start + column.min(previous_end - previous_start);
+        } else {
+            let Some(next_offset) = chars[self.input_cursor..]
+                .iter()
+                .position(|character| *character == '\n')
+            else {
+                return;
+            };
+            let next_start = self.input_cursor + next_offset + 1;
+            let next_end = chars[next_start..]
+                .iter()
+                .position(|character| *character == '\n')
+                .map_or(chars.len(), |offset| next_start + offset);
+            self.input_cursor = next_start + column.min(next_end - next_start);
+        }
+    }
+
+    fn delete_previous_word(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut start = self.input_cursor;
+        while start > 0 && chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        while start > 0 && !chars[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        if start == self.input_cursor {
+            return;
+        }
+        let start_byte = char_to_byte(&self.input, start);
+        let end_byte = char_to_byte(&self.input, self.input_cursor);
+        self.input.replace_range(start_byte..end_byte, "");
+        self.input_characters -= self.input_cursor - start;
+        self.input_cursor = start;
+        self.leave_history();
+    }
+
+    fn previous_history(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        let next = match self.history_cursor {
+            Some(index) => index.saturating_sub(1),
+            None => {
+                self.history_draft.clone_from(&self.input);
+                self.input_history.len() - 1
+            }
+        };
+        self.history_cursor = Some(next);
+        self.set_input(self.input_history[next].clone());
+    }
+
+    fn next_history(&mut self) {
+        let Some(index) = self.history_cursor else {
+            return;
+        };
+        if index + 1 < self.input_history.len() {
+            self.history_cursor = Some(index + 1);
+            self.set_input(self.input_history[index + 1].clone());
+        } else {
+            self.history_cursor = None;
+            let draft = std::mem::take(&mut self.history_draft);
+            self.set_input(draft);
+        }
+    }
+
+    fn set_input(&mut self, input: String) {
+        self.input_characters = input.chars().count();
+        self.input_cursor = self.input_characters;
+        self.input = input;
+    }
+
+    fn leave_history(&mut self) {
+        self.history_cursor = None;
+        self.history_draft.clear();
     }
 
     fn take_input(&mut self) -> String {
         self.input_characters = 0;
+        self.input_cursor = 0;
+        self.history_cursor = None;
+        self.history_draft.clear();
         std::mem::take(&mut self.input)
     }
+}
+
+fn char_to_byte(text: &str, character: usize) -> usize {
+    text.char_indices()
+        .nth(character)
+        .map_or(text.len(), |(byte, _)| byte)
+}
+
+fn current_workspace_label() -> String {
+    std::env::current_dir()
+        .ok()
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .map_or_else(|| "workspace".to_owned(), ToOwned::to_owned)
 }
 
 /// Runs the TUI until the user exits, restoring terminal state on every return path.
@@ -282,6 +467,9 @@ async fn run_loop(
                 stream_event = active.stream.receive() => {
                     handle_stream_event(stream_event, state);
                 }
+                () = tokio::time::sleep(ACTIVE_TICK) => {
+                    state.animation_tick = state.animation_tick.wrapping_add(1);
+                }
             }
         } else {
             tokio::select! {
@@ -296,7 +484,9 @@ async fn run_loop(
                         submit(app, options, state).await?;
                     }
                 }
-                () = tokio::time::sleep(EVENT_TICK) => {}
+                () = tokio::time::sleep(EVENT_TICK) => {
+                    state.animation_tick = state.animation_tick.wrapping_add(1);
+                }
             }
         }
     }
@@ -312,7 +502,7 @@ fn handle_terminal_event(
     let event = event.map_err(|error| format!("failed to read terminal input: {error}"))?;
     match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => Ok(handle_key(key, state)),
-        Event::Paste(text) if state.active.is_none() => {
+        Event::Paste(text) if state.active.is_none() && !state.show_shortcuts => {
             state.append_input(&text);
             Ok(false)
         }
@@ -333,63 +523,27 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
         state.active = None;
         return true;
     }
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        match key.code {
-            KeyCode::Char('k') => state.scroll.scroll_up(1),
-            KeyCode::Char('j') => state.scroll.scroll_down(1),
-            KeyCode::Char('u') => state.scroll.scroll_up(state.scroll.half_page_rows()),
-            KeyCode::Char('d') => state.scroll.scroll_down(state.scroll.half_page_rows()),
-            _ => return false,
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('.') {
+        state.show_shortcuts = !state.show_shortcuts;
+        return false;
+    }
+    if state.show_shortcuts {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Char('?')) {
+            state.show_shortcuts = false;
         }
         return false;
     }
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        handle_control_key(key.code, state);
+        return false;
+    }
+    if let Some(quit) = handle_navigation_key(key.code, state) {
+        return quit;
+    }
+    if let Some(handled) = handle_editor_key(key, state) {
+        return handled;
+    }
     match key.code {
-        KeyCode::PageUp => {
-            state.scroll.scroll_up(state.scroll.page_rows());
-            false
-        }
-        KeyCode::PageDown => {
-            state.scroll.scroll_down(state.scroll.page_rows());
-            false
-        }
-        KeyCode::Home => {
-            state.scroll.goto_top();
-            false
-        }
-        KeyCode::End => {
-            state.scroll.goto_bottom();
-            false
-        }
-        KeyCode::Esc => {
-            if state.active.take().is_some() {
-                state.push_system("Turn cancelled.");
-                state.phase = UiPhase::Idle;
-                false
-            } else {
-                true
-            }
-        }
-        KeyCode::Enter
-            if state.active.is_none()
-                && key
-                    .modifiers
-                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
-        {
-            state.append_input("\n");
-            false
-        }
-        KeyCode::Enter if state.active.is_none() && !state.input.trim().is_empty() => {
-            state.phase = UiPhase::SubmitRequested;
-            false
-        }
-        KeyCode::Backspace if state.active.is_none() => {
-            state.pop_input();
-            false
-        }
-        KeyCode::Char(character) if state.active.is_none() => {
-            state.append_input(&character.to_string());
-            false
-        }
         KeyCode::Tab if !state.panels.is_empty() => {
             state.selected_panel = (state.selected_panel + 1) % state.panels.len();
             false
@@ -405,6 +559,72 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
     }
 }
 
+fn handle_control_key(code: KeyCode, state: &mut TuiState) {
+    match code {
+        KeyCode::Char('k') => state.scroll.scroll_up(1),
+        KeyCode::Char('j') => state.scroll.scroll_down(1),
+        KeyCode::Char('u') => state.scroll.scroll_up(state.scroll.half_page_rows()),
+        KeyCode::Char('d') => state.scroll.scroll_down(state.scroll.half_page_rows()),
+        KeyCode::Char('a') if state.active.is_none() => state.move_line_edge(false),
+        KeyCode::Char('e') if state.active.is_none() => state.move_line_edge(true),
+        KeyCode::Char('w') if state.active.is_none() => state.delete_previous_word(),
+        KeyCode::Char('p') if state.active.is_none() => state.previous_history(),
+        KeyCode::Char('n') if state.active.is_none() => state.next_history(),
+        _ => {}
+    }
+}
+
+fn handle_navigation_key(code: KeyCode, state: &mut TuiState) -> Option<bool> {
+    match code {
+        KeyCode::PageUp => state.scroll.scroll_up(state.scroll.page_rows()),
+        KeyCode::PageDown => state.scroll.scroll_down(state.scroll.page_rows()),
+        KeyCode::Home if state.active.is_none() && !state.input.is_empty() => {
+            state.move_line_edge(false);
+        }
+        KeyCode::End if state.active.is_none() && !state.input.is_empty() => {
+            state.move_line_edge(true);
+        }
+        KeyCode::Home => state.scroll.goto_top(),
+        KeyCode::End => state.scroll.goto_bottom(),
+        KeyCode::Esc if state.active.take().is_some() => {
+            state.push_system("Turn cancelled.");
+            state.phase = UiPhase::Idle;
+        }
+        KeyCode::Esc => return Some(true),
+        _ => return None,
+    }
+    Some(false)
+}
+
+fn handle_editor_key(key: KeyEvent, state: &mut TuiState) -> Option<bool> {
+    if state.active.is_some() {
+        return None;
+    }
+    match key.code {
+        KeyCode::Enter
+            if key
+                .modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+        {
+            state.append_input("\n");
+        }
+        KeyCode::Enter if !state.input.trim().is_empty() => {
+            state.phase = UiPhase::SubmitRequested;
+        }
+        KeyCode::Left => state.move_cursor(-1),
+        KeyCode::Right => state.move_cursor(1),
+        KeyCode::Up if state.input.contains('\n') => state.move_vertical(true),
+        KeyCode::Down if state.input.contains('\n') => state.move_vertical(false),
+        KeyCode::Up => state.previous_history(),
+        KeyCode::Down => state.next_history(),
+        KeyCode::Delete => state.delete_input(),
+        KeyCode::Backspace => state.pop_input(),
+        KeyCode::Char(character) => state.append_input(&character.to_string()),
+        _ => return None,
+    }
+    Some(false)
+}
+
 async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> Result<(), String> {
     let input = state.take_input();
     if input.chars().count() > MAX_INPUT_CHARACTERS {
@@ -416,6 +636,9 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         speaker: Speaker::User,
         text: input.clone(),
     });
+    if state.input_history.last() != Some(&input) {
+        state.input_history.push(input.clone());
+    }
     state.transcript.push(TranscriptEntry {
         speaker: Speaker::Agent,
         text: String::new(),
@@ -501,7 +724,8 @@ fn runtime_failure_message(error: lenso_kernel::RuntimeFailure) -> String {
 fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let area = content_area(frame.area());
     let compact = area.height <= 16;
-    let input_rows = state.input.split('\n').count();
+    let input_width = area.width.saturating_sub(4).max(1);
+    let input_rows = visual_input_rows(&state.input, usize::from(input_width));
     let composer_height = if compact {
         3
     } else {
@@ -541,6 +765,9 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     render_activity(frame, activity, state);
     render_composer(frame, composer, state);
     render_shortcuts(frame, shortcuts, state);
+    if state.show_shortcuts {
+        render_shortcuts_overlay(frame, area);
+    }
 }
 
 fn content_area(area: Rect) -> Rect {
@@ -556,19 +783,22 @@ fn content_area(area: Rect) -> Rect {
 
 fn render_header(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let session = state.session_id.as_deref().unwrap_or("new session");
-    let [identity, session_area] =
-        Layout::horizontal([Constraint::Min(18), Constraint::Length(28)]).areas(area);
+    let [workspace_area, session_area] =
+        Layout::horizontal([Constraint::Min(18), Constraint::Length(30)]).areas(area);
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                "LENSO",
+                "▣ ",
                 Style::default()
                     .fg(Palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  agent", Style::default().fg(Palette::MUTED)),
+            Span::styled(
+                state.workspace.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
         ])),
-        identity,
+        workspace_area,
     );
     frame.render_widget(
         Paragraph::new(session)
@@ -585,34 +815,56 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     let mut lines = Vec::new();
     if state.transcript.is_empty() {
         lines.push(Line::from(Span::styled(
-            "What do you want to work on?",
+            "Lenso Agent",
+            Style::default()
+                .fg(Palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )));
+        lines.push(Line::from(Span::styled(
+            "What do you want to build?",
             Style::default().add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
-            "Your Agent, tools, and UI are selected by this App Composition.",
+            "Describe a task, ask about the codebase, or paste an error.",
             Style::default().fg(Palette::MUTED),
         )));
     }
     for entry in &state.transcript {
-        let (prefix, color, modifier) = match entry.speaker {
-            Speaker::User => ("❯ ", Palette::ACCENT, Modifier::BOLD),
-            Speaker::Agent => ("◆ ", Palette::AGENT, Modifier::empty()),
-            Speaker::System => ("• ", Palette::MUTED, Modifier::empty()),
-            Speaker::Error => ("● ", Palette::ERROR, Modifier::BOLD),
-        };
-        let mut content = entry.text.lines();
-        let first = content.next().unwrap_or_else(|| {
-            if matches!(entry.speaker, Speaker::Agent) && state.phase == UiPhase::Active {
-                "Working…"
-            } else {
-                ""
+        match entry.speaker {
+            Speaker::User => {
+                lines.push(Line::default());
+                for (index, content) in entry.text.lines().enumerate() {
+                    let prefix = if index == 0 { "› " } else { "  " };
+                    lines.push(surface_line(
+                        format!("{prefix}{content}"),
+                        usize::from(transcript_area.width),
+                    ));
+                }
             }
-        });
-        lines.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(color).add_modifier(modifier)),
-            Span::raw(first.to_owned()),
-        ]));
-        lines.extend(content.map(|line| Line::from(format!("  {line}"))));
+            Speaker::Agent => {
+                if entry.text.is_empty() && state.phase == UiPhase::Active {
+                    lines.push(Line::from(Span::styled(
+                        "✦ Thinking…",
+                        Style::default().fg(Palette::MUTED),
+                    )));
+                } else {
+                    lines.extend(markdown_lines(&entry.text));
+                }
+            }
+            Speaker::System => lines.push(Line::from(vec![
+                Span::styled("• ", Style::default().fg(Palette::MUTED)),
+                Span::styled(entry.text.clone(), Style::default().fg(Palette::MUTED)),
+            ])),
+            Speaker::Error => lines.push(Line::from(vec![
+                Span::styled(
+                    "● ",
+                    Style::default()
+                        .fg(Palette::ERROR)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(entry.text.clone(), Style::default().fg(Palette::ERROR)),
+            ])),
+        }
         lines.push(Line::default());
     }
     let wrap_width = usize::from(transcript_area.width).max(1);
@@ -642,6 +894,26 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
             &mut scrollbar_state,
         );
     }
+}
+
+fn surface_line(text: String, width: usize) -> Line<'static> {
+    let content_width = Line::from(text.as_str()).width();
+    let padding = " ".repeat(width.saturating_sub(content_width));
+    Line::from(vec![
+        Span::styled(
+            text,
+            Style::default()
+                .fg(Palette::SURFACE_TEXT)
+                .bg(Palette::SURFACE)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            padding,
+            Style::default()
+                .fg(Palette::SURFACE_TEXT)
+                .bg(Palette::SURFACE),
+        ),
+    ])
 }
 
 fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
@@ -688,7 +960,7 @@ fn render_activity(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     ])
     .areas(area);
 
-    if let Some((label, color)) = state.phase.activity() {
+    if let Some((label, color)) = state.phase.activity(state.animation_tick) {
         let suffix = if state.phase == UiPhase::Active {
             "  Esc cancel"
         } else {
@@ -724,7 +996,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border))
         .title_bottom(Span::styled(
-            format!(" {} · ask ", state.tool_scope),
+            format!(" {} · normal ", state.tool_scope),
             Style::default().fg(Palette::QUIET),
         ))
         .padding(Padding::horizontal(1));
@@ -734,7 +1006,7 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let input = if state.input.is_empty() {
         vec![Line::from(vec![
             Span::styled("❯ ", Style::default().fg(border)),
-            Span::styled("Ask Lenso Agent…", Style::default().fg(Palette::QUIET)),
+            Span::styled("Message Lenso Agent…", Style::default().fg(Palette::QUIET)),
         ])]
     } else {
         state
@@ -752,34 +1024,51 @@ fn render_composer(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
             })
             .collect::<Vec<_>>()
     };
-    let hidden_rows = input.len().saturating_sub(usize::from(inner.height));
+    let cursor = composer_cursor(&state.input, state.input_cursor, usize::from(inner.width));
+    let total_rows = visual_input_rows(&state.input, usize::from(inner.width));
+    let hidden_rows = total_rows.saturating_sub(usize::from(inner.height));
     frame.render_widget(
         Paragraph::new(Text::from(input)).scroll((hidden_rows.try_into().unwrap_or(u16::MAX), 0)),
         inner,
     );
 
     if focused {
-        let last_line = state.input.rsplit('\n').next().unwrap_or_default();
         let cursor_x = inner
             .x
-            .saturating_add(2)
-            .saturating_add(u16::try_from(Line::from(last_line).width()).unwrap_or(u16::MAX))
+            .saturating_add(u16::try_from(cursor.0).unwrap_or(u16::MAX))
             .min(inner.right().saturating_sub(1));
         let cursor_y = inner
             .y
-            .saturating_add(
-                u16::try_from(
-                    state
-                        .input
-                        .split('\n')
-                        .count()
-                        .saturating_sub(1 + hidden_rows),
-                )
-                .unwrap_or(u16::MAX),
-            )
+            .saturating_add(u16::try_from(cursor.1.saturating_sub(hidden_rows)).unwrap_or(u16::MAX))
             .min(inner.bottom().saturating_sub(1));
         frame.set_cursor_position((cursor_x, cursor_y));
     }
+}
+
+fn visual_input_rows(input: &str, width: usize) -> usize {
+    let width = width.max(1);
+    input
+        .split('\n')
+        .map(|line| (2 + Line::from(line).width()).max(1).div_ceil(width))
+        .sum::<usize>()
+        .max(1)
+}
+
+fn composer_cursor(input: &str, cursor: usize, width: usize) -> (usize, usize) {
+    let width = width.max(1);
+    let before: String = input.chars().take(cursor).collect();
+    let mut row = 0;
+    let mut lines = before.split('\n').peekable();
+    while let Some(line) = lines.next() {
+        let position = 2 + Line::from(line).width();
+        if lines.peek().is_some() {
+            row += position.max(1).div_ceil(width);
+        } else {
+            row += position / width;
+            return (position % width, row);
+        }
+    }
+    (2, 0)
 }
 
 fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
@@ -812,7 +1101,64 @@ fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
             spans.extend(shortcut("end", "follow"));
         }
     }
+    if area.width >= 72 {
+        spans.push(Span::raw("   "));
+        spans.extend(shortcut("ctrl+.", "shortcuts"));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn render_shortcuts_overlay(frame: &mut Frame<'_>, area: Rect) {
+    let overlay = centered_rect(area, 68.min(area.width.saturating_sub(2)), 16);
+    frame.render_widget(Clear, overlay);
+    let block = Block::default()
+        .title(Span::styled(
+            " Keyboard shortcuts ",
+            Style::default()
+                .fg(Palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Palette::BORDER))
+        .padding(Padding::new(2, 2, 1, 1));
+    let inner = block.inner(overlay);
+    frame.render_widget(block, overlay);
+    let rows = [
+        ("Enter", "Send prompt"),
+        ("Shift+Enter", "Insert newline"),
+        ("← / →", "Move input cursor"),
+        ("↑ / ↓", "Move by line or browse prompt history"),
+        ("Ctrl+W", "Delete previous word"),
+        ("PgUp / PgDn", "Scroll conversation"),
+        ("End", "Return to the latest message"),
+        ("Tab / Shift+Tab", "Switch composed panels"),
+        ("Esc", "Cancel turn or close this panel"),
+        ("Ctrl+C", "Quit immediately"),
+    ];
+    let lines = rows.into_iter().map(|(key, label)| {
+        Line::from(vec![
+            Span::styled(
+                format!("{key:<18}"),
+                Style::default()
+                    .fg(Palette::MUTED)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(label),
+        ])
+    });
+    frame.render_widget(Paragraph::new(Text::from_iter(lines)), inner);
+}
+
+fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
 }
 
 fn shortcut(key: &'static str, label: &'static str) -> [Span<'static>; 2] {
@@ -908,11 +1254,11 @@ mod tests {
                 body: "Esc quits".to_owned(),
             }],
         );
-        state.input = "hello".to_owned();
+        state.set_input("hello".to_owned());
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
-        assert!(content.contains("LENSO  agent"));
-        assert!(content.contains("What do you want to work on?"));
+        assert!(content.contains("Lenso Agent"));
+        assert!(content.contains("What do you want to build?"));
         assert!(content.contains("Help"));
         assert!(content.contains("hello"));
         assert!(content.contains("enter send"));
@@ -933,10 +1279,46 @@ mod tests {
         );
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
-        assert!(content.contains("What do you want to work on?"));
-        assert!(content.contains("Ask Lenso Agent…"));
+        assert!(content.contains("What do you want to build?"));
+        assert!(content.contains("Message Lenso Agent…"));
         assert!(!content.contains("Esc quits"));
         assert!(!content.contains("tab panels"));
+    }
+
+    #[test]
+    fn tiny_layout_keeps_the_prompt_reachable() {
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.set_input("draft".to_owned());
+
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let content = terminal.backend().to_string();
+        assert!(content.contains("draft"));
+        assert!(content.contains("enter send"));
+    }
+
+    #[test]
+    fn conversation_visually_separates_user_and_markdown_agent_content() {
+        let backend = TestBackend::new(80, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.transcript = vec![
+            TranscriptEntry {
+                speaker: Speaker::User,
+                text: "Summarize it".to_owned(),
+            },
+            TranscriptEntry {
+                speaker: Speaker::Agent,
+                text: "## Result\n- **Done**".to_owned(),
+            },
+        ];
+
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let content = terminal.backend().to_string();
+        assert!(content.contains("› Summarize it"));
+        assert!(content.contains("Result"));
+        assert!(content.contains("• Done"));
     }
 
     #[test]
@@ -968,6 +1350,75 @@ mod tests {
         ));
         assert_eq!(state.input, "first\nsecond\nthird\n");
         assert_eq!(state.phase, UiPhase::Idle);
+    }
+
+    #[test]
+    fn composer_edits_at_the_unicode_cursor() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.append_input("a界c");
+        state.move_cursor(-1);
+        state.append_input("b");
+        assert_eq!(state.input, "a界bc");
+        assert_eq!(state.input_cursor, 3);
+
+        state.pop_input();
+        assert_eq!(state.input, "a界c");
+        state.delete_input();
+        assert_eq!(state.input, "a界");
+    }
+
+    #[test]
+    fn prompt_history_preserves_the_unsent_draft() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.input_history = vec!["first".to_owned(), "second".to_owned()];
+        state.set_input("draft".to_owned());
+
+        state.previous_history();
+        assert_eq!(state.input, "second");
+        state.previous_history();
+        assert_eq!(state.input, "first");
+        state.next_history();
+        assert_eq!(state.input, "second");
+        state.next_history();
+        assert_eq!(state.input, "draft");
+    }
+
+    #[test]
+    fn markdown_distinguishes_headings_lists_code_and_emphasis() {
+        let lines =
+            markdown_lines("## Result\n- **done** with `cargo test`\n```rust\nfn main() {}\n```");
+        let text = Text::from(lines);
+        assert_eq!(text.lines[0].spans[0].content, "Result");
+        assert_eq!(text.lines[1].spans[0].content, "• ");
+        assert!(
+            text.lines[1]
+                .spans
+                .iter()
+                .any(|span| span.content == "done")
+        );
+        assert!(
+            text.lines[1]
+                .spans
+                .iter()
+                .any(|span| span.content == "cargo test")
+        );
+        assert_eq!(text.lines[2].spans[0].content, "╭─ rust");
+        assert_eq!(text.lines[3].spans[1].content, "fn main() {}");
+    }
+
+    #[test]
+    fn shortcut_overlay_is_modal_and_escape_closes_it() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Char('.'), KeyModifiers::CONTROL),
+            &mut state,
+        ));
+        assert!(state.show_shortcuts);
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            &mut state,
+        ));
+        assert!(!state.show_shortcuts);
     }
 
     #[test]
