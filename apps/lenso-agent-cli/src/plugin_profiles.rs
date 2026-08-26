@@ -3,6 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use lenso_agent_auth_openai_codex_module::{
     FACTORY_IDENTITY as CODEX_AUTH_FACTORY_IDENTITY, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
 };
+use lenso_agent_code_mode_tools_module::{
+    FACTORY_IDENTITY as CODE_MODE_FACTORY_IDENTITY, PACKAGE_ID as CODE_MODE_PACKAGE_ID,
+};
 use lenso_agent_http_fetch_module::PACKAGE_ID as HTTP_FETCH_PACKAGE_ID;
 use lenso_agent_loop_module::PACKAGE_ID as AGENT_LOOP_PACKAGE_ID;
 use lenso_agent_model_fixture_module::{
@@ -33,6 +36,7 @@ use lenso_agent_text_tools_module::{
 use lenso_agent_workspace_edit_module::{
     FACTORY_IDENTITY as WORKSPACE_EDIT_FACTORY_IDENTITY, PACKAGE_ID as WORKSPACE_EDIT_PACKAGE_ID,
 };
+use lenso_agent_workspace_read_tools_module::PACKAGE_ID as WORKSPACE_READ_TOOLS_PACKAGE_ID;
 use lenso_app_plan::{
     CapabilityBinding, CapabilityCardinality, CapabilityOperationKind, ResolvedAppPlan,
 };
@@ -98,6 +102,7 @@ pub(crate) const NATIVE_PROCESS_PROFILE: &str = "agent-process-provider-v1";
 pub(crate) const NATIVE_SECRETS_PROFILE: &str = "secrets-provider-v1";
 pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
 pub(crate) const SUBAGENT_PROVIDER_PROFILE: &str = "agent-subagent-provider-v1";
+pub(crate) const CODE_MODE_PROVIDER_PROFILE: &str = "agent-code-mode-provider-v1";
 pub(crate) const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 pub(crate) const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
 
@@ -118,6 +123,8 @@ const PROCESS_NATIVE_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-process-native-module/config.schema.json");
 const SUBAGENT_TOOLS_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-subagent-tools-module/config.schema.json");
+const CODE_MODE_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-code-mode-tools-module/config.schema.json");
 const OPENAI_MODEL_CONFIGURATION_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-model-openai-compatible-module/config.schema.json");
 const PROMPT_PROVIDER_DESCRIPTOR: &[u8] =
@@ -149,6 +156,7 @@ const PROCESS_TOOLS_CONFIGURATION: &str = r#"{"default_timeout_ms":120000}"#;
 const PROCESS_NATIVE_CONFIGURATION: &str = r#"{"allowed_programs":["cargo","git","rg"],"environment_allowlist":["PATH","HOME","CARGO_HOME","RUSTUP_HOME","TMPDIR","LANG","LC_ALL"],"max_argument_bytes":131072,"max_output_bytes":262144,"max_timeout_ms":600000,"root":"."}"#;
 const SUBAGENT_TOOLS_CONFIGURATION: &str =
     r#"{"max_output_bytes":1048576,"max_task_bytes":262144}"#;
+const CODE_MODE_CONFIGURATION: &str = r#"{"max_code_bytes":32768,"max_instructions":1000000,"max_memory_bytes":8388608,"max_output_bytes":262144,"max_parallel_subcalls":4,"max_subcalls":16}"#;
 const OPENAI_MODEL_CONFIGURATION: &str = r#"{"api_key_ref":"model/openai-api-key","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#;
 const OPENAI_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-4o-mini"}"#;
 const SECRETS_CONFIGURATION: &str = r#"{"references":{"model/openai-api-key":"OPENAI_API_KEY"}}"#;
@@ -1195,6 +1203,7 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(process_native_profile())?
         .register(process_tools_profile())?
         .register(subagent_tools_profile())?
+        .register(code_mode_tools_profile())?
         .register(fixture_model_profile())?
         .register(openai_model_profile())?
         .register(secrets_profile())?
@@ -1215,6 +1224,52 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(third_party_wasm_tool_profile())?
         .register(third_party_wasm_workspace_read_tool_profile())?
         .register(third_party_wasm_http_fetch_tool_profile())
+}
+
+fn code_mode_tools_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-code-mode-tools-v1".to_owned(),
+        adapter_profile: CODE_MODE_PROVIDER_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(CODE_MODE_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: CODE_MODE_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(CODE_MODE_CONFIGURATION_SCHEMA),
+        configuration: CODE_MODE_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+            request_operations: vec![
+                TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: vec![CapabilityRequirement {
+            capability_id: TOOLS_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOLS_DESCRIPTOR_VERSION.to_owned(),
+            cardinality: RequirementCardinality::One,
+        }],
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::AppendMany {
+            consumer_instance: "tools".to_owned(),
+            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            max_concurrency: 1,
+        },
+        permission_requests: Vec::new(),
+        fixed_host_imports: vec![FixedHostImport {
+            capability_id: TOOLS_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOLS_DESCRIPTOR_VERSION.to_owned(),
+            provider_instance: "restricted-read-tools".to_owned(),
+            allowed_provider_packages: BTreeSet::from([WORKSPACE_READ_TOOLS_PACKAGE_ID.to_owned()]),
+        }],
+        inherit_displaced_requirements: false,
+    }
 }
 
 fn subagent_tools_profile() -> ExecutablePluginProfile {

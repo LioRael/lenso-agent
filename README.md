@@ -579,6 +579,23 @@ workspace mutation or local process Plugins does not expand child authority.
 The first profile runs one child Turn at a time. See
 [ADR-0028](docs/adr/0028-compose-bounded-subagents-as-tools.md).
 
+Enable constrained Code Mode independently:
+
+```sh
+cargo run -p lenso-agent-cli -- plugins enable code-mode \
+  --evidence "reviewed constrained Code Mode"
+cargo run -p lenso-agent-cli -- \
+  "Use Code Mode to compare README.md twice."
+```
+
+`run_code` executes bounded Lua 5.4 and exposes only `tool(name, arguments)`
+and `parallel(calls)`. Its nested calls go through the separate read-only Tool
+Runtime, so enabling root mutation or process Plugins does not widen code
+authority. The interpreter has source, instruction, memory, output, subcall,
+and parallel-subcall limits and no `io`, `os`, `package`, `debug`, filesystem,
+process, or network library. It is not a hostile-code security sandbox. See
+[ADR-0029](docs/adr/0029-compose-constrained-code-mode-as-a-tool.md).
+
 ## Run the opt-in coding slice
 
 Enable workspace mutation over the deterministic readonly base, then prove

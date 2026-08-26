@@ -30,6 +30,7 @@ fn bundled_plugin_catalog_is_visible_without_product_app_variants() {
     assert!(stdout.contains("skills           experimental"));
     assert!(stdout.contains("local-process    experimental"));
     assert!(stdout.contains("subagent         experimental"));
+    assert!(stdout.contains("code-mode        experimental"));
     assert!(stdout.contains("openai-compatible experimental"));
 }
 
@@ -314,6 +315,86 @@ fn reviewed_subagent_plugin_runs_a_narrow_child_agent_with_a_durable_session() {
         })
     });
     assert!(child_reference_is_durable);
+}
+
+#[test]
+fn reviewed_code_mode_plugin_runs_bounded_parallel_nested_reads_and_records_them() {
+    let _plugin_test_guard = plugin_test_guard();
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "enable", "code-mode", "--evidence"])
+        .arg("reviewed constrained Code Mode")
+        .arg("--plan")
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .arg("Use Code Mode to compare README.md twice.")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Code Mode result: README copies match\n"
+    );
+
+    let session_path = fs::read_dir(workspace.path().join(".lenso/sessions"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let session: serde_json::Value =
+        serde_json::from_slice(&fs::read(session_path).unwrap()).unwrap();
+    let nested_calls_are_durable = session["events"].as_array().unwrap().iter().any(|event| {
+        event["payload_json"].as_str().is_some_and(|payload| {
+            payload.contains("nested_calls")
+                && payload.matches("read_text").count() == 2
+                && payload.matches("success").count() == 2
+        })
+    });
+    assert!(nested_calls_are_durable);
+
+    let disable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "disable", "code-mode", "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        disable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&disable.stderr)
+    );
+    let after_disable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["--plan"])
+        .arg(plan_path())
+        .arg("Use Code Mode to compare README.md twice.")
+        .output()
+        .unwrap();
+    assert!(!after_disable.status.success());
+    assert!(
+        String::from_utf8_lossy(&after_disable.stderr).contains("InvalidRequest"),
+        "{}",
+        String::from_utf8_lossy(&after_disable.stderr)
+    );
 }
 
 #[test]

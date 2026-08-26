@@ -22,7 +22,7 @@ The Harness admits subagent delegation as an optional Tool Provider Module.
 - The provider requires one explicitly bound `lenso.agent@1` child Instance.
   It does not discover or construct Agents at runtime.
 - The base App composes `subagent-agent` separately from the root `agent` and
-  binds it to a narrow `subagent-tools` Runtime. That Runtime projects only the
+  binds it to a narrow `restricted-read-tools` Runtime. That Runtime projects only the
   Host-selected `lenso.agent.workspace-read@1/read_text` Capability.
 - A delegated call inherits deadline, cancellation, and Generation provenance,
   opens a fresh durable child Session, and returns the child Session ID in Tool

@@ -284,9 +284,11 @@ completed-turn history from the Session log.
   shell-string parsing, generic overwrite/delete, or approval workflow. The
   optional subagent Plugin can delegate only to a separately composed child
   Agent whose Tool Runtime exposes the reviewed workspace-read Capability; it
-  does not inherit root mutation or process authority. There is no parallel
-  child pool, automatic compaction, runtime code replacement, or hostile-code
-  isolation.
+  does not inherit root mutation or process authority. The optional Code Mode
+  Plugin evaluates bounded Lua with no ambient filesystem, process, network,
+  package, or debug library and can call only the same separately composed
+  read Tool Runtime. There is no parallel child pool, automatic compaction,
+  runtime code replacement, or hostile-code isolation.
 
 ## First executable slice
 
@@ -299,7 +301,7 @@ The deterministic root base selects these keyed Module Instances:
 - `fixture-instructions`
 - `summary-skill`
 - `subagent-agent`
-- `subagent-tools`
+- `restricted-read-tools`
 - `tools`
 - `tui`
 - `tui-help`
@@ -365,18 +367,27 @@ or dropped invocation.
 Users enable `workspace-edit` separately when both authorities are required.
 
 The opt-in `subagent` Plugin adds one exclusive `delegate` Tool. It invokes the
-base `subagent-agent` Instance, whose separate `subagent-tools` Runtime can call
-only `lenso.agent.workspace-read@1/read_text`. Each delegated task opens a
+base `subagent-agent` Instance, whose separate `restricted-read-tools` Runtime
+can call only `lenso.agent.workspace-read@1/read_text`. Each delegated task opens a
 durable child Session, and the parent Tool result records that child identity.
 Disabling the Plugin removes delegation without changing the Kernel or either
 Agent contract.
+
+The opt-in `code-mode` Plugin adds one exclusive `run_code` Tool. Its bounded
+Lua program can use `tool` and `parallel` only through the separately composed
+`restricted-read-tools` Runtime, so root mutation, process, Skill, subagent, and
+future Tool Plugins are not inherited. Nested results return in call order and
+the parent Tool result durably records the ordered nested-call transcript.
+Disabling the Plugin removes code execution in the next App Generation. The
+in-process interpreter is capability- and resource-constrained, not a
+hostile-code security sandbox.
 
 ## Deferred direction
 
 Web UI, approval policy, hostile-code sandboxing, marketplace Skill
 installation, live Skill watching,
 ordered Hook interception, Trajectory inspection, replay analysis, multi-agent
-scheduling and parallel child pools, sandboxed Code Mode, Creator experiments,
+scheduling and parallel child pools, hostile-code sandboxed Code Mode, Creator experiments,
 additional production
 Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, third-party Host

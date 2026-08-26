@@ -31,6 +31,7 @@ path = "src/channel_main.rs"
 
 [dependencies]
 lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
+lenso-agent-code-mode-tools-module = { path = "../../crates/lenso-agent-code-mode-tools-module" }
 lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
 lenso-agent-tui-static-module = { path = "../../crates/lenso-agent-tui-static-module" }
 lenso-agent-telegram-module = { path = "../../crates/lenso-agent-telegram-module" }
