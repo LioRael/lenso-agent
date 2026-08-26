@@ -57,8 +57,8 @@ cargo run -p lenso-agent-cli -- \
   "Use uppercase on: Lenso modules are replaceable."
 ```
 
-The normal run resolves the root App plus the persisted Plugin Active Set;
-`--plan` is reserved for exact replay.
+The normal run resolves the root App plus its versioned enabled list in memory;
+`--plan` is reserved for exact replay. No `.lenso/plugins` directory is created.
 
 ## 5. Prove removal
 

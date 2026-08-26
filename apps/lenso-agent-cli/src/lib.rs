@@ -29,8 +29,7 @@ pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {
 }
 
 fn resolve_base_plan() -> Result<Vec<u8>, String> {
-    let definition = env::var_os("LENSO_APP_DEFINITION")
-        .map_or_else(|| PathBuf::from("lenso.app.json"), PathBuf::from);
+    let definition = app_definition_path();
     let app = CargoAppDefinition::load(&definition)
         .map_err(|error| format!("failed to load {}: {error}", definition.display()))?;
     let root = definition.parent().unwrap_or_else(|| Path::new("."));
@@ -40,4 +39,14 @@ fn resolve_base_plan() -> Result<Vec<u8>, String> {
             definition.display()
         )
     })
+}
+
+pub(crate) fn app_definition_path() -> PathBuf {
+    env::var_os("LENSO_APP_DEFINITION")
+        .map_or_else(|| PathBuf::from("lenso.app.json"), PathBuf::from)
+}
+
+pub(crate) fn existing_app_definition_path() -> Option<PathBuf> {
+    let path = app_definition_path();
+    (env::var_os("LENSO_APP_DEFINITION").is_some() || path.is_file()).then_some(path)
 }
