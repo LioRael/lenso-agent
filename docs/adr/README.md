@@ -25,3 +25,4 @@
 - [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-modules-through-plugin-state.md)
 - [0024 — Derive typed Agent Tool Providers](0024-derive-agent-tool-providers.md)
 - [0025 — Enforce reviewed network grants through one HTTP Capability](0025-enforce-reviewed-network-grants-through-http-capability.md)
+- [0026 — Reconcile committed Plugin state online](0026-reconcile-committed-plugin-state-online.md)

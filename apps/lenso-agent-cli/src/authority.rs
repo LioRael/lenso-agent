@@ -44,6 +44,19 @@ impl AuthorityCoordinator {
         Ok(AuthorityFence { file })
     }
 
+    /// Attempts to snapshot Plugin authority without blocking the Host's async runtime.
+    ///
+    /// A mutating CLI process may hold the exclusive fence while it validates a candidate.
+    /// The live Host keeps serving its current Generation and retries on the next reconcile tick.
+    pub(crate) fn try_snapshot(&self) -> Result<Option<AuthorityFence>, String> {
+        let file = self.open_lock(false)?;
+        match FileExt::try_lock_shared(&file) {
+            Ok(()) => Ok(Some(AuthorityFence { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(format!("failed to snapshot Plugin authority: {error}")),
+        }
+    }
+
     /// Fence one Ready-before-commit authority transition.
     pub(crate) fn transition(&self) -> Result<AuthorityFence, String> {
         let file = self.open_lock(false)?;
@@ -182,6 +195,40 @@ mod tests {
         let started = Instant::now();
         drop(coordinator.transition().unwrap());
         assert!(started.elapsed() >= Duration::from_millis(500));
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn live_reconcile_never_blocks_on_an_active_transition() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("plugins");
+        let ready = temporary.path().join("ready");
+        AuthorityCoordinator::prepare(&root).unwrap();
+        let executable = env::current_exe().unwrap();
+        let mut child = Command::new(executable)
+            .args([
+                "--exact",
+                "authority::tests::child_holds_authority_fence",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE, "hold")
+            .env(CHILD_ROOT, &root)
+            .env(CHILD_READY, &ready)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "child did not acquire transition fence"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let coordinator = AuthorityCoordinator::prepare(&root).unwrap();
+        let started = Instant::now();
+        assert!(coordinator.try_snapshot().unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_millis(100));
         assert!(child.wait().unwrap().success());
     }
 

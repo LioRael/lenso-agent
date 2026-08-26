@@ -130,6 +130,16 @@ exclusive transition fence. The transition process shuts the preview
 Generation down after validation; it is not live hot loading or distributed
 coordination.
 
+Every running Host also owns one bounded online reconciler beside its durable
+Generation Controller. It non-blockingly observes committed Active Set changes,
+resolves them against the exact startup Plan and Host Build, records their
+immutable recovery authority, and submits an `Overlap` transition. The
+candidate must become Ready before the routing epoch advances. Existing Turns
+remain pinned to the old Generation; new Turns use the candidate, and the old
+Generation drains after its final Lease. A rejected Desired State leaves the
+current Generation routable and produces a bounded operator event. This is
+online App Generation switching, not mutable Kernel hot loading.
+
 Local governance is risk-derived. Passive Releases and selected executable
 contributions that are stable, trusted, stateless, permission-free,
 dependency-free, Artifact-free, and append only to an existing `many`
@@ -235,6 +245,8 @@ completed-turn history from the Session log.
 - Every Agent Turn is admitted through a lease for one exact active App
   Generation. Its `turn_started` Session event records that Generation Spec
   digest. Dropping the lease is required before Generation resource drain.
+- Online Plugin reconciliation can advance routing only between Turns. It must
+  never migrate an admitted Turn or mutate either Generation's Kernel graph.
 - User-facing Agent plugins are ordinary packages containing one or more
   Modules that provide declared Agent Capabilities.
 - Passive Plugin Bundle admission never authorizes executable contributions.
@@ -347,7 +359,7 @@ Plugin Profile Catalog entries, general `one` replacement, `optional` binding
 replacement, publisher-selected provider configuration, third-party Host
 Capability permissions, automatic rollback,
 Generation retention windows and deletion, Plugin Store garbage collection,
-distributed coordination, and overlap replacement require their own product
-slices. Replacement
+distributed coordination, retained standby policy, and state-changing overlap
+require their own product slices. Replacement
 must stage a new Resolved App Plan and App Generation above the Kernel rather
 than mutate the running graph.

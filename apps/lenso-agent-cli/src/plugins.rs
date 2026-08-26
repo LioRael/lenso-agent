@@ -568,6 +568,8 @@ struct ActiveRelease {
 
 #[derive(Debug)]
 pub(crate) struct GenerationPluginAuthority {
+    pub(crate) active_set_digest: String,
+    active_set: CanonicalDocument<ActivePluginSet>,
     pub(crate) store: PluginStore,
     pub(crate) lock: CanonicalDocument<PluginSetLock>,
     pub(crate) manifests: BTreeMap<String, CanonicalDocument<PluginManifest>>,
@@ -1248,13 +1250,11 @@ pub(crate) fn load_generation_authority(root: &Path) -> Result<GenerationPluginA
     load_generation_authority_unfenced(root)
 }
 
-pub(crate) fn record_current_generation_authority(root: &Path) -> Result<(), String> {
-    let profiles = harness_plugin_profiles()?;
-    let coordinator = AuthorityCoordinator::prepare(root)?;
-    let _fence = coordinator.snapshot()?;
-    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
-    let active = validate_active_set(load_active_set(root)?, &store, &profiles)?;
-    record_active_set_in(root, RECOVERY_AUTHORITY_DIRECTORY, &active)
+pub(crate) fn record_resolved_generation_authority_unfenced(
+    root: &Path,
+    authority: &GenerationPluginAuthority,
+) -> Result<(), String> {
+    record_active_set_in(root, RECOVERY_AUTHORITY_DIRECTORY, &authority.active_set)
 }
 
 pub(crate) fn recovery_generation_authorities(
@@ -1304,7 +1304,9 @@ pub(crate) fn recovery_generation_authorities(
         .collect()
 }
 
-fn load_generation_authority_unfenced(root: &Path) -> Result<GenerationPluginAuthority, String> {
+pub(crate) fn load_generation_authority_unfenced(
+    root: &Path,
+) -> Result<GenerationPluginAuthority, String> {
     let profiles = harness_plugin_profiles()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let active = load_active_set(root)?;
@@ -1341,6 +1343,8 @@ fn generation_authority_from_document(
         );
     }
     Ok(GenerationPluginAuthority {
+        active_set_digest: active.digest().to_owned(),
+        active_set: active.clone(),
         store,
         lock,
         manifests,

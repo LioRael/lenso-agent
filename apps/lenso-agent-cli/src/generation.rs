@@ -1,13 +1,15 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
     fs::OpenOptions,
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
+use tokio::sync::oneshot;
 
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
@@ -66,10 +68,13 @@ const APP_ID: &str = "lenso.agent.harness";
 // Keep the gate bounded while avoiding spurious install and rollback failures under local load.
 const READY_TIMEOUT_NANOS: u64 = 30_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
+const ONLINE_DRAIN_TIMEOUT_NANOS: u64 = 300_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
 const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
+const RECONCILE_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_RECONCILE_EVENTS: usize = 32;
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
 const MAX_TUI_PANEL_BYTES: usize = 262_144;
@@ -89,9 +94,30 @@ impl CatalogFactory for HarnessCatalogFactory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct HostBuildIdentity {
     executable_digest: String,
+}
+
+/// One operator-visible outcome from the live Plugin Desired State reconciler.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OnlineGenerationEvent {
+    Switched {
+        active_set_digest: String,
+        generation_spec_digest: String,
+        previous_generation_spec_digest: String,
+        routing_epoch: u64,
+    },
+    Rejected {
+        active_set_digest: Option<String>,
+        detail: String,
+    },
+}
+
+#[derive(Debug)]
+struct GenerationReconciler {
+    stop: Option<oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl HostBuildIdentity {
@@ -114,6 +140,8 @@ impl HostBuildIdentity {
 pub struct AgentApp {
     client: GenerationControllerClient<NativeApp>,
     controller: Option<tokio::task::JoinHandle<Result<DurableControlState, ControlPlaneError>>>,
+    reconciler: Option<GenerationReconciler>,
+    reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
 }
 
 impl AgentApp {
@@ -161,9 +189,8 @@ impl AgentApp {
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
         let _authority_fence = authority.snapshot()?;
-        let generation = resolve_initial_generation_for_host(plan_bytes, store_root, &host_build)?;
-        record_generation_spec(store_root, &generation.spec)?;
-        crate::plugins::record_current_generation_authority(store_root)?;
+        let (generation, active_set_digest) =
+            resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
         let store = FileControlStateStore::open(store_root.join(control_directory))
             .map_err(control_error)?;
         let durable = store.load(APP_ID).map_err(control_error)?;
@@ -243,9 +270,20 @@ impl AgentApp {
                 return Err(control_error(error));
             }
         }
+        let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
+        let reconciler = start_generation_reconciler(
+            client.clone(),
+            plan_bytes.to_vec(),
+            store_root.to_path_buf(),
+            host_build,
+            active_set_digest,
+            reconcile_events.clone(),
+        );
         Ok(Self {
             client,
             controller: Some(task),
+            reconciler: Some(reconciler),
+            reconcile_events,
         })
     }
 
@@ -307,6 +345,15 @@ impl AgentApp {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
+        if let Some(mut reconciler) = self.reconciler.take() {
+            if let Some(stop) = reconciler.stop.take() {
+                let _ = stop.send(());
+            }
+            reconciler
+                .task
+                .await
+                .map_err(|error| format!("Generation Reconciler task failed: {error}"))?;
+        }
         let expected = self.client.suspend().await.map_err(control_error)?;
         let task = self
             .controller
@@ -321,6 +368,182 @@ impl AgentApp {
         }
         Ok(())
     }
+
+    /// Drains bounded online-reconcile events for terminal or host presentation.
+    pub fn take_online_generation_events(&self) -> Vec<OnlineGenerationEvent> {
+        self.reconcile_events.borrow_mut().drain(..).collect()
+    }
+}
+
+fn resolve_and_record_current_generation(
+    plan_bytes: &[u8],
+    store_root: &Path,
+    host_build: &HostBuildIdentity,
+) -> Result<(ResolvedGeneration, String), String> {
+    let authority = crate::plugins::load_generation_authority_unfenced(store_root)?;
+    let generation = resolve_generation_with_authority(plan_bytes, &authority, host_build)?;
+    record_generation_spec(store_root, &generation.spec)?;
+    crate::plugins::record_resolved_generation_authority_unfenced(store_root, &authority)?;
+    Ok((generation, authority.active_set_digest))
+}
+
+fn start_generation_reconciler(
+    client: GenerationControllerClient<NativeApp>,
+    plan_bytes: Vec<u8>,
+    store_root: PathBuf,
+    host_build: HostBuildIdentity,
+    initial_active_set_digest: String,
+    events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+) -> GenerationReconciler {
+    let (stop, mut stopped) = oneshot::channel();
+    let task = tokio::task::spawn_local(async move {
+        let mut interval = tokio::time::interval(RECONCILE_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut last_attempted_active_set_digest = Some(initial_active_set_digest);
+        let mut last_rejection = None::<OnlineGenerationEvent>;
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut stopped => break,
+                _ = interval.tick() => {
+                    if let Some(event) = reconcile_online_generation(
+                        &client,
+                        &plan_bytes,
+                        &store_root,
+                        &host_build,
+                        &mut last_attempted_active_set_digest,
+                    ).await {
+                        if matches!(event, OnlineGenerationEvent::Switched { .. })
+                            || last_rejection.as_ref() != Some(&event)
+                        {
+                            push_reconcile_event(&events, event.clone());
+                        }
+                        last_rejection = matches!(event, OnlineGenerationEvent::Rejected { .. })
+                            .then_some(event);
+                    }
+                }
+            }
+        }
+    });
+    GenerationReconciler {
+        stop: Some(stop),
+        task,
+    }
+}
+
+async fn reconcile_online_generation(
+    client: &GenerationControllerClient<NativeApp>,
+    plan_bytes: &[u8],
+    store_root: &Path,
+    host_build: &HostBuildIdentity,
+    last_attempted_active_set_digest: &mut Option<String>,
+) -> Option<OnlineGenerationEvent> {
+    let coordinator = match crate::authority::AuthorityCoordinator::prepare(store_root) {
+        Ok(coordinator) => coordinator,
+        Err(detail) => {
+            return Some(OnlineGenerationEvent::Rejected {
+                active_set_digest: None,
+                detail,
+            });
+        }
+    };
+    let _authority_fence = match coordinator.try_snapshot() {
+        Ok(Some(fence)) => fence,
+        Ok(None) => return None,
+        Err(detail) => {
+            return Some(OnlineGenerationEvent::Rejected {
+                active_set_digest: None,
+                detail,
+            });
+        }
+    };
+    let authority = match crate::plugins::load_generation_authority_unfenced(store_root) {
+        Ok(authority) => authority,
+        Err(detail) => {
+            return Some(OnlineGenerationEvent::Rejected {
+                active_set_digest: None,
+                detail,
+            });
+        }
+    };
+    if last_attempted_active_set_digest.as_deref() == Some(&authority.active_set_digest) {
+        return None;
+    }
+    *last_attempted_active_set_digest = Some(authority.active_set_digest.clone());
+    let active_set_digest = authority.active_set_digest.clone();
+    let candidate = match resolve_generation_with_authority(plan_bytes, &authority, host_build) {
+        Ok(candidate) => candidate,
+        Err(detail) => {
+            return Some(OnlineGenerationEvent::Rejected {
+                active_set_digest: Some(active_set_digest),
+                detail,
+            });
+        }
+    };
+    let state = match client.inspect().await.map_err(control_error) {
+        Ok(state) => state,
+        Err(detail) => {
+            return Some(OnlineGenerationEvent::Rejected {
+                active_set_digest: Some(active_set_digest),
+                detail,
+            });
+        }
+    };
+    let Some(previous_generation_spec_digest) = state.active_generation_spec_digest else {
+        return Some(OnlineGenerationEvent::Rejected {
+            active_set_digest: Some(active_set_digest),
+            detail: "online reconcile requires one active App Generation".to_owned(),
+        });
+    };
+    if previous_generation_spec_digest == candidate.spec.digest() {
+        return None;
+    }
+    if let Err(detail) = record_generation_spec(store_root, &candidate.spec).and_then(|()| {
+        crate::plugins::record_resolved_generation_authority_unfenced(store_root, &authority)
+    }) {
+        return Some(OnlineGenerationEvent::Rejected {
+            active_set_digest: Some(active_set_digest),
+            detail,
+        });
+    }
+    let transition = match online_overlap_transition(&previous_generation_spec_digest, &candidate)
+        .map_err(control_error)
+    {
+        Ok(transition) => transition,
+        Err(detail) => {
+            return Some(OnlineGenerationEvent::Rejected {
+                active_set_digest: Some(active_set_digest),
+                detail,
+            });
+        }
+    };
+    match client
+        .transition(transition, candidate, BTreeMap::new())
+        .await
+        .map_err(control_error)
+    {
+        Ok(outcome) => Some(OnlineGenerationEvent::Switched {
+            active_set_digest,
+            generation_spec_digest: outcome.active_generation_spec_digest,
+            previous_generation_spec_digest,
+            routing_epoch: outcome.routing_epoch,
+        }),
+        Err(detail) => Some(OnlineGenerationEvent::Rejected {
+            active_set_digest: Some(active_set_digest),
+            detail,
+        }),
+    }
+}
+
+fn push_reconcile_event(
+    events: &Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+    event: OnlineGenerationEvent,
+) {
+    let mut events = events.borrow_mut();
+    if events.len() == MAX_RECONCILE_EVENTS {
+        events.pop_front();
+    }
+    events.push_back(event);
 }
 
 fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), String> {
@@ -462,6 +685,7 @@ pub(crate) fn resolve_initial_generation(
     resolve_initial_generation_for_host(plan_bytes, store_root, &host_build)
 }
 
+#[cfg(test)]
 fn resolve_initial_generation_for_host(
     plan_bytes: &[u8],
     store_root: &Path,
@@ -774,6 +998,29 @@ fn maintenance_transition(
     )
 }
 
+fn online_overlap_transition(
+    current_generation_spec_digest: &str,
+    candidate: &ResolvedGeneration,
+) -> Result<CanonicalDocument<AppGenerationTransitionSpec>, ControlPlaneError> {
+    CanonicalDocument::from_value(
+        "lenso-generation-transition.json",
+        AppGenerationTransitionSpec {
+            schema_version: 1,
+            app_id: APP_ID.to_owned(),
+            from_generation_spec_digest: Some(current_generation_spec_digest.to_owned()),
+            to_generation_spec_digest: candidate.spec.digest().to_owned(),
+            replacement_mode: ReplacementMode::Overlap,
+            state_compatibility_receipt_digests: Vec::new(),
+            rollout_policy: RolloutPolicy {
+                ready_timeout_nanos: READY_TIMEOUT_NANOS.to_string(),
+                drain_timeout_nanos: ONLINE_DRAIN_TIMEOUT_NANOS.to_string(),
+                rollback_window_nanos: "0".to_owned(),
+                automatic_rollback_on_generation_failure: false,
+            },
+        },
+    )
+}
+
 fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
     let registry = NativeModuleRegistry::new().with_linked_factories();
     let mut built_in_modules = registry
@@ -823,6 +1070,19 @@ mod tests {
     use super::*;
     use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
     use lenso_kernel::StreamEvent;
+
+    async fn next_online_event(app: &AgentApp) -> OnlineGenerationEvent {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(event) = app.take_online_generation_events().into_iter().next() {
+                    return event;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("online Generation event timed out")
+    }
 
     #[test]
     fn initial_generation_preserves_the_approved_plan() {
@@ -933,6 +1193,119 @@ mod tests {
                 assert_eq!(output, "Plugin: Direct answer.");
                 drop(stream);
                 drop(turn);
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn committed_plugin_authority_switches_online_while_an_old_turn_is_leased() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let plan_path = directory.path().join("resolved-plan.json");
+                fs::write(&plan_path, crate::test_support::headless_plan()).unwrap();
+                let mut app = AgentApp::start_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
+                let old_turn = app.lease_turn().await.unwrap();
+                let old_digest = old_turn.generation_spec_digest().to_owned();
+
+                let command = crate::plugins::parse_command(&[
+                    "enable".to_owned(),
+                    "text-tools".to_owned(),
+                    "--evidence".to_owned(),
+                    "reviewed by online reconcile test".to_owned(),
+                    "--plan".to_owned(),
+                    plan_path.display().to_string(),
+                    "--root".to_owned(),
+                    directory.path().display().to_string(),
+                ])
+                .unwrap();
+                crate::plugins::run(command).await.unwrap();
+
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    previous_generation_spec_digest,
+                    ..
+                } = event
+                else {
+                    panic!("expected an online Generation switch")
+                };
+                assert_eq!(previous_generation_spec_digest, old_digest);
+                assert_ne!(generation_spec_digest, old_digest);
+
+                let new_turn = app.lease_turn().await.unwrap();
+                assert_eq!(new_turn.generation_spec_digest(), generation_spec_digest);
+
+                let stream = old_turn
+                    .handle()
+                    .open_with_context(
+                        RUN_TURN_OPERATION,
+                        old_turn.invocation_context().unwrap(),
+                        RunTurnRequest {
+                            input: "Answer directly: old Generation remains live".to_owned(),
+                            session_id: None,
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                stream.close_send().await.unwrap();
+                while !matches!(stream.receive().await.unwrap(), StreamEvent::Terminal(_)) {}
+
+                drop(new_turn);
+                drop(old_turn);
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let state = app.client.inspect().await.unwrap();
+                        if state.generations.iter().any(|record| {
+                            record.generation_spec_digest == old_digest
+                                && record.lifecycle == ControlLifecycle::Retired
+                        }) {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("old Generation did not retire after its final Lease");
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn invalid_desired_state_keeps_the_current_generation_routable() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut app = AgentApp::start_with_store(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                )
+                .await
+                .unwrap();
+                let before = app.lease_turn().await.unwrap();
+                let before_digest = before.generation_spec_digest().to_owned();
+                drop(before);
+
+                fs::write(directory.path().join("active-set.json"), b"{}").unwrap();
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Rejected { detail, .. } = event else {
+                    panic!("expected the invalid Desired State to be rejected")
+                };
+                assert!(detail.contains("active-set.json"));
+
+                let after = app.lease_turn().await.unwrap();
+                assert_eq!(after.generation_spec_digest(), before_digest);
+                drop(after);
                 app.shutdown().await.unwrap();
             })
             .await;

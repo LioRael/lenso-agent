@@ -185,7 +185,7 @@ profiles additionally allow a reviewed QuickJS or Wasm Component Module to
 replace the exact native Agent Loop through the generated `AgentJsonCodec`.
 Other Data mounts, Permission shapes, arbitrary binding templates, extra
 Capability requirements, and incomplete Feature selections fail
-admission. General provider/configuration selection, overlap replacement,
+admission. General provider/configuration selection, state-changing overlap,
 automatic rollback, distributed coordination, Generation deletion, Plugin
 Store garbage collection, native-dylib product acceptance, and general
 third-party Host Capability permissions remain deferred.
@@ -305,9 +305,13 @@ the allowlist empty by default, so it grants no ambient network access.
 Admission stores immutable objects and its receipt under
 `.lenso/plugins/store`. Activation atomically writes
 `.lenso/plugins/active-set.json`, which embeds the exact `PluginSetLock`,
-Manifest authorities, and Admission Receipt digests. The next App start
-digest-verifies that closure and includes selected artifacts and executable
-Instances in its initial Generation. The Catalog derives the registered Tool
+Manifest authorities, and Admission Receipt digests. A running Host observes a
+new committed Active Set without blocking on a Plugin command's authority
+fence, resolves and stages a fresh immutable Generation, and advances the
+routing epoch only after its Ready Gate succeeds. Existing Turns keep their old
+Generation Lease; new Turns use the new Generation, and the old Generation is
+retired after its final Lease is released. A stopped Host digest-verifies the
+same closure on its next start. The Catalog derives the registered Tool
 Provider attachment to the existing `tools` aggregator only when that consumer
 declares the exact Capability with `many` cardinality. Its Model profile
 requires `one` cardinality, the exact base `agent -> model` edge, and the
@@ -321,8 +325,10 @@ the exact base Plan. `plugins upgrade` admits a different immutable Manifest
 only after an explicit Manifest CAS and a Runtime maintenance Ready Gate. It
 retains canonical authorities by digest under `.lenso/plugins/active-sets`;
 `plugins rollback` applies the same Ready-before-commit rule to an exact
-retained digest. These commands are offline transitions, not running-Kernel hot
-loading. A Host-owned cross-process authority fence lets startup and validated
+retained digest. The commands remain offline validation and commit
+transactions; a running Host separately reconciles the committed authority
+through an overlap Generation transition. This is not running-Kernel graph
+mutation. A Host-owned cross-process authority fence lets startup and validated
 inspection snapshot either the complete old authority or the complete committed
 authority, while install, remove, upgrade, and rollback retain exclusive
 ownership from their first authority read through atomic commit. The read-only
