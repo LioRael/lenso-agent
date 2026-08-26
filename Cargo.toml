@@ -38,6 +38,7 @@ members = [
     "crates/lenso-agent-http-fetch-module",
     "crates/lenso-agent-workspace-read-module",
     "crates/lenso-agent-cli-module",
+    "crates/lenso-agent-code-mode-tools-module",
     "crates/lenso-agent-tui-module",
     "crates/lenso-agent-tui-static-module",
     "crates/lenso-agent-telegram-module",
@@ -77,6 +78,7 @@ lenso-quickjs-adapter = "0.1.2"
 lenso-runner = "0.1.9"
 lenso-runtime-codec = "0.1.2"
 lenso-wasm-component-adapter = "0.1.2"
+mlua = { version = "0.11", features = ["async", "lua54", "serialize", "vendored"] }
 nix = { version = "0.31", features = ["process", "signal"] }
 lenso-secrets-env-module = "0.1.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }

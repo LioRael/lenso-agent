@@ -116,7 +116,7 @@
         }
       },
       {
-        "key": "subagent-tools",
+        "key": "restricted-read-tools",
         "package": "lenso.agent.workspace-read-tools",
         "configuration": {}
       },
@@ -191,7 +191,7 @@
       {
         "consumer": "subagent-agent",
         "capability_id": "lenso.agent.tools@2",
-        "provider": "subagent-tools",
+        "provider": "restricted-read-tools",
         "admission": {
           "queue_capacity": 0,
           "max_concurrency": 4
@@ -217,7 +217,7 @@
       {
         "consumer": "subagent-agent",
         "capability_id": "lenso.agent.tools@2",
-        "provider": "subagent-tools"
+        "provider": "restricted-read-tools"
       },
       {
         "consumer": "telegram",

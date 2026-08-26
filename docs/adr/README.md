@@ -28,3 +28,4 @@
 - [0026 — Reconcile committed Plugin state online](0026-reconcile-committed-plugin-state-online.md)
 - [0027 — Admit bounded parallel Tool waves](0027-admit-bounded-parallel-tool-waves.md)
 - [0028 — Compose bounded subagents as Tools](0028-compose-bounded-subagents-as-tools.md)
+- [0029 — Compose constrained Code Mode as a Tool](0029-compose-constrained-code-mode-as-a-tool.md)

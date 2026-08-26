@@ -115,6 +115,9 @@ impl FixtureModel {
         if current_user == "Delegate a README.md summary." {
             return subagent_root_response(request, &tool_results);
         }
+        if current_user == "Use Code Mode to compare README.md twice." {
+            return code_mode_response(request, &tool_results);
+        }
         if current_user == "Summarize README.md for the parent Agent." {
             return subagent_child_response(request, &tool_results);
         }
@@ -143,6 +146,41 @@ impl FixtureModel {
         }
         Ok(tool_request(1))
     }
+}
+
+fn code_mode_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "run_code") {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-code-mode",
+            "run_code",
+            r#"{"code":"local values = parallel({{name='read_text', arguments={path='README.md'}}, {name='read_text', arguments={path='README.md'}}}); return {first=values[1], same=values[1] == values[2]}"}"#,
+        )),
+        [result] if is_expected_code_mode_result(&result.content) => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Code Mode result: README copies match",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response("2", CompleteMessageKind::Usage, "", "", "", "{}", "28", "8"),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn is_expected_code_mode_result(content: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(content)
+        .is_ok_and(|value| value["first"] == "# Plugin Fixture\n" && value["same"] == true)
 }
 
 fn subagent_root_response(

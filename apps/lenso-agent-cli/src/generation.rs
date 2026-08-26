@@ -13,6 +13,7 @@ use tokio::sync::oneshot;
 
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
+use lenso_agent_code_mode_tools_module as _;
 use lenso_agent_discord_module as _;
 use lenso_agent_http_fetch_module as _;
 use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;

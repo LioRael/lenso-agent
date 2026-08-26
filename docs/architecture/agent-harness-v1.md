@@ -185,6 +185,11 @@ make both the workspace root and model endpoint visible before execution.
     It invokes a separately composed child Agent with a narrow read-only Tool
     Runtime, persists a distinct child Session, and records that child identity
     in the parent Tool result. Disabling the Plugin removes delegation.
+23. Enabling the reviewed Code Mode Plugin adds one exclusive `run_code` Tool.
+    A bounded Lua program can issue ordered sequential or parallel calls only
+    through the separately composed read-only Tool Runtime. The parent Session
+    records the nested-call transcript, and disabling the Plugin removes Code
+    Mode without changing the Kernel.
 
 ## Deferred
 
