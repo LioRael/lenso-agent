@@ -23,6 +23,7 @@ use lenso_agent_prompt_module as _;
 use lenso_agent_prompt_static_module as _;
 use lenso_agent_session_file_module as _;
 use lenso_agent_skills_filesystem_module as _;
+use lenso_agent_telegram_module as _;
 use lenso_agent_tools_module as _;
 use lenso_agent_tui_module as _;
 use lenso_agent_tui_static_module as _;
@@ -69,6 +70,7 @@ const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
 const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
+const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
@@ -123,6 +125,16 @@ impl AgentApp {
 
     pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
         Self::start_tui_with_store(plan_bytes, Path::new(".lenso/plugins")).await
+    }
+
+    /// Starts the Telegram surface with an independent durable Controller lineage.
+    pub async fn start_telegram(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(
+            plan_bytes,
+            Path::new(".lenso/plugins"),
+            TELEGRAM_CONTROL_DIRECTORY,
+        )
+        .await
     }
 
     pub(crate) async fn start_with_store(
@@ -256,6 +268,11 @@ impl AgentApp {
     /// Pins one TUI-submitted Agent Turn to the active App Generation.
     pub async fn lease_tui_turn(&self) -> Result<TurnGeneration, String> {
         self.lease_turn_for("tui").await
+    }
+
+    /// Pins one Telegram message to the active App Generation.
+    pub async fn lease_telegram_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("telegram").await
     }
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {

@@ -28,6 +28,27 @@ cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
+Run the same composed Agent through a Telegram Bot by creating a Bot with
+BotFather, exporting its token, and explicitly selecting the chats that may
+invoke it:
+
+```sh
+export TELEGRAM_BOT_TOKEN='<bot-token>'
+cargo run -p lenso-agent-cli --bin lenso-agent-telegram -- \
+  --allow-chat '<telegram-chat-id>'
+```
+
+Use `--allow-chat '*'` only as an intentional initial test setting, then
+replace it with exact private or group chat IDs. Telegram Turns have no Tools
+by default; repeat `--allow-tool <name>` to expose only reviewed Tools. Private
+chat text is accepted directly. Group and supergroup text requires an
+`@bot_username` mention or a reply to the Bot unless
+`--respond-all-groups` is explicitly selected. The surface long-polls without
+a public webhook, stores only its update cursor and
+conversation-to-Session mapping in `.lenso/telegram/state.json`, and obtains a
+fresh App Generation lease for every message. Bot tokens remain in the
+environment and never enter the Plan or Session.
+
 The base App in `lenso.app.json` uses a deterministic fixture Model and can only
 read the current workspace. Enable workspace mutation without creating or
 selecting another App definition:

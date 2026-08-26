@@ -36,5 +36,41 @@
 - **Lifecycle and state:** stateless; no managed work or persistence.
 - **Final authorization:** not applicable because v1 panels expose no action.
 - **First observable behavior:** the selected `tui-help` Instance appears as a
-  Help panel; removing it resolves a valid nine-Instance App with no panel
-  binding.
+  Help panel; removing it resolves a valid App with no panel binding.
+
+## Telegram surface Module
+
+- **Owner:** `lenso-agent-telegram-module` owns the source-derived Telegram
+  consumer identity and Agent binding. The `lenso-agent-telegram` Host surface
+  owns Telegram Bot API transport and delivery policy.
+- **Deletion boundary:** removing the binary, Module package, and `telegram`
+  Instance removes Telegram polling, chat authorization, reply delivery,
+  update cursor, and conversation mapping. Agent, Session, terminal, and
+  Plugin behavior remain valid.
+- **Required Capability:** one `lenso.agent@1`.
+- **Provided Capabilities:** none. Telegram is an external Agent consumer and
+  does not invent an application Provider role.
+- **Configuration and secrets:** the immutable Module configuration is empty.
+  The Host surface reads the Bot token from `TELEGRAM_BOT_TOKEN` or an
+  explicitly named environment variable, requires an explicit chat allowlist,
+  and never writes the token into Plan, state, Session, or diagnostics.
+- **Durable facts:** `.lenso/telegram/state.json` contains the next Telegram
+  update ID and a bounded `bot + chat + topic -> Session ID` mapping. The
+  Telegram surface owns the mapping; the Session Module creates and owns each
+  Session and its events. Missing or corrupt state never falls back silently to
+  an in-memory mapping.
+- **Lifecycle:** the Host validates `getMe`, long-polls after App readiness,
+  processes updates sequentially, leases the current App Generation per
+  accepted message, and persists the next cursor only after delivery. Shutdown
+  cancels polling through Ctrl-C and drains the App normally.
+- **Authorization:** exact chat IDs are required unless `*` is deliberately
+  selected. Groups require a mention or reply by default. Telegram Turns expose
+  no Tools unless each model-visible Tool name is explicitly allowed; Tool
+  Modules retain final authorization.
+- **Delivery:** v1 accepts text and sends bounded plain-text replies split on
+  Unicode boundaries. Persist-after-delivery provides at-least-once processing;
+  a crash between Telegram accepting a reply and cursor commit can repeat that
+  update. Durable exactly-once inbox/outbox semantics remain a later slice.
+- **First observable behavior:** two private messages from one allowed chat run
+  two Generation-pinned Turns, receive Telegram replies, and resume the same
+  durable Session.
