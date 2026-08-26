@@ -9,7 +9,7 @@
   names/descriptions, immutable Skill and resource contents, content versions,
   omitted resource counts, and Prompt catalog omissions.
 - **Provides:** `lenso.agent.prompt-provider@1` (`contribute`, request) and
-  `lenso.agent.tool-provider@1` (`catalog` and `execute`, request).
+  `lenso.agent.tool-provider@2` (`catalog` and `execute`, request).
 - **Requires:** none. App Composition binds the same keyed Instance explicitly
   to the Prompt and Tool Runtime aggregates.
 - **Configuration:** rooted Skill directory; catalog contribution ID; Skill,

@@ -1,6 +1,6 @@
 use lenso::{Ctx, ModuleError};
 use lenso_agent_tool_sdk::prelude::*;
-use lenso_capability_agent_tool_provider::{CatalogRequest, ExecuteRequest};
+use lenso_capability_agent_tool_provider::{CatalogRequest, ExecuteRequest, ToolExecutionClass};
 use lenso_kernel::CancellationToken;
 use schemars::JsonSchema;
 
@@ -16,7 +16,11 @@ struct FixtureTools {}
 
 #[tool_provider]
 impl FixtureTools {
-    #[tool(name = "sync_echo", description = "Echo synchronously.")]
+    #[tool(
+        name = "sync_echo",
+        description = "Echo synchronously.",
+        execution = "exclusive"
+    )]
     #[allow(
         clippy::trivially_copy_pass_by_ref,
         clippy::unnecessary_wraps,
@@ -27,7 +31,11 @@ impl FixtureTools {
         Ok(response(message.value))
     }
 
-    #[tool(name = "async_echo", description = "Echo asynchronously.")]
+    #[tool(
+        name = "async_echo",
+        description = "Echo asynchronously.",
+        execution = "parallel_safe"
+    )]
     async fn async_echo(message: Message) -> Result<ExecuteResponse, ExecuteError> {
         std::future::ready(Ok(response(message.value))).await
     }
@@ -57,6 +65,17 @@ fn one_provider_derives_and_dispatches_multiple_typed_tools() {
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
         ["sync_echo", "async_echo"]
+    );
+    assert_eq!(
+        catalog
+            .tools
+            .iter()
+            .map(|tool| tool.execution.clone())
+            .collect::<Vec<_>>(),
+        [
+            ToolExecutionClass::Exclusive,
+            ToolExecutionClass::ParallelSafe
+        ]
     );
 
     for name in ["sync_echo", "async_echo"] {

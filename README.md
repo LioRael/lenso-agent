@@ -497,6 +497,15 @@ limits. Removing Providers and bindings removes those Tool surfaces without
 changing the Agent Loop or Kernel. See
 [ADR-0004](docs/adr/0004-use-minimal-composed-tool-profiles-and-progressive-skills.md).
 
+The base App admits up to four concurrent requests on its Agent-to-Tools and
+Tool-Provider bindings. Providers mark each catalog entry as `parallel_safe`
+or `exclusive`; the Agent Loop overlaps only consecutive safe calls, treats
+every exclusive call as an ordering barrier, and returns results to the Model
+in its original call order. The App's immutable binding admission and
+`max_parallel_tool_calls` remain hard bounds; Provider metadata alone cannot
+grant concurrency. See
+[ADR-0027](docs/adr/0027-admit-bounded-parallel-tool-waves.md).
+
 ## Run the opt-in coding slice
 
 Enable workspace mutation over the deterministic readonly base, then prove

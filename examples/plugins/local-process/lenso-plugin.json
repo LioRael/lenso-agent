@@ -39,9 +39,9 @@
       "configuration_schema_digest": "sha256:e0264152926e6aba1352941ca08687260cfcc45957d23f76fb4646da3a55a212",
       "provides": [
         {
-          "capability_id": "lenso.agent.tool-provider@1",
-          "descriptor_version": "1.0.0",
-          "descriptor_digest": "sha256:b726d7dd7bffaf07e48e0a55013f8d1b55d29d613f22b4e41e693fafd76c6fb4",
+          "capability_id": "lenso.agent.tool-provider@2",
+          "descriptor_version": "2.0.0",
+          "descriptor_digest": "sha256:96374f17b271da64adeaba5201883a79e9a5233b9217d84d3bc8cbc5477c4e46",
           "request_operations": ["catalog", "execute"]
         }
       ],
@@ -60,7 +60,7 @@
           "entrypoint": "default",
           "execution_class": "lenso.native-rust@1",
           "targets": ["aarch64-linux", "aarch64-macos", "x86_64-linux", "x86_64-macos"],
-          "profiles": ["agent-tool-provider-v1"],
+          "profiles": ["agent-tool-provider-v2"],
           "support_channel": "experimental",
           "trust": "trusted"
         }

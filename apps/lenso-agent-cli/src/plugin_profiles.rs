@@ -87,7 +87,7 @@ use lenso_plugin_control_plane::{
 };
 
 pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
-pub(crate) const TOOL_PROVIDER_PROFILE: &str = "agent-tool-provider-v1";
+pub(crate) const TOOL_PROVIDER_PROFILE: &str = "agent-tool-provider-v2";
 pub(crate) const NATIVE_MODEL_PROFILE: &str = "agent-model-provider-v1";
 pub(crate) const NATIVE_AUTH_PROFILE: &str = "agent-auth-provider-v1";
 pub(crate) const NATIVE_SKILLS_PROFILE: &str = "agent-skills-provider-v1";
@@ -131,8 +131,8 @@ const GUEST_AGENT_PACKAGE_ID: &str = "lenso.agent.guest";
 const WORKSPACE_READ_PACKAGE_ID: &str = "lenso.agent.workspace-import-read";
 const WORKSPACE_READ_INSTANCE: &str = "workspace-import-read";
 const HTTP_FETCH_INSTANCE: &str = "http-fetch";
-const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"model":"fixture/readme-summary-v1","max_steps":8,"max_tool_calls":4,"max_output_tokens":1024,"max_history_events":200}"#;
-const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#;
+const FIXTURE_AGENT_CONFIGURATION: &str = r#"{"model":"fixture/readme-summary-v1","max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"max_output_tokens":1024,"max_history_events":200}"#;
+const CODEX_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-5.6-luna"}"#;
 const CODEX_MODEL_CONFIGURATION: &str = r#"{"base_url":"https://chatgpt.com/backend-api","max_event_bytes":1048576,"model":"gpt-5.6-luna","reasoning_effort":"medium"}"#;
 const CODEX_AUTH_CONFIGURATION: &str =
     r#"{"issuer":"https://auth.openai.com","profile":"default","refresh_margin_seconds":60}"#;
@@ -142,10 +142,10 @@ const SKILLS_CONFIGURATION: &str = r#"{"catalog_contribution_id":"agents.skills.
 const PROCESS_TOOLS_CONFIGURATION: &str = r#"{"default_timeout_ms":120000}"#;
 const PROCESS_NATIVE_CONFIGURATION: &str = r#"{"allowed_programs":["cargo","git","rg"],"environment_allowlist":["PATH","HOME","CARGO_HOME","RUSTUP_HOME","TMPDIR","LANG","LC_ALL"],"max_argument_bytes":131072,"max_output_bytes":262144,"max_timeout_ms":600000,"root":"."}"#;
 const OPENAI_MODEL_CONFIGURATION: &str = r#"{"api_key_ref":"model/openai-api-key","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#;
-const OPENAI_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-4o-mini"}"#;
+const OPENAI_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-4o-mini"}"#;
 const SECRETS_CONFIGURATION: &str = r#"{"references":{"model/openai-api-key":"OPENAI_API_KEY"}}"#;
 const SECRETS_PACKAGE_ID: &str = "lenso.secrets.env";
-const SECRETS_FACTORY_IDENTITY: &str = "lenso.secrets.env@0.1.0";
+const SECRETS_FACTORY_IDENTITY: &str = "lenso.secrets.env@0.1.1";
 const SECRETS_CONFIGURATION_SCHEMA_DIGEST: &str =
     "sha256:2fafb2e087e788ab1a9f52b5b3cb9f050a79a7e9d6309f369477f60de428faa2";
 const SECRETS_DESCRIPTOR_DIGEST: &str =
@@ -166,6 +166,7 @@ pub(crate) enum AttachmentProfile {
         consumer_instance: String,
         capability_id: String,
         descriptor_version: String,
+        max_concurrency: usize,
     },
     AppendManySet {
         edges: Vec<AttachmentEdge>,
@@ -677,6 +678,7 @@ impl PluginProfileCatalog {
                 consumer_instance,
                 capability_id,
                 descriptor_version,
+                max_concurrency,
             } => {
                 let consumer =
                     require_consumer(base_plan, consumer_instance, &profile.registration_id)?;
@@ -687,12 +689,15 @@ impl PluginProfileCatalog {
                     CapabilityCardinality::Many,
                     &profile.registration_id,
                 )?;
-                Ok(ResolvedAttachment::AppendMany(CapabilityBinding::new(
-                    consumer_instance,
-                    capability_id,
-                    descriptor_version,
-                    instance_key,
-                )))
+                Ok(ResolvedAttachment::AppendMany(
+                    CapabilityBinding::new(
+                        consumer_instance,
+                        capability_id,
+                        descriptor_version,
+                        instance_key,
+                    )
+                    .with_limits(0, *max_concurrency),
+                ))
             }
             AttachmentProfile::AppendManySet { edges } => {
                 let bindings = edges
@@ -1322,6 +1327,7 @@ fn process_tools_profile() -> ExecutablePluginProfile {
             consumer_instance: "tools".to_owned(),
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            max_concurrency: 4,
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
@@ -1435,6 +1441,7 @@ fn workspace_edit_profile() -> ExecutablePluginProfile {
             consumer_instance: "tools".to_owned(),
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            max_concurrency: 4,
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
@@ -1471,6 +1478,7 @@ fn text_tools_profile() -> ExecutablePluginProfile {
             consumer_instance: "tools".to_owned(),
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            max_concurrency: 4,
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
@@ -1505,6 +1513,7 @@ fn third_party_wasm_tool_profile() -> ExecutablePluginProfile {
             consumer_instance: "tools".to_owned(),
             capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
             descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+            max_concurrency: 4,
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
@@ -1741,6 +1750,7 @@ impl AttachmentProfile {
                 consumer_instance,
                 capability_id,
                 descriptor_version,
+                ..
             }
             | Self::ReplaceOne {
                 consumer_instance,

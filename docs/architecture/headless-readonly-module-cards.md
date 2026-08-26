@@ -20,7 +20,7 @@ Status: implementation baseline for the first executable slice.
   access.
 - **Owned facts:** workspace root, allowed Tool names, path containment and
   hidden-entry policy, traversal/search budgets, and response limits.
-- **Provides:** `lenso.agent.tool-provider@1` (`catalog`, `execute`).
+- **Provides:** `lenso.agent.tool-provider@2` (`catalog`, `execute`).
 - **Requires:** none.
 - **Configuration:** canonical workspace root; maximum list/search entries,
   scanned bytes, search matches, and output bytes.
@@ -37,8 +37,8 @@ Status: implementation baseline for the first executable slice.
 - **Deletion boundary:** removes the App-facing aggregate Tool catalog and
   deterministic dispatch.
 - **Owned facts:** aggregate name uniqueness and provider routing table.
-- **Provides:** `lenso.agent.tools@1` (`catalog`, `execute`).
-- **Requires:** `lenso.agent.tool-provider@1` with `many` cardinality.
+- **Provides:** `lenso.agent.tools@2` (`catalog`, `execute`).
+- **Requires:** `lenso.agent.tool-provider@2` with `many` cardinality.
 - **Configuration:** empty.
 - **Lifecycle/resources:** `activate` obtains only explicitly bound Provider
   handles and builds the catalog; no discovery or global registry.
@@ -114,16 +114,18 @@ Status: implementation baseline for the first executable slice.
   message construction, and Session event intent.
 - **Provides:** `lenso.agent@1` (`run_turn`, stream).
 - **Requires:** exactly one `lenso.agent.model@1`, one
-  `lenso.agent.prompt@1`, one `lenso.agent.tools@1`, and one
+  `lenso.agent.prompt@1`, one `lenso.agent.tools@2`, and one
   `lenso.agent.session@1`.
-- **Configuration:** model name, maximum steps, maximum Tool calls, aggregate
-  model output-token budget, and bounded Session-history event count.
+- **Configuration:** model name, maximum steps, maximum Tool calls, bounded
+  parallel Tool calls, aggregate model output-token budget, and bounded
+  Session-history event count.
 - **Lifecycle/resources:** `activate` materializes generated clients only from
   `ModuleDependencies`; each generation owns its client set, active-Turn state,
   and Driver-managed turn tasks. Each Agent stream uses a one-item internal
   channel so a slow consumer backpressures the Loop.
 - **First behavior:** reconstructs bounded completed-turn context, accepts a
-  direct answer or sequential Tool calls until a finite budget is reached,
+  direct answer or bounded parallel-safe Tool waves with exclusive barriers
+  until a finite budget is reached,
   prepends the assembled Prompt, records its contribution manifest, persists
   terminal facts, and forwards Model text deltas immediately.
 

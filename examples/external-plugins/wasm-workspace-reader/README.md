@@ -1,6 +1,6 @@
 # External Wasm workspace reader Plugin
 
-This standalone example provides one Tool from a Wasm component. The Tool can read workspace text only through the exact `lenso.agent.tool-provider@1` binding selected by the Harness Host Profile. The Plugin does not receive ambient filesystem, network, process, Secrets, state, or data-mount authority.
+This standalone example provides one Tool from a Wasm component. The Tool can read workspace text only through the exact `lenso.agent.workspace-read@1` Host binding selected by the Harness Host Profile. The Plugin does not receive ambient filesystem, network, process, Secrets, state, or data-mount authority.
 
 Installation requires explicit review evidence:
 

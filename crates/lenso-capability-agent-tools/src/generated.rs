@@ -4,8 +4,8 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, ModuleDependencies, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, RequestCapability, RuntimeFailure};
 
 use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
-pub const CAPABILITY_ID: &str = "lenso.agent.tools@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const CAPABILITY_ID: &str = "lenso.agent.tools@2";
+pub const DESCRIPTOR_VERSION: &str = "2.0.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TOOLS_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const TOOLS_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_tools { () => { "{\"capability_id\":\"lenso.agent.tools@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"catalog\",\"execute\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_tools { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.0.0\",\"operations\":[\"catalog\",\"execute\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const EXECUTE_OPERATION: &str = "execute";
@@ -46,12 +46,23 @@ pub struct CatalogResponseToolsItem {
     #[serde(rename = "description")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub description: String,
+    #[serde(rename = "execution")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub execution: CatalogResponseToolsItemExecution,
     #[serde(rename = "input_schema_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub input_schema_json: RawJson,
     #[serde(rename = "name")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CatalogResponseToolsItemExecution {
+    #[serde(rename = "parallel_safe")]
+    ParallelSafe,
+    #[serde(rename = "exclusive")]
+    Exclusive,
 }
 
 #[derive(Clone, Debug, PartialEq)]

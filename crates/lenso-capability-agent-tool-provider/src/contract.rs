@@ -22,6 +22,15 @@ pub struct ToolDefinition {
     pub description: String,
     #[schemars(length(min = 2, max = 65_536))]
     pub input_schema_json: String,
+    /// Static safety classification enforced by the Agent Loop scheduler.
+    pub execution: ToolExecutionClass,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolExecutionClass {
+    ParallelSafe,
+    Exclusive,
 }
 
 #[derive(lenso::DomainError)]
@@ -76,8 +85,8 @@ pub enum ExecuteError {
 
 #[lenso::capability(
     id = "lenso.agent.tool-provider",
-    major = 1,
-    version = "1.0.0",
+    major = 2,
+    version = "2.0.0",
     portable = true,
     cross_lane_transfer = false
 )]

@@ -6,7 +6,7 @@
     {
       "id": "agent-js",
       "kind": "quick_js_module",
-      "digest": "sha256:0e7aa8637b15deb6c5789f17568b6d23d0fefdd26feb83c073ed7bd72a869c25",
+      "digest": "sha256:88c11a20e819b69aa34072e5071974c2d86bf5dd10714b32a5d02534674c7f6a",
       "size": 4014,
       "media_type": "text/javascript",
       "path": "plugin.mjs",
@@ -49,8 +49,8 @@
           "cardinality": "one"
         },
         {
-          "capability_id": "lenso.agent.tools@1",
-          "descriptor_version": "1.0.0",
+          "capability_id": "lenso.agent.tools@2",
+          "descriptor_version": "2.0.0",
           "cardinality": "one"
         }
       ],

@@ -15,8 +15,8 @@ agent-cli
   `- one lenso.agent@1 -> agent-loop
        |- one lenso.agent.model@1 -> openai-compatible-model
        |    `- one lenso.secrets@1 -> env-secrets
-       |- one lenso.agent.tools@1 -> tool-runtime
-       |    `- many lenso.agent.tool-provider@1 -> selected Tool providers
+       |- one lenso.agent.tools@2 -> tool-runtime
+       |    `- many lenso.agent.tool-provider@2 -> selected Tool providers
        |         `- process-tools -> one lenso.agent.process@1 -> native-process
        |- one lenso.agent.prompt@1 -> prompt-runtime
        |    `- many lenso.agent.prompt-provider@1 -> prompt plugins
@@ -178,11 +178,15 @@ make both the workspace root and model endpoint visible before execution.
     immutable grant, must fit inside the App-selected Provider allowlist, and
     is enforced on every bounded HTTP request. The base App has an empty
     allowlist.
+21. Two parallel-safe Tools can complete out of order under a bounded pool but
+    are persisted and returned to the Model in request order; an exclusive
+    Tool between safe calls drains the preceding wave and blocks the next one.
 
 ## Deferred
 
 Web UI, approval workflows, marketplace Skill installation, live Skill
-watching, ordered Hooks, automatic compaction, Trajectory UI, replay
+watching, ordered Hooks, automatic compaction, per-call resource-keyed Tool
+classification, Trajectory UI, replay
 inspection, re-execution, subagents, scheduling, generic overwrite/delete,
 shell-string execution, Creator Mode, hostile-code isolation, multi-lane
 placement, additional production Catalog entries, `one` or `optional` binding

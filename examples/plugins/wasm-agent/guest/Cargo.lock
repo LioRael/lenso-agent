@@ -239,9 +239,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lenso-app-plan"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923bf0bdbf82beee1f37a6f02ae087630b69cd007e19844d116c552fbf36f0a9"
+checksum = "867966536d627ef77b4811fe1736c4d97fcda4d95f3b15c07252a731e1568f0e"
 dependencies = [
  "serde",
  "serde_json",
@@ -368,8 +368,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-guest-sdk"
-version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=fb364b9ff3927d82e4911f1a1e23d9ac006adc6b#fb364b9ff3927d82e4911f1a1e23d9ac006adc6b"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1937642d182736157dfdaec739bea318455bce9651692cb1ae10f2ebdb90ad7a"
 dependencies = [
  "serde",
  "serde_json",
@@ -377,9 +378,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-kernel"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e99aa70408b0a93ce043fad0b00e1c831137a8b876fa3206d9814af0c1a4ba3"
+checksum = "47feff489ef55f5b9f3b3b58518b69a6f1d4dd073fc8b641f2d5d7e3db451402"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -388,12 +389,14 @@ dependencies = [
 [[package]]
 name = "lenso-module-authoring"
 version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0#1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d53c600bf07b0c15e6a8db9def6402ea4dac83f67b646b4761d1b4ddd72c7d2f"
 
 [[package]]
 name = "lenso-runtime-codec"
-version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=fb364b9ff3927d82e4911f1a1e23d9ac006adc6b#fb364b9ff3927d82e4911f1a1e23d9ac006adc6b"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d481bddc3072faf6b6be8c6f59b8546dd6057dc898f31c215e72f3bfbb89384c"
 dependencies = [
  "futures",
  "hex",

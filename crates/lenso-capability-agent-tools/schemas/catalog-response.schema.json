@@ -8,7 +8,7 @@
       "maxItems": 256,
       "items": {
         "type": "object",
-        "required": ["name", "description", "input_schema_json"],
+        "required": ["name", "description", "input_schema_json", "execution"],
         "properties": {
           "name": {
             "type": "string",
@@ -23,6 +23,10 @@
             "type": "string",
             "minLength": 2,
             "maxLength": 65536
+          },
+          "execution": {
+            "type": "string",
+            "enum": ["parallel_safe", "exclusive"]
           }
         },
         "additionalProperties": false

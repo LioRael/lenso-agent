@@ -3,10 +3,12 @@
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
+    future::Future,
     rc::Rc,
     time::Instant,
 };
 
+use futures::{StreamExt, stream};
 use lenso::prelude::*;
 use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
@@ -132,6 +134,7 @@ struct AgentConfig {
     max_tool_calls: u32,
     max_output_tokens: i64,
     max_history_events: i64,
+    max_parallel_tool_calls: u32,
 }
 
 #[lenso::module(validate = validate_agent_config)]
@@ -153,6 +156,7 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
         || config.max_steps == 0
         || config.max_steps > 64
         || config.max_tool_calls > 64
+        || !(1..=16).contains(&config.max_parallel_tool_calls)
         || config.max_output_tokens <= 0
         || !(1..=1000).contains(&config.max_history_events)
     {
@@ -480,7 +484,7 @@ async fn execute_steps(
             return Err(ModuleError::domain(RunTurnError::ContextLimitExceeded));
         }
         tool_call_count = tool_call_count.saturating_add(requested);
-        for tool_call in completion.tool_calls {
+        for tool_call in &completion.tool_calls {
             if !admitted_tools.contains(tool_call.tool_name.as_str()) {
                 return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
                     detail: format!(
@@ -489,95 +493,216 @@ async fn execute_steps(
                     ),
                 }));
             }
-            *revision = append_events(
+        }
+        for (parallel_safe, wave) in tool_call_waves(completion.tool_calls, &static_tools) {
+            execute_tool_wave(
                 clients,
                 context,
                 session_id,
-                revision.clone(),
-                vec![session_event(
-                    AppendSessionRequestEventsItemKind::ToolRequested,
-                    Some(turn_id),
-                    &serde_json::json!({
-                        "call_id": tool_call.tool_call_id,
-                        "name": tool_call.tool_name,
-                        "arguments_json": tool_call.arguments_json
-                    }),
-                )?],
-            )
-            .await?;
-            sequence = sequence.saturating_add(1);
-            send_agent_message(
+                turn_id,
+                revision,
+                &mut sequence,
                 channel,
-                tool_started_message(&tool_call, session_id, sequence),
-                context.request_id(),
+                &mut messages,
+                wave,
+                if parallel_safe {
+                    config.max_parallel_tool_calls as usize
+                } else {
+                    1
+                },
             )
             .await?;
+        }
+    }
+    Err(ModuleError::domain(RunTurnError::StepLimitExceeded))
+}
+
+fn tool_is_parallel_safe(
+    catalog: &BTreeMap<String, tools_capability::CatalogResponseToolsItem>,
+    tool_call: &CompleteMessage,
+) -> bool {
+    matches!(
+        catalog
+            .get(&tool_call.tool_name)
+            .map(|tool| &tool.execution),
+        Some(tools_capability::CatalogResponseToolsItemExecution::ParallelSafe)
+    )
+}
+
+fn tool_call_waves(
+    tool_calls: Vec<CompleteMessage>,
+    catalog: &BTreeMap<String, tools_capability::CatalogResponseToolsItem>,
+) -> Vec<(bool, Vec<CompleteMessage>)> {
+    let mut waves: Vec<(bool, Vec<CompleteMessage>)> = Vec::new();
+    for tool_call in tool_calls {
+        let parallel_safe = tool_is_parallel_safe(catalog, &tool_call);
+        if parallel_safe && let Some((true, calls)) = waves.last_mut() {
+            calls.push(tool_call);
+        } else {
+            waves.push((parallel_safe, vec![tool_call]));
+        }
+    }
+    waves
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "one wave transaction keeps durable ordering and streamed progress together"
+)]
+async fn execute_tool_wave(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    turn_id: &str,
+    revision: &mut String,
+    sequence: &mut u64,
+    channel: &mut ProviderStreamChannel<agent_capability::Agent>,
+    messages: &mut Vec<CompleteMessageInput>,
+    tool_calls: Vec<CompleteMessage>,
+    max_parallel: usize,
+) -> Result<(), TurnFailure> {
+    let requested_events = tool_calls
+        .iter()
+        .map(|tool_call| {
+            session_event(
+                AppendSessionRequestEventsItemKind::ToolRequested,
+                Some(turn_id),
+                &serde_json::json!({
+                    "call_id": tool_call.tool_call_id,
+                    "name": tool_call.tool_name,
+                    "arguments_json": tool_call.arguments_json
+                }),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    *revision = append_events(
+        clients,
+        context,
+        session_id,
+        revision.clone(),
+        requested_events,
+    )
+    .await?;
+    for tool_call in &tool_calls {
+        *sequence = sequence.saturating_add(1);
+        send_agent_message(
+            channel,
+            tool_started_message(tool_call, session_id, *sequence),
+            context.request_id(),
+        )
+        .await?;
+    }
+
+    let tools = clients.tools.clone();
+    let invocation_context = context.clone();
+    let outcomes = execute_bounded(tool_calls, max_parallel, move |tool_call| {
+        let tools = tools.clone();
+        let context = invocation_context.clone();
+        async move {
             let started_at = Instant::now();
-            let tool_result = match clients
-                .tools
+            let result = tools
                 .execute_with_context(
-                    context.clone(),
+                    context,
                     ExecuteRequest {
                         name: tool_call.tool_name.clone(),
                         arguments_json: tool_call.arguments_json.clone(),
                     },
                 )
-                .await
-            {
-                Ok(result) => result,
-                Err(error) => {
-                    let duration_ms = elapsed_millis(started_at);
-                    sequence = sequence.saturating_add(1);
-                    send_agent_message(
-                        channel,
-                        tool_failed_message(
-                            &tool_call,
-                            session_id,
-                            sequence,
-                            duration_ms,
-                            bounded_tool_error(&error),
-                        ),
-                        context.request_id(),
-                    )
-                    .await?;
-                    return Err(map_tools_error(error));
+                .await;
+            (elapsed_millis(started_at), result)
+        }
+    })
+    .await;
+
+    let mut first_error = None;
+    for (_, tool_call, (duration_ms, outcome)) in outcomes {
+        match outcome {
+            Ok(tool_result) => {
+                *revision = append_events(
+                    clients,
+                    context,
+                    session_id,
+                    revision.clone(),
+                    vec![session_event(
+                        AppendSessionRequestEventsItemKind::ToolResult,
+                        Some(turn_id),
+                        &serde_json::json!({
+                            "call_id": tool_call.tool_call_id,
+                            "name": tool_call.tool_name,
+                            "metadata_json": tool_result.metadata_json
+                        }),
+                    )?],
+                )
+                .await?;
+                *sequence = sequence.saturating_add(1);
+                send_agent_message(
+                    channel,
+                    tool_completed_message(
+                        &tool_call,
+                        session_id,
+                        *sequence,
+                        duration_ms,
+                        &tool_result,
+                    ),
+                    context.request_id(),
+                )
+                .await?;
+                messages.push(assistant_tool_message(&tool_call));
+                messages.push(CompleteMessageInput {
+                    role: CompleteMessageRole::Tool,
+                    content: tool_result.content,
+                    tool_call_id: Some(tool_call.tool_call_id),
+                    tool_name: None,
+                    arguments_json: None,
+                });
+            }
+            Err(error) => {
+                *sequence = sequence.saturating_add(1);
+                send_agent_message(
+                    channel,
+                    tool_failed_message(
+                        &tool_call,
+                        session_id,
+                        *sequence,
+                        duration_ms,
+                        bounded_tool_error(&error),
+                    ),
+                    context.request_id(),
+                )
+                .await?;
+                if first_error.is_none() {
+                    first_error = Some(map_tools_error(error));
                 }
-            };
-            let duration_ms = elapsed_millis(started_at);
-            *revision = append_events(
-                clients,
-                context,
-                session_id,
-                revision.clone(),
-                vec![session_event(
-                    AppendSessionRequestEventsItemKind::ToolResult,
-                    Some(turn_id),
-                    &serde_json::json!({
-                        "call_id": tool_call.tool_call_id,
-                        "name": tool_call.tool_name,
-                        "metadata_json": tool_result.metadata_json
-                    }),
-                )?],
-            )
-            .await?;
-            sequence = sequence.saturating_add(1);
-            send_agent_message(
-                channel,
-                tool_completed_message(&tool_call, session_id, sequence, duration_ms, &tool_result),
-                context.request_id(),
-            )
-            .await?;
-            messages.push(assistant_tool_message(&tool_call));
-            messages.push(CompleteMessageInput {
-                role: CompleteMessageRole::Tool,
-                content: tool_result.content,
-                tool_call_id: Some(tool_call.tool_call_id),
-                tool_name: None,
-                arguments_json: None,
-            });
+            }
         }
     }
-    Err(ModuleError::domain(RunTurnError::StepLimitExceeded))
+    match first_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+async fn execute_bounded<T, R, F, Fut>(
+    items: Vec<T>,
+    max_parallel: usize,
+    mut execute: F,
+) -> Vec<(usize, T, R)>
+where
+    T: Clone,
+    F: FnMut(T) -> Fut,
+    Fut: Future<Output = R>,
+{
+    let mut outcomes = stream::iter(items.into_iter().enumerate().map(|(index, item)| {
+        let returned = item.clone();
+        let future = execute(item);
+        async move { (index, returned, future.await) }
+    }))
+    .buffer_unordered(max_parallel)
+    .collect::<Vec<_>>()
+    .await;
+    outcomes.sort_by_key(|(index, _, _)| *index);
+    outcomes
 }
 
 #[derive(Debug)]
@@ -1077,6 +1202,7 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 mod tests {
     use super::*;
     use lenso_kernel::{CancellationToken, NativeStreamSession};
+    use std::{cell::RefCell, task::Poll};
 
     #[test]
     fn struct_authoring_derives_the_complete_module_descriptor() {
@@ -1102,7 +1228,8 @@ mod tests {
                 "max_steps",
                 "max_tool_calls",
                 "max_output_tokens",
-                "max_history_events"
+                "max_history_events",
+                "max_parallel_tool_calls"
             ])
         );
     }
@@ -1286,5 +1413,124 @@ mod tests {
             vec!["text.echo", "workspace.read"]
         );
         assert!(RunScope::new([""]).is_err());
+    }
+
+    #[test]
+    fn bounded_execution_settles_every_call_and_restores_model_order() {
+        let active = Rc::new(Cell::new(0_usize));
+        let peak = Rc::new(Cell::new(0_usize));
+        let completion_order = Rc::new(RefCell::new(Vec::new()));
+        let outcomes = futures::executor::block_on(execute_bounded(
+            vec![(0_u8, 3_u8, true), (1, 1, false), (2, 0, true)],
+            2,
+            {
+                let active = active.clone();
+                let peak = peak.clone();
+                let completion_order = completion_order.clone();
+                move |(id, pending_polls, succeeds)| {
+                    let active = active.clone();
+                    let peak = peak.clone();
+                    let completion_order = completion_order.clone();
+                    let mut remaining = pending_polls;
+                    let mut started = false;
+                    std::future::poll_fn(move |context| {
+                        if !started {
+                            started = true;
+                            let now = active.get() + 1;
+                            active.set(now);
+                            peak.set(peak.get().max(now));
+                        }
+                        if remaining > 0 {
+                            remaining -= 1;
+                            context.waker().wake_by_ref();
+                            return Poll::Pending;
+                        }
+                        active.set(active.get() - 1);
+                        completion_order.borrow_mut().push(id);
+                        Poll::Ready(if succeeds { Ok(id) } else { Err(id) })
+                    })
+                }
+            },
+        ));
+
+        assert_eq!(peak.get(), 2);
+        assert_eq!(&*completion_order.borrow(), &[1, 2, 0]);
+        assert_eq!(
+            outcomes
+                .iter()
+                .map(|(index, item, result)| (*index, item.0, result.is_ok()))
+                .collect::<Vec<_>>(),
+            [(0, 0, true), (1, 1, false), (2, 2, true)]
+        );
+        assert_eq!(active.get(), 0);
+    }
+
+    #[test]
+    fn exclusive_tools_split_parallel_waves_in_model_order() {
+        fn definition(
+            name: &str,
+            execution: tools_capability::CatalogResponseToolsItemExecution,
+        ) -> tools_capability::CatalogResponseToolsItem {
+            tools_capability::CatalogResponseToolsItem {
+                name: name.to_owned(),
+                description: String::new(),
+                input_schema_json: "{}".try_into().unwrap(),
+                execution,
+            }
+        }
+        fn call(name: &str, sequence: u8) -> CompleteMessage {
+            CompleteMessage {
+                arguments_json: "{}".try_into().unwrap(),
+                input_tokens: "0".to_owned(),
+                kind: CompleteMessageKind::ToolCall,
+                output_tokens: "0".to_owned(),
+                sequence: sequence.to_string(),
+                text: String::new(),
+                tool_call_id: format!("call-{sequence}"),
+                tool_name: name.to_owned(),
+            }
+        }
+        let catalog = BTreeMap::from([
+            (
+                "read".to_owned(),
+                definition(
+                    "read",
+                    tools_capability::CatalogResponseToolsItemExecution::ParallelSafe,
+                ),
+            ),
+            (
+                "edit".to_owned(),
+                definition(
+                    "edit",
+                    tools_capability::CatalogResponseToolsItemExecution::Exclusive,
+                ),
+            ),
+        ]);
+
+        let waves = tool_call_waves(
+            vec![
+                call("read", 1),
+                call("read", 2),
+                call("edit", 3),
+                call("read", 4),
+            ],
+            &catalog,
+        );
+
+        assert_eq!(
+            waves
+                .iter()
+                .map(|(parallel, calls)| (*parallel, calls.len()))
+                .collect::<Vec<_>>(),
+            [(true, 2), (false, 1), (true, 1)]
+        );
+        assert_eq!(
+            waves
+                .into_iter()
+                .flat_map(|(_, calls)| calls)
+                .map(|call| call.tool_call_id)
+                .collect::<Vec<_>>(),
+            ["call-1", "call-2", "call-3", "call-4"]
+        );
     }
 }

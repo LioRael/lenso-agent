@@ -2890,7 +2890,7 @@ mod tests {
                 .module_instance("agent")
                 .unwrap()
                 .configuration(),
-            r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"model":"gpt-5.6-luna"}"#
+            r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-5.6-luna"}"#
         );
         assert_eq!(
             generation

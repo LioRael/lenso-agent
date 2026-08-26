@@ -57,7 +57,7 @@
         {
           "id": "native",
           "artifact": null,
-          "built_in_factory": "lenso.secrets.env@0.1.0",
+          "built_in_factory": "lenso.secrets.env@0.1.1",
           "entrypoint": "default",
           "execution_class": "lenso.native-rust@1",
           "targets": ["aarch64-linux", "aarch64-macos", "x86_64-linux", "x86_64-macos"],

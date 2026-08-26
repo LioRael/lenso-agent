@@ -29,7 +29,7 @@ Status: implementation baseline for the higher-authority local-coding profile.
   consumer.
 - **Owned facts:** Tool name, Model-facing JSON schema, default timeout, output
   presentation, metadata, and Process-to-Tool Domain Error mapping.
-- **Provides:** `lenso.agent.tool-provider@1` (`catalog`, `execute`).
+- **Provides:** `lenso.agent.tool-provider@2` (`catalog`, `execute`).
 - **Requires:** exactly one private `lenso.agent.process@1` provider.
 - **Final authorization:** none beyond argument decoding; it cannot expand the
   authoritative catalog returned by its bound Process Provider.

@@ -1056,8 +1056,8 @@ fn write_tool_bundle_release(root: &Path, release_version: &str) -> String {
             "package_id": "lenso.agent.text-tools",
             "configuration_schema_digest": sha256_digest(empty_configuration_schema),
             "provides": [{
-                "capability_id": "lenso.agent.tool-provider@1",
-                "descriptor_version": "1.0.0",
+                "capability_id": "lenso.agent.tool-provider@2",
+                "descriptor_version": "2.0.0",
                 "descriptor_digest": sha256_digest(include_bytes!("../../../crates/lenso-capability-agent-tool-provider/capability.json")),
                 "request_operations": ["catalog", "execute"]
             }],
@@ -1069,7 +1069,7 @@ fn write_tool_bundle_release(root: &Path, release_version: &str) -> String {
                 "entrypoint": "default",
                 "execution_class": "lenso.native-rust@1",
                 "targets": [target],
-                "profiles": ["agent-tool-provider-v1"],
+                "profiles": ["agent-tool-provider-v2"],
                 "support_channel": "stable",
                 "trust": "trusted"
             }],

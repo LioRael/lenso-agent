@@ -26,6 +26,7 @@
           "model": "fixture/readme-summary-v1",
           "max_steps": 8,
           "max_tool_calls": 4,
+          "max_parallel_tool_calls": 4,
           "max_output_tokens": 1024,
           "max_history_events": 200
         }
@@ -135,6 +136,26 @@
           "max_search_entries": 10000,
           "max_search_bytes": 16777216,
           "max_search_matches": 1000
+        }
+      }
+    ],
+    "binding_policies": [
+      {
+        "consumer": "agent",
+        "capability_id": "lenso.agent.tools@2",
+        "provider": "tools",
+        "admission": {
+          "queue_capacity": 0,
+          "max_concurrency": 4
+        }
+      },
+      {
+        "consumer": "tools",
+        "capability_id": "lenso.agent.tool-provider@2",
+        "provider": "workspace-read",
+        "admission": {
+          "queue_capacity": 0,
+          "max_concurrency": 4
         }
       }
     ],

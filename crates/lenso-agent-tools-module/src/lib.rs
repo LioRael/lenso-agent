@@ -6,8 +6,8 @@ use lenso::prelude::*;
 use lenso_capability_agent_tool_provider as provider_contract;
 use lenso_capability_agent_tools::{
     self as tools_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
-    ExecuteError, ExecuteErrorToolErrorPayload, ExecuteRequest, ExecuteResponse,
-    ExecuteResponseContentType, ToolsCatalog, ToolsExecute, ToolsProvider,
+    CatalogResponseToolsItemExecution, ExecuteError, ExecuteErrorToolErrorPayload, ExecuteRequest,
+    ExecuteResponse, ExecuteResponseContentType, ToolsCatalog, ToolsExecute, ToolsProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -115,6 +115,14 @@ impl Lifecycle for ToolsModule {
                     name: tool.name,
                     description: tool.description,
                     input_schema_json: tool.input_schema_json,
+                    execution: match tool.execution {
+                        provider_contract::ToolExecutionClass::ParallelSafe => {
+                            CatalogResponseToolsItemExecution::ParallelSafe
+                        }
+                        provider_contract::ToolExecutionClass::Exclusive => {
+                            CatalogResponseToolsItemExecution::Exclusive
+                        }
+                    },
                 });
             }
         }

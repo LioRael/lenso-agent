@@ -49,8 +49,8 @@
           "cardinality": "one"
         },
         {
-          "capability_id": "lenso.agent.tools@1",
-          "descriptor_version": "1.0.0",
+          "capability_id": "lenso.agent.tools@2",
+          "descriptor_version": "2.0.0",
           "cardinality": "one"
         }
       ],

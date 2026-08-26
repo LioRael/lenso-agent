@@ -29,10 +29,15 @@ additive within the existing Capability major.
 
 ## Tool boundary
 
-`lenso.agent.tools@1` is the application-facing aggregate catalog. It fans out
-to one or more `lenso.agent.tool-provider@1` providers selected by composition.
+`lenso.agent.tools@2` is the application-facing aggregate catalog. It fans out
+to one or more `lenso.agent.tool-provider@2` providers selected by composition.
 Tool names must be unique in the aggregate catalog. Duplicate names fail
 composition or catalog construction; runtime order never decides a winner.
+
+Each Tool definition declares `parallel_safe` or `exclusive` execution.
+Consecutive safe calls may overlap within the App's explicit binding admission
+and Agent Loop bound. Exclusive calls are ordering barriers. Results are
+persisted and returned to the Model in request order.
 
 All JSON-bearing string fields contain one complete JSON value. Providers must
 reject malformed or schema-invalid `arguments_json` as `invalid_arguments`.

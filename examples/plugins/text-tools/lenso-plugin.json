@@ -10,9 +10,9 @@
       "configuration_schema_digest": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
       "provides": [
         {
-          "capability_id": "lenso.agent.tool-provider@1",
-          "descriptor_version": "1.0.0",
-          "descriptor_digest": "sha256:b726d7dd7bffaf07e48e0a55013f8d1b55d29d613f22b4e41e693fafd76c6fb4",
+          "capability_id": "lenso.agent.tool-provider@2",
+          "descriptor_version": "2.0.0",
+          "descriptor_digest": "sha256:96374f17b271da64adeaba5201883a79e9a5233b9217d84d3bc8cbc5477c4e46",
           "request_operations": ["catalog", "execute"]
         }
       ],
@@ -30,7 +30,7 @@
             "x86_64-linux",
             "x86_64-macos"
           ],
-          "profiles": ["agent-tool-provider-v1"],
+          "profiles": ["agent-tool-provider-v2"],
           "support_channel": "stable",
           "trust": "trusted"
         }
