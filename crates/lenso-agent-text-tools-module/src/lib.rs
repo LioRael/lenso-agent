@@ -20,7 +20,8 @@ struct TextTools {}
 impl TextTools {
     #[tool(
         name = "uppercase",
-        description = "Convert one bounded UTF-8 string to uppercase."
+        description = "Convert one bounded UTF-8 string to uppercase.",
+        execution = "parallel_safe"
     )]
     fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteError> {
         if arguments.text.len() > MAX_TEXT_BYTES {
@@ -119,7 +120,7 @@ mod tests {
         assert_eq!(descriptor["package_revision"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             descriptor["provided_capabilities"][0]["capability_id"],
-            "lenso.agent.tool-provider@1"
+            "lenso.agent.tool-provider@2"
         );
         assert_eq!(
             descriptor["provided_capabilities"][0]["operations"],

@@ -202,7 +202,7 @@ fn responses_request(
         "input": input,
         "tools": tools,
         "tool_choice": "auto",
-        "parallel_tool_calls": false,
+        "parallel_tool_calls": true,
         "include": ["reasoning.encrypted_content"],
         "reasoning": { "effort": reasoning_effort, "summary": "auto" },
         "text": { "verbosity": "low" },
@@ -687,6 +687,7 @@ mod tests {
         assert_eq!(body["input"][0]["name"], "read");
         assert_eq!(body["input"][1]["type"], "function_call_output");
         assert_eq!(body["tools"][0]["name"], "read");
+        assert_eq!(body["parallel_tool_calls"], true);
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert!(body.get("temperature").is_none());
         assert!(body.get("max_output_tokens").is_none());

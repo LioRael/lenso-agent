@@ -165,7 +165,7 @@ fn chat_request(request: &CompleteOpen) -> Result<serde_json::Value, CompleteErr
         "model": request.model,
         "messages": messages,
         "tools": tools,
-        "parallel_tool_calls": false,
+        "parallel_tool_calls": true,
         "temperature": request.temperature,
         "max_tokens": request.max_output_tokens,
         "stream": true,
@@ -635,7 +635,7 @@ mod tests {
             "read"
         );
         assert_eq!(body["messages"][1]["tool_call_id"], "call-1");
-        assert_eq!(body["parallel_tool_calls"], false);
+        assert_eq!(body["parallel_tool_calls"], true);
     }
 
     #[test]

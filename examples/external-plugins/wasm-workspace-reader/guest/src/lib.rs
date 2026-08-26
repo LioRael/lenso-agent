@@ -19,7 +19,7 @@ lenso_guest_sdk::wasm_host! {
     }
 }
 
-const CAPABILITY: &str = "lenso.agent.tool-provider@1";
+const CAPABILITY: &str = "lenso.agent.tool-provider@2";
 const TOOL: &str = "plugin_workspace_read_text";
 
 #[derive(Deserialize)]
@@ -36,6 +36,7 @@ struct ToolDefinition {
     name: &'static str,
     description: &'static str,
     input_schema_json: &'static str,
+    execution: &'static str,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -62,7 +63,7 @@ struct ExternalWorkspaceReader;
 
 impl Guest for ExternalWorkspaceReader {
     fn describe() -> String {
-        r#"{"abi":"lenso.json-host-imports@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","request_operations":["catalog","execute"]}],"required_capabilities":[{"capability_id":"lenso.agent.workspace-read@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#.to_owned()
+        r#"{"abi":"lenso.json-host-imports@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@2","descriptor_version":"2.0.0","request_operations":["catalog","execute"]}],"required_capabilities":[{"capability_id":"lenso.agent.workspace-read@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#.to_owned()
     }
 
     fn invoke(
@@ -82,6 +83,7 @@ impl Guest for ExternalWorkspaceReader {
                         name: TOOL,
                         description: "Read UTF-8 text through the Host-selected read-only workspace provider.",
                         input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"minLength":1,"type":"string"}},"required":["path"],"type":"object"}"#,
+                        execution: "parallel_safe",
                     }],
                 })
                 .map_err(|_| "\"catalog_invalid\"".to_owned())

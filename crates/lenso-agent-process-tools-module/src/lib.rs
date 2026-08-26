@@ -9,7 +9,8 @@ use lenso_capability_agent_process::{
 };
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
-    ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolProviderProvider,
+    ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
+    ToolProviderProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -181,6 +182,7 @@ impl Lifecycle for ProcessToolsModule {
                         name: EXEC_TOOL.to_owned(),
                         description: "Run one explicitly allowed executable without shell parsing. The command can still execute trusted project code and is not a sandbox.".to_owned(),
                         input_schema_json,
+                        execution: ToolExecutionClass::Exclusive,
                     }],
                 },
             }));

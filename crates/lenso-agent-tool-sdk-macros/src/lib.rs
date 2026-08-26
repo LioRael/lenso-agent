@@ -9,7 +9,8 @@ use syn::{
 
 /// Derives one Tool Provider catalog and dispatcher from typed methods.
 ///
-/// Each method marked with `#[tool(name = "...", description = "...")]` accepts exactly one typed
+/// Each method marked with
+/// `#[tool(name = "...", description = "...", execution = "parallel_safe|exclusive")]` accepts exactly one typed
 /// argument (optionally after `&self`) and returns the Tool Provider contract's
 /// `Result<ExecuteResponse, ExecuteError>` shape. Both synchronous and asynchronous Tools are
 /// supported.
@@ -36,6 +37,7 @@ struct ToolMethod {
     is_async: bool,
     name: LitStr,
     description: LitStr,
+    execution: LitStr,
 }
 
 fn expand(implementation: &mut ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
@@ -141,7 +143,7 @@ fn parse_tool_method(method: &mut ImplItemFn) -> syn::Result<Option<ToolMethod>>
         return Ok(None);
     };
     let attribute = method.attrs.remove(attribute_index);
-    let (name, description) = parse_tool_attribute(&attribute)?;
+    let (name, description, execution) = parse_tool_attribute(&attribute)?;
     if matches!(method.sig.output, ReturnType::Default) {
         return Err(syn::Error::new(
             method.sig.ident.span(),
@@ -169,6 +171,7 @@ fn parse_tool_method(method: &mut ImplItemFn) -> syn::Result<Option<ToolMethod>>
         is_async: method.sig.asyncness.is_some(),
         name,
         description,
+        execution,
     }))
 }
 
@@ -201,6 +204,15 @@ fn catalog_entry(tool: &ToolMethod) -> proc_macro2::TokenStream {
     let argument_type = &tool.argument_type;
     let name = &tool.name;
     let description = &tool.description;
+    let execution = match tool.execution.value().as_str() {
+        "parallel_safe" => {
+            quote!(::lenso_agent_tool_sdk::__private::contract::ToolExecutionClass::ParallelSafe)
+        }
+        "exclusive" => {
+            quote!(::lenso_agent_tool_sdk::__private::contract::ToolExecutionClass::Exclusive)
+        }
+        _ => unreachable!("Tool execution values are validated while parsing"),
+    };
     quote! {
         ::lenso_agent_tool_sdk::__private::contract::ToolDefinition {
             name: #name.to_owned(),
@@ -211,6 +223,7 @@ fn catalog_entry(tool: &ToolMethod) -> proc_macro2::TokenStream {
             .expect("derived Tool input Schema must serialize")
             .try_into()
             .expect("derived Tool input Schema must be valid JSON"),
+            execution: #execution,
         }
     }
 }
@@ -242,11 +255,12 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
     }
 }
 
-fn parse_tool_attribute(attribute: &Attribute) -> syn::Result<(LitStr, LitStr)> {
+fn parse_tool_attribute(attribute: &Attribute) -> syn::Result<(LitStr, LitStr, LitStr)> {
     let values = Punctuated::<MetaNameValue, Token![,]>::parse_terminated
         .parse2(attribute.meta.require_list()?.tokens.clone())?;
     let mut name = None;
     let mut description = None;
+    let mut execution = None;
     for value in values {
         let literal = match value.value {
             Expr::Lit(ExprLit {
@@ -271,15 +285,29 @@ fn parse_tool_attribute(attribute: &Attribute) -> syn::Result<(LitStr, LitStr)> 
                     "duplicate Tool description",
                 ));
             }
+        } else if value.path.is_ident("execution") {
+            if !matches!(literal.value().as_str(), "parallel_safe" | "exclusive") {
+                return Err(syn::Error::new(
+                    literal.span(),
+                    "Tool execution must be `parallel_safe` or `exclusive`",
+                ));
+            }
+            if execution.replace(literal).is_some() {
+                return Err(syn::Error::new(
+                    value.path.span(),
+                    "duplicate Tool execution",
+                ));
+            }
         } else {
             return Err(syn::Error::new(
                 value.path.span(),
-                "expected `name` or `description`",
+                "expected `name`, `description`, or `execution`",
             ));
         }
     }
     Ok((
         name.ok_or_else(|| syn::Error::new(attribute.span(), "missing Tool name"))?,
         description.ok_or_else(|| syn::Error::new(attribute.span(), "missing Tool description"))?,
+        execution.ok_or_else(|| syn::Error::new(attribute.span(), "missing Tool execution"))?,
     ))
 }

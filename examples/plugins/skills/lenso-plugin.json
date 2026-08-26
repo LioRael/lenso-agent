@@ -16,9 +16,9 @@
           "request_operations": ["contribute"]
         },
         {
-          "capability_id": "lenso.agent.tool-provider@1",
-          "descriptor_version": "1.0.0",
-          "descriptor_digest": "sha256:b726d7dd7bffaf07e48e0a55013f8d1b55d29d613f22b4e41e693fafd76c6fb4",
+          "capability_id": "lenso.agent.tool-provider@2",
+          "descriptor_version": "2.0.0",
+          "descriptor_digest": "sha256:96374f17b271da64adeaba5201883a79e9a5233b9217d84d3bc8cbc5477c4e46",
           "request_operations": ["catalog", "execute"]
         }
       ],

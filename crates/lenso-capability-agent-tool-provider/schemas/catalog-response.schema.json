@@ -15,7 +15,7 @@
   "$defs": {
     "ToolDefinition": {
       "type": "object",
-      "required": ["name", "description", "input_schema_json"],
+      "required": ["name", "description", "input_schema_json", "execution"],
       "properties": {
         "name": {
           "type": "string",
@@ -30,9 +30,17 @@
           "type": "string",
           "minLength": 2,
           "maxLength": 65536
+        },
+        "execution": {
+          "$ref": "#/$defs/ToolExecutionClass",
+          "description": "Static safety classification enforced by the Agent Loop scheduler."
         }
       },
       "additionalProperties": false
+    },
+    "ToolExecutionClass": {
+      "type": "string",
+      "enum": ["parallel_safe", "exclusive"]
     }
   },
   "title": "CatalogResponse"

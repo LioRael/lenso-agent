@@ -10,7 +10,8 @@ use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
-    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolProviderProvider,
+    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolExecutionClass,
+    ToolProviderProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
@@ -297,11 +298,13 @@ impl ToolProviderProvider for WorkspaceEditProvider {
                     name: EDIT_TOOL.to_owned(),
                     description: "Replace one unique, exact UTF-8 string in an existing workspace file. The call fails if old_text is absent or not unique.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::Exclusive,
                 },
                 ToolDefinition {
                     name: CREATE_FILE_TOOL.to_owned(),
                     description: "Create one new UTF-8 workspace file below an existing directory. Existing targets are never overwritten.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::Exclusive,
                 },
             ],
         }))))

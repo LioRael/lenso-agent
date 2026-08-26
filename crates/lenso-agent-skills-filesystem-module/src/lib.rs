@@ -19,7 +19,7 @@ use lenso_capability_agent_prompt_provider::{
 use lenso_capability_agent_tool_provider as tool_provider;
 use lenso_capability_agent_tool_provider::{
     CatalogError, CatalogRequest, CatalogResponse, ContentType, ExecuteError, ExecuteRequest,
-    ExecuteResponse, ToolDefinition,
+    ExecuteResponse, ToolDefinition, ToolExecutionClass,
 };
 use sha2::{Digest, Sha256};
 
@@ -264,6 +264,7 @@ impl FilesystemSkillsModule {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{},"type":"object"}"#.to_owned()
                         .try_into()
                         .expect("static Tool Schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
                 ToolDefinition {
                     name: READ_TOOL.to_owned(),
@@ -272,6 +273,7 @@ impl FilesystemSkillsModule {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#.to_owned()
                         .try_into()
                         .expect("static Tool Schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
                 ToolDefinition {
                     name: LIST_RESOURCES_TOOL.to_owned(),
@@ -280,6 +282,7 @@ impl FilesystemSkillsModule {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"}},"required":["name"],"type":"object"}"#.to_owned()
                         .try_into()
                         .expect("static Tool Schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
                 ToolDefinition {
                     name: READ_RESOURCE_TOOL.to_owned(),
@@ -288,6 +291,7 @@ impl FilesystemSkillsModule {
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"name":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["name","path"],"type":"object"}"#.to_owned()
                         .try_into()
                         .expect("static Tool Schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
             ],
         }))
@@ -931,7 +935,7 @@ mod tests {
 
         assert_eq!(descriptor["package_id"], "lenso.agent.skills.filesystem");
         assert_eq!(provided.len(), 2);
-        assert_eq!(provided[0]["capability_id"], "lenso.agent.tool-provider@1");
+        assert_eq!(provided[0]["capability_id"], "lenso.agent.tool-provider@2");
         assert_eq!(
             provided[1]["capability_id"],
             "lenso.agent.prompt-provider@1"

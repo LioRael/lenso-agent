@@ -4,7 +4,8 @@ use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
-    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolProviderProvider,
+    ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolExecutionClass,
+    ToolProviderProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use std::{
@@ -386,16 +387,19 @@ impl ToolProviderProvider for WorkspaceProvider {
                     name: LIST_TOOL.to_owned(),
                     description: "List one directory below the selected workspace root. Hidden entries are omitted.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"}},"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
                 ToolDefinition {
                     name: SEARCH_TOOL.to_owned(),
                     description: "Search UTF-8 workspace files recursively for a case-sensitive literal string. Hidden entries are omitted.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"default":".","minLength":1,"type":"string"},"query":{"minLength":1,"type":"string"}},"required":["query"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
                 ToolDefinition {
                     name: READ_TOOL.to_owned(),
                     description: "Read one UTF-8 text file below the selected workspace root.".to_owned(),
                     input_schema_json: r#"{"additionalProperties":false,"properties":{"path":{"minLength":1,"type":"string"}},"required":["path"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::ParallelSafe,
                 },
             ],
         }))))

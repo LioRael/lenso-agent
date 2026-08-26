@@ -32,7 +32,7 @@ use ratatui::{
     },
 };
 
-use crate::generation::{AgentApp, TurnGeneration};
+use crate::generation::{AgentApp, OnlineGenerationEvent, TurnGeneration};
 use blocks::{
     ToolCard, ToolStatus, render_grouped_tool_block, render_tool_block, render_tool_group,
 };
@@ -610,6 +610,7 @@ async fn run_loop(
     state: &mut TuiState,
 ) -> Result<(), String> {
     loop {
+        present_online_generation_events(app, state).await;
         terminal
             .draw(|frame| render(frame, state))
             .map_err(|error| format!("failed to render TUI: {error}"))?;
@@ -648,6 +649,55 @@ async fn run_loop(
             }
         }
     }
+}
+
+async fn present_online_generation_events(app: &AgentApp, state: &mut TuiState) {
+    for event in app.take_online_generation_events() {
+        match event {
+            OnlineGenerationEvent::Switched {
+                generation_spec_digest,
+                previous_generation_spec_digest,
+                routing_epoch,
+                ..
+            } => {
+                match app.tui_panels().await {
+                    Ok(panels) => {
+                        state.panels = panels;
+                        state.selected_panel = state
+                            .selected_panel
+                            .min(state.panels.len().saturating_sub(1));
+                    }
+                    Err(error) => state.transcript.push(TranscriptEntry::Message {
+                        speaker: Speaker::Error,
+                        text: format!(
+                            "App Generation switched, but TUI contributions could not refresh: {error}"
+                        ),
+                    }),
+                }
+                state.push_system(format!(
+                    "App Generation switched {} → {} at routing epoch {routing_epoch}",
+                    short_digest(&previous_generation_spec_digest),
+                    short_digest(&generation_spec_digest),
+                ));
+            }
+            OnlineGenerationEvent::Rejected {
+                active_set_digest,
+                detail,
+            } => state.transcript.push(TranscriptEntry::Message {
+                speaker: Speaker::Error,
+                text: format!(
+                    "Plugin update was rejected{}; the current App Generation remains active: {detail}",
+                    active_set_digest.as_deref().map_or_else(String::new, |digest| {
+                        format!(" ({})", short_digest(digest))
+                    })
+                ),
+            }),
+        }
+    }
+}
+
+fn short_digest(digest: &str) -> &str {
+    digest.get(..digest.len().min(15)).unwrap_or(digest)
 }
 
 fn handle_terminal_event(

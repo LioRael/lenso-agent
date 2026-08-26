@@ -11,7 +11,7 @@ Plugin selection.
 - **Owned facts:** workspace mutation root, allowed Tool names, exact-replace
   semantics, create-only semantics, path containment, symlink policy, byte
   limits, and atomic file replacement.
-- **Provides:** `lenso.agent.tool-provider@1` (`catalog`, `execute`).
+- **Provides:** `lenso.agent.tool-provider@2` (`catalog`, `execute`).
 - **Requires:** none.
 - **Configuration:** canonical workspace root, maximum existing/final file
   bytes, and maximum aggregate exact-replacement bytes.

@@ -19,7 +19,7 @@ lenso_guest_sdk::wasm_host! {
     }
 }
 
-const CAPABILITY: &str = "lenso.agent.tool-provider@1";
+const CAPABILITY: &str = "lenso.agent.tool-provider@2";
 const TOOL: &str = "plugin_http_get";
 
 #[derive(Deserialize)]
@@ -36,6 +36,7 @@ struct ToolDefinition {
     name: &'static str,
     description: &'static str,
     input_schema_json: &'static str,
+    execution: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -62,7 +63,7 @@ struct ExternalHttpFetch;
 
 impl Guest for ExternalHttpFetch {
     fn describe() -> String {
-        r#"{"abi":"lenso.json-host-imports@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","request_operations":["catalog","execute"]}],"required_capabilities":[{"capability_id":"lenso.agent.http-fetch@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#.to_owned()
+        r#"{"abi":"lenso.json-host-imports@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@2","descriptor_version":"2.0.0","request_operations":["catalog","execute"]}],"required_capabilities":[{"capability_id":"lenso.agent.http-fetch@1","descriptor_version":"1.0.0","cardinality":"one"}]}"#.to_owned()
     }
 
     fn invoke(
@@ -82,6 +83,7 @@ impl Guest for ExternalHttpFetch {
                         name: TOOL,
                         description: "Fetch UTF-8 HTTP content through the Host-approved network origin.",
                         input_schema_json: r#"{"additionalProperties":false,"properties":{"url":{"minLength":8,"type":"string"}},"required":["url"],"type":"object"}"#,
+                        execution: "parallel_safe",
                     }],
                 })
                 .map_err(|_| "\"catalog_invalid\"".to_owned())

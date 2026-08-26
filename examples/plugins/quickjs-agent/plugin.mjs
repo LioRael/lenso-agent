@@ -4,7 +4,7 @@ let nextId = 1;
 const MODEL = "lenso.agent.model@1";
 const PROMPT = "lenso.agent.prompt@1";
 const SESSION = "lenso.agent.session@1";
-const TOOLS = "lenso.agent.tools@1";
+const TOOLS = "lenso.agent.tools@2";
 
 function unwrap(encoded, label) {
   const envelope = JSON.parse(encoded);
@@ -38,7 +38,7 @@ export function describe() {
       { capability_id: MODEL, descriptor_version: "1.1.0", cardinality: "one" },
       { capability_id: PROMPT, descriptor_version: "1.0.0", cardinality: "one" },
       { capability_id: SESSION, descriptor_version: "1.1.0", cardinality: "one" },
-      { capability_id: TOOLS, descriptor_version: "1.0.0", cardinality: "one" }
+      { capability_id: TOOLS, descriptor_version: "2.0.0", cardinality: "one" }
     ]
   });
 }

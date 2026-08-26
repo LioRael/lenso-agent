@@ -5,7 +5,7 @@ wit_bindgen::generate!({
     world: "plugin",
 });
 
-const CAPABILITY: &str = "lenso.agent.tool-provider@1";
+const CAPABILITY: &str = "lenso.agent.tool-provider@2";
 const TOOL: &str = "uppercase";
 
 #[derive(Deserialize)]
@@ -22,6 +22,7 @@ struct ToolDefinition {
     name: &'static str,
     description: &'static str,
     input_schema_json: &'static str,
+    execution: &'static str,
 }
 
 #[derive(Deserialize)]
@@ -48,7 +49,7 @@ struct ExternalTextTools;
 
 impl Guest for ExternalTextTools {
     fn describe() -> String {
-        r#"{"abi":"lenso.json-request@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@1","descriptor_version":"1.0.0","request_operations":["catalog","execute"]}]}"#.to_owned()
+        r#"{"abi":"lenso.json-request@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@2","descriptor_version":"2.0.0","request_operations":["catalog","execute"]}]}"#.to_owned()
     }
 
     fn invoke(
@@ -68,6 +69,7 @@ impl Guest for ExternalTextTools {
                         name: TOOL,
                         description: "Convert one UTF-8 string to uppercase.",
                         input_schema_json: r#"{"additionalProperties":false,"properties":{"text":{"maxLength":4096,"type":"string"}},"required":["text"],"type":"object"}"#,
+                        execution: "parallel_safe",
                     }],
                 })
                 .map_err(|_| "\"catalog_invalid\"".to_owned())
