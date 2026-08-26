@@ -4,6 +4,7 @@
   "host_package": "lenso-agent-cli",
   "packages": {
     "lenso.agent.cli": "lenso-agent-cli-module",
+    "lenso.agent.discord": "lenso-agent-discord-module",
     "lenso.agent.http-fetch": "lenso-agent-http-fetch-module",
     "lenso.agent.loop": "lenso-agent-loop-module",
     "lenso.agent.model.fixture": "lenso-agent-model-fixture-module",
@@ -34,6 +35,11 @@
       {
         "key": "cli",
         "package": "lenso.agent.cli",
+        "configuration": {}
+      },
+      {
+        "key": "discord",
+        "package": "lenso.agent.discord",
         "configuration": {}
       },
       {

@@ -49,6 +49,25 @@ conversation-to-Session mapping in `.lenso/telegram/state.json`, and obtains a
 fresh App Generation lease for every message. Bot tokens remain in the
 environment and never enter the Plan or Session.
 
+Run the Agent through Discord by creating an application and Bot in the
+Discord Developer Portal, inviting it with permission to view channels, read
+message history, and send messages, then selecting the channels that may
+invoke it:
+
+```sh
+export DISCORD_BOT_TOKEN='<bot-token>'
+cargo run -p lenso-agent-cli --bin lenso-agent-discord -- \
+  --allow-channel '<discord-channel-id>'
+```
+
+Direct messages are accepted from allowed channels. Guild messages require an
+`@mention` or reply to the Bot by default, which avoids requesting Discord's
+privileged Message Content Intent. `--respond-all-guilds` requires the explicit
+`--message-content-intent` switch and the matching Developer Portal setting.
+Discord Turns expose no Tools unless repeated `--allow-tool <name>` options
+select them. Gateway resume information and channel-to-Session mappings live
+in `.lenso/discord/state.json`; the Bot token stays in the environment.
+
 The base App in `lenso.app.json` uses a deterministic fixture Model and can only
 read the current workspace. Enable workspace mutation without creating or
 selecting another App definition:

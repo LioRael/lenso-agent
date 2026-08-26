@@ -74,3 +74,38 @@
 - **First observable behavior:** two private messages from one allowed chat run
   two Generation-pinned Turns, receive Telegram replies, and resume the same
   durable Session.
+
+## Discord surface Module
+
+- **Owner:** `lenso-agent-discord-module` owns the source-derived Discord
+  consumer identity and Agent binding. The `lenso-agent-discord` Host surface
+  owns Gateway v10 transport, REST replies, and delivery policy.
+- **Deletion boundary:** removing the binary, Module package, and `discord`
+  Instance removes Gateway connections, channel authorization, replies,
+  Gateway resume state, and conversation mapping. Agent, Session, Telegram,
+  terminal, and Plugin behavior remain valid.
+- **Required Capability:** one `lenso.agent@1`.
+- **Provided Capabilities:** none. Discord is an external Agent consumer.
+- **Configuration and secrets:** immutable Module configuration is empty. The
+  Host reads `DISCORD_BOT_TOKEN` or an explicitly named environment variable,
+  requires a channel allowlist, and keeps the token out of Plan, state,
+  Session, and diagnostics.
+- **Durable facts:** `.lenso/discord/state.json` contains Gateway resume data
+  and a bounded `bot + channel -> Session ID` mapping. The Discord surface owns
+  that mapping; the Session Module creates and owns Session IDs and events.
+- **Lifecycle:** after App readiness the Host connects to Gateway v10,
+  identifies or resumes, maintains heartbeats, processes message events
+  sequentially, leases the current App Generation per accepted message, and
+  closes the Gateway during normal shutdown.
+- **Authorization:** exact channel IDs are required unless `*` is deliberately
+  selected. Guild messages require a Bot mention or reply by default. Reading
+  every guild message requires both `--message-content-intent` and the matching
+  privileged Intent in Discord. No Tools are exposed unless explicitly named.
+- **Delivery:** v1 accepts text and sends plain-text replies split at Discord's
+  2,000-character limit with mentions disabled. Gateway Resume can replay
+  messages after a disconnect, so delivery is at least once; if the Discord
+  Gateway session expires while the process is stopped, events missed during
+  that interval cannot be recovered by this surface.
+- **First observable behavior:** an allowed DM or mentioned guild message runs
+  a Generation-pinned Turn, receives a reply, and later messages in that
+  channel resume the same durable Session.

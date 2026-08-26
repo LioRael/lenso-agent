@@ -11,6 +11,7 @@ use std::{
 
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
+use lenso_agent_discord_module as _;
 use lenso_agent_http_fetch_module as _;
 use lenso_agent_loop_module::GENERATION_SPEC_DIGEST_EXTENSION;
 use lenso_agent_model_fixture_module as _;
@@ -71,6 +72,7 @@ const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
 const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
 const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
+const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
@@ -133,6 +135,16 @@ impl AgentApp {
             plan_bytes,
             Path::new(".lenso/plugins"),
             TELEGRAM_CONTROL_DIRECTORY,
+        )
+        .await
+    }
+
+    /// Starts the Discord surface with an independent durable Controller lineage.
+    pub async fn start_discord(plan_bytes: &[u8]) -> Result<Self, String> {
+        Self::start_with_store_and_control_directory(
+            plan_bytes,
+            Path::new(".lenso/plugins"),
+            DISCORD_CONTROL_DIRECTORY,
         )
         .await
     }
@@ -273,6 +285,11 @@ impl AgentApp {
     /// Pins one Telegram message to the active App Generation.
     pub async fn lease_telegram_turn(&self) -> Result<TurnGeneration, String> {
         self.lease_turn_for("telegram").await
+    }
+
+    /// Pins one Discord message to the active App Generation.
+    pub async fn lease_discord_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("discord").await
     }
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
