@@ -256,6 +256,7 @@ fn print_available() {
         "skills           experimental  adds filesystem Skills to Prompt and Tools; review required"
     );
     println!("local-process    experimental  adds reviewed local process Tools; review required");
+    println!("subagent         experimental  adds bounded child Agent delegation; review required");
     println!(
         "openai-compatible experimental replaces the Model and adds environment Secrets; review required"
     );
@@ -522,7 +523,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <available|enable <text-tools|workspace-edit|skills|local-process|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <available|enable <text-tools|workspace-edit|skills|local-process|subagent|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -899,6 +900,9 @@ fn bundled_plugin(name: &str) -> Result<LoadedBundle, String> {
         "local-process" => {
             include_bytes!("../../../examples/plugins/local-process/lenso-plugin.json").as_slice()
         }
+        "subagent" => {
+            include_bytes!("../../../examples/plugins/subagent/lenso-plugin.json").as_slice()
+        }
         "openai-compatible" => {
             include_bytes!("../../../examples/plugins/openai-compatible/lenso-plugin.json")
                 .as_slice()
@@ -911,7 +915,7 @@ fn bundled_plugin(name: &str) -> Result<LoadedBundle, String> {
         }
         _ => {
             return Err(format!(
-                "unknown bundled Plugin `{name}`; choose one of: text-tools, workspace-edit, skills, local-process, openai-compatible, fixture-model, codex-direct"
+                "unknown bundled Plugin `{name}`; choose one of: text-tools, workspace-edit, skills, local-process, subagent, openai-compatible, fixture-model, codex-direct"
             ));
         }
     };
@@ -927,6 +931,7 @@ fn bundled_plugin_id(name: &str) -> Option<&'static str> {
         "workspace-edit" => Some("lenso.workspace-edit"),
         "skills" => Some("lenso.skills-filesystem"),
         "local-process" => Some("lenso.local-process"),
+        "subagent" => Some("lenso.subagent"),
         "openai-compatible" => Some("lenso.openai-compatible"),
         "fixture-model" => Some("example.fixture-model"),
         "codex-direct" => Some("example.codex-direct"),
@@ -2895,6 +2900,14 @@ mod tests {
         assert_eq!(
             generation
                 .plan
+                .module_instance("subagent-agent")
+                .unwrap()
+                .configuration(),
+            r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-5.6-luna"}"#
+        );
+        assert_eq!(
+            generation
+                .plan
                 .module_instance(&model_key)
                 .unwrap()
                 .package_id(),
@@ -2926,6 +2939,11 @@ mod tests {
         );
         assert!(generation.plan.capability_bindings().iter().any(|binding| {
             binding.consumer_instance() == "agent"
+                && binding.provider_instance() == model_key
+                && binding.capability_id() == MODEL_CAPABILITY_ID
+        }));
+        assert!(generation.plan.capability_bindings().iter().any(|binding| {
+            binding.consumer_instance() == "subagent-agent"
                 && binding.provider_instance() == model_key
                 && binding.capability_id() == MODEL_CAPABILITY_ID
         }));

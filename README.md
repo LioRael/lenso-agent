@@ -563,6 +563,22 @@ in its original call order. The App's immutable binding admission and
 grant concurrency. See
 [ADR-0027](docs/adr/0027-admit-bounded-parallel-tool-waves.md).
 
+Enable bounded delegation independently:
+
+```sh
+cargo run -p lenso-agent-cli -- plugins enable subagent \
+  --evidence "reviewed child Agent delegation"
+cargo run -p lenso-agent-cli -- \
+  "Delegate a README.md summary."
+```
+
+The `delegate` Tool invokes a separately composed child Agent and returns its
+text plus a durable child Session identity. The child Tool Runtime can only
+call the reviewed `workspace-read@1/read_text` Capability; enabling root
+workspace mutation or local process Plugins does not expand child authority.
+The first profile runs one child Turn at a time. See
+[ADR-0028](docs/adr/0028-compose-bounded-subagents-as-tools.md).
+
 ## Run the opt-in coding slice
 
 Enable workspace mutation over the deterministic readonly base, then prove

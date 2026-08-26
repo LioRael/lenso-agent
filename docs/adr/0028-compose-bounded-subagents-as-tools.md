@@ -1,0 +1,52 @@
+# ADR 0028: Compose bounded subagents as Tools
+
+## Status
+
+Accepted.
+
+## Context
+
+A root Agent sometimes benefits from delegating one self-contained task to an
+independent context. Putting child-agent scheduling in the Kernel would make a
+product-specific orchestration policy part of the portable runtime. Invoking
+the root Agent recursively would also create an activation cycle and inherit
+authority that the App did not explicitly grant to the child.
+
+## Decision
+
+The Harness admits subagent delegation as an optional Tool Provider Module.
+
+- The reviewed `lenso.subagent` Plugin contributes `delegate` to the root Tool
+  Runtime. Removing the Plugin removes that model-visible surface in the next
+  immutable App Generation.
+- The provider requires one explicitly bound `lenso.agent@1` child Instance.
+  It does not discover or construct Agents at runtime.
+- The base App composes `subagent-agent` separately from the root `agent` and
+  binds it to a narrow `subagent-tools` Runtime. That Runtime projects only the
+  Host-selected `lenso.agent.workspace-read@1/read_text` Capability.
+- A delegated call inherits deadline, cancellation, and Generation provenance,
+  opens a fresh durable child Session, and returns the child Session ID in Tool
+  result metadata. The parent Session durably records that metadata through its
+  ordinary Tool result event.
+- Task and output bytes, child Agent steps, Tool calls, history, output tokens,
+  binding admission, and root Tool-call admission remain independently bounded.
+- The first profile is `exclusive` and binds one child Agent. Pooling several
+  child Instances and parallel-safe delegation is a later App Composition
+  change, not a Kernel change.
+
+## Consequences
+
+Enabling write or process Plugins for the root does not grant those
+Capabilities to the child. Model replacement redirects the base child Model
+binding and updates both Agent Loop configurations atomically, so root and
+child remain compatible across App Generations. The native provider is trusted
+code, not a sandbox; independently authored untrusted subagent providers still
+require a reviewed isolated Adapter profile.
+
+## Rejected alternatives
+
+Kernel-owned child Agents would couple one product workflow to the portable
+runtime. Recursive root invocation creates a dependency cycle and ambiguous
+authority. Giving the child the root Tool Runtime would silently inherit every
+later root Plugin. Treating the child transcript as only live stream output
+would lose durable inspection and provenance.

@@ -26,3 +26,5 @@
 - [0024 — Derive typed Agent Tool Providers](0024-derive-agent-tool-providers.md)
 - [0025 — Enforce reviewed network grants through one HTTP Capability](0025-enforce-reviewed-network-grants-through-http-capability.md)
 - [0026 — Reconcile committed Plugin state online](0026-reconcile-committed-plugin-state-online.md)
+- [0027 — Admit bounded parallel Tool waves](0027-admit-bounded-parallel-tool-waves.md)
+- [0028 — Compose bounded subagents as Tools](0028-compose-bounded-subagents-as-tools.md)
