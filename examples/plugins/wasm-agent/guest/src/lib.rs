@@ -187,9 +187,17 @@ impl Guest for WasmAgent {
                             && !message.text.is_empty() =>
                     {
                         let response = RunTurnResponse {
+                            arguments_json: None,
+                            content: None,
+                            duration_ms: None,
+                            error: None,
+                            kind: Some(lenso_capability_agent::RunTurnResponseKind::TextDelta),
+                            metadata_json: None,
                             sequence: session.sequence.to_string(),
                             text: message.text,
                             session_id: Some(session.session_id.clone()),
+                            tool_call_id: None,
+                            tool_name: None,
                         };
                         session.sequence += 1;
                         return Ok(serde_json::json!({

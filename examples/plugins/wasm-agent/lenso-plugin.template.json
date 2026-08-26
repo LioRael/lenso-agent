@@ -26,8 +26,8 @@
       "provides": [
         {
           "capability_id": "lenso.agent@1",
-          "descriptor_version": "1.1.0",
-          "descriptor_digest": "sha256:b732474abb0a706714c72c7534a3ddbc61f1ec01289d036b02124d18aa63ffdb",
+          "descriptor_version": "1.2.0",
+          "descriptor_digest": "sha256:ff735c6d0124ea120f87d91995a835b434f6de1b87777be5382e3ca077f219fa",
           "request_operations": ["run_turn"],
           "operation_kinds": { "run_turn": "stream" }
         }

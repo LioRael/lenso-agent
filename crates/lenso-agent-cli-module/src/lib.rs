@@ -22,7 +22,7 @@ mod tests {
             descriptor["required_capabilities"],
             serde_json::json!([{
                 "capability_id": "lenso.agent@1",
-                "descriptor_version": "1.1.0",
+                "descriptor_version": "1.2.0",
                 "cardinality": "one"
             }])
         );

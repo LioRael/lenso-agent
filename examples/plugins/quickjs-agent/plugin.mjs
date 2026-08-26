@@ -30,7 +30,7 @@ export function describe() {
     abi: "lenso.json-host-imports@1",
     capabilities: [{
       capability_id: "lenso.agent@1",
-      descriptor_version: "1.1.0",
+      descriptor_version: "1.2.0",
       request_operations: [],
       stream_operations: ["run_turn"]
     }],
@@ -101,6 +101,7 @@ export function streamReceive(id) {
         ok: {
           kind: "message",
           value: {
+            kind: "text_delta",
             sequence: String(session.sequence++),
             text: frame.value.text,
             session_id: session.sessionId

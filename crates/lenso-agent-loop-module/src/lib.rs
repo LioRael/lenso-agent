@@ -4,11 +4,12 @@ use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
+    time::Instant,
 };
 
 use lenso::prelude::*;
 use lenso_capability_agent::{
-    self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse,
+    self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
 };
 use lenso_capability_agent_model::{
     self as model_capability, CompleteError, CompleteMessage, CompleteMessageInput,
@@ -504,7 +505,15 @@ async fn execute_steps(
                 )?],
             )
             .await?;
-            let tool_result = clients
+            sequence = sequence.saturating_add(1);
+            send_agent_message(
+                channel,
+                tool_started_message(&tool_call, session_id, sequence),
+                context.request_id(),
+            )
+            .await?;
+            let started_at = Instant::now();
+            let tool_result = match clients
                 .tools
                 .execute_with_context(
                     context.clone(),
@@ -514,7 +523,27 @@ async fn execute_steps(
                     },
                 )
                 .await
-                .map_err(map_tools_error)?;
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    let duration_ms = elapsed_millis(started_at);
+                    sequence = sequence.saturating_add(1);
+                    send_agent_message(
+                        channel,
+                        tool_failed_message(
+                            &tool_call,
+                            session_id,
+                            sequence,
+                            duration_ms,
+                            bounded_tool_error(&error),
+                        ),
+                        context.request_id(),
+                    )
+                    .await?;
+                    return Err(map_tools_error(error));
+                }
+            };
+            let duration_ms = elapsed_millis(started_at);
             *revision = append_events(
                 clients,
                 context,
@@ -529,6 +558,13 @@ async fn execute_steps(
                         "metadata_json": tool_result.metadata_json
                     }),
                 )?],
+            )
+            .await?;
+            sequence = sequence.saturating_add(1);
+            send_agent_message(
+                channel,
+                tool_completed_message(&tool_call, session_id, sequence, duration_ms, &tool_result),
+                context.request_id(),
             )
             .await?;
             messages.push(assistant_tool_message(&tool_call));
@@ -579,9 +615,17 @@ async fn stream_model(
                     send_agent_message(
                         channel,
                         RunTurnResponse {
+                            arguments_json: None,
+                            content: None,
+                            duration_ms: None,
+                            error: None,
+                            kind: Some(RunTurnResponseKind::TextDelta),
+                            metadata_json: None,
                             sequence: sequence.to_string(),
                             session_id: Some(session_id.to_owned()),
                             text: message.text,
+                            tool_call_id: None,
+                            tool_name: None,
                         },
                         context.request_id(),
                     )
@@ -601,6 +645,84 @@ async fn stream_model(
             StreamEvent::Terminal(Ok(())) => return Ok(completion),
             StreamEvent::Terminal(Err(error)) => return Err(map_model_domain_error(error)),
         }
+    }
+}
+
+fn tool_started_message(
+    tool_call: &CompleteMessage,
+    session_id: &str,
+    sequence: u64,
+) -> RunTurnResponse {
+    RunTurnResponse {
+        arguments_json: Some(tool_call.arguments_json.clone()),
+        content: None,
+        duration_ms: None,
+        error: None,
+        kind: Some(RunTurnResponseKind::ToolStarted),
+        metadata_json: None,
+        sequence: sequence.to_string(),
+        session_id: Some(session_id.to_owned()),
+        text: String::new(),
+        tool_call_id: Some(tool_call.tool_call_id.clone()),
+        tool_name: Some(tool_call.tool_name.clone()),
+    }
+}
+
+fn tool_completed_message(
+    tool_call: &CompleteMessage,
+    session_id: &str,
+    sequence: u64,
+    duration_ms: u64,
+    result: &tools_capability::ExecuteResponse,
+) -> RunTurnResponse {
+    RunTurnResponse {
+        arguments_json: None,
+        content: Some(result.content.clone()),
+        duration_ms: Some(duration_ms.to_string()),
+        error: None,
+        kind: Some(RunTurnResponseKind::ToolCompleted),
+        metadata_json: Some(result.metadata_json.clone()),
+        sequence: sequence.to_string(),
+        session_id: Some(session_id.to_owned()),
+        text: String::new(),
+        tool_call_id: Some(tool_call.tool_call_id.clone()),
+        tool_name: Some(tool_call.tool_name.clone()),
+    }
+}
+
+fn tool_failed_message(
+    tool_call: &CompleteMessage,
+    session_id: &str,
+    sequence: u64,
+    duration_ms: u64,
+    error: String,
+) -> RunTurnResponse {
+    RunTurnResponse {
+        arguments_json: None,
+        content: None,
+        duration_ms: Some(duration_ms.to_string()),
+        error: Some(error),
+        kind: Some(RunTurnResponseKind::ToolFailed),
+        metadata_json: None,
+        sequence: sequence.to_string(),
+        session_id: Some(session_id.to_owned()),
+        text: String::new(),
+        tool_call_id: Some(tool_call.tool_call_id.clone()),
+        tool_name: Some(tool_call.tool_name.clone()),
+    }
+}
+
+fn elapsed_millis(started_at: Instant) -> u64 {
+    u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+fn bounded_tool_error(error: &ToolsExecuteInvocationError) -> String {
+    const MAX_ERROR_CHARACTERS: usize = 4_096;
+    let error = format!("{error:?}");
+    if error.chars().count() <= MAX_ERROR_CHARACTERS {
+        error
+    } else {
+        error.chars().take(MAX_ERROR_CHARACTERS).collect()
     }
 }
 
@@ -1029,6 +1151,47 @@ mod tests {
         let (stream, _channel) = ProviderStream::<agent_capability::Agent>::channel(&context, 1);
         stream.cancel();
         assert!(cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn tool_progress_messages_preserve_call_identity_and_structured_result() {
+        let tool_call = CompleteMessage {
+            arguments_json: r#"{"path":"src/lib.rs"}"#.to_owned().try_into().unwrap(),
+            input_tokens: "0".to_owned(),
+            kind: CompleteMessageKind::ToolCall,
+            output_tokens: "0".to_owned(),
+            sequence: "1".to_owned(),
+            text: String::new(),
+            tool_call_id: "call-1".to_owned(),
+            tool_name: "read_text".to_owned(),
+        };
+        let started = tool_started_message(&tool_call, "session-1", 2);
+        assert_eq!(started.kind, Some(RunTurnResponseKind::ToolStarted));
+        assert_eq!(started.tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(
+            started
+                .arguments_json
+                .as_ref()
+                .map(lenso_capability_agent::RawJson::as_str),
+            Some(r#"{"path":"src/lib.rs"}"#)
+        );
+
+        let result = tools_capability::ExecuteResponse {
+            content: "source".to_owned(),
+            content_type: tools_capability::ExecuteResponseContentType::Text,
+            metadata_json: r#"{"path":"src/lib.rs"}"#.to_owned().try_into().unwrap(),
+        };
+        let completed = tool_completed_message(&tool_call, "session-1", 3, 12, &result);
+        assert_eq!(completed.kind, Some(RunTurnResponseKind::ToolCompleted));
+        assert_eq!(completed.duration_ms.as_deref(), Some("12"));
+        assert_eq!(completed.content.as_deref(), Some("source"));
+        assert_eq!(
+            completed
+                .metadata_json
+                .as_ref()
+                .map(lenso_capability_agent::RawJson::as_str),
+            Some(r#"{"path":"src/lib.rs"}"#)
+        );
     }
 
     #[test]

@@ -105,11 +105,13 @@ async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), Str
             .map_err(|error| format!("Agent stream failed: {error:?}"))?
         {
             StreamEvent::Message(message) => {
-                session_id = message.session_id.or(session_id);
-                print!("{}", message.text);
-                io::stdout()
-                    .flush()
-                    .map_err(|error| format!("failed to flush Agent output: {error}"))?;
+                session_id = message.session_id.clone().or(session_id);
+                if message.is_text_delta() {
+                    print!("{}", message.text);
+                    io::stdout()
+                        .flush()
+                        .map_err(|error| format!("failed to flush Agent output: {error}"))?;
+                }
             }
             StreamEvent::PeerHalfClosed => {}
             StreamEvent::Terminal(Ok(())) => {

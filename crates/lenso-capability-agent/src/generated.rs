@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, ModuleDependencies, NativeStream, NativeSt
 
 use lenso_module_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent@1";
-pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_VERSION: &str = "1.2.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AGENT_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,19 +13,19 @@ pub const AGENT_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.2.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_agent_client { () => { "{\"capability_id\":\"lenso.agent@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" }; }
 
 pub const RUN_TURN_OPERATION: &str = "run_turn";
 
-pub use lenso_contract_runtime::{Uint64, UnknownDomainError};
+pub use lenso_contract_runtime::{RawJson, Uint64, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -40,6 +40,24 @@ pub struct RunTurnRequest {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RunTurnResponse {
+    #[serde(rename = "arguments_json")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arguments_json: Option<RawJson>,
+    #[serde(rename = "content")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(rename = "duration_ms")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<Uint64>,
+    #[serde(rename = "error")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(rename = "kind")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<RunTurnResponseKind>,
+    #[serde(rename = "metadata_json")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_json: Option<RawJson>,
     #[serde(rename = "sequence")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub sequence: Uint64,
@@ -49,6 +67,24 @@ pub struct RunTurnResponse {
     #[serde(rename = "text")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub text: String,
+    #[serde(rename = "tool_call_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(rename = "tool_name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum RunTurnResponseKind {
+    #[serde(rename = "text_delta")]
+    TextDelta,
+    #[serde(rename = "tool_started")]
+    ToolStarted,
+    #[serde(rename = "tool_completed")]
+    ToolCompleted,
+    #[serde(rename = "tool_failed")]
+    ToolFailed,
 }
 
 #[derive(Clone, Debug, PartialEq)]
