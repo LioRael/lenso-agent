@@ -8,7 +8,10 @@ use std::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{channel::run_agent_turn, generation::AgentApp};
+use crate::{
+    channel::{TurnGate, run_agent_turn},
+    generation::AgentApp,
+};
 
 const DEFAULT_API_BASE: &str = "https://api.telegram.org";
 const MAX_MESSAGE_CHARS: usize = 4_000;
@@ -23,6 +26,7 @@ pub struct TelegramOptions {
     pub state_path: PathBuf,
     pub poll_timeout_seconds: u64,
     pub max_updates: Option<u64>,
+    pub turn_gate: TurnGate,
 }
 
 impl TelegramOptions {
@@ -37,6 +41,7 @@ impl TelegramOptions {
             state_path,
             poll_timeout_seconds: 30,
             max_updates: None,
+            turn_gate: TurnGate::default(),
         }
     }
 }
@@ -340,6 +345,12 @@ async fn process_update(
     }
     let conversation_key = conversation_key(bot.id, message);
     let existing_session = state.sessions.get(&conversation_key).cloned();
+    let Ok(_turn_permit) = options.turn_gate.enter().await else {
+        client
+            .send_text(message, "The Agent is busy. Please try again shortly.")
+            .await?;
+        return Ok(());
+    };
     let turn = app.lease_telegram_turn().await?;
     let response = match run_agent_turn(
         turn,

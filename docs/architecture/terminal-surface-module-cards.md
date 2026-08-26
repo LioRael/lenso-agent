@@ -75,6 +75,25 @@
   two Generation-pinned Turns, receive Telegram replies, and resume the same
   durable Session.
 
+## Unified Channel Host
+
+- **Owner:** `lenso-agent-channel` is a Host entrypoint over the independently
+  removable Telegram and Discord consumer Modules. It does not introduce a
+  generic Channel Capability, Module type, Kernel registry, or mutable graph.
+- **Authoring input:** `lenso.channels.toml` selects external transports,
+  allowlists, Tool scopes, state paths, and token environment-variable names.
+  It is not App Composition authority. The root `lenso.app.json` remains the
+  reviewed App source and the resolved Plan remains a generated Host input.
+- **Concurrency:** both transports share one Controller lineage and one Turn
+  gate. One Turn is active while a configured, bounded number may wait; a
+  message beyond that bound receives a busy response without entering the App.
+- **Failure boundary:** invalid configuration, missing token variables, or an
+  unavailable selected transport fails the unified Host closed. Each surface
+  keeps its own durable cursor, resume data, and conversation mapping.
+- **Deletion boundary:** removing this entrypoint and its TOML file removes only
+  joint process orchestration. The focused Telegram and Discord binaries and
+  their ordinary Module deletion boundaries remain intact.
+
 ## Discord surface Module
 
 - **Owner:** `lenso-agent-discord-module` owns the source-derived Discord

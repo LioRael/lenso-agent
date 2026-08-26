@@ -13,7 +13,10 @@ use serde_json::Value;
 use tokio::time::{Instant, Sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::{channel::run_agent_turn, generation::AgentApp};
+use crate::{
+    channel::{TurnGate, run_agent_turn},
+    generation::AgentApp,
+};
 
 const DEFAULT_API_BASE: &str = "https://discord.com/api/v10";
 const MAX_MESSAGE_CHARS: usize = 2_000;
@@ -34,6 +37,7 @@ pub struct DiscordOptions {
     pub message_content_intent: bool,
     pub state_path: PathBuf,
     pub max_messages: Option<u64>,
+    pub turn_gate: TurnGate,
 }
 
 impl DiscordOptions {
@@ -49,6 +53,7 @@ impl DiscordOptions {
             message_content_intent: false,
             state_path,
             max_messages: None,
+            turn_gate: TurnGate::default(),
         }
     }
 }
@@ -460,6 +465,12 @@ async fn process_message(
         ));
     }
     let existing_session = state.sessions.get(&conversation_key).cloned();
+    let Ok(_turn_permit) = options.turn_gate.enter().await else {
+        client
+            .send_text(message, "The Agent is busy. Please try again shortly.")
+            .await?;
+        return Ok(());
+    };
     let turn = app.lease_discord_turn().await?;
     let response = match run_agent_turn(
         turn,
