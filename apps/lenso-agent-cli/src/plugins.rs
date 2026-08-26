@@ -2562,7 +2562,9 @@ mod tests {
                 loop {
                     match stream.receive().await.unwrap() {
                         StreamEvent::Message(message) => {
-                            text.push_str(&message.text);
+                            if message.is_text_delta() {
+                                text.push_str(&message.text);
+                            }
                             session_id = message.session_id;
                         }
                         StreamEvent::Terminal(Ok(())) => break,
@@ -2690,7 +2692,9 @@ mod tests {
                 loop {
                     match stream.receive().await.unwrap() {
                         StreamEvent::Message(message) => {
-                            text.push_str(&message.text);
+                            if message.is_text_delta() {
+                                text.push_str(&message.text);
+                            }
                             session_id = message.session_id;
                         }
                         StreamEvent::Terminal(Ok(())) => break,

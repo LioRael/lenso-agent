@@ -84,3 +84,9 @@ unknown Domain Error codes for forward compatibility.
 Agent Descriptor `1.1.0` adds optional `session_id` to `run_turn` messages so a
 consumer can persist the identity created by the Agent Loop. Older consumers
 may ignore it and older providers remain representable.
+
+Agent Descriptor `1.2.0` adds an optional `kind` plus Tool call, result, and
+duration fields to the same bounded `run_turn` stream. A missing `kind` remains
+a `text_delta`, preserving messages from older providers. `tool_started`,
+`tool_completed`, and `tool_failed` expose the Agent Loop's live Step progress;
+they do not replace the durable Session events that own trajectory evidence.

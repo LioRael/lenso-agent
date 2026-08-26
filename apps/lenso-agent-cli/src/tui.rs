@@ -15,7 +15,7 @@ use crossterm::{
 use futures::StreamExt;
 use lenso_agent_loop_module::RunScope;
 use lenso_capability_agent::{
-    Agent, RUN_TURN_OPERATION, RunTurnError, RunTurnRequest, RunTurnResponse,
+    Agent, RUN_TURN_OPERATION, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
 };
 use lenso_capability_agent_tui_contribution::SnapshotResponsePanelsItem;
 use lenso_kernel::{NativeStream, StreamEvent};
@@ -109,9 +109,29 @@ const fn working_label(tick: u64) -> &'static str {
 }
 
 #[derive(Debug)]
-struct TranscriptEntry {
-    speaker: Speaker,
-    text: String,
+enum TranscriptEntry {
+    Message { speaker: Speaker, text: String },
+    Tool(ToolCard),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ToolStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug)]
+struct ToolCard {
+    call_id: String,
+    name: String,
+    arguments_json: Option<String>,
+    content: Option<String>,
+    metadata_json: Option<String>,
+    duration_ms: Option<u64>,
+    error: Option<String>,
+    status: ToolStatus,
+    expanded: bool,
 }
 
 #[derive(Debug)]
@@ -192,6 +212,7 @@ struct TuiState {
     history_cursor: Option<usize>,
     history_draft: String,
     transcript: Vec<TranscriptEntry>,
+    selected_tool: Option<usize>,
     panels: Vec<SnapshotResponsePanelsItem>,
     selected_panel: usize,
     session_id: Option<String>,
@@ -214,6 +235,7 @@ impl TuiState {
             history_cursor: None,
             history_draft: String::new(),
             transcript: Vec::new(),
+            selected_tool: None,
             panels,
             selected_panel: 0,
             session_id: options.session_id.clone(),
@@ -232,7 +254,7 @@ impl TuiState {
     }
 
     fn push_system(&mut self, text: impl Into<String>) {
-        self.transcript.push(TranscriptEntry {
+        self.transcript.push(TranscriptEntry::Message {
             speaker: Speaker::System,
             text: text.into(),
         });
@@ -240,12 +262,15 @@ impl TuiState {
 
     fn append_agent_text(&mut self, text: &str) {
         if let Some(last) = self.transcript.last_mut()
-            && matches!(last.speaker, Speaker::Agent)
+            && let TranscriptEntry::Message {
+                speaker: Speaker::Agent,
+                text: existing,
+            } = last
         {
-            last.text.push_str(text);
+            existing.push_str(text);
             return;
         }
-        self.transcript.push(TranscriptEntry {
+        self.transcript.push(TranscriptEntry::Message {
             speaker: Speaker::Agent,
             text: text.to_owned(),
         });
@@ -408,6 +433,89 @@ impl TuiState {
         self.history_draft.clear();
         std::mem::take(&mut self.input)
     }
+
+    fn start_tool(&mut self, message: RunTurnResponse) {
+        let Some(call_id) = message.tool_call_id else {
+            self.push_system("Ignored a Tool event without a call ID");
+            return;
+        };
+        let Some(name) = message.tool_name else {
+            self.push_system("Ignored a Tool event without a name");
+            return;
+        };
+        self.transcript.push(TranscriptEntry::Tool(ToolCard {
+            call_id,
+            name,
+            arguments_json: message.arguments_json.map(|value| value.to_string()),
+            content: None,
+            metadata_json: None,
+            duration_ms: None,
+            error: None,
+            status: ToolStatus::Running,
+            expanded: false,
+        }));
+        self.selected_tool = Some(self.transcript.len() - 1);
+    }
+
+    fn finish_tool(&mut self, message: RunTurnResponse, status: ToolStatus) {
+        let Some(call_id) = message.tool_call_id else {
+            self.push_system("Ignored a Tool result without a call ID");
+            return;
+        };
+        let index = self.transcript.iter().rposition(
+            |entry| matches!(entry, TranscriptEntry::Tool(card) if card.call_id == call_id),
+        );
+        let Some(index) = index else {
+            self.push_system(format!(
+                "Ignored a Tool result for unknown call `{call_id}`"
+            ));
+            return;
+        };
+        let TranscriptEntry::Tool(card) = &mut self.transcript[index] else {
+            unreachable!("Tool lookup returned a message entry")
+        };
+        card.content = message.content;
+        card.metadata_json = message.metadata_json.map(|value| value.to_string());
+        card.duration_ms = message
+            .duration_ms
+            .and_then(|value| value.parse::<u64>().ok());
+        card.error = message.error;
+        card.status = status;
+        self.selected_tool = Some(index);
+    }
+
+    fn toggle_tool_details(&mut self) {
+        let Some(index) = self.selected_tool else {
+            return;
+        };
+        if let Some(TranscriptEntry::Tool(card)) = self.transcript.get_mut(index) {
+            card.expanded = !card.expanded;
+        }
+    }
+
+    fn select_adjacent_tool(&mut self, previous: bool) {
+        let tools = self
+            .transcript
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| matches!(entry, TranscriptEntry::Tool(_)).then_some(index))
+            .collect::<Vec<_>>();
+        if tools.is_empty() {
+            self.selected_tool = None;
+            return;
+        }
+        let current = self
+            .selected_tool
+            .and_then(|selected| tools.iter().position(|index| *index == selected));
+        let next = if previous {
+            current
+                .and_then(|position| position.checked_sub(1))
+                .unwrap_or(tools.len() - 1)
+        } else {
+            current.map_or(0, |position| (position + 1) % tools.len())
+        };
+        self.selected_tool = Some(tools[next]);
+    }
 }
 
 fn char_to_byte(text: &str, character: usize) -> usize {
@@ -533,6 +641,14 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
         }
         return false;
     }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        match key.code {
+            KeyCode::Up => state.select_adjacent_tool(true),
+            KeyCode::Down => state.select_adjacent_tool(false),
+            _ => {}
+        }
+        return false;
+    }
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         handle_control_key(key.code, state);
         return false;
@@ -565,6 +681,7 @@ fn handle_control_key(code: KeyCode, state: &mut TuiState) {
         KeyCode::Char('j') => state.scroll.scroll_down(1),
         KeyCode::Char('u') => state.scroll.scroll_up(state.scroll.half_page_rows()),
         KeyCode::Char('d') => state.scroll.scroll_down(state.scroll.half_page_rows()),
+        KeyCode::Char('o') => state.toggle_tool_details(),
         KeyCode::Char('a') if state.active.is_none() => state.move_line_edge(false),
         KeyCode::Char('e') if state.active.is_none() => state.move_line_edge(true),
         KeyCode::Char('w') if state.active.is_none() => state.delete_previous_word(),
@@ -632,17 +749,13 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
             "Agent input exceeds the {MAX_INPUT_CHARACTERS}-character limit"
         ));
     }
-    state.transcript.push(TranscriptEntry {
+    state.transcript.push(TranscriptEntry::Message {
         speaker: Speaker::User,
         text: input.clone(),
     });
     if state.input_history.last() != Some(&input) {
         state.input_history.push(input.clone());
     }
-    state.transcript.push(TranscriptEntry {
-        speaker: Speaker::Agent,
-        text: String::new(),
-    });
     state.phase = UiPhase::Active;
     state.scroll.goto_bottom();
 
@@ -683,7 +796,7 @@ fn handle_stream_event(
         Ok(event) => event,
         Err(error) => {
             state.active = None;
-            state.transcript.push(TranscriptEntry {
+            state.transcript.push(TranscriptEntry::Message {
                 speaker: Speaker::Error,
                 text: runtime_failure_message(error),
             });
@@ -693,8 +806,24 @@ fn handle_stream_event(
     };
     match event {
         StreamEvent::Message(message) => {
-            state.session_id = message.session_id.or_else(|| state.session_id.clone());
-            state.append_agent_text(&message.text);
+            state.session_id = message
+                .session_id
+                .clone()
+                .or_else(|| state.session_id.clone());
+            match message
+                .kind
+                .clone()
+                .unwrap_or(RunTurnResponseKind::TextDelta)
+            {
+                RunTurnResponseKind::TextDelta => state.append_agent_text(&message.text),
+                RunTurnResponseKind::ToolStarted => state.start_tool(message),
+                RunTurnResponseKind::ToolCompleted => {
+                    state.finish_tool(message, ToolStatus::Completed);
+                }
+                RunTurnResponseKind::ToolFailed => {
+                    state.finish_tool(message, ToolStatus::Failed);
+                }
+            }
         }
         StreamEvent::PeerHalfClosed => {}
         StreamEvent::Terminal(Ok(())) => {
@@ -703,7 +832,7 @@ fn handle_stream_event(
         }
         StreamEvent::Terminal(Err(error)) => {
             state.active = None;
-            state.transcript.push(TranscriptEntry {
+            state.transcript.push(TranscriptEntry::Message {
                 speaker: Speaker::Error,
                 text: format!("Agent turn failed: {error:?}"),
             });
@@ -829,41 +958,37 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
             Style::default().fg(Palette::MUTED),
         )));
     }
-    for entry in &state.transcript {
-        match entry.speaker {
-            Speaker::User => {
-                lines.push(Line::default());
-                for (index, content) in entry.text.lines().enumerate() {
-                    let prefix = if index == 0 { "› " } else { "  " };
-                    lines.push(surface_line(
-                        format!("{prefix}{content}"),
-                        usize::from(transcript_area.width),
-                    ));
+    for (entry_index, entry) in state.transcript.iter().enumerate() {
+        match entry {
+            TranscriptEntry::Message { speaker, text } => match speaker {
+                Speaker::User => {
+                    lines.push(Line::default());
+                    for (index, content) in text.lines().enumerate() {
+                        let prefix = if index == 0 { "› " } else { "  " };
+                        lines.push(surface_line(
+                            format!("{prefix}{content}"),
+                            usize::from(transcript_area.width),
+                        ));
+                    }
                 }
+                Speaker::Agent => lines.extend(markdown_lines(text)),
+                Speaker::System => lines.push(Line::from(vec![
+                    Span::styled("• ", Style::default().fg(Palette::MUTED)),
+                    Span::styled(text.clone(), Style::default().fg(Palette::MUTED)),
+                ])),
+                Speaker::Error => lines.push(Line::from(vec![
+                    Span::styled(
+                        "● ",
+                        Style::default()
+                            .fg(Palette::ERROR)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(text.clone(), Style::default().fg(Palette::ERROR)),
+                ])),
+            },
+            TranscriptEntry::Tool(card) => {
+                render_tool_card(&mut lines, card, state.selected_tool == Some(entry_index));
             }
-            Speaker::Agent => {
-                if entry.text.is_empty() && state.phase == UiPhase::Active {
-                    lines.push(Line::from(Span::styled(
-                        "✦ Thinking…",
-                        Style::default().fg(Palette::MUTED),
-                    )));
-                } else {
-                    lines.extend(markdown_lines(&entry.text));
-                }
-            }
-            Speaker::System => lines.push(Line::from(vec![
-                Span::styled("• ", Style::default().fg(Palette::MUTED)),
-                Span::styled(entry.text.clone(), Style::default().fg(Palette::MUTED)),
-            ])),
-            Speaker::Error => lines.push(Line::from(vec![
-                Span::styled(
-                    "● ",
-                    Style::default()
-                        .fg(Palette::ERROR)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(entry.text.clone(), Style::default().fg(Palette::ERROR)),
-            ])),
         }
         lines.push(Line::default());
     }
@@ -893,6 +1018,174 @@ fn render_transcript(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
             transcript_area,
             &mut scrollbar_state,
         );
+    }
+}
+
+fn render_tool_card(lines: &mut Vec<Line<'static>>, card: &ToolCard, selected: bool) {
+    let (symbol, color, status) = match card.status {
+        ToolStatus::Running => ("◆", Palette::AGENT, "running"),
+        ToolStatus::Completed => ("✓", Color::LightGreen, "done"),
+        ToolStatus::Failed => ("×", Palette::ERROR, "failed"),
+    };
+    let disclosure = if card.expanded { "▾" } else { "▸" };
+    let mut header = vec![
+        Span::styled(
+            format!("{disclosure} {symbol} "),
+            Style::default().fg(if selected { Palette::ACCENT } else { color }),
+        ),
+        Span::styled(
+            card.name.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(summary) = tool_summary(card) {
+        header.push(Span::styled(
+            format!("  {summary}"),
+            Style::default().fg(Palette::MUTED),
+        ));
+    }
+    header.push(Span::styled(
+        format!("  {status}"),
+        Style::default().fg(color),
+    ));
+    if let Some(duration_ms) = card.duration_ms {
+        header.push(Span::styled(
+            format!("  {}", format_duration(duration_ms)),
+            Style::default().fg(Palette::QUIET),
+        ));
+    }
+    if selected {
+        header.push(Span::styled(
+            "  ctrl+o details",
+            Style::default().fg(Palette::QUIET),
+        ));
+    }
+    lines.push(Line::from(header));
+
+    if !card.expanded {
+        return;
+    }
+    if let Some(arguments) = card.arguments_json.as_deref() {
+        push_tool_detail(lines, "arguments", arguments, true);
+    }
+    if let Some(content) = card.content.as_deref()
+        && !content.is_empty()
+    {
+        push_tool_detail(lines, "output", content, false);
+    }
+    if let Some(metadata) = card.metadata_json.as_deref() {
+        push_tool_detail(lines, "metadata", metadata, true);
+    }
+    if let Some(error) = card.error.as_deref() {
+        push_tool_detail(lines, "error", error, false);
+    }
+}
+
+fn push_tool_detail(
+    lines: &mut Vec<Line<'static>>,
+    label: &'static str,
+    value: &str,
+    pretty_json: bool,
+) {
+    lines.push(Line::from(vec![
+        Span::styled("  │ ", Style::default().fg(Palette::BORDER)),
+        Span::styled(label, Style::default().fg(Palette::QUIET)),
+    ]));
+    let value = if pretty_json {
+        serde_json::from_str::<serde_json::Value>(value)
+            .ok()
+            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+            .unwrap_or_else(|| value.to_owned())
+    } else {
+        value.to_owned()
+    };
+    for line in bounded_preview(&value, 24, 4096).lines() {
+        lines.push(Line::from(vec![
+            Span::styled("  │   ", Style::default().fg(Palette::BORDER)),
+            Span::styled(line.to_owned(), Style::default().fg(Palette::CODE)),
+        ]));
+    }
+}
+
+fn bounded_preview(value: &str, max_lines: usize, max_characters: usize) -> String {
+    let mut preview = String::new();
+    let mut characters = 0;
+    let mut truncated = false;
+    for (index, line) in value.lines().enumerate() {
+        if index >= max_lines || characters >= max_characters {
+            truncated = true;
+            break;
+        }
+        if index > 0 {
+            preview.push('\n');
+            characters += 1;
+        }
+        let remaining = max_characters.saturating_sub(characters);
+        let accepted = line.chars().take(remaining).collect::<String>();
+        characters += accepted.chars().count();
+        preview.push_str(&accepted);
+        if accepted.chars().count() < line.chars().count() {
+            truncated = true;
+            break;
+        }
+    }
+    if truncated {
+        preview.push_str("\n… output truncated in TUI");
+    }
+    preview
+}
+
+fn tool_summary(card: &ToolCard) -> Option<String> {
+    let metadata = card
+        .metadata_json
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+    if let Some(metadata) = metadata.as_ref() {
+        if let (Some(operation), Some(path)) = (
+            metadata
+                .get("operation")
+                .and_then(serde_json::Value::as_str),
+            metadata.get("path").and_then(serde_json::Value::as_str),
+        ) {
+            let bytes = metadata
+                .get("bytes_written")
+                .and_then(serde_json::Value::as_u64)
+                .map(|bytes| format!(" · {bytes} B"))
+                .unwrap_or_default();
+            return Some(format!("{operation} {path}{bytes}"));
+        }
+        if let Some(path) = metadata.get("path").and_then(serde_json::Value::as_str) {
+            return Some(path.to_owned());
+        }
+        if let Some(program) = metadata.get("program").and_then(serde_json::Value::as_str) {
+            let exit = metadata
+                .get("exit_code")
+                .and_then(serde_json::Value::as_str)
+                .map(|code| format!(" · exit {code}"))
+                .unwrap_or_default();
+            return Some(format!("{program}{exit}"));
+        }
+    }
+    card.arguments_json
+        .as_deref()
+        .and_then(|arguments| serde_json::from_str::<serde_json::Value>(arguments).ok())
+        .and_then(|arguments| {
+            arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn format_duration(duration_ms: u64) -> String {
+    if duration_ms < 1_000 {
+        format!("{duration_ms}ms")
+    } else {
+        format!(
+            "{}.{:01}s",
+            duration_ms / 1_000,
+            (duration_ms % 1_000) / 100
+        )
     }
 }
 
@@ -1101,6 +1394,10 @@ fn render_shortcuts(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
             spans.extend(shortcut("end", "follow"));
         }
     }
+    if state.selected_tool.is_some() && area.width >= 68 {
+        spans.push(Span::raw("   "));
+        spans.extend(shortcut("ctrl+o", "details"));
+    }
     if area.width >= 72 {
         spans.push(Span::raw("   "));
         spans.extend(shortcut("ctrl+.", "shortcuts"));
@@ -1130,6 +1427,8 @@ fn render_shortcuts_overlay(frame: &mut Frame<'_>, area: Rect) {
         ("← / →", "Move input cursor"),
         ("↑ / ↓", "Move by line or browse prompt history"),
         ("Ctrl+W", "Delete previous word"),
+        ("Ctrl+O", "Expand or collapse the selected Tool card"),
+        ("Alt+↑ / Alt+↓", "Select a previous or next Tool card"),
         ("PgUp / PgDn", "Scroll conversation"),
         ("End", "Return to the latest message"),
         ("Tab / Shift+Tab", "Switch composed panels"),
@@ -1304,11 +1603,11 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
         state.transcript = vec![
-            TranscriptEntry {
+            TranscriptEntry::Message {
                 speaker: Speaker::User,
                 text: "Summarize it".to_owned(),
             },
-            TranscriptEntry {
+            TranscriptEntry::Message {
                 speaker: Speaker::Agent,
                 text: "## Result\n- **Done**".to_owned(),
             },
@@ -1319,6 +1618,69 @@ mod tests {
         assert!(content.contains("› Summarize it"));
         assert!(content.contains("Result"));
         assert!(content.contains("• Done"));
+    }
+
+    #[test]
+    fn tool_events_render_a_collapsible_file_change_card() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        handle_stream_event(
+            Ok(StreamEvent::Message(RunTurnResponse {
+                arguments_json: Some(
+                    r#"{"path":"src/lib.rs","old_text":"a","new_text":"b"}"#
+                        .to_owned()
+                        .try_into()
+                        .unwrap(),
+                ),
+                content: None,
+                duration_ms: None,
+                error: None,
+                kind: Some(RunTurnResponseKind::ToolStarted),
+                metadata_json: None,
+                sequence: "1".to_owned(),
+                session_id: Some("session-1".to_owned()),
+                text: String::new(),
+                tool_call_id: Some("call-1".to_owned()),
+                tool_name: Some("edit".to_owned()),
+            })),
+            &mut state,
+        );
+        handle_stream_event(
+            Ok(StreamEvent::Message(RunTurnResponse {
+                arguments_json: None,
+                content: Some("edited src/lib.rs".to_owned()),
+                duration_ms: Some("12".to_owned()),
+                error: None,
+                kind: Some(RunTurnResponseKind::ToolCompleted),
+                metadata_json: Some(
+                    r#"{"operation":"edited","path":"src/lib.rs","bytes_written":42}"#
+                        .to_owned()
+                        .try_into()
+                        .unwrap(),
+                ),
+                sequence: "2".to_owned(),
+                session_id: Some("session-1".to_owned()),
+                text: String::new(),
+                tool_call_id: Some("call-1".to_owned()),
+                tool_name: Some("edit".to_owned()),
+            })),
+            &mut state,
+        );
+
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let collapsed = terminal.backend().to_string();
+        assert!(collapsed.contains("edit"));
+        assert!(collapsed.contains("edited src/lib.rs · 42 B"));
+        assert!(collapsed.contains("done  12ms"));
+        assert!(!collapsed.contains("old_text"));
+
+        handle_control_key(KeyCode::Char('o'), &mut state);
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let expanded = terminal.backend().to_string();
+        assert!(expanded.contains("arguments"));
+        assert!(expanded.contains("old_text"));
+        assert!(expanded.contains("metadata"));
     }
 
     #[test]
@@ -1434,7 +1796,7 @@ mod tests {
         assert!(state.active.is_none());
         assert!(matches!(
             state.transcript.last(),
-            Some(TranscriptEntry {
+            Some(TranscriptEntry::Message {
                 speaker: Speaker::Error,
                 text,
             }) if text.contains("fixture failure")
@@ -1495,7 +1857,7 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
         for index in 0..24 {
-            state.transcript.push(TranscriptEntry {
+            state.transcript.push(TranscriptEntry::Message {
                 speaker: Speaker::System,
                 text: format!("event {index}"),
             });

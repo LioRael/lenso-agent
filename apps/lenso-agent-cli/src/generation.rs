@@ -920,8 +920,10 @@ mod tests {
                 let mut output = String::new();
                 loop {
                     match stream.receive().await.unwrap() {
-                        StreamEvent::Message(message) => output.push_str(&message.text),
-                        StreamEvent::PeerHalfClosed => {}
+                        StreamEvent::Message(message) if message.is_text_delta() => {
+                            output.push_str(&message.text);
+                        }
+                        StreamEvent::Message(_) | StreamEvent::PeerHalfClosed => {}
                         StreamEvent::Terminal(Ok(())) => break,
                         StreamEvent::Terminal(Err(error)) => {
                             panic!("TUI Agent Turn failed: {error:?}")
