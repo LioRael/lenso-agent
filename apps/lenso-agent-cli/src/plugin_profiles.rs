@@ -1,5 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use lenso_agent_approval_hook_module::{
+    FACTORY_IDENTITY as APPROVAL_HOOK_FACTORY_IDENTITY, PACKAGE_ID as APPROVAL_HOOK_PACKAGE_ID,
+};
 use lenso_agent_auth_openai_codex_module::{
     FACTORY_IDENTITY as CODEX_AUTH_FACTORY_IDENTITY, PACKAGE_ID as CODEX_AUTH_PACKAGE_ID,
 };
@@ -70,6 +73,11 @@ use lenso_capability_agent_prompt_provider::{
 use lenso_capability_agent_session::{
     CAPABILITY_ID as SESSION_CAPABILITY_ID, DESCRIPTOR_VERSION as SESSION_DESCRIPTOR_VERSION,
 };
+use lenso_capability_agent_tool_hook::{
+    AFTER_EXECUTE_OPERATION as TOOL_HOOK_AFTER_EXECUTE_OPERATION,
+    BEFORE_EXECUTE_OPERATION as TOOL_HOOK_BEFORE_EXECUTE_OPERATION,
+    CAPABILITY_ID as TOOL_HOOK_CAPABILITY_ID, DESCRIPTOR_VERSION as TOOL_HOOK_DESCRIPTOR_VERSION,
+};
 use lenso_capability_agent_tool_provider::{
     CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
     CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
@@ -90,7 +98,7 @@ use lenso_capability_secrets::{
 use lenso_plugin_control_plane::{
     ApprovedGrant, BindingTemplate, CapabilityDeclaration, CapabilityRequirement,
     ControlPlaneError, EnforcementKind, ModuleContribution, PermissionRequest, PluginManifest,
-    RequirementCardinality, SupportChannel, TrustLevel, sha256_digest,
+    RequirementCardinality, StateDeclaration, SupportChannel, TrustLevel, sha256_digest,
 };
 
 pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
@@ -103,12 +111,20 @@ pub(crate) const NATIVE_SECRETS_PROFILE: &str = "secrets-provider-v1";
 pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
 pub(crate) const SUBAGENT_PROVIDER_PROFILE: &str = "agent-subagent-provider-v1";
 pub(crate) const CODE_MODE_PROVIDER_PROFILE: &str = "agent-code-mode-provider-v1";
+pub(crate) const TOOL_HOOK_PROFILE: &str = "agent-tool-hook-v1";
 pub(crate) const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 pub(crate) const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
 
 const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"type":"object"}"#;
 const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-tool-provider/capability.json");
+const TOOL_HOOK_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-tool-hook/capability.json");
+const APPROVAL_HOOK_CONFIGURATION_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-approval-hook-module/config.schema.json");
+const APPROVAL_HOOK_STATE_SCHEMA: &[u8] =
+    include_bytes!("../../../crates/lenso-agent-approval-hook-module/state.schema.json");
+const APPROVAL_HOOK_STATE_SCHEMA_ID: &str = "lenso.agent.approval-state@1";
 const MODEL_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-model/capability.json");
 const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
@@ -157,6 +173,7 @@ const PROCESS_NATIVE_CONFIGURATION: &str = r#"{"allowed_programs":["cargo","git"
 const SUBAGENT_TOOLS_CONFIGURATION: &str =
     r#"{"max_output_bytes":1048576,"max_task_bytes":262144}"#;
 const CODE_MODE_CONFIGURATION: &str = r#"{"max_code_bytes":32768,"max_instructions":1000000,"max_memory_bytes":8388608,"max_output_bytes":262144,"max_parallel_subcalls":4,"max_subcalls":16}"#;
+const APPROVAL_HOOK_CONFIGURATION: &str = r#"{"allow_tools":["read_text"],"ask_tools":[],"default_decision":"ask","deny_tools":[],"directory":".lenso/approvals","max_records":10000}"#;
 const OPENAI_MODEL_CONFIGURATION: &str = r#"{"api_key_ref":"model/openai-api-key","base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#;
 const OPENAI_AGENT_CONFIGURATION: &str = r#"{"max_history_events":200,"max_output_tokens":1024,"max_steps":8,"max_tool_calls":4,"max_parallel_tool_calls":4,"model":"gpt-4o-mini"}"#;
 const SECRETS_CONFIGURATION: &str = r#"{"references":{"model/openai-api-key":"OPENAI_API_KEY"}}"#;
@@ -815,6 +832,13 @@ impl ExecutablePluginProfile {
         }
     }
 
+    fn state_declaration(&self) -> Option<StateDeclaration> {
+        (self.registration_id == "native-approval-hook-v1").then(|| StateDeclaration {
+            state_schema_id: APPROVAL_HOOK_STATE_SCHEMA_ID.to_owned(),
+            state_schema_digest: sha256_digest(APPROVAL_HOOK_STATE_SCHEMA),
+        })
+    }
+
     #[allow(
         clippy::too_many_lines,
         reason = "one profile invariant audit keeps all executable authority checks together"
@@ -1013,7 +1037,7 @@ impl ExecutablePluginProfile {
                 &contribution.permission_request_ids,
                 &self.permission_requests,
             )
-            && contribution.state.is_none()
+            && contribution.state == self.state_declaration()
             && contribution.provides.len() == self.provides.len()
             && contribution
                 .provides
@@ -1204,6 +1228,7 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(process_tools_profile())?
         .register(subagent_tools_profile())?
         .register(code_mode_tools_profile())?
+        .register(approval_hook_profile())?
         .register(fixture_model_profile())?
         .register(openai_model_profile())?
         .register(secrets_profile())?
@@ -1224,6 +1249,51 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(third_party_wasm_tool_profile())?
         .register(third_party_wasm_workspace_read_tool_profile())?
         .register(third_party_wasm_http_fetch_tool_profile())
+}
+
+fn approval_hook_profile() -> ExecutablePluginProfile {
+    ExecutablePluginProfile {
+        registration_id: "native-approval-hook-v1".to_owned(),
+        adapter_profile: TOOL_HOOK_PROFILE.to_owned(),
+        package: PackagePolicy::Exact(APPROVAL_HOOK_PACKAGE_ID.to_owned()),
+        authority: ImplementationAuthority::BuiltIn {
+            factory_identity: APPROVAL_HOOK_FACTORY_IDENTITY.to_owned(),
+        },
+        configuration_schema_digest: sha256_digest(APPROVAL_HOOK_CONFIGURATION_SCHEMA),
+        configuration: APPROVAL_HOOK_CONFIGURATION.to_owned(),
+        provides: vec![CapabilityProfile {
+            capability_id: TOOL_HOOK_CAPABILITY_ID.to_owned(),
+            descriptor_version: TOOL_HOOK_DESCRIPTOR_VERSION.to_owned(),
+            descriptor_digest: sha256_digest(TOOL_HOOK_DESCRIPTOR),
+            request_operations: vec![
+                TOOL_HOOK_AFTER_EXECUTE_OPERATION.to_owned(),
+                TOOL_HOOK_BEFORE_EXECUTE_OPERATION.to_owned(),
+            ],
+            operation_kinds: BTreeMap::new(),
+        }],
+        requires: Vec::new(),
+        entrypoint: "default".to_owned(),
+        execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        support_channel: SupportChannel::Experimental,
+        trust: TrustLevel::Trusted,
+        attachment: AttachmentProfile::AppendManySet {
+            edges: vec![
+                AttachmentEdge {
+                    consumer_instance: "tools".to_owned(),
+                    capability_id: TOOL_HOOK_CAPABILITY_ID.to_owned(),
+                    descriptor_version: TOOL_HOOK_DESCRIPTOR_VERSION.to_owned(),
+                },
+                AttachmentEdge {
+                    consumer_instance: "restricted-read-tools".to_owned(),
+                    capability_id: TOOL_HOOK_CAPABILITY_ID.to_owned(),
+                    descriptor_version: TOOL_HOOK_DESCRIPTOR_VERSION.to_owned(),
+                },
+            ],
+        },
+        permission_requests: Vec::new(),
+        fixed_host_imports: Vec::new(),
+        inherit_displaced_requirements: false,
+    }
 }
 
 fn code_mode_tools_profile() -> ExecutablePluginProfile {
@@ -2256,7 +2326,7 @@ mod tests {
                 .iter()
                 .map(|permission| permission.request_id.clone())
                 .collect(),
-            state: None,
+            state: profile.state_declaration(),
         }
     }
 }

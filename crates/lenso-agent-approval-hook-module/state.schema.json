@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "lenso.agent.approval-state@1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "records"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "records": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "approval_id",
+          "generation_digest",
+          "action_digest",
+          "tool_name",
+          "arguments_json",
+          "status",
+          "created_at_unix",
+          "updated_at_unix"
+        ],
+        "properties": {
+          "approval_id": { "type": "string", "format": "uuid" },
+          "generation_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "action_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "tool_name": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "arguments_json": { "type": "string" },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "approved", "rejected", "consumed", "succeeded", "failed"]
+          },
+          "created_at_unix": { "type": "integer" },
+          "updated_at_unix": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

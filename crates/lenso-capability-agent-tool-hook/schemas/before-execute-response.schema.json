@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["decision", "reason_code", "message", "context_json"],
+  "properties": {
+    "decision": {
+      "$ref": "#/$defs/HookDecision"
+    },
+    "reason_code": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "context_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "HookDecision": {
+      "type": "string",
+      "enum": ["allow", "ask", "deny"]
+    }
+  },
+  "title": "BeforeExecuteResponse"
+}

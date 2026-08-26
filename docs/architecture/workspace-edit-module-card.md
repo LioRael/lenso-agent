@@ -37,6 +37,6 @@ workspace-edit` removes that authority through the same Ready Gate. Mutation
 authority exists only through this persisted Plugin selection.
 
 Deletion and generic overwrite are deliberately unsupported in this slice.
-Approval policy and process execution remain separate future Modules.
+Approval policy and process execution remain separate Modules.
 The Agent Loop records Tool arguments as durable Session trajectory facts, so
 create and replacement text must not contain credentials or other secrets.

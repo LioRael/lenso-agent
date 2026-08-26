@@ -1409,6 +1409,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-approval-hook-module"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "lenso",
+ "lenso-capability-agent-tool-hook",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "uuid",
+]
+
+[[package]]
 name = "lenso-agent-auth-openai-codex-module"
 version = "0.1.0"
 dependencies = [
@@ -1437,6 +1453,7 @@ dependencies = [
  "crossterm",
  "fs2",
  "futures",
+ "lenso-agent-approval-hook-module",
  "lenso-agent-auth-openai-codex-module",
  "lenso-agent-cli-module",
  "lenso-agent-code-mode-tools-module",
@@ -1472,6 +1489,7 @@ dependencies = [
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tools",
  "lenso-capability-agent-tui-contribution",
@@ -1781,6 +1799,7 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tools",
  "lenso-kernel",
@@ -1858,6 +1877,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-tools",
  "lenso-capability-agent-workspace-read",
  "lenso-kernel",
@@ -1990,6 +2010,24 @@ dependencies = [
  "lenso-runtime-codec",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-tool-hook"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring 0.1.1",
+ "lenso-contract-codegen 0.6.3",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-module-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

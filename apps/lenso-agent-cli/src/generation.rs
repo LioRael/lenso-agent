@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+use lenso_agent_approval_hook_module as _;
 use lenso_agent_auth_openai_codex_module as _;
 use lenso_agent_cli_module as _;
 use lenso_agent_code_mode_tools_module as _;
@@ -42,6 +43,7 @@ use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::SessionJsonCodec;
+use lenso_capability_agent_tool_hook::ToolHookJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::ToolsJsonCodec;
 use lenso_capability_agent_tui_contribution::{
@@ -1090,6 +1092,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(ModelJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)
+        .with_wasm_codec(ToolHookJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
@@ -1097,6 +1100,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(ModelJsonCodec)
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
+        .with_quickjs_codec(ToolHookJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
 }

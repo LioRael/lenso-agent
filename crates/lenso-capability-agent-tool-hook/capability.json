@@ -1,0 +1,22 @@
+{
+  "id": "lenso.agent.tool-hook@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "before_execute",
+      "interaction": "request",
+      "request_schema": "schemas/before-execute-request.schema.json",
+      "response_schema": "schemas/before-execute-response.schema.json",
+      "domain_error_schema": "schemas/before-execute-error.schema.json"
+    },
+    {
+      "name": "after_execute",
+      "interaction": "request",
+      "request_schema": "schemas/after-execute-request.schema.json",
+      "response_schema": "schemas/after-execute-response.schema.json",
+      "domain_error_schema": "schemas/after-execute-error.schema.json"
+    }
+  ]
+}

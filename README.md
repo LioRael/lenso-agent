@@ -596,6 +596,28 @@ and parallel-subcall limits and no `io`, `os`, `package`, `debug`, filesystem,
 process, or network library. It is not a hostile-code security sandbox. See
 [ADR-0029](docs/adr/0029-compose-constrained-code-mode-as-a-tool.md).
 
+Enable one-shot Tool approval independently:
+
+```sh
+cargo run -p lenso-agent-cli -- plugins enable approval \
+  --evidence "reviewed one-shot Tool approval"
+cargo run -p lenso-agent-cli -- \
+  "Create one approved workspace note."
+cargo run -p lenso-agent-cli -- approvals list
+cargo run -p lenso-agent-cli -- approvals approve <approval-id>
+cargo run -p lenso-agent-cli -- \
+  "Create one approved workspace note."
+```
+
+The first attempt returns `approval_required` before the Provider runs. The
+operator approves only the exact Tool name and normalized arguments in the
+current App Generation, then retries; the grant is consumed once. The same
+Hook provider is Plan-bound to the root and restricted read-only Tool Runtimes,
+so direct Tools, Code Mode, and subagents cannot introduce a separate bypass.
+The bundled policy allows `read_text` and asks for other Tool names. Disable it
+with `plugins disable approval`. See
+[ADR-0030](docs/adr/0030-compose-unified-tool-hooks-and-one-shot-approval.md).
+
 ## Run the opt-in coding slice
 
 Enable workspace mutation over the deterministic readonly base, then prove

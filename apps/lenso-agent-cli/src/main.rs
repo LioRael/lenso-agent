@@ -5,6 +5,7 @@ use std::{
     process::{Command, ExitCode},
 };
 
+use lenso_agent_approval_hook_module::{ApprovalDecision, decide_approval, list_approvals};
 use lenso_agent_auth_openai_codex_module::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
@@ -30,6 +31,14 @@ enum CliCommand {
     Plugins(plugins::PluginCommand),
     Generations(provenance::GenerationCommand),
     Sessions(provenance::SessionCommand),
+    Approvals(ApprovalCommand),
+}
+
+#[derive(Debug)]
+enum ApprovalCommand {
+    List { root: PathBuf },
+    Approve { approval_id: String, root: PathBuf },
+    Reject { approval_id: String, root: PathBuf },
 }
 
 #[derive(Debug)]
@@ -62,6 +71,7 @@ async fn run() -> Result<(), String> {
         CliCommand::Plugins(command) => return plugins::run(command).await,
         CliCommand::Generations(command) => return provenance::run_generation(command),
         CliCommand::Sessions(command) => return provenance::run_session(command),
+        CliCommand::Approvals(command) => return run_approval(command),
     };
     let bytes = fs::read(&args.plan)
         .map_err(|error| format!("failed to read {}: {error}", args.plan.display()))?;
@@ -145,6 +155,9 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "sessions") {
         return provenance::parse_session_command(&raw[1..]).map(CliCommand::Sessions);
     }
+    if raw.first().is_some_and(|value| value == "approvals") {
+        return parse_approval(&raw[1..]).map(CliCommand::Approvals);
+    }
     let mut plan = None;
     let mut plan_source = None;
     let mut prompt = None;
@@ -225,7 +238,64 @@ fn parse_args() -> Result<CliCommand, String> {
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <plugins|generations|sessions|auth> ...\n\nEnable optional capabilities with `plugins enable`; the base App is resolved from lenso.app.json.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <plugins|generations|sessions|approvals|auth> ...\n\nEnable optional capabilities with `plugins enable`; the base App is resolved from lenso.app.json.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+}
+
+fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
+    let mut root = PathBuf::from(".");
+    let mut positional = Vec::new();
+    let mut index = 0;
+    while index < arguments.len() {
+        if arguments[index] == "--root" {
+            index += 1;
+            root = PathBuf::from(
+                arguments
+                    .get(index)
+                    .ok_or_else(|| "--root requires a directory".to_owned())?,
+            );
+        } else {
+            positional.push(arguments[index].clone());
+        }
+        index += 1;
+    }
+    match positional.as_slice() {
+        [command] if command == "list" => Ok(ApprovalCommand::List { root }),
+        [command, approval_id] if command == "approve" => Ok(ApprovalCommand::Approve {
+            approval_id: approval_id.clone(),
+            root,
+        }),
+        [command, approval_id] if command == "reject" => Ok(ApprovalCommand::Reject {
+            approval_id: approval_id.clone(),
+            root,
+        }),
+        _ => Err(
+            "usage: lenso-agent-cli approvals <list|approve <id>|reject <id>> [--root <directory>]"
+                .to_owned(),
+        ),
+    }
+}
+
+fn run_approval(command: ApprovalCommand) -> Result<(), String> {
+    let (root, action) = match command {
+        ApprovalCommand::List { root } => {
+            let records = list_approvals(&root.join(".lenso/approvals"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&records)
+                    .map_err(|error| format!("failed to encode approvals: {error}"))?
+            );
+            return Ok(());
+        }
+        ApprovalCommand::Approve { approval_id, root } => {
+            (root, (approval_id, ApprovalDecision::Approve))
+        }
+        ApprovalCommand::Reject { approval_id, root } => {
+            (root, (approval_id, ApprovalDecision::Reject))
+        }
+    };
+    let record = decide_approval(&root.join(".lenso/approvals"), &action.0, action.1)?;
+    println!("{}: {:?}", record.approval_id, record.status);
+    Ok(())
 }
 
 fn parse_auth(arguments: &[String]) -> Result<AuthCommand, String> {

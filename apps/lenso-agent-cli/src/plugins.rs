@@ -261,6 +261,9 @@ fn print_available() {
         "code-mode        experimental  adds constrained Lua Tool orchestration; review required"
     );
     println!(
+        "approval         experimental  adds generation-bound one-shot Tool approval; review required"
+    );
+    println!(
         "openai-compatible experimental replaces the Model and adds environment Secrets; review required"
     );
     println!("fixture-model    stable        replaces the fixture Model; review required");
@@ -526,7 +529,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <available|enable <text-tools|workspace-edit|skills|local-process|subagent|code-mode|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <available|enable <text-tools|workspace-edit|skills|local-process|subagent|code-mode|approval|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -909,6 +912,9 @@ fn bundled_plugin(name: &str) -> Result<LoadedBundle, String> {
         "code-mode" => {
             include_bytes!("../../../examples/plugins/code-mode/lenso-plugin.json").as_slice()
         }
+        "approval" => {
+            include_bytes!("../../../examples/plugins/approval/lenso-plugin.json").as_slice()
+        }
         "openai-compatible" => {
             include_bytes!("../../../examples/plugins/openai-compatible/lenso-plugin.json")
                 .as_slice()
@@ -921,7 +927,7 @@ fn bundled_plugin(name: &str) -> Result<LoadedBundle, String> {
         }
         _ => {
             return Err(format!(
-                "unknown bundled Plugin `{name}`; choose one of: text-tools, workspace-edit, skills, local-process, subagent, code-mode, openai-compatible, fixture-model, codex-direct"
+                "unknown bundled Plugin `{name}`; choose one of: text-tools, workspace-edit, skills, local-process, subagent, code-mode, approval, openai-compatible, fixture-model, codex-direct"
             ));
         }
     };
@@ -939,6 +945,7 @@ fn bundled_plugin_id(name: &str) -> Option<&'static str> {
         "local-process" => Some("lenso.local-process"),
         "subagent" => Some("lenso.subagent"),
         "code-mode" => Some("lenso.code-mode"),
+        "approval" => Some("lenso.approval"),
         "openai-compatible" => Some("lenso.openai-compatible"),
         "fixture-model" => Some("example.fixture-model"),
         "codex-direct" => Some("example.codex-direct"),
@@ -2351,6 +2358,7 @@ mod tests {
         CAPABILITY_ID as MODEL_CAPABILITY_ID, COMPLETE_OPERATION as MODEL_COMPLETE_OPERATION,
         DESCRIPTOR_VERSION as MODEL_DESCRIPTOR_VERSION,
     };
+    use lenso_capability_agent_tool_hook::CAPABILITY_ID as TOOL_HOOK_CAPABILITY_ID;
     use lenso_capability_agent_tool_provider::{
         CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
         CATALOG_OPERATION as TOOL_PROVIDER_CATALOG_OPERATION,
@@ -2464,7 +2472,12 @@ mod tests {
             .iter_mut()
             .find(|instance| instance["instance_key"] == "tools")
             .unwrap();
-        tools["required_capabilities"][0]["cardinality"] = "one".into();
+        tools["required_capabilities"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|requirement| requirement["capability_id"] == TOOL_PROVIDER_CAPABILITY_ID)
+            .unwrap()["cardinality"] = "one".into();
         let one_plan: ResolvedAppPlan = serde_json::from_value(one_plan_value).unwrap();
         one_plan.validate().unwrap();
         let error = generation_composition(&authority, &one_plan).unwrap_err();
@@ -2498,6 +2511,64 @@ mod tests {
         let approved: ResolvedAppPlan = serde_json::from_slice(plan()).unwrap();
         assert_eq!(generation.plan, approved);
         assert!(generation.artifact_set.value().instances.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn approval_plugin_attaches_one_hook_to_both_tool_runtimes_and_is_removable() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let root = tempfile::tempdir().unwrap();
+                let plan_path = root.path().join("base-plan.json");
+                fs::write(&plan_path, plan()).unwrap();
+                enable_loaded(
+                    root.path(),
+                    bundled_plugin("approval").unwrap(),
+                    Some("review-ticket-approval"),
+                    &plan_path,
+                )
+                .await
+                .unwrap();
+
+                let generation =
+                    crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
+                let hook_bindings = generation
+                    .plan
+                    .capability_bindings()
+                    .iter()
+                    .filter(|binding| binding.capability_id() == TOOL_HOOK_CAPABILITY_ID)
+                    .collect::<Vec<_>>();
+                assert_eq!(hook_bindings.len(), 2);
+                assert_eq!(
+                    hook_bindings
+                        .iter()
+                        .map(|binding| binding.consumer_instance())
+                        .collect::<BTreeSet<_>>(),
+                    BTreeSet::from(["restricted-read-tools", "tools"])
+                );
+                assert!(hook_bindings.iter().all(|binding| {
+                    generation
+                        .plan
+                        .module_instance(binding.provider_instance())
+                        .is_some_and(|instance| {
+                            instance.package_id() == "lenso.agent.approval-hook"
+                        })
+                }));
+
+                disable(root.path(), "lenso.approval", &plan_path)
+                    .await
+                    .unwrap();
+                let generation =
+                    crate::generation::resolve_initial_generation(plan(), root.path()).unwrap();
+                assert!(
+                    generation
+                        .plan
+                        .capability_bindings()
+                        .iter()
+                        .all(|binding| { binding.capability_id() != TOOL_HOOK_CAPABILITY_ID })
+                );
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "current_thread")]
