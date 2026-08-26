@@ -90,8 +90,7 @@ read the current workspace. Enable workspace mutation without creating or
 selecting another App definition:
 
 ```sh
-cargo run -p lenso-agent-cli --bin lenso-agent-cli -- plugins enable workspace-edit \
-  --evidence "reviewed workspace mutation"
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- plugins enable workspace-edit
 cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
   "Create and edit a workspace note."
 ```
@@ -109,9 +108,9 @@ how-to guides, reference material, and architecture explanations; the
 ## Choose capabilities
 
 Start from the default read-only App, then enable independently shipped Plugin
-contributions by name. The selection persists in
-`.lenso/plugins/active-set.json`; there is no Composition file for each
-combination:
+contributions by name. The only persisted value is a sorted, versioned enabled
+list under `extensions.lenso.agent.plugins` in `lenso.app.json`; there is no
+Composition file or private Plugin database for each combination:
 
 ```sh
 # See the exact Releases bundled with this Host.
@@ -120,17 +119,14 @@ cargo run -p lenso-agent-cli -- plugins available
 # Low-risk append-to-many Tool Provider: automatic local admission.
 cargo run -p lenso-agent-cli -- plugins enable text-tools
 
-# Workspace mutation changes authority and therefore requires review evidence.
-cargo run -p lenso-agent-cli -- plugins enable workspace-edit \
-  --evidence "reviewed workspace mutation"
+# The versioned Host profile fixes the maximum workspace mutation authority.
+cargo run -p lenso-agent-cli -- plugins enable workspace-edit
 
 # Add local Skills to both the Prompt and Tool aggregates.
-cargo run -p lenso-agent-cli -- plugins enable skills \
-  --evidence "reviewed local skills"
+cargo run -p lenso-agent-cli -- plugins enable skills
 
 # Add the reviewed process catalog (cargo, git, and rg).
-cargo run -p lenso-agent-cli -- plugins enable local-process \
-  --evidence "reviewed local process execution"
+cargo run -p lenso-agent-cli -- plugins enable local-process
 
 cargo run -p lenso-agent-cli -- plugins status
 cargo run -p lenso-agent-cli -- \
@@ -142,28 +138,27 @@ cargo run -p lenso-agent-cli -- plugins disable workspace-edit
 The catalog also includes `openai-compatible` and experimental `codex-direct`
 Model replacements. `workspace-edit`, `text-tools`, `skills`, and
 `local-process` become independently selected Module Instances. Startup resolves
-the persisted Plugin Set into a new immutable App Generation; the running Kernel
-never discovers packages or mutates its graph. High-authority selections require
-explicit review evidence.
+the enabled IDs through exact Host-built Profiles into a new immutable App
+Generation; Manifest, Receipt, lock, and Plan authority exist only in memory.
+The running Kernel never discovers packages or mutates its graph.
 
 ## How Apps are composed
 
 The repository has one source App Definition: `lenso.app.json`. It describes the
 small read-only base. Optional Modules are selected through the persisted Plugin
-Active Set, so combinations do not create more App files.
+enabled list in that same definition, so combinations do not create more App
+files.
 
 Before boot, the Host validates the definition and selected Plugins, then
-materializes one immutable Resolved App Plan in ignored Host state. App authors
-can check or reproduce that artifact:
+resolves one immutable App Plan in memory for the candidate Generation. App
+authors can validate the source intent without materializing a generated file:
 
 ```sh
 lenso app check --definition lenso.app.json
-lenso app resolve --definition lenso.app.json \
-  --output .lenso/resolved-plan.json
 ```
 
 `--plan <path>` remains an advanced escape hatch for exact Plan replay.
-Resolved Plans are generated Host input and are never hand-edited or committed.
+Resolved Plans are runtime values and are never hand-edited or committed.
 `scripts/check-removal.sh` proves static optional providers can be removed while
 the remaining graph still resolves; Plugin tests prove independent Skills,
 process, and workspace-edit removal. The TUI proof additionally removes every
@@ -185,32 +180,23 @@ Contribution providers leaves the Shell valid with only the conversation.
 
 ## Runtime baseline
 
-The host currently resolves `lenso-app-plan 0.1.5` and `lenso-kernel 0.1.11`.
+The host currently resolves `lenso-app-plan 0.2.0` and `lenso-kernel 0.1.12`.
 All runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
-`fb364b9ff3927d82e4911f1a1e23d9ac006adc6b`; contract authoring and codegen are
+`fe84b16b4362f76b5fd37a0aaba405a1834289f2`; contract authoring and codegen are
 locked to `lenso-protocols` revision
-`8a9b2482278224973417aaac1fd925ba1cfa5370`, while Module authoring remains on
-`1424ffe25f05c0d3aaf746fb7fd66b26b9f803e0`. Secrets packages are locked to
-`lenso-secrets-module` revision
-`a52177f8508a23e9b72d9983ff79896c2a7e7695`, which uses the same native-adapter
-revision as the Host. This closes the generic dynamic
+`8a9b2482278224973417aaac1fd925ba1cfa5370`. App Definition extensions are
+locked to `lenso-cli` revision
+`5b12da4b267edfc294d8d9d1cd6fc59e12f8b8e8`. This closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
 
-The CLI now passes its reviewed Resolved App Plan through the first bounded
-Plugin control-plane slice. It opens the content-addressed Plugin Store at
-`.lenso/plugins/store`, closes the executable, installed native factories, and
-the Wasm Component and QuickJS Adapter profiles in a Host Build Manifest, and resolves
-the validated base Plan plus an empty Plugin lock into one exact initial App
-Generation. The already-resolved base Plan, including explicit Provider order,
-remains authoritative in the Generation spec. Each Agent Turn holds a
-Generation lease until its stream reaches a terminal outcome; host shutdown
-then drains all Generation-owned resources. Before the Ready Gate, the Host
-stores the canonical Generation Spec by digest under
-`.lenso/plugins/generations`. The lease injects that digest into the root Agent
-Invocation Context, and each `turn_started` Session event records it without
-making provenance a user-supplied request field.
+The normal source-backed path expands bundled enabled IDs through the exact
+Host build, resolves the base Plan and Plugin contributions in memory, and
+stages an immutable Generation behind the existing Ready Gate. It creates no
+`.lenso/plugins` Store, Active Set, lock, Receipt, Plan, or Generation record.
+Each Agent Turn still holds a Generation lease until its stream reaches a
+terminal outcome, and the Kernel still receives only one immutable Plan.
 
 The Host can admit passive Plugin releases plus executable profiles
 registered in its product-owned Plugin Profile Catalog. Each code-level Catalog
@@ -253,9 +239,10 @@ A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
 declared by that Manifest. Admission rejects undeclared files, symlinks, digest
 or size mismatches, unsupported selected targets, unregistered executable
 factories, privileged or stateful contributions, and unbounded review evidence.
-For exact Releases bundled with this Host, prefer `plugins enable <name>` and
-`plugins disable <name>`; the Bundle path commands remain the third-party and
-upgrade surface.
+For exact Releases bundled with this Host, use `plugins enable <name>` and
+`plugins disable <name>`. Third-party acquisition, upgrade history, and durable
+rollback are not part of the source-backed slice; the legacy Store commands are
+rejected when a source App Definition is present.
 
 ```sh
 cargo run -p lenso-agent-cli -- plugins install \

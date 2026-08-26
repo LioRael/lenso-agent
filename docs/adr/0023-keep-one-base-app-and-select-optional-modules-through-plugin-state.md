@@ -39,9 +39,9 @@ admission risk. Enabling or disabling a selection resolves a candidate Plan,
 requires the existing Ready Gate, and only then atomically commits Desired
 State. Conflicting Model replacements fail closed.
 
-The CLI generates the resolved artifact at `.lenso/resolved-plan.json` by
-default. It remains ignored Host input and is never a source document. Exact
-Plan replay through `--plan` remains available for automation and diagnosis.
+The CLI resolves the immutable Plan in memory by default and does not write a
+derived Plan into the project. Exact Plan replay through `--plan` remains
+available for automation and diagnosis.
 Provider-specific App Definitions needed by integration tests live under test
 fixtures and are not product variants.
 

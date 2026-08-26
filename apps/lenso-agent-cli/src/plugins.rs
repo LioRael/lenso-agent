@@ -7,8 +7,9 @@ use std::{
 
 use lenso_app_plan::{CapabilityBinding, ModuleInstancePlan, ResolvedAppPlan};
 use lenso_plugin_control_plane::{
-    AdmissionPolicy, ApprovedGrant, CanonicalDocument, ControlPlaneError, LockedInstance,
-    LockedPlugin, ModuleContribution, PluginBundle, PluginManifest, PluginSetLock, PluginStore,
+    AdmissionPolicy, AdmissionReceipt, ApprovedGrant, ArtifactSource, CanonicalDocument,
+    ControlPlaneError, LockedInstance, LockedPlugin, ModuleContribution, NoArtifactSource,
+    PluginBundle, PluginManifest, PluginSetLock, PluginStore, sha256_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +27,9 @@ const RECOVERY_AUTHORITY_DIRECTORY: &str = "generation-authorities";
 const MANIFEST_FILE: &str = "lenso-plugin.json";
 const LOCAL_REVIEW_PROVENANCE: &str = "local-review";
 const LOCAL_REVIEW_POLICY: &str = "lenso.agent.local-review@1";
+const BUNDLED_POLICY: &str = "lenso.agent.host-build@1";
+const BUNDLED_PROVENANCE: &str = "host-build";
+const PLUGIN_SELECTION_EXTENSION: &str = "lenso.agent.plugins";
 const MAX_BUNDLE_FILES: usize = 4_096;
 const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH: usize = 32;
@@ -57,12 +61,12 @@ pub enum PluginCommand {
     Enable {
         bundled: String,
         evidence: Option<String>,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Disable {
         plugin_id: String,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Available,
@@ -81,12 +85,12 @@ pub enum PluginCommand {
         evidence: Option<String>,
         features: Vec<String>,
         expected_manifest: Option<String>,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Rollback {
         to: String,
-        plan: PathBuf,
+        plan: Option<PathBuf>,
         root: PathBuf,
     },
     Status {
@@ -127,12 +131,12 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             evidence,
             plan,
             root,
-        } => run_enable(&bundled, evidence.as_deref(), &plan, &root).await,
+        } => run_enable(&bundled, evidence.as_deref(), plan.as_deref(), &root).await,
         PluginCommand::Disable {
             plugin_id,
             plan,
             root,
-        } => run_disable(&plugin_id, &plan, &root).await,
+        } => run_disable(&plugin_id, plan.as_deref(), &root).await,
         PluginCommand::Available => {
             print_available();
             Ok(())
@@ -142,19 +146,18 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             evidence,
             features,
             root,
-        } => {
-            let outcome = install(&root, &bundle, evidence.as_deref(), features)?;
-            println!(
-                "installed: {}@{}",
-                outcome.plugin_id, outcome.release_version
-            );
-            println!("manifest: {}", outcome.manifest_digest);
-            println!("receipt: {}", outcome.receipt_digest);
-            println!("plugin-set: {}", outcome.plugin_set_digest);
-            println!("governance: {}", outcome.governance);
-            Ok(())
-        }
+        } => run_install(&bundle, evidence.as_deref(), features, &root),
         PluginCommand::Status { root } => {
+            if let Some(snapshot) = source_selection()? {
+                if snapshot.selection.enabled.is_empty() {
+                    println!("No bundled Plugins enabled.");
+                } else {
+                    for selection in &snapshot.selection.enabled {
+                        println!("enabled: {selection}");
+                    }
+                }
+                return Ok(());
+            }
             let authority = load_generation_authority(&root)?;
             if authority.lock.value().plugins.is_empty() {
                 println!("No active Plugin releases.");
@@ -170,6 +173,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             Ok(())
         }
         PluginCommand::Remove { plugin_id, root } => {
+            reject_store_operation_for_source_app("remove")?;
             let digest = remove(&root, &plugin_id)?;
             println!("removed: {plugin_id}");
             println!("plugin-set: {digest}");
@@ -183,51 +187,106 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             plan,
             root,
         } => {
-            let outcome = upgrade(
-                &root,
+            run_upgrade(
                 &bundle,
                 evidence.as_deref(),
                 features,
                 expected_manifest.as_deref(),
-                &plan,
+                plan.as_deref(),
+                &root,
             )
-            .await?;
-            println!(
-                "upgraded: {}@{}",
-                outcome.plugin_id, outcome.release_version
-            );
-            println!("manifest: {}", outcome.manifest_digest);
-            println!(
-                "previous-active-set: {}",
-                outcome.previous_active_set_digest
-            );
-            println!("active-set: {}", outcome.active_set_digest);
-            println!("generation: {}", outcome.generation_spec_digest);
-            println!("governance: {}", outcome.governance);
-            Ok(())
+            .await
         }
         PluginCommand::Rollback { to, plan, root } => {
-            let outcome = rollback(&root, &to, &plan).await?;
-            println!("rolled-back-to: {}", outcome.active_set);
-            println!("previous-active-set: {}", outcome.previous_active_set);
-            println!("generation: {}", outcome.generation_spec);
-            Ok(())
+            run_rollback(&to, plan.as_deref(), &root).await
         }
-        PluginCommand::History { root } => print_active_set_history(&root),
+        PluginCommand::History { root } => {
+            reject_store_operation_for_source_app("history")?;
+            print_active_set_history(&root)
+        }
         PluginCommand::Inspect {
             active_set_digest,
             root,
-        } => print_active_set(&root, &active_set_digest),
+        } => {
+            reject_store_operation_for_source_app("inspect")?;
+            print_active_set(&root, &active_set_digest)
+        }
     }
+}
+
+fn run_install(
+    bundle: &Path,
+    evidence: Option<&str>,
+    features: Vec<String>,
+    root: &Path,
+) -> Result<(), String> {
+    reject_store_operation_for_source_app("install")?;
+    let outcome = install(root, bundle, evidence, features)?;
+    println!(
+        "installed: {}@{}",
+        outcome.plugin_id, outcome.release_version
+    );
+    println!("manifest: {}", outcome.manifest_digest);
+    println!("receipt: {}", outcome.receipt_digest);
+    println!("plugin-set: {}", outcome.plugin_set_digest);
+    println!("governance: {}", outcome.governance);
+    Ok(())
+}
+
+async fn run_upgrade(
+    bundle: &Path,
+    evidence: Option<&str>,
+    features: Vec<String>,
+    expected_manifest: Option<&str>,
+    plan: Option<&Path>,
+    root: &Path,
+) -> Result<(), String> {
+    reject_store_operation_for_source_app("upgrade")?;
+    let outcome = upgrade(root, bundle, evidence, features, expected_manifest, plan).await?;
+    println!(
+        "upgraded: {}@{}",
+        outcome.plugin_id, outcome.release_version
+    );
+    println!("manifest: {}", outcome.manifest_digest);
+    println!(
+        "previous-active-set: {}",
+        outcome.previous_active_set_digest
+    );
+    println!("active-set: {}", outcome.active_set_digest);
+    println!("generation: {}", outcome.generation_spec_digest);
+    println!("governance: {}", outcome.governance);
+    Ok(())
+}
+
+async fn run_rollback(to: &str, plan: Option<&Path>, root: &Path) -> Result<(), String> {
+    reject_store_operation_for_source_app("rollback")?;
+    let outcome = rollback(root, to, plan).await?;
+    println!("rolled-back-to: {}", outcome.active_set);
+    println!("previous-active-set: {}", outcome.previous_active_set);
+    println!("generation: {}", outcome.generation_spec);
+    Ok(())
+}
+
+fn reject_store_operation_for_source_app(operation: &str) -> Result<(), String> {
+    if source_selection()?.is_some() {
+        return Err(format!(
+            "plugins {operation} uses the legacy private Plugin Store and is unavailable for a source-backed App; bundled selections use `plugins enable` and `plugins disable`"
+        ));
+    }
+    Ok(())
 }
 
 async fn run_enable(
     bundled: &str,
     evidence: Option<&str>,
-    plan: &Path,
+    plan: Option<&Path>,
     root: &Path,
 ) -> Result<(), String> {
-    let outcome = enable_loaded(root, bundled_plugin(bundled)?, evidence, plan).await?;
+    let plan = crate::plan_bytes(plan)?;
+    if let Some(snapshot) = source_selection()? {
+        return run_source_enable(bundled, &plan, snapshot).await;
+    }
+    let outcome = enable_loaded(root, bundled_plugin(bundled)?, evidence, &plan).await?;
     println!("enabled: {bundled}");
     println!("release: {}@{}", outcome.plugin_id, outcome.release_version);
     println!("manifest: {}", outcome.manifest_digest);
@@ -239,9 +298,13 @@ async fn run_enable(
     Ok(())
 }
 
-async fn run_disable(plugin: &str, plan: &Path, root: &Path) -> Result<(), String> {
+async fn run_disable(plugin: &str, plan: Option<&Path>, root: &Path) -> Result<(), String> {
+    let plan = crate::plan_bytes(plan)?;
+    if let Some(snapshot) = source_selection()? {
+        return run_source_disable(plugin, &plan, snapshot).await;
+    }
     let plugin_id = bundled_plugin_id(plugin).unwrap_or(plugin);
-    let outcome = disable(root, plugin_id, plan).await?;
+    let outcome = disable(root, plugin_id, &plan).await?;
     println!("disabled: {plugin_id}");
     println!("plugin-set: {}", outcome.plugin_set);
     println!("active-set: {}", outcome.active_set);
@@ -249,25 +312,84 @@ async fn run_disable(plugin: &str, plan: &Path, root: &Path) -> Result<(), Strin
     Ok(())
 }
 
+async fn run_source_enable(
+    bundled: &str,
+    plan: &[u8],
+    snapshot: SourceSelectionSnapshot,
+) -> Result<(), String> {
+    let (name, selection_id) = if bundled.ends_with("@1") {
+        (bundled_selection_name(bundled)?, bundled.to_owned())
+    } else {
+        (bundled, bundled_selection_id(bundled)?)
+    };
+    if snapshot.selection.enabled.contains(&selection_id) {
+        return Err(format!("bundled Plugin `{name}` is already enabled"));
+    }
+    let current_authority = source_generation_authority(&snapshot.selection)?;
+    let mut next = snapshot.selection.clone();
+    next.enabled.insert(selection_id.clone());
+    let candidate_authority = source_generation_authority(&next)?;
+    let generation = crate::generation::ready_check_source_transition(
+        plan,
+        current_authority,
+        candidate_authority,
+    )
+    .await?;
+    write_source_selection(&snapshot, &next)?;
+    println!("enabled: {name}");
+    println!("selection: {selection_id}");
+    println!("generation: {generation}");
+    println!("governance: host-build-profile");
+    Ok(())
+}
+
+async fn run_source_disable(
+    plugin: &str,
+    plan: &[u8],
+    snapshot: SourceSelectionSnapshot,
+) -> Result<(), String> {
+    let selection_id = if plugin.ends_with("@1") {
+        bundled_selection_name(plugin)?;
+        plugin.to_owned()
+    } else if bundled_plugin_id(plugin).is_some() {
+        bundled_selection_id(plugin)?
+    } else {
+        let name = bundled_name_for_plugin_id(plugin)
+            .ok_or_else(|| format!("unknown bundled Plugin `{plugin}`"))?;
+        bundled_selection_id(name)?
+    };
+    if !snapshot.selection.enabled.contains(&selection_id) {
+        return Err(format!(
+            "bundled Plugin selection `{selection_id}` is not enabled"
+        ));
+    }
+    let current_authority = source_generation_authority(&snapshot.selection)?;
+    let mut next = snapshot.selection.clone();
+    next.enabled.remove(&selection_id);
+    let candidate_authority = source_generation_authority(&next)?;
+    let generation = crate::generation::ready_check_source_transition(
+        plan,
+        current_authority,
+        candidate_authority,
+    )
+    .await?;
+    write_source_selection(&snapshot, &next)?;
+    println!("disabled: {selection_id}");
+    println!("generation: {generation}");
+    Ok(())
+}
+
 fn print_available() {
-    println!("text-tools       stable        adds text transformation Tools");
-    println!("workspace-edit   experimental  adds workspace mutation Tools; review required");
-    println!(
-        "skills           experimental  adds filesystem Skills to Prompt and Tools; review required"
-    );
-    println!("local-process    experimental  adds reviewed local process Tools; review required");
-    println!("subagent         experimental  adds bounded child Agent delegation; review required");
-    println!(
-        "code-mode        experimental  adds constrained Lua Tool orchestration; review required"
-    );
-    println!(
-        "approval         experimental  adds generation-bound one-shot Tool approval; review required"
-    );
-    println!(
-        "openai-compatible experimental replaces the Model and adds environment Secrets; review required"
-    );
-    println!("fixture-model    stable        replaces the fixture Model; review required");
-    println!("codex-direct     experimental  replaces Model and Auth; review required");
+    println!("text-tools@1       stable        adds text transformation Tools");
+    println!("workspace-edit@1   experimental  adds workspace mutation Tools");
+    println!("skills@1           experimental  adds filesystem Skills to Prompt and Tools");
+    println!("local-process@1    experimental  adds reviewed local process Tools");
+    println!("subagent@1         experimental  adds bounded child Agent delegation");
+    println!("code-mode@1        experimental  adds constrained Lua Tool orchestration");
+    println!("approval@1         experimental  adds generation-bound one-shot Tool approval");
+    println!("openai-compatible@1 experimental replaces the Model and adds environment Secrets");
+    println!("fixture-model@1    stable        replaces the fixture Model");
+    println!("codex-direct@1     experimental  replaces Model and Auth");
 }
 
 fn print_active_set_history(root: &Path) -> Result<(), String> {
@@ -379,10 +501,7 @@ fn parse_enable(arguments: &[String]) -> Result<PluginCommand, String> {
     Ok(PluginCommand::Enable {
         bundled: bundled.ok_or_else(usage)?,
         evidence,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -404,10 +523,7 @@ fn parse_disable(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Disable {
         plugin_id: plugin.ok_or_else(usage)?,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -495,10 +611,7 @@ fn parse_upgrade(arguments: &[String]) -> Result<PluginCommand, String> {
         evidence,
         features,
         expected_manifest,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -520,10 +633,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
     }
     Ok(PluginCommand::Rollback {
         to: to.ok_or_else(usage)?,
-        plan: match plan {
-            Some(plan) => plan,
-            None => default_plan()?,
-        },
+        plan,
         root,
     })
 }
@@ -536,8 +646,64 @@ fn default_root() -> PathBuf {
     PathBuf::from(".lenso/plugins")
 }
 
-fn default_plan() -> Result<PathBuf, String> {
-    crate::default_plan()
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PluginSelection {
+    schema_version: u32,
+    enabled: BTreeSet<String>,
+}
+
+impl Default for PluginSelection {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            enabled: BTreeSet::new(),
+        }
+    }
+}
+
+struct SourceSelectionSnapshot {
+    path: PathBuf,
+    definition_digest: String,
+    selection: PluginSelection,
+}
+
+fn source_selection() -> Result<Option<SourceSelectionSnapshot>, String> {
+    let Some(path) = crate::existing_app_definition_path() else {
+        return Ok(None);
+    };
+    let bytes =
+        fs::read(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let definition = lenso_authoring::CargoAppDefinition::load(&path)
+        .map_err(|error| format!("failed to load {}: {error}", path.display()))?;
+    let selection = definition
+        .extension(PLUGIN_SELECTION_EXTENSION)
+        .cloned()
+        .map_or_else(
+            || Ok(PluginSelection::default()),
+            |value| {
+                serde_json::from_value::<PluginSelection>(value).map_err(|error| {
+                    format!(
+                        "invalid `{PLUGIN_SELECTION_EXTENSION}` extension in {}: {error}",
+                        path.display()
+                    )
+                })
+            },
+        )?;
+    if selection.schema_version != 1 {
+        return Err(format!(
+            "unsupported `{PLUGIN_SELECTION_EXTENSION}` schema version {}",
+            selection.schema_version
+        ));
+    }
+    for id in &selection.enabled {
+        bundled_selection_name(id)?;
+    }
+    Ok(Some(SourceSelectionSnapshot {
+        path,
+        definition_digest: sha256_digest(&bytes),
+        selection,
+    }))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -577,10 +743,10 @@ struct ActiveRelease {
 pub(crate) struct GenerationPluginAuthority {
     pub(crate) active_set_digest: String,
     active_set: CanonicalDocument<ActivePluginSet>,
-    pub(crate) store: PluginStore,
+    pub(crate) artifact_source: Box<dyn ArtifactSource>,
     pub(crate) lock: CanonicalDocument<PluginSetLock>,
     pub(crate) manifests: BTreeMap<String, CanonicalDocument<PluginManifest>>,
-    pub(crate) admission_receipts: BTreeMap<String, String>,
+    pub(crate) admission_receipts: BTreeMap<String, CanonicalDocument<AdmissionReceipt>>,
 }
 
 #[derive(Debug)]
@@ -815,7 +981,7 @@ async fn enable_loaded(
     root: &Path,
     bundle: LoadedBundle,
     evidence: Option<&str>,
-    plan_path: &Path,
+    plan: &[u8],
 ) -> Result<EnableOutcome, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
@@ -865,12 +1031,10 @@ async fn enable_loaded(
         &store,
         &profiles,
     )?;
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
-        &plan,
+        plan,
         current_authority,
         candidate_authority,
         root,
@@ -953,6 +1117,205 @@ fn bundled_plugin_id(name: &str) -> Option<&'static str> {
     }
 }
 
+fn bundled_name_for_plugin_id(plugin_id: &str) -> Option<&'static str> {
+    [
+        "text-tools",
+        "workspace-edit",
+        "skills",
+        "local-process",
+        "subagent",
+        "code-mode",
+        "approval",
+        "openai-compatible",
+        "fixture-model",
+        "codex-direct",
+    ]
+    .into_iter()
+    .find(|name| bundled_plugin_id(name) == Some(plugin_id))
+}
+
+fn bundled_selection_id(name: &str) -> Result<String, String> {
+    bundled_plugin_id(name)
+        .map(|_| format!("{name}@1"))
+        .ok_or_else(|| format!("unknown bundled Plugin `{name}`"))
+}
+
+fn bundled_selection_name(selection_id: &str) -> Result<&str, String> {
+    let Some(name) = selection_id.strip_suffix("@1") else {
+        return Err(format!(
+            "unsupported bundled Plugin selection `{selection_id}`; expected a supported `name@1` profile"
+        ));
+    };
+    bundled_plugin_id(name)
+        .map(|_| name)
+        .ok_or_else(|| format!("unknown bundled Plugin selection `{selection_id}`"))
+}
+
+fn write_source_selection(
+    snapshot: &SourceSelectionSnapshot,
+    next: &PluginSelection,
+) -> Result<(), String> {
+    let current = fs::read(&snapshot.path)
+        .map_err(|error| format!("failed to read {}: {error}", snapshot.path.display()))?;
+    if sha256_digest(&current) != snapshot.definition_digest {
+        return Err(format!(
+            "{} changed while the candidate Generation was being checked; retry the command",
+            snapshot.path.display()
+        ));
+    }
+    let mut document: serde_json::Value = serde_json::from_slice(&current)
+        .map_err(|error| format!("invalid {}: {error}", snapshot.path.display()))?;
+    let root = document
+        .as_object_mut()
+        .ok_or_else(|| format!("{} is not a JSON object", snapshot.path.display()))?;
+    let extensions = root
+        .entry("extensions")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| "App Definition `extensions` must be a JSON object".to_owned())?;
+    if next.enabled.is_empty() {
+        extensions.remove(PLUGIN_SELECTION_EXTENSION);
+        if extensions.is_empty() {
+            root.remove("extensions");
+        }
+    } else {
+        extensions.insert(
+            PLUGIN_SELECTION_EXTENSION.to_owned(),
+            serde_json::to_value(next).map_err(|error| error.to_string())?,
+        );
+    }
+    let mut bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    let temporary = snapshot
+        .path
+        .with_extension(format!("lenso-selection-{}.tmp", std::process::id()));
+    let write_result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| format!("failed to create {}: {error}", temporary.display()))?;
+        file.write_all(&bytes)
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
+        fs::rename(&temporary, &snapshot.path).map_err(|error| {
+            format!(
+                "failed to replace {} with checked Plugin intent: {error}",
+                snapshot.path.display()
+            )
+        })
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+pub(crate) fn source_generation_authority(
+    selection: &PluginSelection,
+) -> Result<GenerationPluginAuthority, String> {
+    let profiles = harness_plugin_profiles()?;
+    let mut active = ActivePluginSet::empty();
+    let mut manifests = BTreeMap::new();
+    let mut admission_receipts = BTreeMap::new();
+
+    for selection_id in &selection.enabled {
+        let name = bundled_selection_name(selection_id)?;
+        let bundle = bundled_plugin(name)?;
+        if !bundle.files.is_empty() {
+            return Err(format!(
+                "bundled Plugin selection `{selection_id}` unexpectedly contains files"
+            ));
+        }
+        let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+            .map_err(control_error)?;
+        validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
+        if !manifest.value().artifacts.is_empty() || !manifest.value().product_metadata.is_empty() {
+            return Err(format!(
+                "bundled Plugin selection `{selection_id}` is not closed by the exact Host build"
+            ));
+        }
+        let selected =
+            validate_selection(manifest.value(), &[], &profiles).map_err(control_error)?;
+        let receipt = CanonicalDocument::from_value(
+            "bundled Admission Receipt",
+            AdmissionReceipt {
+                schema_version: 1,
+                policy_identity: BUNDLED_POLICY.to_owned(),
+                plugin_id: manifest.value().plugin_id.clone(),
+                release_version: manifest.value().release_version.clone(),
+                manifest_digest: manifest.digest().to_owned(),
+                artifact_digests: Vec::new(),
+                product_metadata_digests: Vec::new(),
+                provenance: BUNDLED_PROVENANCE.to_owned(),
+                decision_evidence: selection_id.clone(),
+            },
+        )
+        .map_err(control_error)?;
+        active.lock.plugins.push(LockedPlugin {
+            plugin_id: manifest.value().plugin_id.clone(),
+            release_version: manifest.value().release_version.clone(),
+            manifest_digest: manifest.digest().to_owned(),
+            selected_features: Vec::new(),
+            product_metadata_digests: selected.product_metadata_digests,
+        });
+        active.lock.instances.extend(locked_instances(
+            manifest.value(),
+            &selected.module_contribution_ids,
+            &profiles,
+        )?);
+        replace_plugin_grants(
+            &mut active.lock.approved_grants,
+            manifest.value(),
+            &selected.module_contribution_ids,
+            &profiles,
+        )?;
+        active.releases.push(ActiveRelease {
+            plugin_id: manifest.value().plugin_id.clone(),
+            manifest: manifest.value().clone(),
+            admission_receipt_digest: receipt.digest().to_owned(),
+        });
+        admission_receipts.insert(manifest.digest().to_owned(), receipt);
+        manifests.insert(manifest.value().plugin_id.clone(), manifest);
+    }
+
+    active
+        .lock
+        .plugins
+        .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    active
+        .lock
+        .instances
+        .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+    active.lock.approved_grants.sort_by(|left, right| {
+        (&left.instance_key, &left.permission_request_id)
+            .cmp(&(&right.instance_key, &right.permission_request_id))
+    });
+    active
+        .releases
+        .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    let active =
+        CanonicalDocument::from_value("source Plugin selection", active).map_err(control_error)?;
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
+            .map_err(control_error)?;
+    Ok(GenerationPluginAuthority {
+        active_set_digest: active.digest().to_owned(),
+        active_set: active,
+        artifact_source: Box::new(NoArtifactSource),
+        lock,
+        manifests,
+        admission_receipts,
+    })
+}
+
+pub(crate) fn current_source_generation_authority()
+-> Result<Option<GenerationPluginAuthority>, String> {
+    source_selection()?
+        .map(|snapshot| source_generation_authority(&snapshot.selection))
+        .transpose()
+}
+
 fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
@@ -997,7 +1360,7 @@ fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
     Ok(lock.digest().to_owned())
 }
 
-async fn disable(root: &Path, plugin_id: &str, plan_path: &Path) -> Result<DisableOutcome, String> {
+async fn disable(root: &Path, plugin_id: &str, plan: &[u8]) -> Result<DisableOutcome, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
@@ -1025,12 +1388,10 @@ async fn disable(root: &Path, plugin_id: &str, plan_path: &Path) -> Result<Disab
         .releases
         .retain(|release| release.plugin_id != plugin_id);
     let candidate = validate_active_set(candidate, &store, &profiles)?;
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
-        &plan,
+        plan,
         current_authority,
         candidate_authority,
         root,
@@ -1055,8 +1416,9 @@ async fn upgrade(
     evidence: Option<&str>,
     mut features: Vec<String>,
     expected_manifest: Option<&str>,
-    plan_path: &Path,
+    plan_path: Option<&Path>,
 ) -> Result<UpgradeOutcome, String> {
+    let plan = crate::plan_bytes(plan_path)?;
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
@@ -1123,8 +1485,6 @@ async fn upgrade(
         &store,
         &profiles,
     )?;
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
@@ -1229,7 +1589,12 @@ fn replacement_active_set(
     validate_active_set(candidate, store, profiles)
 }
 
-async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOutcome, String> {
+async fn rollback(
+    root: &Path,
+    to: &str,
+    plan_path: Option<&Path>,
+) -> Result<RollbackOutcome, String> {
+    let plan = crate::plan_bytes(plan_path)?;
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
@@ -1242,8 +1607,6 @@ async fn rollback(root: &Path, to: &str, plan_path: &Path) -> Result<RollbackOut
     if target.digest() != to {
         return Err("rollback Plugin Set does not match its requested digest".to_owned());
     }
-    let plan = fs::read(plan_path)
-        .map_err(|error| format!("failed to read {}: {error}", plan_path.display()))?;
     let current_authority = generation_authority_from_active(root, current.value().clone())?;
     let target_authority = generation_authority_from_active(root, target.value().clone())?;
     let generation_spec_digest = crate::generation::ready_check_maintenance_transition(
@@ -1356,15 +1719,15 @@ fn generation_authority_from_document(
         let manifest = CanonicalDocument::from_value("lenso-plugin.json", release.manifest.clone())
             .map_err(control_error)?;
         manifests.insert(release.plugin_id.clone(), manifest.clone());
-        admission_receipts.insert(
-            manifest.digest().to_owned(),
-            release.admission_receipt_digest.clone(),
-        );
+        let receipt = store
+            .admission_receipt(&release.admission_receipt_digest)
+            .map_err(control_error)?;
+        admission_receipts.insert(manifest.digest().to_owned(), receipt);
     }
     Ok(GenerationPluginAuthority {
         active_set_digest: active.digest().to_owned(),
         active_set: active.clone(),
-        store,
+        artifact_source: Box::new(store),
         lock,
         manifests,
         admission_receipts,
@@ -2519,13 +2882,11 @@ mod tests {
         local
             .run_until(async {
                 let root = tempfile::tempdir().unwrap();
-                let plan_path = root.path().join("base-plan.json");
-                fs::write(&plan_path, plan()).unwrap();
                 enable_loaded(
                     root.path(),
                     bundled_plugin("approval").unwrap(),
                     Some("review-ticket-approval"),
-                    &plan_path,
+                    plan(),
                 )
                 .await
                 .unwrap();
@@ -2555,7 +2916,7 @@ mod tests {
                         })
                 }));
 
-                disable(root.path(), "lenso.approval", &plan_path)
+                disable(root.path(), "lenso.approval", plan())
                     .await
                     .unwrap();
                 let generation =

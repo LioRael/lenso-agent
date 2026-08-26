@@ -39,17 +39,15 @@ jq empty examples/plugins/text-tools/lenso-plugin.json
 The workspace command discovers Capability packages through Cargo metadata, so
 adding a contract does not require editing a shell-script crate list.
 
-## 3. Resolve the immutable Plan
+## 3. Validate immutable Plan resolution
 
 ```sh
-lenso app resolve \
-  --definition lenso.app.json \
-  --output .lenso/resolved-plan.json
+lenso app check --definition lenso.app.json
 ```
 
 Review the root source App Definition for base intent and the Plugin Manifest
-for the optional contribution. The generated Plan is Host state; do not edit it
-by hand.
+for the optional contribution. The Host resolves the candidate Plan in memory
+when it starts or switches a Generation.
 
 ## 4. Run it
 
@@ -59,8 +57,8 @@ cargo run -p lenso-agent-cli -- \
   "Use uppercase on: Lenso modules are replaceable."
 ```
 
-The normal run resolves the root App plus the persisted Plugin Active Set;
-`--plan` is reserved for exact replay.
+The normal run resolves the root App plus its versioned enabled list in memory;
+`--plan` is reserved for exact replay. No `.lenso/plugins` directory is created.
 
 ## 5. Prove removal
 

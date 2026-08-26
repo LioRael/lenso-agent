@@ -80,6 +80,7 @@ crossterm.workspace = true
 futures.workspace = true
 fs2.workspace = true
 lenso-app-plan.workspace = true
+lenso-authoring.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 lenso-plugin-control-plane.workspace = true

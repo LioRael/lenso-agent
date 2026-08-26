@@ -231,15 +231,24 @@ pub struct AgentApp {
 
 impl AgentApp {
     pub async fn start(plan_bytes: &[u8]) -> Result<Self, String> {
+        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
+            return Self::start_with_source_authority(plan_bytes, authority).await;
+        }
         Self::start_with_store(plan_bytes, Path::new(".lenso/plugins")).await
     }
 
     pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
+        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
+            return Self::start_with_source_authority(plan_bytes, authority).await;
+        }
         Self::start_tui_with_store(plan_bytes, Path::new(".lenso/plugins")).await
     }
 
     /// Starts the Telegram surface with an independent durable Controller lineage.
     pub async fn start_telegram(plan_bytes: &[u8]) -> Result<Self, String> {
+        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
+            return Self::start_with_source_authority(plan_bytes, authority).await;
+        }
         Self::start_with_store_and_control_directory(
             plan_bytes,
             Path::new(".lenso/plugins"),
@@ -250,6 +259,9 @@ impl AgentApp {
 
     /// Starts the Discord surface with an independent durable Controller lineage.
     pub async fn start_discord(plan_bytes: &[u8]) -> Result<Self, String> {
+        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
+            return Self::start_with_source_authority(plan_bytes, authority).await;
+        }
         Self::start_with_store_and_control_directory(
             plan_bytes,
             Path::new(".lenso/plugins"),
@@ -260,6 +272,9 @@ impl AgentApp {
 
     /// Starts all configured messaging surfaces in one durable Controller lineage.
     pub async fn start_channels(plan_bytes: &[u8]) -> Result<Self, String> {
+        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
+            return Self::start_with_source_authority(plan_bytes, authority).await;
+        }
         Self::start_with_store_and_control_directory(
             plan_bytes,
             Path::new(".lenso/plugins"),
@@ -294,6 +309,37 @@ impl AgentApp {
             host_build,
         )
         .await
+    }
+
+    async fn start_with_source_authority(
+        plan_bytes: &[u8],
+        authority: crate::plugins::GenerationPluginAuthority,
+    ) -> Result<Self, String> {
+        let host_build = HostBuildIdentity::current()?;
+        let generation = resolve_generation_with_authority(plan_bytes, &authority, &host_build)?;
+        let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
+        let supervisor =
+            DurableGenerationSupervisor::open(APP_ID, runtime, MemoryControlStateStore::default())
+                .map_err(control_error)?;
+        let (controller, client) =
+            GenerationController::new(supervisor, MAINTENANCE_INTERVAL).map_err(control_error)?;
+        let task = tokio::task::spawn_local(controller.run());
+        let transition = initial_transition(&generation).map_err(control_error)?;
+        if let Err(error) = client
+            .transition(transition, generation, BTreeMap::new())
+            .await
+        {
+            drop(client);
+            let _ = task.await;
+            return Err(control_error(error));
+        }
+        Ok(Self {
+            client,
+            controller: Some(task),
+            reconciler: None,
+            reconcile_events: Rc::new(RefCell::new(VecDeque::new())),
+            host_lease: None,
+        })
     }
 
     async fn start_with_store_control_directory_and_host_build(
@@ -938,7 +984,7 @@ fn resolve_generation_with_authority(
         admission_receipts: &authority.admission_receipts,
         host_build: &host_build,
         policy: &policy,
-        store: &authority.store,
+        artifact_source: authority.artifact_source.as_ref(),
         base_instances: composition.base_instances,
         bindings: composition.bindings,
     })
@@ -951,6 +997,29 @@ pub(crate) async fn ready_check_maintenance_transition(
     current_authority: crate::plugins::GenerationPluginAuthority,
     candidate_authority: crate::plugins::GenerationPluginAuthority,
     store_root: &Path,
+) -> Result<String, String> {
+    ready_check_transition(
+        plan_bytes,
+        current_authority,
+        candidate_authority,
+        Some(store_root),
+    )
+    .await
+}
+
+pub(crate) async fn ready_check_source_transition(
+    plan_bytes: &[u8],
+    current_authority: crate::plugins::GenerationPluginAuthority,
+    candidate_authority: crate::plugins::GenerationPluginAuthority,
+) -> Result<String, String> {
+    ready_check_transition(plan_bytes, current_authority, candidate_authority, None).await
+}
+
+async fn ready_check_transition(
+    plan_bytes: &[u8],
+    current_authority: crate::plugins::GenerationPluginAuthority,
+    candidate_authority: crate::plugins::GenerationPluginAuthority,
+    record_root: Option<&Path>,
 ) -> Result<String, String> {
     let host_build = HostBuildIdentity::current()?;
     let current = resolve_generation_with_authority(plan_bytes, &current_authority, &host_build)?;
@@ -997,7 +1066,9 @@ pub(crate) async fn ready_check_maintenance_transition(
             ));
         }
     }
-    record_generation_spec(store_root, &candidate.spec)?;
+    if let Some(root) = record_root {
+        record_generation_spec(root, &candidate.spec)?;
+    }
     Ok(candidate.spec.digest().to_owned())
 }
 

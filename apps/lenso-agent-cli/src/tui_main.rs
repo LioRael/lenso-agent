@@ -1,9 +1,9 @@
-use std::{fs, path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
 use lenso_agent_cli::{
-    default_plan,
     generation::AgentApp,
+    plan_bytes,
     tui::{self, TuiOptions},
 };
 
@@ -45,12 +45,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    let plan = match args.plan {
-        Some(plan) => plan,
-        None => default_plan()?,
-    };
-    let bytes =
-        fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))?;
+    let bytes = plan_bytes(args.plan.as_deref())?;
     let mut app = AgentApp::start_tui(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;

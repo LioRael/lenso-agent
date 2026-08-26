@@ -1,10 +1,10 @@
-use std::{fs, path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
 use lenso_agent_cli::{
-    default_plan,
     discord::{self, ChannelAllowlist, DiscordOptions},
     generation::AgentApp,
+    plan_bytes,
 };
 
 /// Run the composed Lenso Agent as a Discord Bot.
@@ -76,12 +76,7 @@ async fn run(args: Args) -> Result<(), String> {
         )
     })?;
     let allowed_channels = ChannelAllowlist::parse(&args.allowed_channels)?;
-    let plan = match args.plan {
-        Some(plan) => plan,
-        None => default_plan()?,
-    };
-    let bytes =
-        fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))?;
+    let bytes = plan_bytes(args.plan.as_deref())?;
     let mut app = AgentApp::start_discord(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;

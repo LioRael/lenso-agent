@@ -662,7 +662,8 @@ fn product_runner_resolves_the_single_base_app_without_a_plan_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
-    assert!(temporary.path().join(".lenso/resolved-plan.json").is_file());
+    assert!(!temporary.path().join(".lenso/resolved-plan.json").exists());
+    assert!(!temporary.path().join(".lenso/plugins").exists());
 }
 
 #[test]

@@ -1,8 +1,8 @@
-use std::{fs, path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use lenso_agent_cli::{
-    channel_host::ChannelHostConfig, default_plan, discord, generation::AgentApp, telegram,
+    channel_host::ChannelHostConfig, discord, generation::AgentApp, plan_bytes, telegram,
 };
 
 /// Run the composed Lenso Agent through every configured messaging Channel.
@@ -36,12 +36,7 @@ async fn main() -> ExitCode {
 
 async fn run(args: Args) -> Result<(), String> {
     let options = ChannelHostConfig::load(&args.config)?.resolve()?;
-    let plan = match args.plan {
-        Some(plan) => plan,
-        None => default_plan()?,
-    };
-    let bytes =
-        fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))?;
+    let bytes = plan_bytes(args.plan.as_deref())?;
     let mut app = AgentApp::start_channels(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
