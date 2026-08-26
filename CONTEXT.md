@@ -7,7 +7,7 @@ as an ordinary Lenso App. The first executable slice contains portable
 Capability sources, native Module implementations, composable Prompt/Skill
 contributions, semantic TUI panels, a CLI Runner, a no-subcommand `lenso-agent`
 TUI entrypoint, a long-polling `lenso-agent-telegram` Bot surface, and one
-checked read-only base definition at
+Gateway-backed `lenso-agent-discord` Bot surface, and one checked read-only base definition at
 `lenso.app.json`. Optional text Tools, workspace mutation, filesystem Skills,
 local process execution, OpenAI-compatible Models, and experimental Codex
 Direct access are selected independently through the Host's persisted Plugin
@@ -48,7 +48,7 @@ wraps the public `lenso::provides` facade and derives only Agent Tool catalog,
 Schema, argument decoding, and dispatch boilerplate. Capability contracts,
 Module Descriptors, factories, endpoints, and Host registration remain
 source-first and package-owned.
-The CLI and Telegram surface Modules are source-derived consumer-only
+The CLI, Telegram, and Discord surface Modules are source-derived consumer-only
 identities that anchor their exact Agent bindings. The TUI Shell remains a
 deliberate compatibility factory while it binds one Agent plus explicit `many`
 semantic panel Contributions. The native Host surface snapshots those resolved
@@ -58,6 +58,10 @@ durable update cursor and conversation-to-Session mapping, while the Session
 Module remains the sole owner and creator of Session identity and history.
 Every accepted Telegram message leases the current App Generation separately;
 the long poll never pins future messages to an old Generation.
+The Discord Host similarly owns Gateway heartbeats and resume state, REST
+delivery, channel authorization, and channel-to-Session mapping. Mention/reply
+handling avoids privileged message-content access by default, and every
+accepted Discord message receives its own Generation lease.
 
 Source-derived Provider Descriptors use the standard fail-fast admission
 default (`max_concurrency: 1`, `queue_capacity: 0`). The regenerated canonical
@@ -281,6 +285,8 @@ The deterministic root base selects these keyed Module Instances:
 - `tools`
 - `tui`
 - `tui-help`
+- `telegram`
+- `discord`
 - `workspace-import-read`
 - `workspace-read`
 - `sessions`
