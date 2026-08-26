@@ -11,9 +11,10 @@
       "provides": [
         {
           "capability_id": "lenso.agent.process@1",
-          "descriptor_version": "1.0.0",
-          "descriptor_digest": "sha256:a717cff3e24066078c04f7e6dd3247a6dbfe4c09a2a1dd055e2f4dc77eeaa695",
-          "request_operations": ["catalog", "run"]
+          "descriptor_version": "1.1.0",
+          "descriptor_digest": "sha256:1d97b2a32359e34d881b05e60bbc549e496129a4d473dc2f53e53a6a1486dd9c",
+          "request_operations": ["catalog", "run", "run_stream"],
+          "operation_kinds": { "run_stream": "stream" }
         }
       ],
       "requires": [],
@@ -39,6 +40,13 @@
       "configuration_schema_digest": "sha256:e0264152926e6aba1352941ca08687260cfcc45957d23f76fb4646da3a55a212",
       "provides": [
         {
+          "capability_id": "lenso.agent.tool-progress@1",
+          "descriptor_version": "1.0.0",
+          "descriptor_digest": "sha256:4c42eed138bb8c6649acc54fe1ee7ae36e7412634fd7fbec39963abbd5b0425b",
+          "request_operations": ["execute_progress", "progress_catalog"],
+          "operation_kinds": { "execute_progress": "stream" }
+        },
+        {
           "capability_id": "lenso.agent.tool-provider@2",
           "descriptor_version": "2.0.0",
           "descriptor_digest": "sha256:96374f17b271da64adeaba5201883a79e9a5233b9217d84d3bc8cbc5477c4e46",
@@ -48,7 +56,7 @@
       "requires": [
         {
           "capability_id": "lenso.agent.process@1",
-          "descriptor_version": "1.0.0",
+          "descriptor_version": "1.1.0",
           "cardinality": "one"
         }
       ],

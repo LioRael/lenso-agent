@@ -172,7 +172,7 @@ panel Contribution while retaining the TUI Shell and Agent route.
 ## Compose the TUI
 
 The root App selects a `tui` Shell Module that requires exactly one
-`lenso.agent@1` provider and `many lenso.agent.tui-contribution@1` providers.
+`lenso.agent@3` provider and `many lenso.agent.tui-contribution@1` providers.
 The Shell owns terminal mode, layout, focus, input, streaming, cancellation,
 and cross-provider panel ID collision checks. Contribution Modules return
 bounded semantic panel snapshots; they do not receive `ratatui` widgets or a
@@ -424,8 +424,9 @@ content-addressed Generation Spec and Session events.
 ## Compose Prompt and Skill plugins
 
 Prompt and Skill providers are ordinary Modules selected before boot. The root
-base definition binds `fixture-instructions` and `summary-skill` to the
-`prompt` aggregate. Their binding order is the Model-visible order.
+base definition binds the removable `summary-skill` provider to the `prompt`
+aggregate. Additional providers are Model-visible in their resolved binding
+order.
 
 Each static plugin Instance declares one or more versioned contributions in
 the project document:
@@ -719,7 +720,7 @@ cargo run -p lenso-agent-cli -- \
   "Summarize this repository."
 ```
 
-This profile directly provides `lenso.agent.model@1`, while Lenso continues to
+This profile directly provides `lenso.agent.model@2`, while Lenso continues to
 own the Agent Loop, Tool Runtime, and Session log. Its private Auth Module owns
 OAuth refresh credentials outside the repository and App Plan. The integration
 does not depend on the Codex CLI. The same Model/Auth pair can be installed over

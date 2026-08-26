@@ -48,7 +48,7 @@
   "$defs": {
     "CompleteMessageKind": {
       "type": "string",
-      "enum": ["text_delta", "tool_call", "usage"]
+      "enum": ["reasoning_summary_delta", "text_delta", "tool_call", "usage"]
     }
   },
   "title": "CompleteMessage"

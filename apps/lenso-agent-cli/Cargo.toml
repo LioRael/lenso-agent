@@ -37,6 +37,8 @@ lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
 lenso-agent-tui-static-module = { path = "../../crates/lenso-agent-tui-static-module" }
 lenso-agent-telegram-module = { path = "../../crates/lenso-agent-telegram-module" }
 lenso-agent-discord-module = { path = "../../crates/lenso-agent-discord-module" }
+lenso-agent-tui-command-suggestions-module = { path = "../../crates/lenso-agent-tui-command-suggestions-module" }
+lenso-agent-tui-workspace-suggestions-module = { path = "../../crates/lenso-agent-tui-workspace-suggestions-module" }
 lenso-agent-auth-openai-codex-module = { path = "../../crates/lenso-agent-auth-openai-codex-module" }
 lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
 lenso-agent-http-fetch-module = { path = "../../crates/lenso-agent-http-fetch-module" }
@@ -67,9 +69,11 @@ lenso-capability-agent-process = { path = "../../crates/lenso-capability-agent-p
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-tool-hook = { path = "../../crates/lenso-capability-agent-tool-hook" }
 lenso-capability-agent-tool-provider = { path = "../../crates/lenso-capability-agent-tool-provider" }
+lenso-capability-agent-tool-progress = { path = "../../crates/lenso-capability-agent-tool-progress" }
 lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
 lenso-capability-agent-workspace-read = { path = "../../crates/lenso-capability-agent-workspace-read" }
 lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
+lenso-capability-agent-tui-suggestion = { path = "../../crates/lenso-capability-agent-tui-suggestion" }
 lenso-capability-secrets.workspace = true
 clap.workspace = true
 crossterm.workspace = true
@@ -88,6 +92,7 @@ serde_json.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 toml.workspace = true
+time.workspace = true
 uuid.workspace = true
 
 [lints]

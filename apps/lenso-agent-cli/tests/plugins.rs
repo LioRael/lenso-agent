@@ -176,10 +176,7 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&run.stdout),
-        "Plugin: Direct answer.\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Direct answer.\n");
 }
 
 #[test]
@@ -1235,10 +1232,7 @@ fn reviewed_fixture_model_plugin_replaces_the_base_provider_and_runs() {
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(
-        String::from_utf8_lossy(&run.stdout),
-        "Plugin: Direct answer.\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Direct answer.\n");
 
     let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())

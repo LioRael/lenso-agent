@@ -1,6 +1,6 @@
 {
   "id": "lenso.agent.process@1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "portable": false,
   "operations": [
     {
@@ -15,6 +15,13 @@
       "interaction": "request",
       "request_schema": "schemas/run-request.schema.json",
       "response_schema": "schemas/run-response.schema.json",
+      "domain_error_schema": "schemas/run-error.schema.json"
+    },
+    {
+      "name": "run_stream",
+      "interaction": "stream",
+      "request_schema": "schemas/run-request.schema.json",
+      "response_schema": "schemas/run-progress.schema.json",
       "domain_error_schema": "schemas/run-error.schema.json"
     }
   ]

@@ -12,10 +12,13 @@ rust-version.workspace = true
 package-id = "lenso.agent.tui"
 
 [dependencies]
+lenso.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-tui-contribution = { path = "../lenso-capability-agent-tui-contribution" }
-lenso-kernel.workspace = true
-lenso-native-adapter.workspace = true
+lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
+
+[dev-dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

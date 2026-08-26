@@ -35,6 +35,8 @@ mod tests {
             error: None,
             kind: Some(RunTurnResponseKind::ToolStarted),
             metadata_json: None,
+            progress_channel: None,
+            reasoning_id: None,
             sequence: "2".to_owned(),
             session_id: Some("session-1".to_owned()),
             text: String::new(),

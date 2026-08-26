@@ -12,8 +12,8 @@ budgets, and unavailable durable storage remain explicit failures.
 
 ```text
 agent-cli
-  `- one lenso.agent@1 -> agent-loop
-       |- one lenso.agent.model@1 -> openai-compatible-model
+  `- one lenso.agent@3 -> agent-loop
+       |- one lenso.agent.model@2 -> openai-compatible-model
        |    `- one lenso.secrets@1 -> env-secrets
        |- one lenso.agent.tools@2 -> tool-runtime
        |    `- many lenso.agent.tool-provider@2 -> selected Tool providers
@@ -26,7 +26,7 @@ agent-cli
 All selected Instances run in one Execution Lane for the first slice. Before
 Kernel boot, the Host control plane assembles native Rust, QuickJS, and Wasm
 Component Execution Adapters from its build manifest and registers the
-generated JSON codec for `lenso.agent@1`. The built-in profile remains native;
+generated JSON codec for `lenso.agent@3`. The built-in profile remains native;
 a reviewed Artifact profile may replace that provider in the next immutable App
 Generation. No contract opts into cross-lane transfer in V1.
 
@@ -65,13 +65,13 @@ Generation. No contract opts into cross-lane transfer in V1.
 
 1. CLI leases the exact active App Generation and resolves the Agent route from
    that lease.
-2. CLI opens `lenso.agent@1/run_turn` and closes its sending half.
+2. CLI opens `lenso.agent@3/run_turn` and closes its sending half.
 3. Agent opens or resumes the Session and atomically records `turn_started`.
 4. Agent reads the bounded Session tail and the validated Tool catalog.
 5. Agent assembles bounded Prompt contributions. A selected progressive Skills
    Provider contributes only Skill names and descriptions from its startup
    snapshot.
-6. Agent opens `lenso.agent.model@1/complete` with normalized messages and Tool
+6. Agent opens `lenso.agent.model@2/complete` with normalized messages and Tool
    definitions.
 7. Text deltas flow to CLI. A complete Tool call is recorded before execution.
 8. Tool Runtime validates the arguments and dispatches to the owning Provider.
@@ -161,7 +161,7 @@ make both the workspace root and model endpoint visible before execution.
     and reports unreferenced Generation candidates without deleting them.
 17. Installing the reviewed QuickJS Agent Bundle replaces the built-in Agent
     Loop, starts the resolved durable Generation, and completes a typed streamed
-    Turn through the generated `lenso.agent@1` codec. The same product profile
+    Turn through the generated `lenso.agent@3` codec. The same product profile
     boundary admits reviewed Wasm Component Agent artifacts; Adapter-level
     tests execute a real Rust Component guest.
 18. A standalone external Wasm Tool source tree, with no Harness path

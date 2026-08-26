@@ -193,6 +193,8 @@ impl Guest for WasmAgent {
                             error: None,
                             kind: Some(lenso_capability_agent::RunTurnResponseKind::TextDelta),
                             metadata_json: None,
+                            progress_channel: None,
+                            reasoning_id: None,
                             sequence: session.sequence.to_string(),
                             text: message.text,
                             session_id: Some(session.session_id.clone()),

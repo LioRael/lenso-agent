@@ -31,8 +31,10 @@ use lenso_agent_skills_filesystem_module as _;
 use lenso_agent_subagent_tools_module as _;
 use lenso_agent_telegram_module as _;
 use lenso_agent_tools_module as _;
+use lenso_agent_tui_command_suggestions_module as _;
 use lenso_agent_tui_module as _;
 use lenso_agent_tui_static_module as _;
+use lenso_agent_tui_workspace_suggestions_module as _;
 use lenso_agent_workspace_edit_module as _;
 use lenso_agent_workspace_import_read_module as _;
 use lenso_agent_workspace_read_module as _;
@@ -49,6 +51,11 @@ use lenso_capability_agent_tools::ToolsJsonCodec;
 use lenso_capability_agent_tui_contribution::{
     SNAPSHOT_OPERATION, SnapshotRequest, SnapshotResponsePanelsItem, TuiContribution,
     validate_snapshot_panels,
+};
+use lenso_capability_agent_tui_suggestion::{
+    SNAPSHOT_OPERATION as SUGGESTION_SNAPSHOT_OPERATION,
+    SnapshotRequest as SuggestionSnapshotRequest, Suggestion, TuiSuggestion,
+    validate_snapshot_suggestions,
 };
 use lenso_capability_agent_workspace_read::WorkspaceReadJsonCodec;
 use lenso_kernel::{
@@ -88,6 +95,8 @@ const MAX_RECONCILE_EVENTS: usize = 32;
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
 const MAX_TUI_PANEL_BYTES: usize = 262_144;
+const MAX_TUI_SUGGESTIONS: usize = 2_112;
+const MAX_TUI_SUGGESTION_BYTES: usize = 2_097_152;
 
 static NEXT_ROOT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -146,12 +155,78 @@ impl HostBuildIdentity {
     }
 }
 
+async fn recover_or_open_supervisor<F: CatalogFactory>(
+    plan_bytes: &[u8],
+    store_root: &Path,
+    host_build: &HostBuildIdentity,
+    runtime: KernelGenerationRuntime<F>,
+    store: FileControlStateStore,
+    durable: DurableControlState,
+) -> Result<DurableGenerationSupervisor<KernelGenerationRuntime<F>, FileControlStateStore>, String>
+{
+    let has_live_state = durable.generations.iter().any(|record| {
+        matches!(
+            record.lifecycle,
+            ControlLifecycle::Staged
+                | ControlLifecycle::Ready
+                | ControlLifecycle::Active
+                | ControlLifecycle::Draining
+                | ControlLifecycle::Standby
+        )
+    });
+    if !has_live_state {
+        return DurableGenerationSupervisor::open(APP_ID, runtime, store).map_err(control_error);
+    }
+    let live_digests = durable
+        .generations
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.lifecycle,
+                ControlLifecycle::Active | ControlLifecycle::Standby
+            )
+        })
+        .map(|record| record.generation_spec_digest.as_str())
+        .collect::<BTreeSet<_>>();
+    let recoverable = resolve_retained_generations(plan_bytes, store_root, host_build)?;
+    let all_live_generations_are_recoverable = live_digests
+        .iter()
+        .all(|digest| recoverable.contains_key(*digest));
+    if all_live_generations_are_recoverable {
+        return DurableGenerationSupervisor::recover(
+            APP_ID,
+            runtime,
+            store,
+            &recoverable,
+            now_unix_nanos()?,
+        )
+        .await
+        .map_err(control_error);
+    }
+    if durable.host_suspended {
+        return DurableGenerationSupervisor::replace_suspended_host(APP_ID, runtime, store)
+            .map_err(control_error);
+    }
+
+    // The process-lifetime Host lease proves the previous owner of this Controller
+    // namespace has exited even if it could not commit a clean suspension.
+    let revision = durable.revision;
+    let mut exited_host = durable;
+    exited_host.host_suspended = true;
+    store
+        .compare_and_swap(APP_ID, revision, exited_host)
+        .map_err(control_error)?;
+    DurableGenerationSupervisor::replace_suspended_host(APP_ID, runtime, store)
+        .map_err(control_error)
+}
+
 #[derive(Debug)]
 pub struct AgentApp {
     client: GenerationControllerClient<NativeApp>,
     controller: Option<tokio::task::JoinHandle<Result<DurableControlState, ControlPlaneError>>>,
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+    host_lease: Option<crate::authority::AuthorityFence>,
 }
 
 impl AgentApp {
@@ -228,64 +303,23 @@ impl AgentApp {
         host_build: HostBuildIdentity,
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
+        let host_lease = authority.host_lease(control_directory)?;
         let _authority_fence = authority.snapshot()?;
         let (generation, active_set_digest) =
             resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
         let store = FileControlStateStore::open(store_root.join(control_directory))
             .map_err(control_error)?;
         let durable = store.load(APP_ID).map_err(control_error)?;
-        let has_live_state = durable.generations.iter().any(|record| {
-            matches!(
-                record.lifecycle,
-                ControlLifecycle::Staged
-                    | ControlLifecycle::Ready
-                    | ControlLifecycle::Active
-                    | ControlLifecycle::Draining
-                    | ControlLifecycle::Standby
-            )
-        });
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
-        let supervisor = if has_live_state {
-            let live_digests = durable
-                .generations
-                .iter()
-                .filter(|record| {
-                    matches!(
-                        record.lifecycle,
-                        ControlLifecycle::Active | ControlLifecycle::Standby
-                    )
-                })
-                .map(|record| record.generation_spec_digest.as_str())
-                .collect::<BTreeSet<_>>();
-            let recoverable = resolve_retained_generations(plan_bytes, store_root, &host_build)?;
-            let missing = live_digests
-                .iter()
-                .filter(|digest| !recoverable.contains_key(**digest))
-                .copied()
-                .collect::<Vec<_>>();
-            if missing.is_empty() {
-                DurableGenerationSupervisor::recover(
-                    APP_ID,
-                    runtime,
-                    store,
-                    &recoverable,
-                    now_unix_nanos()?,
-                )
-                .await
-                .map_err(control_error)?
-            } else if durable.host_suspended {
-                DurableGenerationSupervisor::replace_suspended_host(APP_ID, runtime, store)
-                    .map_err(control_error)?
-            } else {
-                return Err(format!(
-                    "durable Generation recovery lacks retained exact Plugin authority for {}; recoverable Generation Specs: {}; automatic Host replacement requires a clean suspension",
-                    missing.join(", "),
-                    recoverable.keys().cloned().collect::<Vec<_>>().join(", ")
-                ));
-            }
-        } else {
-            DurableGenerationSupervisor::open(APP_ID, runtime, store).map_err(control_error)?
-        };
+        let supervisor = recover_or_open_supervisor(
+            plan_bytes,
+            store_root,
+            &host_build,
+            runtime,
+            store,
+            durable,
+        )
+        .await?;
         let recovered_active = supervisor.state().active_generation_spec_digest.clone();
         let (controller, client) =
             GenerationController::new(supervisor, MAINTENANCE_INTERVAL).map_err(control_error)?;
@@ -324,6 +358,7 @@ impl AgentApp {
             controller: Some(task),
             reconciler: Some(reconciler),
             reconcile_events,
+            host_lease: Some(host_lease),
         })
     }
 
@@ -394,6 +429,45 @@ impl AgentApp {
         Ok(panels)
     }
 
+    /// Snapshots every composer suggestion provider in deterministic resolved order.
+    pub async fn tui_suggestions(&self) -> Result<Vec<Suggestion>, String> {
+        let route = self.client.route().await.map_err(control_error)?;
+        let handle = route
+            .target()
+            .many_handle::<TuiSuggestion>("tui")
+            .map_err(|error| format!("leased Generation has no TUI suggestion route: {error:?}"))?;
+        let cancellation = CancellationToken::new();
+        let context = route
+            .target()
+            .invocation_context_after(TUI_SNAPSHOT_TIMEOUT, cancellation.clone());
+        let invocation = handle.invoke_many_with_context(
+            SUGGESTION_SNAPSHOT_OPERATION,
+            context,
+            SuggestionSnapshotRequest {},
+        );
+        let responses = match tokio::time::timeout(TUI_SNAPSHOT_TIMEOUT, invocation).await {
+            Ok(result) => {
+                result.map_err(|error| format!("TUI suggestion snapshot failed: {error:?}"))?
+            }
+            Err(_) => {
+                cancellation.cancel();
+                return Err("TUI suggestion snapshot timed out".to_owned());
+            }
+        };
+        let mut suggestions = Vec::new();
+        for response in responses {
+            let response = response.map_err(|error| {
+                format!("TUI suggestion provider rejected its snapshot: {error:?}")
+            })?;
+            validate_snapshot_suggestions(&response.suggestions).map_err(|error| {
+                format!("TUI suggestion provider returned an invalid snapshot: {error}")
+            })?;
+            suggestions.extend(response.suggestions);
+        }
+        validate_tui_suggestions(&suggestions)?;
+        Ok(suggestions)
+    }
+
     pub async fn shutdown(&mut self) -> Result<(), String> {
         if let Some(mut reconciler) = self.reconciler.take() {
             if let Some(stop) = reconciler.stop.take() {
@@ -416,6 +490,7 @@ impl AgentApp {
         if actual != expected {
             return Err("Generation Controller returned inconsistent durable state".to_owned());
         }
+        self.host_lease.take();
         Ok(())
     }
 
@@ -616,6 +691,33 @@ fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), Stri
         if total_bytes > MAX_TUI_PANEL_BYTES {
             return Err(format!(
                 "TUI contributions exceed the {MAX_TUI_PANEL_BYTES}-byte aggregate limit"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_tui_suggestions(suggestions: &[Suggestion]) -> Result<(), String> {
+    if suggestions.len() > MAX_TUI_SUGGESTIONS {
+        return Err(format!(
+            "TUI suggestions exceed the {MAX_TUI_SUGGESTIONS}-item aggregate limit"
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    for suggestion in suggestions {
+        if !ids.insert(suggestion.id.as_str()) {
+            return Err(format!("duplicate TUI suggestion id `{}`", suggestion.id));
+        }
+        total_bytes = total_bytes
+            .checked_add(suggestion.id.len())
+            .and_then(|total| total.checked_add(suggestion.label.len()))
+            .and_then(|total| total.checked_add(suggestion.insert_text.len()))
+            .and_then(|total| total.checked_add(suggestion.description.len()))
+            .ok_or_else(|| "TUI suggestion size overflowed".to_owned())?;
+        if total_bytes > MAX_TUI_SUGGESTION_BYTES {
+            return Err(format!(
+                "TUI suggestions exceed the {MAX_TUI_SUGGESTION_BYTES}-byte aggregate limit"
             ));
         }
     }
@@ -1213,6 +1315,9 @@ mod tests {
                 let panels = app.tui_panels().await.unwrap();
                 assert_eq!(panels.len(), 1);
                 assert_eq!(panels[0].id, "agent.help");
+                let suggestions = app.tui_suggestions().await.unwrap();
+                assert!(suggestions.iter().any(|item| item.label == "/help"));
+                assert!(suggestions.iter().any(|item| item.label == "Cargo.toml"));
 
                 let turn = app.lease_tui_turn().await.unwrap();
                 let stream = turn
@@ -1242,7 +1347,7 @@ mod tests {
                         }
                     }
                 }
-                assert_eq!(output, "Plugin: Direct answer.");
+                assert_eq!(output, "Direct answer.");
                 drop(stream);
                 drop(turn);
                 app.shutdown().await.unwrap();
@@ -1498,7 +1603,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn concurrent_or_unclean_host_upgrade_still_fails_closed() {
+    async fn concurrent_host_upgrade_still_fails_closed() {
         let local = tokio::task::LocalSet::new();
         local
             .run_until(async {
@@ -1524,8 +1629,45 @@ mod tests {
                 )
                 .await
                 .unwrap_err();
-                assert!(error.contains("automatic Host replacement requires a clean suspension"));
+                assert!(error.contains("another Host owns"));
                 first.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exited_unclean_host_is_replaced_without_deleting_plugin_state() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let mut first = AgentApp::start_with_store_control_directory_and_host_build(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    TUI_CONTROL_DIRECTORY,
+                    HostBuildIdentity {
+                        executable_digest: sha256_digest(b"crashed host build"),
+                    },
+                )
+                .await
+                .unwrap();
+                first.controller.take().unwrap().abort();
+                drop(first);
+
+                let mut replacement = AgentApp::start_with_store_control_directory_and_host_build(
+                    crate::test_support::headless_plan(),
+                    directory.path(),
+                    TUI_CONTROL_DIRECTORY,
+                    HostBuildIdentity {
+                        executable_digest: sha256_digest(b"replacement host build"),
+                    },
+                )
+                .await
+                .unwrap();
+                let turn = replacement.lease_tui_turn().await.unwrap();
+                assert!(!turn.generation_spec_digest().is_empty());
+                drop(turn);
+                replacement.shutdown().await.unwrap();
             })
             .await;
     }

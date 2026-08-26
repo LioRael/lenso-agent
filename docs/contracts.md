@@ -7,9 +7,9 @@ snapshots of the same sources.
 
 ## Stream conventions
 
-- `lenso.agent@1/run_turn` is a server-output stream. The caller sends exactly
+- `lenso.agent@3/run_turn` is a server-output stream. The caller sends exactly
   one open request and then closes its send half.
-- `lenso.agent.model@1/complete` follows the same half-close convention.
+- `lenso.agent.model@2/complete` follows the same half-close convention.
 - Every emitted stream message has a monotonically increasing `sequence`,
   starting at `1` for each invocation.
 - A normal stream close means completion. A typed stream error means the turn
@@ -18,14 +18,22 @@ snapshots of the same sources.
 
 For `complete`, fields not selected by `kind` retain their schema defaults:
 
+- `reasoning_summary_delta` uses `text` and contains only Provider-designated,
+  display-safe summary content.
 - `text_delta` uses `text`.
 - `tool_call` uses `tool_call_id`, `tool_name`, and `arguments_json`.
 - `usage` uses `input_tokens` and `output_tokens`.
 
-Model Descriptor `1.1.0` adds optional `tool_name` and `arguments_json` fields
+Model Descriptor `1.1.0` added optional `tool_name` and `arguments_json` fields
 to input messages. This preserves the complete assistant Tool call when an
 Agent sends a Tool result in a later completion request. The change is
 additive within the existing Capability major.
+
+Model `lenso.agent.model@2`, Descriptor `2.0.0`, adds the closed
+`reasoning_summary_delta` kind. Agent `lenso.agent@3`, Descriptor `3.0.0`,
+projects it as ordered `reasoning_delta` and `reasoning_completed` messages
+with one Turn-step `reasoning_id`. Reasoning progress is volatile terminal
+presentation data, not durable Session evidence or raw private chain-of-thought.
 
 ## Tool boundary
 

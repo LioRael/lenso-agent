@@ -417,6 +417,21 @@ impl SseDecoder {
         let chunk =
             serde_json::from_str::<ChatChunk>(&data).map_err(|_| provider_protocol_failure())?;
         for choice in chunk.choices {
+            if let Some(reasoning) = choice
+                .delta
+                .reasoning_content
+                .filter(|value| !value.is_empty())
+            {
+                output.push(self.message(
+                    CompleteMessageKind::ReasoningSummaryDelta,
+                    reasoning,
+                    "",
+                    "",
+                    "{}",
+                    0,
+                    0,
+                ));
+            }
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
                 output.push(self.message(
                     CompleteMessageKind::TextDelta,
@@ -565,6 +580,7 @@ struct ChatChoice {
 #[derive(Debug, Default, serde::Deserialize)]
 struct ChatDelta {
     content: Option<String>,
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<ToolCallDelta>,
 }
@@ -667,6 +683,30 @@ data: [DONE]
         );
         assert_eq!(messages[1].kind, CompleteMessageKind::Usage);
         assert_eq!(messages[1].input_tokens, "12");
+    }
+
+    #[test]
+    fn decoder_preserves_provider_reasoning_content_before_text() {
+        let mut decoder = SseDecoder::default();
+        let events = decoder
+            .push(
+                br#"data: {"choices":[{"delta":{"reasoning_content":"Checking.","content":"Done."},"finish_reason":null}]}
+
+"#,
+            )
+            .unwrap();
+        let messages = events
+            .into_iter()
+            .filter_map(|event| match event {
+                NativeStreamItem::Message(value) => value.downcast::<CompleteMessage>().ok(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].kind, CompleteMessageKind::ReasoningSummaryDelta);
+        assert_eq!(messages[0].text, "Checking.");
+        assert_eq!(messages[1].kind, CompleteMessageKind::TextDelta);
+        assert_eq!(messages[1].text, "Done.");
     }
 
     #[test]

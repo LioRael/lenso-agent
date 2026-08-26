@@ -8,8 +8,9 @@
   terminal mode, layout, input, streamed rendering, cancellation UX, Session
   selection, and panel aggregation. Agent, Model, Tool, Prompt, and Session
   behavior remain valid.
-- **Required Capabilities:** one `lenso.agent@1`; many
-  `lenso.agent.tui-contribution@1`.
+- **Required Capabilities:** one `lenso.agent@3`; many
+  `lenso.agent.tui-contribution@1`; many
+  `lenso.agent.tui-suggestion@1`.
 - **Provided Capabilities:** none. It is a user-facing consumer and does not
   invent a Provider solely for source-first metadata generation.
 - **Configuration and state:** empty immutable configuration. Input,
@@ -22,6 +23,23 @@
 - **First observable behavior:** running `lenso-agent` without arguments opens
   the conversation, accepts one prompt, streams the Agent response, and shows
   selected semantic panels.
+
+## TUI Suggestion Modules
+
+- **Owner:** `lenso-agent-tui-command-suggestions-module` owns reviewed local
+  command candidates; `lenso-agent-tui-workspace-suggestions-module` owns the
+  bounded workspace file snapshot.
+- **Deletion boundary:** removing one provider removes only its command or file
+  candidates. The composer continues accepting ordinary text.
+- **Provided Capability:** `lenso.agent.tui-suggestion@1` snapshot.
+- **Required Capabilities:** none.
+- **Configuration and state:** command metadata is immutable configuration.
+  The workspace provider has a root, file/entry limits, and excluded directory
+  names. Both responses are immutable startup snapshots.
+- **Lifecycle:** stateless. Filesystem enumeration happens only when the Shell
+  requests its startup snapshot, before raw terminal mode.
+- **Final authorization:** suggestions grant no filesystem or Tool authority;
+  the selected Tool Modules still authorize every Agent action.
 
 ## Static TUI Contribution Module
 
@@ -47,7 +65,7 @@
   Instance removes Telegram polling, chat authorization, reply delivery,
   update cursor, and conversation mapping. Agent, Session, terminal, and
   Plugin behavior remain valid.
-- **Required Capability:** one `lenso.agent@1`.
+- **Required Capability:** one `lenso.agent@3`.
 - **Provided Capabilities:** none. Telegram is an external Agent consumer and
   does not invent an application Provider role.
 - **Configuration and secrets:** the immutable Module configuration is empty.
@@ -103,7 +121,7 @@
   Instance removes Gateway connections, channel authorization, replies,
   Gateway resume state, and conversation mapping. Agent, Session, Telegram,
   terminal, and Plugin behavior remain valid.
-- **Required Capability:** one `lenso.agent@1`.
+- **Required Capability:** one `lenso.agent@3`.
 - **Provided Capabilities:** none. Discord is an external Agent consumer.
 - **Configuration and secrets:** immutable Module configuration is empty. The
   Host reads `DISCORD_BOT_TOKEN` or an explicitly named environment variable,

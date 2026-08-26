@@ -36,7 +36,7 @@ remove_modules lenso.app.json \
   workspace-read
 remove_modules lenso.app.json \
   "${proof_root}/headless-without-prompt-providers.app.json" \
-  fixture-instructions summary-skill
+  summary-skill
 remove_modules lenso.app.json \
   "${proof_root}/tui-without-panels.app.json" \
   tui-help

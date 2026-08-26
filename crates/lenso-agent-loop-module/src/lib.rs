@@ -8,10 +8,11 @@ use std::{
     time::Instant,
 };
 
-use futures::{StreamExt, stream};
+use futures::{StreamExt, lock::Mutex, stream};
 use lenso::prelude::*;
 use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
+    RunTurnResponseProgressChannel,
 };
 use lenso_capability_agent_model::{
     self as model_capability, CompleteError, CompleteMessage, CompleteMessageInput,
@@ -28,7 +29,8 @@ use lenso_capability_agent_session::{
     SessionAppendInvocationError, SessionOpenInvocationError, SessionReadInvocationError,
 };
 use lenso_capability_agent_tools::{
-    self as tools_capability, CatalogRequest, ExecuteRequest, ToolsExecuteInvocationError,
+    self as tools_capability, CatalogRequest, ExecuteResponse, ExecuteResponseContentType,
+    ExecuteStreamRequest, ExecuteStreamResponseKind, ToolsExecuteStreamInvocationError,
 };
 use lenso_kernel::{InvocationContext, StreamEvent};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -416,6 +418,7 @@ async fn execute_steps(
                 max_output_tokens: remaining_output_tokens,
             },
             session_id,
+            &format!("{turn_id}:{step}"),
             &mut sequence,
             channel,
         )
@@ -596,20 +599,16 @@ async fn execute_tool_wave(
 
     let tools = clients.tools.clone();
     let invocation_context = context.clone();
+    let progress_sink = Rc::new(Mutex::new(ToolProgressSink { sequence, channel }));
     let outcomes = execute_bounded(tool_calls, max_parallel, move |tool_call| {
         let tools = tools.clone();
         let context = invocation_context.clone();
+        let progress_sink = Rc::clone(&progress_sink);
         async move {
             let started_at = Instant::now();
-            let result = tools
-                .execute_with_context(
-                    context,
-                    ExecuteRequest {
-                        name: tool_call.tool_name.clone(),
-                        arguments_json: tool_call.arguments_json.clone(),
-                    },
-                )
-                .await;
+            let result =
+                stream_tool_execution(&tools, &context, &tool_call, session_id, progress_sink)
+                    .await;
             (elapsed_millis(started_at), result)
         }
     })
@@ -666,13 +665,13 @@ async fn execute_tool_wave(
                         session_id,
                         *sequence,
                         duration_ms,
-                        bounded_tool_error(&error),
+                        bounded_tool_stream_error(&error),
                     ),
                     context.request_id(),
                 )
                 .await?;
                 if first_error.is_none() {
-                    first_error = Some(map_tools_error(error));
+                    first_error = Some(map_tools_stream_error(error));
                 }
             }
         }
@@ -681,6 +680,11 @@ async fn execute_tool_wave(
         Some(error) => Err(error),
         None => Ok(()),
     }
+}
+
+struct ToolProgressSink<'a> {
+    sequence: &'a mut u64,
+    channel: &'a mut ProviderStreamChannel<agent_capability::Agent>,
 }
 
 async fn execute_bounded<T, R, F, Fut>(
@@ -705,6 +709,95 @@ where
     outcomes
 }
 
+async fn stream_tool_execution(
+    tools: &tools_capability::ToolsClient,
+    context: &InvocationContext,
+    tool_call: &CompleteMessage,
+    session_id: &str,
+    progress_sink: Rc<Mutex<ToolProgressSink<'_>>>,
+) -> Result<ExecuteResponse, ToolsExecuteStreamInvocationError> {
+    let stream = tools
+        .execute_stream_with_context(
+            context.clone(),
+            ExecuteStreamRequest {
+                name: tool_call.tool_name.clone(),
+                arguments_json: tool_call.arguments_json.clone(),
+            },
+        )
+        .await?;
+    stream
+        .close_send()
+        .await
+        .map_err(ToolsExecuteStreamInvocationError::Runtime)?;
+    let mut completed = None;
+    loop {
+        match stream
+            .receive()
+            .await
+            .map_err(ToolsExecuteStreamInvocationError::Runtime)?
+        {
+            StreamEvent::Message(message) => match message.kind {
+                ExecuteStreamResponseKind::Stdout | ExecuteStreamResponseKind::Stderr => {
+                    let mut sink = progress_sink.lock().await;
+                    *sink.sequence = sink.sequence.saturating_add(1);
+                    let sequence = *sink.sequence;
+                    send_agent_message(
+                        sink.channel,
+                        tool_progress_message(
+                            tool_call,
+                            session_id,
+                            sequence,
+                            match message.kind {
+                                ExecuteStreamResponseKind::Stdout => {
+                                    RunTurnResponseProgressChannel::Stdout
+                                }
+                                ExecuteStreamResponseKind::Stderr => {
+                                    RunTurnResponseProgressChannel::Stderr
+                                }
+                                ExecuteStreamResponseKind::Completed => unreachable!(),
+                            },
+                            message.content,
+                        ),
+                        context.request_id(),
+                    )
+                    .await
+                    .map_err(|error| match error {
+                        ModuleError::Runtime(error) => {
+                            ToolsExecuteStreamInvocationError::Runtime(error)
+                        }
+                        ModuleError::Domain(_) => unreachable!("sending has no Domain Error"),
+                    })?;
+                }
+                ExecuteStreamResponseKind::Completed => {
+                    if completed.is_some() {
+                        return Err(ToolsExecuteStreamInvocationError::Runtime(
+                            RuntimeFailure::ProtocolViolation {
+                                capability: tools_capability::CAPABILITY_ID,
+                            },
+                        ));
+                    }
+                    completed = Some(ExecuteResponse {
+                        content_type: ExecuteResponseContentType::Text,
+                        content: message.content,
+                        metadata_json: message.metadata_json,
+                    });
+                }
+            },
+            StreamEvent::PeerHalfClosed => {}
+            StreamEvent::Terminal(Ok(())) => {
+                return completed.ok_or_else(|| {
+                    ToolsExecuteStreamInvocationError::Runtime(RuntimeFailure::ProtocolViolation {
+                        capability: tools_capability::CAPABILITY_ID,
+                    })
+                });
+            }
+            StreamEvent::Terminal(Err(error)) => {
+                return Err(ToolsExecuteStreamInvocationError::Domain(error));
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ModelStep {
     text: String,
@@ -712,11 +805,68 @@ struct ModelStep {
     output_tokens: Option<u64>,
 }
 
+struct ReasoningProgress<'a> {
+    id: &'a str,
+    session_id: &'a str,
+    started_at: Option<Instant>,
+}
+
+impl<'a> ReasoningProgress<'a> {
+    fn new(id: &'a str, session_id: &'a str) -> Self {
+        Self {
+            id,
+            session_id,
+            started_at: None,
+        }
+    }
+
+    async fn emit_delta(
+        &mut self,
+        text: String,
+        sequence: &mut u64,
+        channel: &mut ProviderStreamChannel<agent_capability::Agent>,
+        request_id: u64,
+    ) -> Result<(), TurnFailure> {
+        self.started_at.get_or_insert_with(Instant::now);
+        *sequence = sequence.saturating_add(1);
+        send_agent_message(
+            channel,
+            reasoning_delta_message(self.id, self.session_id, *sequence, text),
+            request_id,
+        )
+        .await
+    }
+
+    async fn finish(
+        &mut self,
+        sequence: &mut u64,
+        channel: &mut ProviderStreamChannel<agent_capability::Agent>,
+        request_id: u64,
+    ) -> Result<(), TurnFailure> {
+        let Some(started_at) = self.started_at.take() else {
+            return Ok(());
+        };
+        *sequence = sequence.saturating_add(1);
+        send_agent_message(
+            channel,
+            reasoning_completed_message(
+                self.id,
+                self.session_id,
+                *sequence,
+                elapsed_millis(started_at),
+            ),
+            request_id,
+        )
+        .await
+    }
+}
+
 async fn stream_model(
     clients: &AgentLoop,
     context: &InvocationContext,
     request: CompleteOpen,
     session_id: &str,
+    reasoning_id: &str,
     sequence: &mut u64,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<ModelStep, TurnFailure> {
@@ -731,10 +881,22 @@ async fn stream_model(
         tool_calls: Vec::new(),
         output_tokens: None,
     };
+    let mut reasoning = ReasoningProgress::new(reasoning_id, session_id);
     loop {
         match stream.receive().await.map_err(ModuleError::runtime)? {
             ModelEvent::Message(message) => match message.kind {
+                CompleteMessageKind::ReasoningSummaryDelta => {
+                    if message.text.is_empty() {
+                        continue;
+                    }
+                    reasoning
+                        .emit_delta(message.text, sequence, channel, context.request_id())
+                        .await?;
+                }
                 CompleteMessageKind::TextDelta => {
+                    reasoning
+                        .finish(sequence, channel, context.request_id())
+                        .await?;
                     completion.text.push_str(&message.text);
                     *sequence = sequence.saturating_add(1);
                     send_agent_message(
@@ -746,6 +908,8 @@ async fn stream_model(
                             error: None,
                             kind: Some(RunTurnResponseKind::TextDelta),
                             metadata_json: None,
+                            progress_channel: None,
+                            reasoning_id: None,
                             sequence: sequence.to_string(),
                             session_id: Some(session_id.to_owned()),
                             text: message.text,
@@ -756,8 +920,16 @@ async fn stream_model(
                     )
                     .await?;
                 }
-                CompleteMessageKind::ToolCall => completion.tool_calls.push(message),
+                CompleteMessageKind::ToolCall => {
+                    reasoning
+                        .finish(sequence, channel, context.request_id())
+                        .await?;
+                    completion.tool_calls.push(message);
+                }
                 CompleteMessageKind::Usage => {
+                    reasoning
+                        .finish(sequence, channel, context.request_id())
+                        .await?;
                     completion.output_tokens =
                         Some(message.output_tokens.parse().map_err(|_| {
                             ModuleError::runtime(RuntimeFailure::ModuleFailure {
@@ -767,9 +939,65 @@ async fn stream_model(
                 }
             },
             StreamEvent::PeerHalfClosed => {}
-            StreamEvent::Terminal(Ok(())) => return Ok(completion),
-            StreamEvent::Terminal(Err(error)) => return Err(map_model_domain_error(error)),
+            StreamEvent::Terminal(Ok(())) => {
+                reasoning
+                    .finish(sequence, channel, context.request_id())
+                    .await?;
+                return Ok(completion);
+            }
+            StreamEvent::Terminal(Err(error)) => {
+                reasoning
+                    .finish(sequence, channel, context.request_id())
+                    .await?;
+                return Err(map_model_domain_error(error));
+            }
         }
+    }
+}
+
+fn reasoning_delta_message(
+    reasoning_id: &str,
+    session_id: &str,
+    sequence: u64,
+    text: String,
+) -> RunTurnResponse {
+    RunTurnResponse {
+        arguments_json: None,
+        content: None,
+        duration_ms: None,
+        error: None,
+        kind: Some(RunTurnResponseKind::ReasoningDelta),
+        metadata_json: None,
+        progress_channel: None,
+        reasoning_id: Some(reasoning_id.to_owned()),
+        sequence: sequence.to_string(),
+        session_id: Some(session_id.to_owned()),
+        text,
+        tool_call_id: None,
+        tool_name: None,
+    }
+}
+
+fn reasoning_completed_message(
+    reasoning_id: &str,
+    session_id: &str,
+    sequence: u64,
+    duration_ms: u64,
+) -> RunTurnResponse {
+    RunTurnResponse {
+        arguments_json: None,
+        content: None,
+        duration_ms: Some(duration_ms.to_string()),
+        error: None,
+        kind: Some(RunTurnResponseKind::ReasoningCompleted),
+        metadata_json: None,
+        progress_channel: None,
+        reasoning_id: Some(reasoning_id.to_owned()),
+        sequence: sequence.to_string(),
+        session_id: Some(session_id.to_owned()),
+        text: String::new(),
+        tool_call_id: None,
+        tool_name: None,
     }
 }
 
@@ -785,6 +1013,32 @@ fn tool_started_message(
         error: None,
         kind: Some(RunTurnResponseKind::ToolStarted),
         metadata_json: None,
+        progress_channel: None,
+        reasoning_id: None,
+        sequence: sequence.to_string(),
+        session_id: Some(session_id.to_owned()),
+        text: String::new(),
+        tool_call_id: Some(tool_call.tool_call_id.clone()),
+        tool_name: Some(tool_call.tool_name.clone()),
+    }
+}
+
+fn tool_progress_message(
+    tool_call: &CompleteMessage,
+    session_id: &str,
+    sequence: u64,
+    progress_channel: RunTurnResponseProgressChannel,
+    content: String,
+) -> RunTurnResponse {
+    RunTurnResponse {
+        arguments_json: None,
+        content: Some(content),
+        duration_ms: None,
+        error: None,
+        kind: Some(RunTurnResponseKind::ToolProgress),
+        metadata_json: None,
+        progress_channel: Some(progress_channel),
+        reasoning_id: None,
         sequence: sequence.to_string(),
         session_id: Some(session_id.to_owned()),
         text: String::new(),
@@ -807,6 +1061,8 @@ fn tool_completed_message(
         error: None,
         kind: Some(RunTurnResponseKind::ToolCompleted),
         metadata_json: Some(result.metadata_json.clone()),
+        progress_channel: None,
+        reasoning_id: None,
         sequence: sequence.to_string(),
         session_id: Some(session_id.to_owned()),
         text: String::new(),
@@ -829,6 +1085,8 @@ fn tool_failed_message(
         error: Some(error),
         kind: Some(RunTurnResponseKind::ToolFailed),
         metadata_json: None,
+        progress_channel: None,
+        reasoning_id: None,
         sequence: sequence.to_string(),
         session_id: Some(session_id.to_owned()),
         text: String::new(),
@@ -841,7 +1099,7 @@ fn elapsed_millis(started_at: Instant) -> u64 {
     u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-fn bounded_tool_error(error: &ToolsExecuteInvocationError) -> String {
+fn bounded_tool_stream_error(error: &ToolsExecuteStreamInvocationError) -> String {
     const MAX_ERROR_CHARACTERS: usize = 4_096;
     let error = format!("{error:?}");
     if error.chars().count() <= MAX_ERROR_CHARACTERS {
@@ -1181,14 +1439,14 @@ fn map_model_domain_error(error: CompleteError) -> TurnFailure {
     ModuleError::runtime(RuntimeFailure::ModuleFailure { detail })
 }
 
-fn map_tools_error(error: ToolsExecuteInvocationError) -> TurnFailure {
+fn map_tools_stream_error(error: ToolsExecuteStreamInvocationError) -> TurnFailure {
     match error {
-        ToolsExecuteInvocationError::Domain(error) => {
+        ToolsExecuteStreamInvocationError::Domain(error) => {
             ModuleError::runtime(RuntimeFailure::ModuleFailure {
                 detail: format!("Tool execution failed: {error:?}"),
             })
         }
-        ToolsExecuteInvocationError::Runtime(error) => ModuleError::runtime(error),
+        ToolsExecuteStreamInvocationError::Runtime(error) => ModuleError::runtime(error),
     }
 }
 
@@ -1210,7 +1468,7 @@ mod tests {
         assert_eq!(descriptor["package_id"], "lenso.agent.loop");
         assert_eq!(
             descriptor["provided_capabilities"][0]["capability_id"],
-            "lenso.agent@1"
+            "lenso.agent@3"
         );
         let requirements = descriptor["required_capabilities"]
             .as_array()
@@ -1319,6 +1577,27 @@ mod tests {
                 .map(lenso_capability_agent::RawJson::as_str),
             Some(r#"{"path":"src/lib.rs"}"#)
         );
+    }
+
+    #[test]
+    fn reasoning_messages_preserve_step_identity_and_duration() {
+        let delta = reasoning_delta_message(
+            "turn-1:2",
+            "session-1",
+            4,
+            "Checking the Tool result.".to_owned(),
+        );
+        assert_eq!(delta.kind, Some(RunTurnResponseKind::ReasoningDelta));
+        assert_eq!(delta.reasoning_id.as_deref(), Some("turn-1:2"));
+        assert_eq!(delta.text, "Checking the Tool result.");
+
+        let completed = reasoning_completed_message("turn-1:2", "session-1", 5, 1250);
+        assert_eq!(
+            completed.kind,
+            Some(RunTurnResponseKind::ReasoningCompleted)
+        );
+        assert_eq!(completed.reasoning_id.as_deref(), Some("turn-1:2"));
+        assert_eq!(completed.duration_ms.as_deref(), Some("1250"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 {
-  "id": "lenso.agent.model@1",
-  "version": "1.1.0",
+  "id": "lenso.agent.model@2",
+  "version": "2.0.0",
   "portable": true,
   "cross_lane_transfer": false,
   "operations": [

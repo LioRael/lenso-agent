@@ -4,26 +4,34 @@ use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use lenso::prelude::*;
 use lenso_capability_agent_tool_hook as hook_contract;
+use lenso_capability_agent_tool_progress as progress_contract;
 use lenso_capability_agent_tool_provider as provider_contract;
 use lenso_capability_agent_tools::{
     self as tools_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
     CatalogResponseToolsItemExecution, ExecuteError, ExecuteErrorToolErrorPayload, ExecuteRequest,
-    ExecuteResponse, ExecuteResponseContentType, ToolsCatalog, ToolsExecute, ToolsProvider,
+    ExecuteResponse, ExecuteResponseContentType, ExecuteStreamError,
+    ExecuteStreamErrorToolErrorPayload, ExecuteStreamRequest, ExecuteStreamResponse,
+    ExecuteStreamResponseContentType, ExecuteStreamResponseKind, ToolsCatalog, ToolsExecute,
+    ToolsExecuteStreamInvocationError, ToolsProvider,
 };
-use lenso_kernel::{InvocationContext, RuntimeFailure};
+use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure, StreamEvent};
 
 #[lenso::module(lifecycle)]
 #[derive(Clone, Debug)]
 struct ToolsModule {
     hooks: ManyPort<hook_contract::ToolHookClient>,
     providers: ManyPort<provider_contract::ToolProviderClient>,
+    progress_providers: ManyPort<progress_contract::ToolProgressClient>,
     state: Rc<RefCell<Option<ToolRuntimeState>>>,
+    #[tasks]
+    tasks: ManagedTasks,
 }
 
 #[derive(Debug)]
 struct ToolRuntimeState {
     catalog: Vec<CatalogResponseToolsItem>,
     routes: BTreeMap<String, usize>,
+    progress_routes: BTreeMap<String, usize>,
 }
 
 #[lenso::provides(tools_contract::Tools)]
@@ -148,6 +156,97 @@ impl ToolsProvider for ToolsModule {
             }
         })
     }
+
+    fn execute_stream(
+        &self,
+        context: InvocationContext,
+        request: ExecuteStreamRequest,
+    ) -> futures::future::LocalBoxFuture<
+        'static,
+        Result<Box<dyn NativeStreamSession>, ToolsExecuteStreamInvocationError>,
+    > {
+        let route = self
+            .state
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.routes.get(&request.name).copied());
+        let Some(provider_index) = route else {
+            return Box::pin(futures::future::ready(Err(
+                ToolsExecuteStreamInvocationError::Domain(ExecuteStreamError::UnknownTool),
+            )));
+        };
+        let Ok(arguments_json) =
+            hook_contract::normalize_arguments(request.arguments_json.as_str())
+        else {
+            return Box::pin(futures::future::ready(Err(
+                ToolsExecuteStreamInvocationError::Domain(ExecuteStreamError::InvalidArguments),
+            )));
+        };
+        let progress_index = self
+            .state
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.progress_routes.get(&request.name).copied());
+        let providers = self.providers.clone();
+        let progress_providers = self.progress_providers.clone();
+        let hooks = self.hooks.clone();
+        let tasks = self.tasks.clone();
+        Box::pin(async move {
+            let execution = hook_contract::start_hooks(
+                &hooks,
+                &context,
+                request.name.clone(),
+                arguments_json.clone(),
+            )
+            .await
+            .map_err(ToolsExecuteStreamInvocationError::Runtime)?;
+            if let Some(block) = &execution.block {
+                hook_contract::finish_hooks(
+                    &hooks,
+                    &context,
+                    &execution,
+                    hook_contract::HookTerminal::DomainError,
+                    "",
+                    "{}",
+                    block.provider_code,
+                )
+                .await
+                .map_err(ToolsExecuteStreamInvocationError::Runtime)?;
+                return Err(ToolsExecuteStreamInvocationError::Domain(
+                    stream_tool_error(block.provider_code, &block.message, &block.details_json),
+                ));
+            }
+            let request = ExecuteStreamRequest {
+                name: request.name,
+                arguments_json: arguments_json
+                    .try_into()
+                    .expect("normalized arguments must remain JSON"),
+            };
+            let (stream, channel) =
+                ProviderStream::<tools_contract::ToolsExecuteStream>::channel(&context, 8);
+            tasks
+                .spawn_local(async move {
+                    produce_execute_stream(
+                        providers,
+                        progress_providers,
+                        hooks,
+                        execution,
+                        provider_index,
+                        progress_index,
+                        context,
+                        request,
+                        channel,
+                    )
+                    .await;
+                })
+                .map_err(|error| {
+                    ToolsExecuteStreamInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                        detail: format!("Tool execution stream task failed to start: {error:?}"),
+                    })
+                })?;
+            Ok(Box::new(stream) as Box<dyn NativeStreamSession>)
+        })
+    }
 }
 
 fn execute_error_code(error: &ExecuteError) -> &str {
@@ -163,6 +262,7 @@ impl Lifecycle for ToolsModule {
     async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
         let mut catalog = Vec::new();
         let mut routes = BTreeMap::new();
+        let mut progress_routes = BTreeMap::new();
         for (index, provider) in self.providers.iter().enumerate() {
             let response = provider
                 .catalog(provider_contract::CatalogRequest {})
@@ -204,10 +304,314 @@ impl Lifecycle for ToolsModule {
                 });
             }
         }
+        for (index, provider) in self.progress_providers.iter().enumerate() {
+            let response = provider
+                .progress_catalog(progress_contract::CatalogRequest {})
+                .await
+                .map_err(|error| RuntimeFailure::ModuleFailure {
+                    detail: format!("Tool Progress Provider {index} catalog failed: {error:?}"),
+                })?;
+            for tool in response.tools {
+                if !routes.contains_key(&tool.name) {
+                    return Err(RuntimeFailure::InvalidResolvedPlan {
+                        detail: format!(
+                            "Tool Progress Provider advertises unknown Tool `{}`",
+                            tool.name
+                        ),
+                    });
+                }
+                if progress_routes.insert(tool.name.clone(), index).is_some() {
+                    return Err(RuntimeFailure::InvalidResolvedPlan {
+                        detail: format!("duplicate Tool progress route `{}`", tool.name),
+                    });
+                }
+            }
+        }
         catalog.sort_by(|left, right| left.name.cmp(&right.name));
-        self.state
-            .replace(Some(ToolRuntimeState { catalog, routes }));
+        self.state.replace(Some(ToolRuntimeState {
+            catalog,
+            routes,
+            progress_routes,
+        }));
         Ok(())
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn produce_execute_stream(
+    providers: ManyPort<provider_contract::ToolProviderClient>,
+    progress_providers: ManyPort<progress_contract::ToolProgressClient>,
+    hooks: ManyPort<hook_contract::ToolHookClient>,
+    hook_execution: hook_contract::HookExecution,
+    provider_index: usize,
+    progress_index: Option<usize>,
+    context: InvocationContext,
+    request: ExecuteStreamRequest,
+    mut channel: ProviderStreamChannel<tools_contract::ToolsExecuteStream>,
+) {
+    let result = if let Some(progress_index) = progress_index {
+        proxy_progress_provider(
+            &progress_providers[progress_index],
+            context.clone(),
+            request,
+            &mut channel,
+        )
+        .await
+    } else {
+        execute_legacy_provider(
+            &providers[provider_index],
+            context.clone(),
+            request,
+            &mut channel,
+        )
+        .await
+    };
+    let hook_result = match &result {
+        Ok(terminal) => {
+            hook_contract::finish_hooks(
+                &hooks,
+                &context,
+                &hook_execution,
+                hook_contract::HookTerminal::Success,
+                &terminal.content,
+                &terminal.metadata_json,
+                "",
+            )
+            .await
+        }
+        Err(ModuleError::Domain(error)) => {
+            hook_contract::finish_hooks(
+                &hooks,
+                &context,
+                &hook_execution,
+                hook_contract::HookTerminal::DomainError,
+                "",
+                "{}",
+                execute_stream_error_code(error),
+            )
+            .await
+        }
+        Err(ModuleError::Runtime(_)) => {
+            hook_contract::finish_hooks(
+                &hooks,
+                &context,
+                &hook_execution,
+                hook_contract::HookTerminal::RuntimeFailure,
+                "",
+                "{}",
+                "runtime_failure",
+            )
+            .await
+        }
+    };
+    let terminal = match (result, hook_result) {
+        (_, Err(error)) => Err(ModuleError::runtime(error)),
+        (Ok(_), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+    };
+    let _ = channel.complete(terminal).await;
+}
+
+#[derive(Debug)]
+struct ExecuteTerminal {
+    content: String,
+    metadata_json: String,
+}
+
+async fn proxy_progress_provider(
+    provider: &progress_contract::ToolProgressClient,
+    context: InvocationContext,
+    request: ExecuteStreamRequest,
+    channel: &mut ProviderStreamChannel<tools_contract::ToolsExecuteStream>,
+) -> ModuleResult<ExecuteTerminal, ExecuteStreamError> {
+    let stream = provider
+        .execute_progress_with_context(
+            context,
+            progress_contract::ExecuteOpen {
+                name: request.name,
+                arguments_json: request.arguments_json,
+            },
+        )
+        .await
+        .map_err(map_progress_open_error)?;
+    stream.close_send().await.map_err(ModuleError::runtime)?;
+    let mut completed = None;
+    loop {
+        match stream.receive().await.map_err(ModuleError::runtime)? {
+            StreamEvent::Message(_) if completed.is_some() => {
+                return Err(ModuleError::runtime(RuntimeFailure::ProtocolViolation {
+                    capability: progress_contract::CAPABILITY_ID,
+                }));
+            }
+            StreamEvent::Message(message) => {
+                let kind = match message.kind {
+                    progress_contract::ExecuteProgressKind::Stdout => {
+                        ExecuteStreamResponseKind::Stdout
+                    }
+                    progress_contract::ExecuteProgressKind::Stderr => {
+                        ExecuteStreamResponseKind::Stderr
+                    }
+                    progress_contract::ExecuteProgressKind::Completed => {
+                        completed = Some(ExecuteTerminal {
+                            content: message.content.clone(),
+                            metadata_json: message.metadata_json.as_str().to_owned(),
+                        });
+                        ExecuteStreamResponseKind::Completed
+                    }
+                };
+                channel
+                    .send(ExecuteStreamResponse {
+                        kind,
+                        content_type: ExecuteStreamResponseContentType::Text,
+                        content: message.content,
+                        metadata_json: message.metadata_json,
+                    })
+                    .await
+                    .map_err(ModuleError::runtime)?;
+            }
+            StreamEvent::PeerHalfClosed => {}
+            StreamEvent::Terminal(Ok(())) if completed.is_some() => {
+                return Ok(completed.expect("completed terminal was checked"));
+            }
+            StreamEvent::Terminal(Ok(())) => {
+                return Err(ModuleError::runtime(RuntimeFailure::ProtocolViolation {
+                    capability: progress_contract::CAPABILITY_ID,
+                }));
+            }
+            StreamEvent::Terminal(Err(error)) => {
+                return Err(ModuleError::domain(convert_progress_error(error)));
+            }
+        }
+    }
+}
+
+async fn execute_legacy_provider(
+    provider: &provider_contract::ToolProviderClient,
+    context: InvocationContext,
+    request: ExecuteStreamRequest,
+    channel: &mut ProviderStreamChannel<tools_contract::ToolsExecuteStream>,
+) -> ModuleResult<ExecuteTerminal, ExecuteStreamError> {
+    let response = provider
+        .execute_with_context(
+            context,
+            provider_contract::ExecuteRequest {
+                name: request.name,
+                arguments_json: request.arguments_json,
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            provider_contract::ToolProviderExecuteInvocationError::Domain(error) => {
+                ModuleError::domain(convert_provider_stream_error(error))
+            }
+            provider_contract::ToolProviderExecuteInvocationError::Runtime(error) => {
+                ModuleError::runtime(error)
+            }
+        })?;
+    let terminal = ExecuteTerminal {
+        content: response.content.clone(),
+        metadata_json: response.metadata_json.as_str().to_owned(),
+    };
+    channel
+        .send(ExecuteStreamResponse {
+            kind: ExecuteStreamResponseKind::Completed,
+            content_type: ExecuteStreamResponseContentType::Text,
+            content: response.content,
+            metadata_json: response.metadata_json,
+        })
+        .await
+        .map_err(ModuleError::runtime)?;
+    Ok(terminal)
+}
+
+fn execute_stream_error_code(error: &ExecuteStreamError) -> &str {
+    match error {
+        ExecuteStreamError::InvalidArguments => "invalid_arguments",
+        ExecuteStreamError::UnknownTool => "unknown_tool",
+        ExecuteStreamError::ToolError { payload } => &payload.provider_code,
+        ExecuteStreamError::Unknown(unknown) => &unknown.code,
+    }
+}
+
+fn map_progress_open_error(
+    error: progress_contract::ToolProgressExecuteProgressInvocationError,
+) -> ModuleError<ExecuteStreamError, RuntimeFailure> {
+    match error {
+        progress_contract::ToolProgressExecuteProgressInvocationError::Domain(error) => {
+            ModuleError::domain(convert_progress_error(error))
+        }
+        progress_contract::ToolProgressExecuteProgressInvocationError::Runtime(error) => {
+            ModuleError::runtime(error)
+        }
+    }
+}
+
+fn convert_progress_error(error: progress_contract::ExecuteProgressError) -> ExecuteStreamError {
+    use progress_contract::ExecuteProgressError as ProgressError;
+    match error {
+        ProgressError::InvalidArguments => ExecuteStreamError::InvalidArguments,
+        ProgressError::NotFound => {
+            stream_tool_error("not_found", "Tool resource was not found", "{}")
+        }
+        ProgressError::OutputLimitExceeded => {
+            stream_tool_error("output_limit_exceeded", "Tool output limit exceeded", "{}")
+        }
+        ProgressError::PermissionDenied => {
+            stream_tool_error("permission_denied", "Tool permission denied", "{}")
+        }
+        ProgressError::ExecutionFailed { payload } => stream_tool_error(
+            &payload.reason_code,
+            &payload.message,
+            payload.details_json.as_str(),
+        ),
+        ProgressError::Unknown(unknown) => stream_tool_error(
+            &unknown.code,
+            "Tool Progress Provider returned an unknown Domain Error",
+            &unknown
+                .payload
+                .map_or_else(|| "{}".to_owned(), |value| value.to_string()),
+        ),
+    }
+}
+
+fn convert_provider_stream_error(error: provider_contract::ExecuteError) -> ExecuteStreamError {
+    use provider_contract::ExecuteError as ProviderError;
+    match error {
+        ProviderError::InvalidArguments => ExecuteStreamError::InvalidArguments,
+        ProviderError::NotFound => {
+            stream_tool_error("not_found", "Tool resource was not found", "{}")
+        }
+        ProviderError::OutputLimitExceeded => {
+            stream_tool_error("output_limit_exceeded", "Tool output limit exceeded", "{}")
+        }
+        ProviderError::PermissionDenied => {
+            stream_tool_error("permission_denied", "Tool permission denied", "{}")
+        }
+        ProviderError::ExecutionFailed { payload } => stream_tool_error(
+            &payload.reason_code,
+            &payload.message,
+            payload.details_json.as_str(),
+        ),
+        ProviderError::Unknown(unknown) => stream_tool_error(
+            &unknown.code,
+            "Tool Provider returned an unknown Domain Error",
+            &unknown
+                .payload
+                .map_or_else(|| "{}".to_owned(), |value| value.to_string()),
+        ),
+    }
+}
+
+fn stream_tool_error(code: &str, message: &str, details_json: &str) -> ExecuteStreamError {
+    ExecuteStreamError::ToolError {
+        payload: ExecuteStreamErrorToolErrorPayload {
+            provider_code: code.to_owned(),
+            message: message.to_owned(),
+            details_json: details_json
+                .to_owned()
+                .try_into()
+                .expect("Tool error details must be valid JSON"),
+        },
     }
 }
 

@@ -48,7 +48,7 @@ fn discord_messages_run_real_agent_turns_and_resume_gateway_and_session() {
     for exchange in requests.as_chunks::<2>().0 {
         assert!(exchange[0].0.ends_with("/channels/100/typing"));
         assert!(exchange[1].0.ends_with("/channels/100/messages"));
-        assert_eq!(exchange[1].1["content"], "Plugin: Direct answer.");
+        assert_eq!(exchange[1].1["content"], "Direct answer.");
         assert_eq!(
             exchange[1].1["allowed_mentions"]["parse"],
             serde_json::json!([])

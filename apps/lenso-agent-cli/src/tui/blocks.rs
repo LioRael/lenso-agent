@@ -5,8 +5,129 @@ use ratatui::{
     text::{Line, Span},
 };
 use serde_json::Value;
+use std::time::Instant;
 
 use super::Palette;
+use super::markdown_lines;
+
+const THINKING_TAIL_LINES: usize = 3;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ThinkingStatus {
+    Running,
+    Completed,
+}
+
+#[derive(Debug)]
+pub(super) struct ThinkingCard {
+    pub(super) reasoning_id: Option<String>,
+    pub(super) text: String,
+    pub(super) status: ThinkingStatus,
+    pub(super) expanded: bool,
+    started_at: Instant,
+    duration_ms: Option<u64>,
+}
+
+impl ThinkingCard {
+    pub(super) fn provisional() -> Self {
+        Self {
+            reasoning_id: None,
+            text: String::new(),
+            status: ThinkingStatus::Running,
+            expanded: false,
+            started_at: Instant::now(),
+            duration_ms: None,
+        }
+    }
+
+    pub(super) fn append(&mut self, reasoning_id: String, text: &str) {
+        self.reasoning_id = Some(reasoning_id);
+        self.text.push_str(text);
+    }
+
+    pub(super) fn finish(&mut self, duration_ms: Option<u64>) {
+        self.status = ThinkingStatus::Completed;
+        self.expanded = false;
+        self.duration_ms = duration_ms.or_else(|| {
+            Some(u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX))
+        });
+    }
+
+    pub(super) fn is_running(&self) -> bool {
+        self.status == ThinkingStatus::Running
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.duration_ms.unwrap_or_else(|| {
+            u64::try_from(self.started_at.elapsed().as_millis()).unwrap_or(u64::MAX)
+        })
+    }
+}
+
+pub(super) fn render_thinking_block(
+    lines: &mut Vec<Line<'static>>,
+    card: &ThinkingCard,
+    tick: u64,
+) {
+    let running = card.status == ThinkingStatus::Running;
+    let bullet = "◆";
+    let bullet_color = if running {
+        if tick.is_multiple_of(2) {
+            Palette::ACCENT
+        } else {
+            Palette::MUTED
+        }
+    } else {
+        Palette::QUIET
+    };
+    let mut header = vec![
+        Span::styled(format!("{bullet} "), Style::default().fg(bullet_color)),
+        Span::styled(
+            if running { "Thinking…" } else { "Thought" },
+            Style::default()
+                .fg(Palette::MUTED)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if !running {
+        header.push(Span::styled(
+            format!(" for {}", format_thinking_duration(card.elapsed_ms())),
+            Style::default().fg(Palette::QUIET),
+        ));
+    }
+    lines.push(Line::from(header));
+
+    if card.text.is_empty() || (!running && !card.expanded) {
+        return;
+    }
+    lines.push(Line::default());
+    let mut body = markdown_lines(&card.text);
+    if running && body.len() > THINKING_TAIL_LINES {
+        body = body.split_off(body.len() - THINKING_TAIL_LINES);
+        lines.push(Line::from(Span::styled(
+            "  …",
+            Style::default().fg(Palette::QUIET),
+        )));
+    }
+    for mut line in body {
+        for span in &mut line.spans {
+            span.style = span.style.patch(Style::default().fg(Palette::MUTED));
+        }
+        lines.push(line);
+    }
+}
+
+fn format_thinking_duration(duration_ms: u64) -> String {
+    if duration_ms < 60_000 {
+        let seconds = duration_ms / 1_000;
+        let tenths = duration_ms % 1_000 / 100;
+        format!("{seconds}.{tenths}s")
+    } else {
+        let minutes = duration_ms / 60_000;
+        let remaining = (duration_ms % 60_000).saturating_add(500) / 1_000;
+        format!("{minutes}m{remaining}s")
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ToolStatus {
@@ -91,16 +212,6 @@ impl ToolKind {
             (Self::Other, true) => "Called",
         }
     }
-
-    const fn color(self) -> Color {
-        match self {
-            Self::Read | Self::List | Self::Skill => Color::LightBlue,
-            Self::Search => Color::LightMagenta,
-            Self::Execute => Color::LightCyan,
-            Self::Edit | Self::Create => Color::LightGreen,
-            Self::Other => Color::Gray,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -129,13 +240,23 @@ impl ToolCard {
             duration_ms: None,
             error: None,
             status: ToolStatus::Running,
-            expanded: matches!(kind, ToolKind::Execute | ToolKind::Edit | ToolKind::Create),
+            expanded: false,
             kind,
         }
     }
 
     pub(super) fn activity(&self) -> String {
         format!("{} {}", self.kind.verb(false), self.subject())
+    }
+
+    pub(super) fn append_progress(&mut self, chunk: &str) {
+        const MAX_PROGRESS_CHARACTERS: usize = 1_048_576;
+        let content = self.content.get_or_insert_with(String::new);
+        let current = content.chars().count();
+        if current >= MAX_PROGRESS_CHARACTERS {
+            return;
+        }
+        content.extend(chunk.chars().take(MAX_PROGRESS_CHARACTERS - current));
     }
 
     pub(super) fn group_kind(&self) -> Option<ToolGroupKind> {
@@ -195,16 +316,14 @@ pub(super) fn render_tool_group(
         .iter()
         .filter_map(|card| card.duration_ms)
         .reduce(u64::saturating_add);
-    let color = match kind {
-        ToolGroupKind::Read | ToolGroupKind::List => Color::LightBlue,
-        ToolGroupKind::Search => Color::LightMagenta,
-        ToolGroupKind::Execute => Color::LightCyan,
-        ToolGroupKind::Edit => Color::LightGreen,
-    };
     let mut header = vec![
         Span::styled(
-            format!("{disclosure} ◆ "),
-            Style::default().fg(if selected { Palette::ACCENT } else { color }),
+            format!("{disclosure} ● "),
+            Style::default().fg(if selected {
+                Palette::ACCENT
+            } else {
+                Palette::SUCCESS
+            }),
         ),
         Span::styled(
             format!("{} ", kind.verb()),
@@ -227,23 +346,19 @@ pub(super) fn render_tool_group(
 pub(super) fn render_tool_block(lines: &mut Vec<Line<'static>>, card: &ToolCard, selected: bool) {
     let failed = card.status == ToolStatus::Failed;
     let running = card.status == ToolStatus::Running;
-    let color = if failed {
+    let accent = if failed {
         Palette::ERROR
+    } else if running {
+        Palette::ACCENT
     } else {
-        card.kind.color()
+        Palette::SUCCESS
     };
-    let bullet = if running {
-        "●"
-    } else if failed {
-        "×"
-    } else {
-        "◆"
-    };
+    let bullet = if failed { "×" } else { "◆" };
     let disclosure = if card.expanded { "▾" } else { "▸" };
     let mut header = vec![
         Span::styled(
-            format!("{disclosure} {bullet} "),
-            Style::default().fg(if selected { Palette::ACCENT } else { color }),
+            format!("{bullet} "),
+            Style::default().fg(if selected { Palette::ACCENT } else { accent }),
         ),
         Span::styled(
             format!("{} ", card.kind.verb(!running)),
@@ -260,6 +375,12 @@ pub(super) fn render_tool_block(lines: &mut Vec<Line<'static>>, card: &ToolCard,
     if let Some(duration_ms) = card.duration_ms {
         header.push(Span::styled(
             format!("  {}", format_duration(duration_ms)),
+            Style::default().fg(Palette::QUIET),
+        ));
+    }
+    if card.expanded || card.content.is_some() || card.arguments_json.is_some() {
+        header.push(Span::styled(
+            format!("  {disclosure}"),
             Style::default().fg(Palette::QUIET),
         ));
     }
@@ -293,7 +414,7 @@ pub(super) fn render_grouped_tool_block(
 
 fn render_process(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
     if let Some(command) = command(card.arguments().as_ref()) {
-        detail_line(lines, "$ ", &command, Palette::CODE);
+        detail_line(lines, "$ ", &command, Palette::COMMAND);
     }
     if let Some(content) = card.content.as_deref().filter(|value| !value.is_empty()) {
         for line in bounded_tail(content, 12, 4096).lines() {
@@ -397,11 +518,21 @@ fn render_error(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
 }
 
 fn detail_line(lines: &mut Vec<Line<'static>>, marker: &str, value: &str, color: Color) {
-    lines.push(Line::from(vec![
-        Span::styled("  │ ", Style::default().fg(Palette::BORDER)),
-        Span::styled(marker.to_owned(), Style::default().fg(color)),
-        Span::styled(value.to_owned(), Style::default().fg(color)),
-    ]));
+    lines.push(
+        Line::from(vec![
+            Span::styled("    ", Style::default().bg(Palette::SURFACE)),
+            Span::styled(
+                marker.to_owned(),
+                Style::default().fg(color).bg(Palette::SURFACE),
+            ),
+            Span::styled(
+                value.to_owned(),
+                Style::default().fg(color).bg(Palette::SURFACE),
+            ),
+            Span::styled("  ", Style::default().bg(Palette::SURFACE)),
+        ])
+        .style(Style::default().bg(Palette::SURFACE)),
+    );
 }
 
 fn result_summary(card: &ToolCard) -> Option<String> {
@@ -483,7 +614,9 @@ fn path_color(kind: ToolKind) -> Color {
         kind,
         ToolKind::Read | ToolKind::List | ToolKind::Edit | ToolKind::Create
     ) {
-        Color::LightBlue
+        Palette::PATH
+    } else if kind == ToolKind::Execute {
+        Palette::COMMAND
     } else {
         Palette::MUTED
     }
@@ -577,6 +710,7 @@ mod tests {
             Some(r#"{"path":"src/lib.rs","old_text":"old","new_text":"new"}"#.to_owned()),
         );
         card.status = ToolStatus::Completed;
+        card.expanded = true;
         card.metadata_json = Some(r#"{"start_line":12}"#.to_owned());
         let mut lines = Vec::new();
         render_tool_block(&mut lines, &card, false);
@@ -610,6 +744,7 @@ mod tests {
             Some(r#"{"program":"cargo","arguments":["test"]}"#.to_owned()),
         );
         card.status = ToolStatus::Completed;
+        card.expanded = true;
         card.content = Some(
             (1..=20)
                 .map(|line| format!("line {line}"))

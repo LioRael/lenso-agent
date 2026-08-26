@@ -1,17 +1,21 @@
 //! Narrow Tools Capability projection over one reviewed `WorkspaceRead` provider.
 
-use futures::future::ready;
+use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
+use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_tool_hook as hook_contract;
 use lenso_capability_agent_tools::{
     self as tools_contract, CatalogRequest, CatalogResponse, CatalogResponseToolsItem,
     CatalogResponseToolsItemExecution, ExecuteError, ExecuteErrorToolErrorPayload, ExecuteRequest,
-    ExecuteResponse, ExecuteResponseContentType, ToolsProvider,
+    ExecuteResponse, ExecuteResponseContentType, ExecuteStreamError,
+    ExecuteStreamErrorToolErrorPayload, ExecuteStreamRequest, ExecuteStreamResponse,
+    ExecuteStreamResponseContentType, ExecuteStreamResponseKind, ToolsExecuteStreamInvocationError,
+    ToolsProvider,
 };
 use lenso_capability_agent_workspace_read::{
     self as workspace_read_contract, ReadTextError, ReadTextRequest, WorkspaceReadInvocationError,
 };
-use lenso_kernel::InvocationContext;
+use lenso_kernel::{InvocationContext, NativeStreamSession};
 
 const READ_TEXT_TOOL: &str = "read_text";
 
@@ -156,6 +160,41 @@ impl ToolsProvider for WorkspaceReadToolsModule {
             }
         })
     }
+
+    fn execute_stream(
+        &self,
+        context: InvocationContext,
+        request: ExecuteStreamRequest,
+    ) -> LocalBoxFuture<
+        'static,
+        Result<Box<dyn NativeStreamSession>, ToolsExecuteStreamInvocationError>,
+    > {
+        let future = self.execute(
+            context,
+            ExecuteRequest {
+                name: request.name,
+                arguments_json: request.arguments_json,
+            },
+        );
+        Box::pin(async move {
+            let response = future
+                .await
+                .map_err(ToolsExecuteStreamInvocationError::Runtime)?
+                .map_err(|error| {
+                    ToolsExecuteStreamInvocationError::Domain(map_execute_stream_error(error))
+                })?;
+            let message = ExecuteStreamResponse {
+                kind: ExecuteStreamResponseKind::Completed,
+                content_type: ExecuteStreamResponseContentType::Text,
+                content: response.content,
+                metadata_json: response.metadata_json,
+            };
+            Ok(Box::new(FiniteOutputStream::successful(
+                tools_contract::CAPABILITY_ID,
+                vec![message],
+            )) as Box<dyn NativeStreamSession>)
+        })
+    }
 }
 
 fn tool_error(provider_code: &str, message: &str, details_json: &str) -> ExecuteError {
@@ -213,6 +252,21 @@ fn map_workspace_error(error: ReadTextError) -> ExecuteError {
             message,
             details_json,
         },
+    }
+}
+
+fn map_execute_stream_error(error: ExecuteError) -> ExecuteStreamError {
+    match error {
+        ExecuteError::InvalidArguments => ExecuteStreamError::InvalidArguments,
+        ExecuteError::UnknownTool => ExecuteStreamError::UnknownTool,
+        ExecuteError::ToolError { payload } => ExecuteStreamError::ToolError {
+            payload: ExecuteStreamErrorToolErrorPayload {
+                provider_code: payload.provider_code,
+                message: payload.message,
+                details_json: payload.details_json,
+            },
+        },
+        ExecuteError::Unknown(unknown) => ExecuteStreamError::Unknown(unknown),
     }
 }
 

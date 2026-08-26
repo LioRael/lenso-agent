@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["kind", "content"],
+  "properties": {
+    "kind": {
+      "type": "string",
+      "enum": ["stdout", "stderr", "completed"]
+    },
+    "content": {
+      "type": "string",
+      "maxLength": 65536
+    },
+    "exit_code": {
+      "type": "string",
+      "format": "int64"
+    },
+    "duration_ms": {
+      "type": "string",
+      "format": "uint64"
+    }
+  },
+  "additionalProperties": false
+}

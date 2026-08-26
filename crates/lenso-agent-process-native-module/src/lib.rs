@@ -14,9 +14,10 @@ use futures::future::ready;
 use lenso::prelude::*;
 use lenso_capability_agent_process::{
     self as process_contract, CatalogRequest, CatalogResponse, CatalogResponseProgramsItem,
-    ProcessProvider, ProcessRun, RunError, RunRequest, RunResponse,
+    ProcessProvider, ProcessRun, ProcessRunStreamInvocationError, RunError, RunRequest,
+    RunResponse, RunStreamError, RunStreamRequest, RunStreamResponse, RunStreamResponseKind,
 };
-use lenso_kernel::{InvocationContext, RuntimeFailure};
+use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
 use tokio::{io::AsyncReadExt, process::Child};
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -36,6 +37,7 @@ struct NativeProcessProvider {
     root: PathBuf,
     programs: BTreeMap<String, ResolvedProgram>,
     environment: BTreeMap<String, String>,
+    tasks: ManagedTasks,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +56,8 @@ struct NativeProcessModule {
     #[config]
     config: ProcessConfig,
     provider: Rc<RefCell<Option<NativeProcessProvider>>>,
+    #[tasks]
+    tasks: ManagedTasks,
 }
 
 fn validate_config(config: &ProcessConfig) -> Result<(), RuntimeFailure> {
@@ -151,6 +155,35 @@ impl ProcessProvider for NativeProcessProvider {
         let provider = self.clone();
         Box::pin(async move { Box::pin(provider.run_process(context, request)).await })
     }
+
+    fn run_stream(
+        &self,
+        context: InvocationContext,
+        request: RunStreamRequest,
+    ) -> futures::future::LocalBoxFuture<
+        'static,
+        Result<Box<dyn NativeStreamSession>, ProcessRunStreamInvocationError>,
+    > {
+        let provider = self.clone();
+        Box::pin(async move {
+            let (stream, mut channel) =
+                ProviderStream::<process_contract::ProcessRunStream>::channel(&context, 8);
+            let tasks = provider.tasks.clone();
+            tasks
+                .spawn_local(async move {
+                    let result = provider
+                        .run_process_stream(context, request, &mut channel)
+                        .await;
+                    let _ = channel.complete(result).await;
+                })
+                .map_err(|error| {
+                    ProcessRunStreamInvocationError::Runtime(RuntimeFailure::ModuleFailure {
+                        detail: format!("process stream task failed to start: {error:?}"),
+                    })
+                })?;
+            Ok(Box::new(stream) as Box<dyn NativeStreamSession>)
+        })
+    }
 }
 
 #[lenso::provides(process_contract::Process)]
@@ -182,6 +215,25 @@ impl ProcessProvider for NativeProcessModule {
             }))),
         }
     }
+
+    fn run_stream(
+        &self,
+        context: InvocationContext,
+        request: RunStreamRequest,
+    ) -> futures::future::LocalBoxFuture<
+        'static,
+        Result<Box<dyn NativeStreamSession>, ProcessRunStreamInvocationError>,
+    > {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => provider.run_stream(context, request),
+            None => Box::pin(futures::future::ready(Err(
+                ProcessRunStreamInvocationError::Runtime(RuntimeFailure::Unavailable {
+                    capability: process_contract::CAPABILITY_ID,
+                }),
+            ))),
+        }
+    }
 }
 
 impl Lifecycle for NativeProcessModule {
@@ -204,6 +256,7 @@ impl Lifecycle for NativeProcessModule {
             root,
             programs,
             environment,
+            tasks: self.tasks.clone(),
         }));
         Ok(())
     }
@@ -294,6 +347,214 @@ impl NativeProcessProvider {
             })?;
         observe_child(child, context, timeout_ms, self.config.max_output_bytes).await
     }
+
+    async fn run_process_stream(
+        &self,
+        context: InvocationContext,
+        request: RunStreamRequest,
+        channel: &mut ProviderStreamChannel<process_contract::ProcessRunStream>,
+    ) -> ModuleResult<(), RunStreamError> {
+        let request = RunRequest {
+            program: request.program,
+            arguments: request.arguments,
+            cwd: request.cwd,
+            timeout_ms: request.timeout_ms,
+        };
+        let Some(program) = self.programs.get(&request.program) else {
+            return Err(ModuleError::domain(RunStreamError::ProgramNotAllowed));
+        };
+        let current_target = fs::canonicalize(&program.invocation_path).map_err(|error| {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                detail: format!("configured process executable is unavailable: {error}"),
+            })
+        })?;
+        if current_target != program.canonical_target {
+            return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                detail: "configured process executable identity changed after startup".to_owned(),
+            }));
+        }
+        let timeout_ms = request.timeout_ms.parse::<u64>().map_err(|_| {
+            ModuleError::runtime(RuntimeFailure::ProtocolViolation {
+                capability: process_contract::CAPABILITY_ID,
+            })
+        })?;
+        let argument_bytes = request
+            .arguments
+            .iter()
+            .try_fold(0usize, |total, argument| {
+                total.checked_add(argument.len()).ok_or(())
+            });
+        let valid = timeout_ms > 0
+            && timeout_ms <= self.config.max_timeout_ms
+            && request.program.len() <= 128
+            && request.cwd.len() <= 4096
+            && request.arguments.len() <= 128
+            && request
+                .arguments
+                .iter()
+                .all(|argument| argument.len() <= 16_384)
+            && argument_bytes.is_ok_and(|bytes| bytes <= self.config.max_argument_bytes);
+        if !valid {
+            return Err(ModuleError::domain(RunStreamError::InvalidRequest));
+        }
+        let root = fs::canonicalize(&self.root).map_err(|error| {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                detail: format!("process root is unavailable: {error}"),
+            })
+        })?;
+        if root != self.root {
+            return Err(ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                detail: "process root identity changed after startup".to_owned(),
+            }));
+        }
+        let Some(cwd) = resolve_cwd(&self.root, &request.cwd) else {
+            return Err(ModuleError::domain(RunStreamError::InvalidWorkingDirectory));
+        };
+        let mut command = tokio::process::Command::new(&program.invocation_path);
+        command
+            .args(&request.arguments)
+            .current_dir(cwd)
+            .env_clear()
+            .envs(&self.environment)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.as_std_mut().process_group(0);
+        }
+        let child = command.spawn().map_err(|error| {
+            ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                detail: format!("failed to spawn configured process: {error}"),
+            })
+        })?;
+        observe_child_stream(
+            child,
+            context,
+            timeout_ms,
+            self.config.max_output_bytes,
+            channel,
+        )
+        .await
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one select loop must retain child status and both pipe states atomically"
+)]
+async fn observe_child_stream(
+    mut child: Child,
+    context: InvocationContext,
+    timeout_ms: u64,
+    max_output_bytes: usize,
+    channel: &mut ProviderStreamChannel<process_contract::ProcessRunStream>,
+) -> ModuleResult<(), RunStreamError> {
+    let process_id = child.id();
+    let mut guard = ProcessGroupGuard::new(process_id);
+    let mut stdout = child.stdout.take().ok_or_else(|| {
+        ModuleError::runtime(RuntimeFailure::Internal {
+            detail: "spawned process has no stdout pipe".to_owned(),
+        })
+    })?;
+    let mut stderr = child.stderr.take().ok_or_else(|| {
+        ModuleError::runtime(RuntimeFailure::Internal {
+            detail: "spawned process has no stderr pipe".to_owned(),
+        })
+    })?;
+    let started = Instant::now();
+    let cancellation = context.cancellation();
+    let request_id = context.request_id();
+    let mut timeout = Box::pin(tokio::time::sleep(Duration::from_millis(timeout_ms)));
+    let mut cancelled = Box::pin(cancellation.cancelled());
+    let mut total_bytes = 0usize;
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+    let mut status = None;
+    let mut stdout_buffer = Box::new([0_u8; 8192]);
+    let mut stderr_buffer = Box::new([0_u8; 8192]);
+
+    while status.is_none() || stdout_open || stderr_open {
+        tokio::select! {
+            () = &mut cancelled => {
+                terminate(&mut child, process_id).await;
+                guard.disarm();
+                return Err(ModuleError::runtime(RuntimeFailure::Cancelled { request_id }));
+            }
+            () = &mut timeout => {
+                terminate(&mut child, process_id).await;
+                guard.disarm();
+                return Err(ModuleError::domain(RunStreamError::Timeout));
+            }
+            result = stdout.read(&mut stdout_buffer[..]), if stdout_open => {
+                let read = result.map_err(|error| ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!("failed to read process stdout: {error}"),
+                }))?;
+                if read == 0 {
+                    stdout_open = false;
+                } else {
+                    total_bytes = total_bytes.saturating_add(read);
+                    if total_bytes > max_output_bytes {
+                        terminate(&mut child, process_id).await;
+                        guard.disarm();
+                        return Err(ModuleError::domain(RunStreamError::OutputLimitExceeded));
+                    }
+                    channel.send(RunStreamResponse {
+                        kind: RunStreamResponseKind::Stdout,
+                        content: String::from_utf8_lossy(&stdout_buffer[..read]).into_owned(),
+                        exit_code: None,
+                        duration_ms: None,
+                    }).await.map_err(ModuleError::runtime)?;
+                }
+            }
+            result = stderr.read(&mut stderr_buffer[..]), if stderr_open => {
+                let read = result.map_err(|error| ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!("failed to read process stderr: {error}"),
+                }))?;
+                if read == 0 {
+                    stderr_open = false;
+                } else {
+                    total_bytes = total_bytes.saturating_add(read);
+                    if total_bytes > max_output_bytes {
+                        terminate(&mut child, process_id).await;
+                        guard.disarm();
+                        return Err(ModuleError::domain(RunStreamError::OutputLimitExceeded));
+                    }
+                    channel.send(RunStreamResponse {
+                        kind: RunStreamResponseKind::Stderr,
+                        content: String::from_utf8_lossy(&stderr_buffer[..read]).into_owned(),
+                        exit_code: None,
+                        duration_ms: None,
+                    }).await.map_err(ModuleError::runtime)?;
+                }
+            }
+            result = child.wait(), if status.is_none() => {
+                status = Some(result.map_err(|error| ModuleError::runtime(RuntimeFailure::ModuleFailure {
+                    detail: format!("failed to wait for process: {error}"),
+                }))?);
+            }
+        }
+    }
+    guard.disarm();
+    let status = status.expect("process loop ends only after observing status");
+    let Some(exit_code) = status.code() else {
+        return Err(ModuleError::domain(RunStreamError::Terminated));
+    };
+    channel
+        .send(RunStreamResponse {
+            kind: RunStreamResponseKind::Completed,
+            content: String::new(),
+            exit_code: Some(exit_code.to_string()),
+            duration_ms: Some(
+                u64::try_from(started.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .to_string(),
+            ),
+        })
+        .await
+        .map_err(ModuleError::runtime)
 }
 
 async fn observe_child(
@@ -501,7 +762,7 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use lenso_kernel::CancellationToken;
+    use lenso_kernel::{CancellationToken, NativeStreamItem};
     use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
 
     fn provider(
@@ -528,6 +789,7 @@ mod tests {
                 },
             )]),
             environment: BTreeMap::new(),
+            tasks: ManagedTasks::default(),
         }
     }
 
@@ -559,6 +821,55 @@ mod tests {
         assert_eq!(response.exit_code, "7");
         assert_eq!(response.stdout, "out");
         assert_eq!(response.stderr, "err");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn streams_stdout_before_process_completion() {
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command
+            .args([
+                "-c",
+                "printf first; sleep 0.05; printf second; printf err >&2",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let invocation = context(CancellationToken::new());
+        let (stream, mut channel) =
+            ProviderStream::<process_contract::ProcessRunStream>::channel(&invocation, 8);
+        let producer = async {
+            let result = observe_child_stream(child, invocation, 1_000, 4_096, &mut channel).await;
+            channel.complete(result).await.unwrap();
+        };
+        let consumer = async {
+            let mut messages = Vec::new();
+            loop {
+                match stream.receive().await.unwrap() {
+                    NativeStreamItem::Message(message) => {
+                        messages.push(*message.downcast::<RunStreamResponse>().unwrap());
+                    }
+                    NativeStreamItem::PeerHalfClosed => {}
+                    NativeStreamItem::Terminal(Ok(())) => return messages,
+                    NativeStreamItem::Terminal(Err(_)) => panic!("stream should succeed"),
+                }
+            }
+        };
+        let ((), messages) = futures::future::join(producer, consumer).await;
+        assert_eq!(
+            messages.first().unwrap().kind,
+            RunStreamResponseKind::Stdout
+        );
+        assert_eq!(messages.first().unwrap().content, "first");
+        assert!(messages.iter().any(|message| {
+            message.kind == RunStreamResponseKind::Stderr && message.content == "err"
+        }));
+        assert_eq!(
+            messages.last().unwrap().kind,
+            RunStreamResponseKind::Completed
+        );
+        assert_eq!(messages.last().unwrap().exit_code.as_deref(), Some("0"));
     }
 
     #[tokio::test(flavor = "current_thread")]

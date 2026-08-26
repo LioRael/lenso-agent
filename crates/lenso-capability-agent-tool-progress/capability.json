@@ -1,0 +1,22 @@
+{
+  "id": "lenso.agent.tool-progress@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "progress_catalog",
+      "interaction": "request",
+      "request_schema": "schemas/progress-catalog-request.schema.json",
+      "response_schema": "schemas/progress-catalog-response.schema.json",
+      "domain_error_schema": "schemas/progress-catalog-error.schema.json"
+    },
+    {
+      "name": "execute_progress",
+      "interaction": "stream",
+      "request_schema": "schemas/execute-progress-open.schema.json",
+      "response_schema": "schemas/execute-progress-message.schema.json",
+      "domain_error_schema": "schemas/execute-progress-error.schema.json"
+    }
+  ]
+}

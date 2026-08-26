@@ -14,8 +14,10 @@ members = [
     "crates/lenso-capability-agent-workspace-read",
     "crates/lenso-capability-agent-tools",
     "crates/lenso-capability-agent-tool-provider",
+    "crates/lenso-capability-agent-tool-progress",
     "crates/lenso-capability-agent-session",
     "crates/lenso-capability-agent-tui-contribution",
+    "crates/lenso-capability-agent-tui-suggestion",
     "crates/lenso-agent-loop-module",
     "crates/lenso-agent-model-fixture-module",
     "crates/lenso-agent-model-openai-compatible-module",
@@ -45,6 +47,8 @@ members = [
     "crates/lenso-agent-tui-static-module",
     "crates/lenso-agent-telegram-module",
     "crates/lenso-agent-discord-module",
+    "crates/lenso-agent-tui-command-suggestions-module",
+    "crates/lenso-agent-tui-workspace-suggestions-module",
 ]
 
 [workspace.package]
@@ -91,7 +95,7 @@ serde_json = "1.0"
 syn = { version = "2", features = ["full"] }
 sha2 = { version = "0.10", features = ["asm"] }
 tempfile = "3.23"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "local-offset"] }
 tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 toml = "0.9"

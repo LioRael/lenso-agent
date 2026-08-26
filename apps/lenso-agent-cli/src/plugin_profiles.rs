@@ -61,6 +61,7 @@ use lenso_capability_agent_model::{
 use lenso_capability_agent_process::{
     CAPABILITY_ID as PROCESS_CAPABILITY_ID, CATALOG_OPERATION as PROCESS_CATALOG_OPERATION,
     DESCRIPTOR_VERSION as PROCESS_DESCRIPTOR_VERSION, RUN_OPERATION as PROCESS_RUN_OPERATION,
+    RUN_STREAM_OPERATION as PROCESS_RUN_STREAM_OPERATION,
 };
 use lenso_capability_agent_prompt::{
     CAPABILITY_ID as PROMPT_CAPABILITY_ID, DESCRIPTOR_VERSION as PROMPT_DESCRIPTOR_VERSION,
@@ -77,6 +78,12 @@ use lenso_capability_agent_tool_hook::{
     AFTER_EXECUTE_OPERATION as TOOL_HOOK_AFTER_EXECUTE_OPERATION,
     BEFORE_EXECUTE_OPERATION as TOOL_HOOK_BEFORE_EXECUTE_OPERATION,
     CAPABILITY_ID as TOOL_HOOK_CAPABILITY_ID, DESCRIPTOR_VERSION as TOOL_HOOK_DESCRIPTOR_VERSION,
+};
+use lenso_capability_agent_tool_progress::{
+    CAPABILITY_ID as TOOL_PROGRESS_CAPABILITY_ID,
+    DESCRIPTOR_VERSION as TOOL_PROGRESS_DESCRIPTOR_VERSION,
+    EXECUTE_PROGRESS_OPERATION as TOOL_PROGRESS_EXECUTE_OPERATION,
+    PROGRESS_CATALOG_OPERATION as TOOL_PROGRESS_CATALOG_OPERATION,
 };
 use lenso_capability_agent_tool_provider::{
     CAPABILITY_ID as TOOL_PROVIDER_CAPABILITY_ID,
@@ -103,12 +110,12 @@ use lenso_plugin_control_plane::{
 
 pub(crate) const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 pub(crate) const TOOL_PROVIDER_PROFILE: &str = "agent-tool-provider-v2";
-pub(crate) const NATIVE_MODEL_PROFILE: &str = "agent-model-provider-v1";
+pub(crate) const NATIVE_MODEL_PROFILE: &str = "agent-model-provider-v2";
 pub(crate) const NATIVE_AUTH_PROFILE: &str = "agent-auth-provider-v1";
 pub(crate) const NATIVE_SKILLS_PROFILE: &str = "agent-skills-provider-v1";
 pub(crate) const NATIVE_PROCESS_PROFILE: &str = "agent-process-provider-v1";
 pub(crate) const NATIVE_SECRETS_PROFILE: &str = "secrets-provider-v1";
-pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v1";
+pub(crate) const AGENT_PROVIDER_PROFILE: &str = "agent-provider-v3";
 pub(crate) const SUBAGENT_PROVIDER_PROFILE: &str = "agent-subagent-provider-v1";
 pub(crate) const CODE_MODE_PROVIDER_PROFILE: &str = "agent-code-mode-provider-v1";
 pub(crate) const TOOL_HOOK_PROFILE: &str = "agent-tool-hook-v1";
@@ -125,6 +132,8 @@ const APPROVAL_HOOK_CONFIGURATION_SCHEMA: &[u8] =
 const APPROVAL_HOOK_STATE_SCHEMA: &[u8] =
     include_bytes!("../../../crates/lenso-agent-approval-hook-module/state.schema.json");
 const APPROVAL_HOOK_STATE_SCHEMA_ID: &str = "lenso.agent.approval-state@1";
+const TOOL_PROGRESS_DESCRIPTOR: &[u8] =
+    include_bytes!("../../../crates/lenso-capability-agent-tool-progress/capability.json");
 const MODEL_DESCRIPTOR: &[u8] =
     include_bytes!("../../../crates/lenso-capability-agent-model/capability.json");
 const FIXTURE_MODEL_CONFIGURATION_SCHEMA: &[u8] =
@@ -1235,13 +1244,13 @@ pub(crate) fn harness_plugin_profiles() -> Result<PluginProfileCatalog, String> 
         .register(codex_model_profile())?
         .register(codex_auth_profile())?
         .register(guest_agent_profile(
-            "quickjs-agent-provider-v1",
+            "quickjs-agent-provider-v3",
             QUICKJS_EXECUTION_CLASS,
             "plugin.mjs",
             TrustLevel::Constrained,
         ))?
         .register(guest_agent_profile(
-            "wasm-agent-provider-v1",
+            "wasm-agent-provider-v3",
             WASM_EXECUTION_CLASS,
             "plugin",
             TrustLevel::Isolated,
@@ -1459,8 +1468,12 @@ fn process_native_profile() -> ExecutablePluginProfile {
             request_operations: vec![
                 PROCESS_CATALOG_OPERATION.to_owned(),
                 PROCESS_RUN_OPERATION.to_owned(),
+                PROCESS_RUN_STREAM_OPERATION.to_owned(),
             ],
-            operation_kinds: BTreeMap::new(),
+            operation_kinds: BTreeMap::from([(
+                PROCESS_RUN_STREAM_OPERATION.to_owned(),
+                CapabilityOperationKind::Stream,
+            )]),
         }],
         requires: Vec::new(),
         entrypoint: "default".to_owned(),
@@ -1484,16 +1497,31 @@ fn process_tools_profile() -> ExecutablePluginProfile {
         },
         configuration_schema_digest: sha256_digest(PROCESS_TOOLS_CONFIGURATION_SCHEMA),
         configuration: PROCESS_TOOLS_CONFIGURATION.to_owned(),
-        provides: vec![CapabilityProfile {
-            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
-            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
-            descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
-            request_operations: vec![
-                TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
-                TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
-            ],
-            operation_kinds: BTreeMap::new(),
-        }],
+        provides: vec![
+            CapabilityProfile {
+                capability_id: TOOL_PROGRESS_CAPABILITY_ID.to_owned(),
+                descriptor_version: TOOL_PROGRESS_DESCRIPTOR_VERSION.to_owned(),
+                descriptor_digest: sha256_digest(TOOL_PROGRESS_DESCRIPTOR),
+                request_operations: vec![
+                    TOOL_PROGRESS_EXECUTE_OPERATION.to_owned(),
+                    TOOL_PROGRESS_CATALOG_OPERATION.to_owned(),
+                ],
+                operation_kinds: BTreeMap::from([(
+                    TOOL_PROGRESS_EXECUTE_OPERATION.to_owned(),
+                    CapabilityOperationKind::Stream,
+                )]),
+            },
+            CapabilityProfile {
+                capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+                descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                descriptor_digest: sha256_digest(TOOL_PROVIDER_DESCRIPTOR),
+                request_operations: vec![
+                    TOOL_PROVIDER_CATALOG_OPERATION.to_owned(),
+                    TOOL_PROVIDER_EXECUTE_OPERATION.to_owned(),
+                ],
+                operation_kinds: BTreeMap::new(),
+            },
+        ],
         requires: vec![CapabilityRequirement {
             capability_id: PROCESS_CAPABILITY_ID.to_owned(),
             descriptor_version: PROCESS_DESCRIPTOR_VERSION.to_owned(),
@@ -1503,11 +1531,19 @@ fn process_tools_profile() -> ExecutablePluginProfile {
         execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
         support_channel: SupportChannel::Experimental,
         trust: TrustLevel::Trusted,
-        attachment: AttachmentProfile::AppendMany {
-            consumer_instance: "tools".to_owned(),
-            capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
-            descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
-            max_concurrency: 4,
+        attachment: AttachmentProfile::AppendManySet {
+            edges: vec![
+                AttachmentEdge {
+                    consumer_instance: "tools".to_owned(),
+                    capability_id: TOOL_PROGRESS_CAPABILITY_ID.to_owned(),
+                    descriptor_version: TOOL_PROGRESS_DESCRIPTOR_VERSION.to_owned(),
+                },
+                AttachmentEdge {
+                    consumer_instance: "tools".to_owned(),
+                    capability_id: TOOL_PROVIDER_CAPABILITY_ID.to_owned(),
+                    descriptor_version: TOOL_PROVIDER_DESCRIPTOR_VERSION.to_owned(),
+                },
+            ],
         },
         permission_requests: Vec::new(),
         fixed_host_imports: Vec::new(),
@@ -1517,7 +1553,7 @@ fn process_tools_profile() -> ExecutablePluginProfile {
 
 fn openai_model_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
-        registration_id: "native-openai-compatible-model-v1".to_owned(),
+        registration_id: "native-openai-compatible-model-v2".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package: PackagePolicy::Exact(OPENAI_MODEL_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
@@ -1754,7 +1790,7 @@ fn third_party_wasm_http_fetch_tool_profile() -> ExecutablePluginProfile {
 
 fn fixture_model_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
-        registration_id: "native-fixture-model-v1".to_owned(),
+        registration_id: "native-fixture-model-v2".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package: PackagePolicy::Exact(FIXTURE_MODEL_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
@@ -1793,7 +1829,7 @@ fn fixture_model_profile() -> ExecutablePluginProfile {
 
 fn codex_model_profile() -> ExecutablePluginProfile {
     ExecutablePluginProfile {
-        registration_id: "native-codex-direct-model-v1".to_owned(),
+        registration_id: "native-codex-direct-model-v2".to_owned(),
         adapter_profile: NATIVE_MODEL_PROFILE.to_owned(),
         package: PackagePolicy::Exact(CODEX_MODEL_PACKAGE_ID.to_owned()),
         authority: ImplementationAuthority::BuiltIn {
@@ -2156,7 +2192,7 @@ mod tests {
     #[test]
     fn capability_requirement_order_does_not_affect_profile_matching() {
         let profile = guest_agent_profile(
-            "quickjs-agent-provider-v1",
+            "quickjs-agent-provider-v3",
             QUICKJS_EXECUTION_CLASS,
             "plugin.mjs",
             TrustLevel::Constrained,

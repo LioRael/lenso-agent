@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.tui-suggestion@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "snapshot",
+      "interaction": "request",
+      "request_schema": "schemas/snapshot-request.schema.json",
+      "response_schema": "schemas/snapshot-response.schema.json",
+      "domain_error_schema": "schemas/snapshot-error.schema.json"
+    }
+  ]
+}

@@ -30,3 +30,6 @@
 - [0028 — Compose bounded subagents as Tools](0028-compose-bounded-subagents-as-tools.md)
 - [0029 — Compose constrained Code Mode as a Tool](0029-compose-constrained-code-mode-as-a-tool.md)
 - [0030 — Compose unified Tool Hooks and one-shot approval](0030-compose-unified-tool-hooks-and-one-shot-approval.md)
+- [0031 — Stream Tool progress to terminal surfaces](0031-stream-tool-progress-to-terminal-surfaces.md)
+- [0032 — Compose bounded TUI composer suggestions](0032-compose-bounded-tui-composer-suggestions.md)
+- [0033 — Stream display-safe reasoning to terminal surfaces](0033-stream-display-safe-reasoning-to-terminal-surfaces.md)

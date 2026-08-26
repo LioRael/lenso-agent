@@ -29,7 +29,7 @@ Status: experimental direct-provider baseline.
   subscription headers, SSE decoding, and provider-error translation.
 - **Owned facts:** allowed backend URL, selected model, Responses wire mapping,
   event bound, and sanitized status policy.
-- **Provides:** `lenso.agent.model@1` (`complete`, stream).
+- **Provides:** `lenso.agent.model@2` (`complete`, stream).
 - **Requires:** exactly one `lenso.agent.auth.openai-codex@1` provider selected
   by the Host Profile.
 - **Configuration:** official backend base URL, model, reasoning effort, and
