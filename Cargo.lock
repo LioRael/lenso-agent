@@ -2102,7 +2102,7 @@ dependencies = [
 [[package]]
 name = "lenso-authoring"
 version = "0.2.6"
-source = "git+https://github.com/LioRael/lenso-cli?rev=5b12da4b267edfc294d8d9d1cd6fc59e12f8b8e8#5b12da4b267edfc294d8d9d1cd6fc59e12f8b8e8"
+source = "git+https://github.com/LioRael/lenso-cli?rev=df54e290acd54e555bb5f231cca4ac3ffa33f079#df54e290acd54e555bb5f231cca4ac3ffa33f079"
 dependencies = [
  "lenso-app-plan",
  "lenso-bun-adapter",
