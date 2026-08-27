@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Superseded by ADR-0034.
 
 Supersedes the bundled-Plugin persistence decisions in ADR-0022, ADR-0023,
 and ADR-0026. Their Store-backed third-party lifecycle remains historical and

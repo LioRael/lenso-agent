@@ -33,3 +33,4 @@
 - [0031 — Stream Tool progress to terminal surfaces](0031-stream-tool-progress-to-terminal-surfaces.md)
 - [0032 — Compose bounded TUI composer suggestions](0032-compose-bounded-tui-composer-suggestions.md)
 - [0033 — Stream display-safe reasoning to terminal surfaces](0033-stream-display-safe-reasoning-to-terminal-surfaces.md)
+- [0034 — Separate local user settings from the reviewed App Definition](0034-separate-local-user-settings-from-app-definition.md)

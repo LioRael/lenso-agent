@@ -108,9 +108,11 @@ how-to guides, reference material, and architecture explanations; the
 ## Choose capabilities
 
 Start from the default read-only App, then enable independently shipped Plugin
-contributions by name. The only persisted value is a sorted, versioned enabled
-list under `extensions.lenso.agent.plugins` in `lenso.app.json`; there is no
-Composition file or private Plugin database for each combination:
+contributions by name. Personal selections are stored as one sorted, versioned
+enabled list in the visible, Git-ignored `lenso.local.toml` beside
+`lenso.app.json`; there is no Composition file or private Plugin database for
+each combination. The file is created only after the first selection and is
+removed when the selection becomes empty:
 
 ```sh
 # See the exact Releases bundled with this Host.
@@ -195,6 +197,10 @@ The normal source-backed path expands bundled enabled IDs through the exact
 Host build, resolves the base Plan and Plugin contributions in memory, and
 stages an immutable Generation behind the existing Ready Gate. It creates no
 `.lenso/plugins` Store, Active Set, lock, Receipt, Plan, or Generation record.
+`plugins status` prints the exact local configuration path. Module graph,
+binding, security limits, and product defaults remain in the reviewed
+`lenso.app.json`; `lenso.local.toml` is not an arbitrary Module configuration
+overlay.
 Each Agent Turn still holds a Generation lease until its stream reaches a
 terminal outcome, and the Kernel still receives only one immutable Plan.
 
