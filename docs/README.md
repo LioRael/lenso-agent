@@ -2,10 +2,11 @@
 
 Start with the job you need to complete:
 
-- Tutorial: [build and run a Tool Provider in 10 minutes](tutorials/10-minute-tool-provider.md).
-- How-to: use the root README for App selection, Plugin lifecycle commands, and verification commands.
+- Tutorial: [build and add a Tool Plugin in 10 minutes](tutorials/10-minute-tool-provider.md).
+- How-to: use the root README for App selection, Plugin lifecycle commands, and packaging.
 - Reference: [Capability contracts](contracts.md), [control-plane glossary](glossary.md), and [ADR index](adr/README.md).
 - Explanation: [Agent Harness v1 architecture](architecture/agent-harness-v1.md),
+  [Host implementation and operations](architecture/host-internals.md),
   [terminal and chat surface Module cards](architecture/terminal-surface-module-cards.md),
   and the focused Module cards under `architecture/`.
 

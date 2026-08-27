@@ -1,72 +1,60 @@
-# Build and run a Tool Provider in 10 minutes
+# Build and add a Tool Plugin in 10 minutes
 
-This tutorial starts from the checked-in `uppercase` Tool so the
-whole path runs without credentials or network APIs.
+This is the complete normal extension-author workflow; only the Plugin source
+and commands below are part of it.
 
-## 1. Inspect the typed Tool
-
-Open `crates/lenso-agent-text-tools-module/src/lib.rs`. The argument type owns
-its JSON Schema. `#[tool_provider]` derives `catalog`, typed JSON decoding, and
-dispatch from the method marked `#[tool(...)]`:
-
-```rust
-#[tool_provider]
-impl TextTools {
-    #[tool(name = "uppercase", description = "Convert bounded text to uppercase.")]
-    fn uppercase(arguments: UppercaseArguments) -> Result<ExecuteResponse, ExecuteError> {
-        // Product behavior only.
-    }
-}
-```
-
-Invalid JSON becomes the portable `InvalidArguments` Domain Error; the Module
-never hand-writes an endpoint or Provider factory.
-
-Change the description or the `uppercase` function, keeping the bounded input
-and output checks.
-
-## 2. Check the contracts and App
-
-From the repository root:
+## 1. Create the Plugin
 
 ```sh
-./scripts/generate-contracts.sh
-./scripts/check-contracts.sh
-lenso app check --definition lenso.app.json
-jq empty examples/plugins/text-tools/lenso-plugin.json
+lenso plugin new uppercase
+cd uppercase
 ```
 
-The workspace command discovers Capability packages through Cargo metadata, so
-adding a contract does not require editing a shell-script crate list.
+The generated project contains one Plugin identity, one Rust/Wasm source file,
+and the `lenso.agent.tool-provider@2` Tool contract expected by the Agent
+Harness. Edit `src/lib.rs` to implement the behavior.
 
-## 3. Validate immutable Plan resolution
+## 2. Check and run it locally
 
 ```sh
-lenso app check --definition lenso.app.json
+lenso plugin check
+lenso plugin dev --operation execute \
+  --request-json '{"name":"uppercase","arguments_json":"{\"text\":\"hello\"}"}'
 ```
 
-Review the root source App Definition for base intent and the Plugin Manifest
-for the optional contribution. The Host resolves the candidate Plan in memory
-when it starts or switches a Generation.
+`dev` uses the same Wasm Component execution path used after installation.
 
-## 4. Run it
+## 3. Package it
 
 ```sh
-cargo run -p lenso-agent-cli -- plugins enable text-tools
-cargo run -p lenso-agent-cli -- \
-  "Use uppercase on: Lenso modules are replaceable."
+lenso plugin pack
 ```
 
-The normal run resolves the root App plus its versioned enabled list in memory;
-`--plan` is reserved for exact replay. No `.lenso/plugins` directory is created.
+`pack` builds the release, creates a non-overwriting `.lenso-plugin` directory,
+and reopens the exact bytes it wrote. There is no separate `plugin verify`
+step.
 
-## 5. Prove removal
+## 4. Add it to the Harness
+
+From the Harness project:
 
 ```sh
-./scripts/check-removal.sh
+lenso-agent-cli plugins add \
+  path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
+lenso-agent-cli plugins status
+lenso-agent-cli "Use the text Plugin to uppercase Lenso plugin."
 ```
 
-The proof removes optional Tool Provider instances from temporary App
-Definitions and checks that the remaining graph still resolves. A removable
-Module should leave no required binding, task, state meaning, or configuration
-behind.
+Adding a newer release with the same Plugin ID updates it. The previous active
+release remains selected if validation or readiness fails.
+
+## 5. Disable, re-enable, or remove it
+
+```sh
+lenso-agent-cli plugins disable uppercase
+lenso-agent-cli plugins enable uppercase
+lenso-agent-cli plugins remove uppercase
+```
+
+Disable keeps the selected release available for re-enabling. Remove forgets
+the Plugin from this App.

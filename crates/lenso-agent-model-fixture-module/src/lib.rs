@@ -268,7 +268,7 @@ fn text_plugin_response(
             "uppercase",
             r#"{"text":"Lenso plugin"}"#,
         )),
-        [result] if result.content == "LENSO PLUGIN" => Ok(text_plugin_result()),
+        [result] if !result.content.is_empty() => Ok(text_plugin_result(&result.content)),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }
@@ -855,12 +855,12 @@ fn summary_response(first_line: &str) -> Vec<CompleteMessage> {
     ]
 }
 
-fn text_plugin_result() -> Vec<CompleteMessage> {
+fn text_plugin_result(content: &str) -> Vec<CompleteMessage> {
     vec![
         response(
             "1",
             CompleteMessageKind::TextDelta,
-            "Text Plugin result: LENSO PLUGIN",
+            format!("Text Plugin result: {content}"),
             "",
             "",
             "{}",
