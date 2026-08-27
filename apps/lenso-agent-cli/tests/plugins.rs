@@ -26,10 +26,15 @@ fn source_app_definition(workspace: &Path) -> std::path::PathBuf {
     path
 }
 
+fn local_configuration(workspace: &Path) -> std::path::PathBuf {
+    workspace.join("lenso.local.toml")
+}
+
 #[test]
-fn bundled_selection_uses_only_source_app_intent_and_runs_without_plugin_state() {
+fn bundled_selection_uses_local_user_intent_and_runs_without_plugin_state() {
     let workspace = tempfile::tempdir().unwrap();
     let definition = source_app_definition(workspace.path());
+    let definition_before = fs::read(&definition).unwrap();
 
     let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
@@ -43,11 +48,13 @@ fn bundled_selection_uses_only_source_app_intent_and_runs_without_plugin_state()
         "{}",
         String::from_utf8_lossy(&enable.stderr)
     );
-    let definition_value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&definition).unwrap()).unwrap();
+    assert_eq!(fs::read(&definition).unwrap(), definition_before);
+    let local_value: toml::Value =
+        toml::from_str(&fs::read_to_string(local_configuration(workspace.path())).unwrap())
+            .unwrap();
     assert_eq!(
-        definition_value["extensions"]["lenso.agent.plugins"]["enabled"],
-        serde_json::json!(["text-tools@1"])
+        local_value["plugins"]["enabled"].as_array().unwrap(),
+        &[toml::Value::String("text-tools@1".to_owned())]
     );
     assert!(!workspace.path().join(".lenso/plugins").exists());
 
@@ -60,7 +67,10 @@ fn bundled_selection_uses_only_source_app_intent_and_runs_without_plugin_state()
     assert!(status.status.success());
     assert_eq!(
         String::from_utf8_lossy(&status.stdout),
-        "enabled: text-tools@1\n"
+        format!(
+            "enabled: text-tools@1\nconfig: {}\n",
+            local_configuration(workspace.path()).display()
+        )
     );
 
     let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
@@ -94,9 +104,8 @@ fn bundled_selection_uses_only_source_app_intent_and_runs_without_plugin_state()
         "{}",
         String::from_utf8_lossy(&disable.stderr)
     );
-    let definition_value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&definition).unwrap()).unwrap();
-    assert!(definition_value.get("extensions").is_none());
+    assert_eq!(fs::read(&definition).unwrap(), definition_before);
+    assert!(!local_configuration(workspace.path()).exists());
     assert!(!workspace.path().join(".lenso/plugins").exists());
 }
 
@@ -119,7 +128,73 @@ fn source_selection_is_unchanged_when_the_candidate_never_becomes_ready() {
     assert!(!enable.status.success());
     assert!(String::from_utf8_lossy(&enable.stderr).contains("resolved Plan"));
     assert_eq!(fs::read(&definition).unwrap(), before);
+    assert!(!local_configuration(workspace.path()).exists());
     assert!(!workspace.path().join(".lenso/plugins").exists());
+}
+
+#[test]
+fn legacy_source_selection_migrates_to_local_configuration_on_the_next_edit() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&definition).unwrap()).unwrap();
+    document["extensions"] = serde_json::json!({
+        "lenso.agent.plugins": {
+            "schema_version": 1,
+            "enabled": ["text-tools@1"]
+        }
+    });
+    fs::write(&definition, serde_json::to_vec_pretty(&document).unwrap()).unwrap();
+
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "enable", "workspace-edit", "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+    let migrated: serde_json::Value =
+        serde_json::from_slice(&fs::read(&definition).unwrap()).unwrap();
+    assert!(migrated.get("extensions").is_none());
+    let local_value: toml::Value =
+        toml::from_str(&fs::read_to_string(local_configuration(workspace.path())).unwrap())
+            .unwrap();
+    assert_eq!(
+        local_value["plugins"]["enabled"].as_array().unwrap(),
+        &[
+            toml::Value::String("text-tools@1".to_owned()),
+            toml::Value::String("workspace-edit@1".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn local_configuration_rejects_arbitrary_module_overrides() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    fs::write(
+        local_configuration(workspace.path()),
+        "schema_version = 1\n\n[modules.agent]\nmax_steps = 99\n",
+    )
+    .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+
+    assert!(!status.status.success());
+    let stderr = String::from_utf8_lossy(&status.stderr);
+    assert!(stderr.contains("lenso.local.toml"), "{stderr}");
+    assert!(stderr.contains("unknown field `modules`"), "{stderr}");
 }
 
 #[test]

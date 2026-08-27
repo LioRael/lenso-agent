@@ -10,6 +10,7 @@ pub mod channel;
 pub mod channel_host;
 pub mod discord;
 pub mod generation;
+mod local_config;
 mod plugin_profiles;
 pub mod plugins;
 pub mod provenance;

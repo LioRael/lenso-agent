@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     authority::AuthorityCoordinator,
+    local_config::{self, LocalConfigurationSnapshot},
     plugin_profiles::{
         PluginProfileCatalog, ResolvedAttachment, harness_plugin_profiles, plugin_instance_key,
     },
@@ -156,6 +157,7 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
                         println!("enabled: {selection}");
                     }
                 }
+                println!("config: {}", snapshot.local.path().display());
                 return Ok(());
             }
             let authority = load_generation_authority(&root)?;
@@ -335,7 +337,7 @@ async fn run_source_enable(
         candidate_authority,
     )
     .await?;
-    write_source_selection(&snapshot, &next)?;
+    commit_local_selection(&snapshot, &next)?;
     println!("enabled: {name}");
     println!("selection: {selection_id}");
     println!("generation: {generation}");
@@ -373,7 +375,7 @@ async fn run_source_disable(
         candidate_authority,
     )
     .await?;
-    write_source_selection(&snapshot, &next)?;
+    commit_local_selection(&snapshot, &next)?;
     println!("disabled: {selection_id}");
     println!("generation: {generation}");
     Ok(())
@@ -646,25 +648,24 @@ fn default_root() -> PathBuf {
     PathBuf::from(".lenso/plugins")
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PluginSelection {
+    enabled: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyPluginSelection {
     schema_version: u32,
     enabled: BTreeSet<String>,
 }
 
-impl Default for PluginSelection {
-    fn default() -> Self {
-        Self {
-            schema_version: 1,
-            enabled: BTreeSet::new(),
-        }
-    }
-}
-
 struct SourceSelectionSnapshot {
-    path: PathBuf,
+    definition_path: PathBuf,
     definition_digest: String,
+    local: LocalConfigurationSnapshot,
+    legacy_extension: bool,
     selection: PluginSelection,
 }
 
@@ -676,32 +677,50 @@ fn source_selection() -> Result<Option<SourceSelectionSnapshot>, String> {
         fs::read(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let definition = lenso_authoring::CargoAppDefinition::load(&path)
         .map_err(|error| format!("failed to load {}: {error}", path.display()))?;
-    let selection = definition
+    let legacy = definition
         .extension(PLUGIN_SELECTION_EXTENSION)
         .cloned()
         .map_or_else(
-            || Ok(PluginSelection::default()),
+            || Ok(None),
             |value| {
-                serde_json::from_value::<PluginSelection>(value).map_err(|error| {
-                    format!(
-                        "invalid `{PLUGIN_SELECTION_EXTENSION}` extension in {}: {error}",
-                        path.display()
-                    )
-                })
+                serde_json::from_value::<LegacyPluginSelection>(value)
+                    .map(Some)
+                    .map_err(|error| {
+                        format!(
+                            "invalid `{PLUGIN_SELECTION_EXTENSION}` extension in {}: {error}",
+                            path.display()
+                        )
+                    })
             },
         )?;
-    if selection.schema_version != 1 {
+    if let Some(legacy) = &legacy
+        && legacy.schema_version != 1
+    {
         return Err(format!(
             "unsupported `{PLUGIN_SELECTION_EXTENSION}` schema version {}",
-            selection.schema_version
+            legacy.schema_version
         ));
     }
+    let local = local_config::load(&path)?;
+    let selection = if local.exists() {
+        PluginSelection {
+            enabled: local.configuration.plugins.enabled.clone(),
+        }
+    } else {
+        PluginSelection {
+            enabled: legacy
+                .as_ref()
+                .map_or_else(BTreeSet::new, |selection| selection.enabled.clone()),
+        }
+    };
     for id in &selection.enabled {
         bundled_selection_name(id)?;
     }
     Ok(Some(SourceSelectionSnapshot {
-        path,
+        definition_path: path,
         definition_digest: sha256_digest(&bytes),
+        local,
+        legacy_extension: legacy.is_some(),
         selection,
     }))
 }
@@ -1151,43 +1170,50 @@ fn bundled_selection_name(selection_id: &str) -> Result<&str, String> {
         .ok_or_else(|| format!("unknown bundled Plugin selection `{selection_id}`"))
 }
 
-fn write_source_selection(
+fn commit_local_selection(
     snapshot: &SourceSelectionSnapshot,
     next: &PluginSelection,
 ) -> Result<(), String> {
-    let current = fs::read(&snapshot.path)
-        .map_err(|error| format!("failed to read {}: {error}", snapshot.path.display()))?;
+    let current = fs::read(&snapshot.definition_path).map_err(|error| {
+        format!(
+            "failed to read {}: {error}",
+            snapshot.definition_path.display()
+        )
+    })?;
     if sha256_digest(&current) != snapshot.definition_digest {
         return Err(format!(
             "{} changed while the candidate Generation was being checked; retry the command",
-            snapshot.path.display()
+            snapshot.definition_path.display()
         ));
     }
+    let mut local = snapshot.local.configuration.clone();
+    local.plugins.enabled.clone_from(&next.enabled);
+    snapshot.local.write(&local)?;
+    if !snapshot.legacy_extension {
+        return Ok(());
+    }
+
     let mut document: serde_json::Value = serde_json::from_slice(&current)
-        .map_err(|error| format!("invalid {}: {error}", snapshot.path.display()))?;
-    let root = document
-        .as_object_mut()
-        .ok_or_else(|| format!("{} is not a JSON object", snapshot.path.display()))?;
-    let extensions = root
-        .entry("extensions")
-        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
-        .as_object_mut()
-        .ok_or_else(|| "App Definition `extensions` must be a JSON object".to_owned())?;
-    if next.enabled.is_empty() {
+        .map_err(|error| format!("invalid {}: {error}", snapshot.definition_path.display()))?;
+    let root = document.as_object_mut().ok_or_else(|| {
+        format!(
+            "{} is not a JSON object",
+            snapshot.definition_path.display()
+        )
+    })?;
+    if let Some(extensions) = root.get_mut("extensions") {
+        let extensions = extensions
+            .as_object_mut()
+            .ok_or_else(|| "App Definition `extensions` must be a JSON object".to_owned())?;
         extensions.remove(PLUGIN_SELECTION_EXTENSION);
         if extensions.is_empty() {
             root.remove("extensions");
         }
-    } else {
-        extensions.insert(
-            PLUGIN_SELECTION_EXTENSION.to_owned(),
-            serde_json::to_value(next).map_err(|error| error.to_string())?,
-        );
     }
     let mut bytes = serde_json::to_vec_pretty(&document).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
     let temporary = snapshot
-        .path
+        .definition_path
         .with_extension(format!("lenso-selection-{}.tmp", std::process::id()));
     let write_result = (|| {
         let mut file = OpenOptions::new()
@@ -1198,10 +1224,10 @@ fn write_source_selection(
         file.write_all(&bytes)
             .and_then(|()| file.sync_all())
             .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
-        fs::rename(&temporary, &snapshot.path).map_err(|error| {
+        fs::rename(&temporary, &snapshot.definition_path).map_err(|error| {
             format!(
-                "failed to replace {} with checked Plugin intent: {error}",
-                snapshot.path.display()
+                "failed to migrate Plugin intent out of {}: {error}",
+                snapshot.definition_path.display()
             )
         })
     })();
