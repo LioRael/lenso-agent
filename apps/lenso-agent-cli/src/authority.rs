@@ -6,6 +6,7 @@ use std::{
 use fs2::FileExt;
 
 const LOCK_FILE: &str = "active-set.lock";
+const GENERATION_GC_LOCK_FILE: &str = "generation-gc.lock";
 
 /// Coordinates one Host's durable Plugin authority across processes.
 #[derive(Debug)]
@@ -62,6 +63,22 @@ impl AuthorityCoordinator {
         let file = self.open_lock(false)?;
         FileExt::lock_exclusive(&file)
             .map_err(|error| format!("failed to fence Plugin authority transition: {error}"))?;
+        Ok(AuthorityFence { file })
+    }
+
+    /// Prevents Generation collection while this Host can admit or persist a Turn.
+    pub(crate) fn generation_gc_snapshot(&self) -> Result<AuthorityFence, String> {
+        let file = open_regular_lock(&self.root.join(GENERATION_GC_LOCK_FILE), true)?;
+        FileExt::lock_shared(&file)
+            .map_err(|error| format!("failed to lease Generation provenance: {error}"))?;
+        Ok(AuthorityFence { file })
+    }
+
+    /// Waits for every Host using this authority root before applying one GC snapshot.
+    pub(crate) fn generation_gc_transition(&self) -> Result<AuthorityFence, String> {
+        let file = open_regular_lock(&self.root.join(GENERATION_GC_LOCK_FILE), true)?;
+        FileExt::lock_exclusive(&file)
+            .map_err(|error| format!("failed to fence Generation collection: {error}"))?;
         Ok(AuthorityFence { file })
     }
 
@@ -278,6 +295,40 @@ mod tests {
     }
 
     #[test]
+    fn generation_collection_waits_for_a_running_host_lease() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().join("plugins");
+        let ready = temporary.path().join("ready");
+        AuthorityCoordinator::prepare(&root).unwrap();
+        let executable = env::current_exe().unwrap();
+        let mut child = Command::new(executable)
+            .args([
+                "--exact",
+                "authority::tests::child_holds_authority_fence",
+                "--nocapture",
+            ])
+            .env(CHILD_MODE, "generation-gc-snapshot")
+            .env(CHILD_ROOT, &root)
+            .env(CHILD_READY, &ready)
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.exists() {
+            assert!(
+                Instant::now() < deadline,
+                "child did not acquire Generation GC lease"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        let coordinator = AuthorityCoordinator::prepare(&root).unwrap();
+        let started = Instant::now();
+        drop(coordinator.generation_gc_transition().unwrap());
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
     fn child_holds_authority_fence() {
         if env::var_os(CHILD_MODE).is_none() {
             return;
@@ -286,10 +337,10 @@ mod tests {
         let ready = PathBuf::from(env::var_os(CHILD_READY).unwrap());
         let coordinator = AuthorityCoordinator::prepare(&root).unwrap();
         let mode = env::var(CHILD_MODE).unwrap();
-        let _fence = if mode == "snapshot" {
-            coordinator.snapshot().unwrap()
-        } else {
-            coordinator.transition().unwrap()
+        let _fence = match mode.as_str() {
+            "snapshot" => coordinator.snapshot().unwrap(),
+            "generation-gc-snapshot" => coordinator.generation_gc_snapshot().unwrap(),
+            _ => coordinator.transition().unwrap(),
         };
         fs::write(ready, b"ready").unwrap();
         if mode == "exit" {

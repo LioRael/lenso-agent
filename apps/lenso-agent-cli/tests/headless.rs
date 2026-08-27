@@ -457,7 +457,11 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
 }
 
 #[test]
-fn generation_gc_preview_reports_reachability_without_deleting() {
+#[allow(
+    clippy::too_many_lines,
+    reason = "one end-to-end fixture proves preview, Controller reconciliation, apply, and idempotency"
+)]
+fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# GC Fixture\n").unwrap();
     let first = run(
@@ -493,6 +497,27 @@ fn generation_gc_preview_reports_reachability_without_deleting() {
     assert!(remove.status.success());
     let empty_sessions = temporary.path().join("empty-sessions");
     fs::create_dir(&empty_sessions).unwrap();
+    let before_reconcile = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "generations",
+            "gc-preview",
+            "--sessions",
+            empty_sessions.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(before_reconcile.status.success());
+    let before_reconcile_stdout = String::from_utf8(before_reconcile.stdout).unwrap();
+    assert!(before_reconcile_stdout.contains("reason=controller"));
+    assert!(before_reconcile_stdout.contains("summary: protected=2 candidates=0"));
+    let reconcile = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: reconcile removed Plugin authority",
+        None,
+    );
+    assert!(reconcile.status.success());
     let preview = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
         .args([
@@ -509,7 +534,10 @@ fn generation_gc_preview_reports_reachability_without_deleting() {
         String::from_utf8_lossy(&preview.stderr)
     );
     let stdout = String::from_utf8(preview.stdout).unwrap();
-    assert!(stdout.contains("summary: protected=1 candidates=1"));
+    assert!(
+        stdout.contains("summary: protected=1 candidates=1"),
+        "{stdout}"
+    );
     let records_before = fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
         .unwrap()
         .count();
@@ -529,6 +557,53 @@ fn generation_gc_preview_reports_reachability_without_deleting() {
             .unwrap()
             .count(),
         records_before
+    );
+
+    let recovery_directory = temporary
+        .path()
+        .join(".lenso/plugins/generation-authorities");
+    let authorities_before = fs::read_dir(&recovery_directory).unwrap().count();
+    let apply = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "generations",
+            "gc",
+            "--apply",
+            "--sessions",
+            empty_sessions.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "{}",
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    let apply_stdout = String::from_utf8(apply.stdout).unwrap();
+    assert!(apply_stdout.contains("summary: removed-generations=1"));
+    assert_eq!(
+        fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
+            .unwrap()
+            .count(),
+        records_before - 1
+    );
+    assert!(fs::read_dir(&recovery_directory).unwrap().count() < authorities_before);
+
+    let second_apply = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "generations",
+            "gc",
+            "--apply",
+            "--sessions",
+            empty_sessions.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(second_apply.status.success());
+    assert!(
+        String::from_utf8_lossy(&second_apply.stdout)
+            .contains("summary: removed-generations=0 removed-recovery-authorities=0")
     );
 }
 

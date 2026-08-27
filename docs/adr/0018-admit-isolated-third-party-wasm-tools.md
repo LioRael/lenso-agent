@@ -29,9 +29,12 @@ any non-empty package identity only when it:
 - attaches only by appending to the existing `tools` Instance's exact `many` Tool Provider
   requirement.
 
-Artifact-backed and experimental execution continues to require explicit bounded review evidence.
-The Host registers the generated Tool Provider JSON codec and validates the guest Descriptor before
-readiness. The Bundle cannot select its consumer, configuration, permissions, or execution policy.
+This exact permission-free isolated shape may use automatic local admission. Its automatic evidence
+records the Host policy decision rather than publisher-provided trust. Artifact-backed QuickJS,
+Host imports, permissions, state, Provider replacement, and every broader experimental shape still
+require explicit bounded review evidence. The Host registers the generated Tool Provider JSON codec
+and validates the guest Descriptor before readiness. The Bundle cannot select its consumer,
+configuration, permissions, or execution policy.
 
 The checked standalone example has no Agent Harness path dependency. Product tests copy it outside
 the repository workspace, build its Wasm core, use the production Bundle builder, and prove install,
@@ -41,7 +44,7 @@ Agent invocation, upgrade, rollback, invocation after rollback, removal, and los
 
 - A third party can independently build and install a pure Wasm Tool without registering its package
   identity or recompiling the Host.
-- This is a local reviewed extension path, not automatic trust, publisher identity verification,
+- This is a Host-policy-bounded local extension path, not publisher trust, identity verification,
   marketplace distribution, permission grants, or arbitrary Plugin topology.
 - Wasm resource limits and lack of Host imports contain the accepted shape. Filesystem, process,
   network, secret, or other Host access requires a later permission and Capability-import slice.

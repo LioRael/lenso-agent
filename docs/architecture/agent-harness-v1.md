@@ -156,9 +156,11 @@ make both the workspace root and model endpoint visible before execution.
 15. A real child process holding an exclusive Plugin authority transition fence
     blocks App startup until release; direct process exit releases the OS-owned
     fence and leaves later snapshots available.
-16. A read-only GC plan validates all Generation Specs and Session Turn
-    provenance, protects current or retained Plugin Set and Session references,
-    and reports unreferenced Generation candidates without deleting them.
+16. A read-only GC preview validates all Generation Specs and Session Turn
+    provenance and reports reachability. Applied GC waits for every Host GC
+    lease, locks Plugin authority, rebuilds Controller, Plugin Set, and Session
+    roots, removes only unreferenced Specs and recovery authority, and is
+    idempotent.
 17. Installing the reviewed QuickJS Agent Bundle replaces the built-in Agent
     Loop, starts the resolved durable Generation, and completes a typed streamed
     Turn through the generated `lenso.agent@3` codec. The same product profile

@@ -1,0 +1,5 @@
+[[contributions]]
+id = "workspace.summary"
+version = "1.0.0"
+kind = "skill"
+content = "When summarizing a workspace file, ground the answer in the Tool result."

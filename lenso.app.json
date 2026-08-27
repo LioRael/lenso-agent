@@ -27,14 +27,7 @@
       {
         "key": "agent",
         "package": "lenso.agent.loop",
-        "configuration": {
-          "model": "fixture/readme-summary-v1",
-          "max_steps": 8,
-          "max_tool_calls": 4,
-          "max_parallel_tool_calls": 4,
-          "max_output_tokens": 1024,
-          "max_history_events": 200
-        }
+        "configuration_file": "config/modules/agent.toml"
       },
       {
         "key": "cli",
@@ -47,16 +40,12 @@
       {
         "key": "http-fetch",
         "package": "lenso.agent.http-fetch",
-        "configuration": {
-          "allowed_origins": []
-        }
+        "configuration_file": "config/modules/http-fetch.toml"
       },
       {
         "key": "model",
         "package": "lenso.agent.model.fixture",
-        "configuration": {
-          "model": "fixture/readme-summary-v1"
-        }
+        "configuration_file": "config/modules/model.toml"
       },
       {
         "key": "prompt",
@@ -65,35 +54,17 @@
       {
         "key": "sessions",
         "package": "lenso.agent.session.file",
-        "configuration": {
-          "directory": ".lenso/sessions"
-        }
+        "configuration_file": "config/modules/sessions.toml"
       },
       {
         "key": "summary-skill",
         "package": "lenso.agent.prompt.static",
-        "configuration": {
-          "contributions": [
-            {
-              "id": "workspace.summary",
-              "version": "1.0.0",
-              "kind": "skill",
-              "content": "When summarizing a workspace file, ground the answer in the Tool result."
-            }
-          ]
-        }
+        "configuration_file": "config/modules/summary-skill.toml"
       },
       {
         "key": "subagent-agent",
         "package": "lenso.agent.loop",
-        "configuration": {
-          "model": "fixture/readme-summary-v1",
-          "max_steps": 8,
-          "max_tool_calls": 4,
-          "max_parallel_tool_calls": 4,
-          "max_output_tokens": 1024,
-          "max_history_events": 200
-        }
+        "configuration_file": "config/modules/subagent-agent.toml"
       },
       {
         "key": "restricted-read-tools",
@@ -110,15 +81,7 @@
       {
         "key": "tui-help",
         "package": "lenso.agent.tui.static",
-        "configuration": {
-          "panels": [
-            {
-              "id": "agent.help",
-              "title": "Help",
-              "body": "Enter sends a message.\nEsc cancels the active Turn or exits while idle.\nCtrl-C exits immediately.\nTab cycles contributed panels."
-            }
-          ]
-        }
+        "configuration_file": "config/modules/tui-help.toml"
       },
       {
         "key": "telegram",
@@ -127,49 +90,22 @@
       {
         "key": "tui-commands",
         "package": "lenso.agent.tui-command-suggestions",
-        "configuration": {
-          "commands": [
-            {
-              "id": "agent.command.help",
-              "label": "/help",
-              "insert_text": "/help",
-              "description": "Show keyboard shortcuts"
-            },
-            {
-              "id": "agent.command.clear",
-              "label": "/clear",
-              "insert_text": "/clear",
-              "description": "Clear the visible conversation"
-            },
-            {
-              "id": "agent.command.new",
-              "label": "/new",
-              "insert_text": "/new",
-              "description": "Start a new session"
-            }
-          ]
-        }
+        "configuration_file": "config/modules/tui-commands.toml"
       },
       {
         "key": "tui-workspace-suggestions",
         "package": "lenso.agent.tui-workspace-suggestions",
-        "configuration": {
-          "root": "."
-        }
+        "configuration_file": "config/modules/tui-workspace-suggestions.toml"
       },
       {
         "key": "workspace-import-read",
         "package": "lenso.agent.workspace-import-read",
-        "configuration": {
-          "root": "."
-        }
+        "configuration_file": "config/modules/workspace-import-read.toml"
       },
       {
         "key": "workspace-read",
         "package": "lenso.agent.workspace-read",
-        "configuration": {
-          "root": "."
-        }
+        "configuration_file": "config/modules/workspace-read.toml"
       }
     ],
     "binding_policies": [

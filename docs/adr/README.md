@@ -34,3 +34,7 @@
 - [0032 — Compose bounded TUI composer suggestions](0032-compose-bounded-tui-composer-suggestions.md)
 - [0033 — Stream display-safe reasoning to terminal surfaces](0033-stream-display-safe-reasoning-to-terminal-surfaces.md)
 - [0034 — Separate local user settings from the reviewed App Definition](0034-separate-local-user-settings-from-app-definition.md)
+- [0035 — Apply fenced Generation provenance garbage collection](0035-apply-fenced-generation-provenance-gc.md)
+- [0036 — Wake Plugin reconciliation from filesystem events](0036-wake-plugin-reconciliation-from-filesystem-events.md)
+- [0037 — Consume packaged Plugin Bundles without extraction](0037-consume-packaged-plugin-bundles-without-extraction.md)
+- [0038 — Configure discovered Plugin Modules with adjacent sidecars](0038-configure-discovered-plugin-modules-with-sidecars.md)

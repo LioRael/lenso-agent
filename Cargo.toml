@@ -70,7 +70,7 @@ proc-macro2 = "1"
 quote = "1"
 lenso-capability-secrets = "0.1.1"
 lenso-app-plan = { git = "https://github.com/LioRael/lenso", rev = "d25a785577354dbc942fa792fac3baff95c58515" }
-lenso-authoring = { git = "https://github.com/LioRael/lenso-cli", rev = "68c361ac484ae340d48389d3ed163ac269bbf679" }
+lenso-authoring = { git = "https://github.com/LioRael/lenso-cli", rev = "38549ab2a6cf933b8bf8446d71d8698da382530c" }
 lenso = { git = "https://github.com/LioRael/lenso-runtime-rust", rev = "f2e506de04ee5286251d0c9cabd9cf56ccacefe4" }
 lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "8a9b2482278224973417aaac1fd925ba1cfa5370" }
 lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "8a9b2482278224973417aaac1fd925ba1cfa5370" }
@@ -87,12 +87,14 @@ lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust", r
 lenso-wasm-component-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust", rev = "f2e506de04ee5286251d0c9cabd9cf56ccacefe4" }
 mlua = { version = "0.11", features = ["async", "lua54", "serialize", "vendored"] }
 nix = { version = "0.31", features = ["process", "signal"] }
+notify = "8.2"
 lenso-secrets-env-module = "0.1.1"
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+jsonschema = { version = "0.51", default-features = false }
 syn = { version = "2", features = ["full"] }
 sha2 = { version = "0.10", features = ["asm"] }
 tempfile = "3.23"
@@ -101,6 +103,7 @@ tokio = { version = "1.48", features = ["io-util", "macros", "net", "process", "
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 toml = "0.9"
 uuid = { version = "1.18", features = ["v4"] }
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [patch.crates-io]
 lenso-app-plan = { git = "https://github.com/LioRael/lenso", rev = "d25a785577354dbc942fa792fac3baff95c58515" }

@@ -1,0 +1,17 @@
+[[commands]]
+id = "agent.command.help"
+label = "/help"
+insert_text = "/help"
+description = "Show keyboard shortcuts"
+
+[[commands]]
+id = "agent.command.clear"
+label = "/clear"
+insert_text = "/clear"
+description = "Clear the visible conversation"
+
+[[commands]]
+id = "agent.command.new"
+label = "/new"
+insert_text = "/new"
+description = "Start a new session"
