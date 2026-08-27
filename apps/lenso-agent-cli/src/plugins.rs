@@ -2827,7 +2827,10 @@ pub(crate) fn generation_composition(
                             )
                         })?;
                     if candidate.package_id() != replacement.allowed_package
-                        || candidate.configuration() != replacement.expected_configuration
+                        || !configuration_values_equal(
+                            candidate.configuration(),
+                            &replacement.expected_configuration,
+                        )
                     {
                         return Err(format!(
                             "Plugin replacement cannot configure base Instance `{}`",
@@ -2851,6 +2854,13 @@ pub(crate) fn generation_composition(
         bindings,
         preserved_base_bindings,
     })
+}
+
+fn configuration_values_equal(left: &str, right: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(left)
+        .ok()
+        .zip(serde_json::from_str::<serde_json::Value>(right).ok())
+        .is_some_and(|(left, right)| left == right)
 }
 
 fn reserve_displaced_instance(

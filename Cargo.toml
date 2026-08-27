@@ -70,7 +70,7 @@ proc-macro2 = "1"
 quote = "1"
 lenso-capability-secrets = "0.1.1"
 lenso-app-plan = { git = "https://github.com/LioRael/lenso", rev = "d25a785577354dbc942fa792fac3baff95c58515" }
-lenso-authoring = { git = "https://github.com/LioRael/lenso-cli", rev = "68c361ac484ae340d48389d3ed163ac269bbf679" }
+lenso-authoring = { git = "https://github.com/LioRael/lenso-cli", rev = "38549ab2a6cf933b8bf8446d71d8698da382530c" }
 lenso = { git = "https://github.com/LioRael/lenso-runtime-rust", rev = "f2e506de04ee5286251d0c9cabd9cf56ccacefe4" }
 lenso-contract-authoring = { git = "https://github.com/LioRael/lenso-protocols", rev = "8a9b2482278224973417aaac1fd925ba1cfa5370" }
 lenso-contract-codegen = { git = "https://github.com/LioRael/lenso-protocols", rev = "8a9b2482278224973417aaac1fd925ba1cfa5370" }

@@ -1,0 +1,4 @@
+[[panels]]
+id = "agent.help"
+title = "Help"
+body = "Enter sends a message.\nEsc cancels the active Turn or exits while idle.\nCtrl-C exits immediately.\nTab cycles contributed panels."
