@@ -10,23 +10,6 @@ const TOOL: &str = "uppercase";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct CatalogRequest {}
-
-#[derive(Serialize)]
-struct CatalogResponse {
-    tools: Vec<ToolDefinition>,
-}
-
-#[derive(Serialize)]
-struct ToolDefinition {
-    name: &'static str,
-    description: &'static str,
-    input_schema_json: &'static str,
-    execution: &'static str,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ExecuteRequest {
     name: String,
     arguments_json: String,
@@ -45,11 +28,14 @@ struct ExecuteResponse {
     metadata_json: &'static str,
 }
 
-struct ExternalTextTools;
+struct PluginComponent;
 
-impl Guest for ExternalTextTools {
-    fn describe() -> String {
-        r#"{"abi":"lenso.json-request@1","capabilities":[{"capability_id":"lenso.agent.tool-provider@2","descriptor_version":"2.0.0","request_operations":["catalog","execute"]}]}"#.to_owned()
+lenso_guest_sdk::guest_request_plugin! {
+impl Guest for PluginComponent {
+    provides: {
+        capability_id: "lenso.agent.tool-provider@2",
+        descriptor_version: "2.0.0",
+        requests: ["catalog", "execute"],
     }
 
     fn invoke(
@@ -61,19 +47,7 @@ impl Guest for ExternalTextTools {
             return Err("\"not_found\"".to_owned());
         }
         match operation.as_str() {
-            "catalog" => {
-                serde_json::from_str::<CatalogRequest>(&request_json)
-                    .map_err(|_| "\"catalog_invalid\"".to_owned())?;
-                serde_json::to_string(&CatalogResponse {
-                    tools: vec![ToolDefinition {
-                        name: TOOL,
-                        description: "Convert one UTF-8 string to uppercase.",
-                        input_schema_json: r#"{"additionalProperties":false,"properties":{"text":{"maxLength":4096,"type":"string"}},"required":["text"],"type":"object"}"#,
-                        execution: "parallel_safe",
-                    }],
-                })
-                .map_err(|_| "\"catalog_invalid\"".to_owned())
-            }
+            "catalog" => Ok(r#"{"tools":[{"name":"uppercase","description":"Convert one UTF-8 string to uppercase.","input_schema_json":"{\"additionalProperties\":false,\"properties\":{\"text\":{\"maxLength\":4096,\"type\":\"string\"}},\"required\":[\"text\"],\"type\":\"object\"}","execution":"parallel_safe"}]}"#.to_owned()),
             "execute" => {
                 let request = serde_json::from_str::<ExecuteRequest>(&request_json)
                     .map_err(|_| "\"invalid_arguments\"".to_owned())?;
@@ -82,9 +56,6 @@ impl Guest for ExternalTextTools {
                 }
                 let arguments = serde_json::from_str::<UppercaseArguments>(&request.arguments_json)
                     .map_err(|_| "\"invalid_arguments\"".to_owned())?;
-                if arguments.text.len() > 4_096 {
-                    return Err("\"output_limit_exceeded\"".to_owned());
-                }
                 serde_json::to_string(&ExecuteResponse {
                     content_type: "text",
                     content: arguments.text.to_uppercase(),
@@ -96,5 +67,6 @@ impl Guest for ExternalTextTools {
         }
     }
 }
+}
 
-export!(ExternalTextTools);
+export!(PluginComponent);

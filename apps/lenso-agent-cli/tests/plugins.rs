@@ -7,7 +7,9 @@ use std::{
     thread,
 };
 
-use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
+use lenso_plugin_bundle::{
+    ArtifactSource, BundleBuild, SourcePluginBuild, build_bundle, build_source_plugin_bundle,
+};
 use lenso_plugin_control_plane::sha256_digest;
 
 mod support;
@@ -44,13 +46,33 @@ fn cli_status_defaults_to_plugin_language() {
 
     assert!(status.status.success());
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert_eq!(
-        stdout,
-        format!(
-            "Plugin folder: {}\nNo plugins found.\n",
-            workspace.path().join("plugins").display()
-        )
-    );
+    assert_eq!(stdout, "No plugins.\n");
+}
+
+#[test]
+fn public_plugin_help_exposes_only_the_normal_lifecycle() {
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .args(["plugins", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for command in ["list", "add", "status", "enable", "disable", "remove"] {
+        assert!(stdout.contains(command), "missing {command}: {stdout}");
+    }
+    for internal in [
+        "install",
+        "upgrade",
+        "rollback",
+        "history",
+        "inspect",
+        "pack",
+        "receipt",
+        "module",
+        "generation",
+    ] {
+        assert!(!stdout.contains(internal), "leaked {internal}: {stdout}");
+    }
 }
 
 #[test]
@@ -102,7 +124,7 @@ fn cli_packs_and_discovers_one_file_without_extracting_it() {
         "{}",
         String::from_utf8_lossy(&status.stderr)
     );
-    assert!(String::from_utf8_lossy(&status.stdout).contains("Plugin: example.text-tools@1.0.0"));
+    assert!(String::from_utf8_lossy(&status.stdout).contains("example.text-tools@1.0.0  enabled"));
     assert!(!plugins.join("text-tools").exists());
 }
 
@@ -142,12 +164,7 @@ fn bundled_selection_uses_local_user_intent_and_runs_without_plugin_state() {
         .unwrap();
     assert!(status.status.success());
     let status_stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(status_stdout.contains("Plugin: text-tools@1 (built in)\n"));
-    assert!(!status_stdout.contains("desired-state:"));
-    assert!(status_stdout.contains(&format!(
-        "Plugin folder: {}\n",
-        workspace.path().join("plugins").display()
-    )));
+    assert!(status_stdout.contains("example.text-tools@1.0.0  enabled\n"));
 
     let verbose_status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
@@ -224,7 +241,7 @@ fn source_app_discovers_runs_and_unloads_an_isolated_wasm_bundle() {
     );
     assert!(
         String::from_utf8_lossy(&status.stdout)
-            .contains("Plugin: dev.example.wasm-text-tools@1.0.0")
+            .contains("dev.example.wasm-text-tools@1.0.0  enabled")
     );
     assert!(
         !workspace
@@ -291,8 +308,7 @@ fn source_discovery_reports_governed_and_malformed_bundles() {
         .unwrap();
     assert!(blocked.status.success());
     let blocked_status = String::from_utf8_lossy(&blocked.stdout);
-    assert!(blocked_status.contains("Problem: quickjs-agent:"));
-    assert!(blocked_status.contains("--evidence <review>"));
+    assert_eq!(blocked_status, "quickjs-agent  blocked\n");
 
     fs::remove_dir_all(&governed).unwrap();
     fs::create_dir_all(workspace.path().join("plugins/malformed")).unwrap();
@@ -303,10 +319,9 @@ fn source_discovery_reports_governed_and_malformed_bundles() {
         .output()
         .unwrap();
     assert!(malformed.status.success());
-    assert!(String::from_utf8_lossy(&malformed.stdout).contains("Problem: malformed:"));
-    assert!(
-        String::from_utf8_lossy(&malformed.stdout)
-            .contains("Plugin Bundle is missing `lenso-plugin.json`")
+    assert_eq!(
+        String::from_utf8_lossy(&malformed.stdout),
+        "malformed  blocked\n"
     );
 }
 
@@ -334,11 +349,7 @@ fn source_discovery_reports_an_orphan_plugin_configuration_without_blocking_othe
 
     assert!(status.status.success());
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(stdout.contains("Problem: missing.config.toml:"), "{stdout}");
-    assert!(
-        stdout.contains("Plugin configuration has no matching Bundle"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("missing.config.toml  blocked"), "{stdout}");
     assert!(stdout.contains("example.passive"), "{stdout}");
 }
 
@@ -371,8 +382,7 @@ fn source_discovery_rejects_a_plugin_configuration_that_expands_host_limits() {
 
     assert!(status.status.success());
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(stdout.contains("Problem: code-mode:"), "{stdout}");
-    assert!(stdout.contains("may narrow, but not expand"), "{stdout}");
+    assert_eq!(stdout, "code-mode  blocked\n");
 }
 
 #[test]
@@ -392,10 +402,9 @@ fn source_discovery_rejects_duplicate_plugin_ids() {
         .output()
         .unwrap();
     assert!(status.status.success());
-    assert!(
-        String::from_utf8_lossy(&status.stdout)
-            .contains("Plugin `example.passive` appears in more than one discovery Bundle")
-    );
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("one  blocked"), "{stdout}");
+    assert!(stdout.contains("two  blocked"), "{stdout}");
 }
 
 #[test]
@@ -548,11 +557,11 @@ fn source_app_installs_and_removes_a_third_party_release_alongside_bundled_plugi
     assert!(status.status.success());
     let stdout = String::from_utf8_lossy(&status.stdout);
     assert!(
-        stdout.contains("Plugin: text-tools@1 (built in)"),
+        stdout.contains("example.text-tools@1.0.0  enabled"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("Plugin: example.passive@1.0.0 (installed)"),
+        stdout.contains("example.passive@1.0.0  enabled"),
         "{stdout}"
     );
 
@@ -595,7 +604,7 @@ fn source_app_installs_and_removes_a_third_party_release_alongside_bundled_plugi
         .unwrap();
     let stdout = String::from_utf8_lossy(&status.stdout);
     assert!(
-        stdout.contains("Plugin: text-tools@1 (built in)"),
+        stdout.contains("example.text-tools@1.0.0  enabled"),
         "{stdout}"
     );
     assert!(!stdout.contains("example.passive"), "{stdout}");
@@ -829,7 +838,7 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
         .output()
         .unwrap();
     assert!(status.status.success());
-    assert!(String::from_utf8_lossy(&status.stdout).contains("Plugin: example.passive@1.0.0"));
+    assert!(String::from_utf8_lossy(&status.stdout).contains("example.passive@1.0.0  enabled"));
 
     let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
@@ -1433,6 +1442,121 @@ fn external_wasm_tool_plugin_builds_installs_upgrades_rolls_back_and_removes() {
         "{}",
         String::from_utf8_lossy(&after_remove.stderr)
     );
+}
+
+#[test]
+fn public_plugin_lifecycle_uses_one_plugin_unit() {
+    let _plugin_test_guard = plugin_test_guard();
+    let workspace = tempfile::tempdir().unwrap();
+    let external = tempfile::tempdir().unwrap();
+    let bundles = tempfile::tempdir().unwrap();
+    copy_external_wasm_tool_v2_source(external.path());
+    let artifact = build_external_wasm_tool_v2(external.path());
+    let bundle = bundles.path().join("release");
+    build_source_plugin_bundle(&SourcePluginBuild {
+        package_manifest: external.path().join("Cargo.toml"),
+        wasm_module: artifact,
+        output: bundle.clone(),
+    })
+    .unwrap();
+
+    let invalid_plan = workspace.path().join("invalid-plan.json");
+    fs::write(&invalid_plan, b"{}\n").unwrap();
+    let rejected = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_RESOLVED_PLAN", &invalid_plan)
+        .args(["plugins", "add"])
+        .arg(&bundle)
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(
+        !workspace
+            .path()
+            .join(".lenso/plugins/active-set.json")
+            .exists()
+    );
+
+    let add = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["plugins", "add"])
+        .arg(&bundle)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(add.stdout).unwrap(),
+        "Plugin dev.example.wasm-text-tools@1.0.0 added.\n"
+    );
+    assert_external_text_tool_runs(workspace.path(), "after add");
+
+    let cargo_manifest = external.path().join("Cargo.toml");
+    let next_manifest = fs::read_to_string(&cargo_manifest).unwrap().replacen(
+        "version = \"1.0.0\"",
+        "version = \"2.0.0\"",
+        1,
+    );
+    fs::write(&cargo_manifest, next_manifest).unwrap();
+    let artifact = build_external_wasm_tool_v2(external.path());
+    let next_bundle = bundles.path().join("release-2");
+    build_source_plugin_bundle(&SourcePluginBuild {
+        package_manifest: cargo_manifest,
+        wasm_module: artifact,
+        output: next_bundle.clone(),
+    })
+    .unwrap();
+    let update = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["plugins", "add"])
+        .arg(next_bundle)
+        .output()
+        .unwrap();
+    assert!(
+        update.status.success(),
+        "{}",
+        String::from_utf8_lossy(&update.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(update.stdout).unwrap(),
+        "Plugin dev.example.wasm-text-tools@2.0.0 added.\n"
+    );
+    assert_external_text_tool_runs(workspace.path(), "after update");
+
+    for (command, expected_status) in [
+        ("disable", "disabled"),
+        ("enable", "enabled"),
+        ("remove", "removed"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(workspace.path())
+            .env("LENSO_RESOLVED_PLAN", plan_path())
+            .args(["plugins", command, "dev.example.wasm-text-tools"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("Plugin dev.example.wasm-text-tools {expected_status}.\n")
+        );
+    }
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert_eq!(String::from_utf8(status.stdout).unwrap(), "No plugins.\n");
 }
 
 #[test]
@@ -2054,15 +2178,72 @@ fn write_tool_bundle_release(root: &Path, release_version: &str) -> String {
 fn copy_external_wasm_tool_source(destination: &Path) {
     let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/external-plugins/wasm-text-tools");
-    fs::create_dir_all(destination.join("guest/src")).unwrap();
-    fs::create_dir_all(destination.join("guest/wit")).unwrap();
-    for relative in [
-        "guest/Cargo.toml",
-        "guest/Cargo.lock",
-        "guest/src/lib.rs",
-        "guest/wit/world.wit",
-        "lenso-plugin.template.json",
-    ] {
+    fs::create_dir_all(destination.join("src")).unwrap();
+    fs::create_dir_all(destination.join("wit")).unwrap();
+    for relative in ["Cargo.toml", "Cargo.lock", "src/lib.rs", "wit/world.wit"] {
+        fs::copy(source.join(relative), destination.join(relative)).unwrap();
+    }
+    write_external_wasm_tool_template(destination);
+}
+
+fn write_external_wasm_tool_template(destination: &Path) {
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "plugin_id": "dev.example.wasm-text-tools",
+        "release_version": "1.0.0",
+        "artifacts": [{
+            "id": "tool-wasm",
+            "kind": "wasm_component",
+            "digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "size": 0,
+            "media_type": "application/wasm",
+            "path": "plugin.wasm",
+            "targets": ["aarch64-linux", "aarch64-macos", "x86_64-linux", "x86_64-macos"]
+        }],
+        "module_contributions": [{
+            "id": "text-tools",
+            "package_id": "dev.example.wasm-text-tools",
+            "configuration_schema_digest": "sha256:cd1a463c46d6264134447db17a8c3c7abe5b9a2488c6d759fea66da1f96b133e",
+            "provides": [{
+                "capability_id": "lenso.agent.tool-provider@2",
+                "descriptor_version": "2.0.0",
+                "descriptor_digest": "sha256:96374f17b271da64adeaba5201883a79e9a5233b9217d84d3bc8cbc5477c4e46",
+                "request_operations": ["catalog", "execute"]
+            }],
+            "requires": [],
+            "implementations": [{
+                "id": "wasm",
+                "artifact": "tool-wasm",
+                "built_in_factory": null,
+                "entrypoint": "plugin",
+                "execution_class": "lenso.wasm-component@1",
+                "targets": ["aarch64-linux", "aarch64-macos", "x86_64-linux", "x86_64-macos"],
+                "profiles": ["agent-tool-provider-v2"],
+                "support_channel": "experimental",
+                "trust": "isolated"
+            }],
+            "permission_request_ids": [],
+            "state": null
+        }],
+        "data_contributions": [],
+        "permission_requests": [],
+        "features": [],
+        "binding_templates": [],
+        "product_metadata": []
+    });
+    fs::write(
+        destination.join("lenso-plugin.template.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
+fn copy_external_wasm_tool_v2_source(destination: &Path) {
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/external-plugins/wasm-text-tools");
+    fs::create_dir_all(destination.join("src")).unwrap();
+    fs::create_dir_all(destination.join("wit")).unwrap();
+    for relative in ["Cargo.toml", "Cargo.lock", "src/lib.rs", "wit/world.wit"] {
         fs::copy(source.join(relative), destination.join(relative)).unwrap();
     }
 }
@@ -2121,7 +2302,7 @@ fn build_external_wasm_tool(source: &Path) -> std::path::PathBuf {
             "wasm32-unknown-unknown",
             "--manifest-path",
         ])
-        .arg(source.join("guest/Cargo.toml"))
+        .arg(source.join("Cargo.toml"))
         .arg("--target-dir")
         .arg(&target)
         .output()
@@ -2131,7 +2312,30 @@ fn build_external_wasm_tool(source: &Path) -> std::path::PathBuf {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    target.join("wasm32-unknown-unknown/release/external_wasm_text_tools.wasm")
+    target.join("wasm32-unknown-unknown/release/dev_example_wasm_text_tools.wasm")
+}
+
+fn build_external_wasm_tool_v2(source: &Path) -> std::path::PathBuf {
+    let target = source.join("target");
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "build",
+            "--release",
+            "--target",
+            "wasm32-unknown-unknown",
+            "--manifest-path",
+        ])
+        .arg(source.join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    target.join("wasm32-unknown-unknown/release/dev_example_wasm_text_tools.wasm")
 }
 
 fn build_external_wasm_workspace_reader(source: &Path) -> std::path::PathBuf {

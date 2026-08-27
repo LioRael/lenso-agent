@@ -6,10 +6,13 @@ use std::{
 };
 
 use lenso_app_plan::{CapabilityBinding, ModuleInstancePlan, ResolvedAppPlan};
+use lenso_plugin_bundle::{PluginManifestV2, verify_bundle_directory};
 use lenso_plugin_control_plane::{
-    AdmissionPolicy, AdmissionReceipt, ApprovedGrant, ArtifactSource, CanonicalDocument,
-    ControlPlaneError, LockedInstance, LockedPlugin, ModuleContribution, NoArtifactSource,
-    PluginBundle, PluginManifest, PluginSetLock, PluginStore, sha256_digest,
+    AdmissionPolicy, AdmissionReceipt, ApprovedGrant, ArtifactDeclaration, ArtifactKind,
+    ArtifactSource, CanonicalDocument, CapabilityDeclaration, ControlPlaneError,
+    ImplementationVariant, LockedInstance, LockedPlugin, ModuleContribution, NoArtifactSource,
+    PluginBundle, PluginManifest, PluginSetLock, PluginStore, SupportChannel, TrustLevel,
+    sha256_digest,
 };
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +27,7 @@ use crate::{
 const APP_ID: &str = "lenso.agent.harness";
 const ACTIVE_SET_FILE: &str = "active-set.json";
 const ACTIVE_SET_DIRECTORY: &str = "active-sets";
+const DISABLED_RELEASES_FILE: &str = "disabled-releases.json";
 const RECOVERY_AUTHORITY_DIRECTORY: &str = "generation-authorities";
 const MANIFEST_FILE: &str = "lenso-plugin.json";
 const PACKAGED_BUNDLE_EXTENSION: &str = "lenso-plugin";
@@ -39,7 +43,6 @@ const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH: usize = 32;
 const MAX_EVIDENCE_BYTES: usize = 4_096;
 const MAX_PLUGIN_CONFIGURATION_BYTES: u64 = 256 * 1024;
-#[cfg(test)]
 const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"type":"object"}"#;
 #[cfg(test)]
 const TOOL_PROVIDER_DESCRIPTOR: &[u8] =
@@ -63,6 +66,26 @@ const CODEX_AUTH_DESCRIPTOR: &[u8] =
 
 #[derive(Debug)]
 pub enum PluginCommand {
+    Help,
+    List {
+        root: PathBuf,
+    },
+    Add {
+        bundle: PathBuf,
+        root: PathBuf,
+    },
+    PublicEnable {
+        plugin_id: String,
+        root: PathBuf,
+    },
+    PublicDisable {
+        plugin_id: String,
+        root: PathBuf,
+    },
+    PublicRemove {
+        plugin_id: String,
+        root: PathBuf,
+    },
     Enable {
         bundled: String,
         evidence: Option<String>,
@@ -120,14 +143,39 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
         return Err(usage());
     };
     match command.as_str() {
+        "help" | "--help" | "-h" if arguments.len() == 1 => Ok(PluginCommand::Help),
+        "list" => parse_root_only(&arguments[1..]).map(|root| PluginCommand::List { root }),
+        "add" => parse_public_plugin_path(&arguments[1..]),
+        "enable" if is_public_plugin_id_command(&arguments[1..]) => {
+            parse_public_plugin_id(&arguments[1..], |plugin_id, root| {
+                PluginCommand::PublicEnable { plugin_id, root }
+            })
+        }
+        "disable" if is_public_plugin_id_command(&arguments[1..]) => {
+            parse_public_plugin_id(&arguments[1..], |plugin_id, root| {
+                PluginCommand::PublicDisable { plugin_id, root }
+            })
+        }
         "enable" => parse_enable(&arguments[1..]),
         "disable" => parse_disable(&arguments[1..]),
         "available" if arguments.len() == 1 => Ok(PluginCommand::Available),
         "pack" => parse_pack(&arguments[1..]),
         "install" => parse_install(&arguments[1..]),
+        "remove" if is_public_plugin_id_command(&arguments[1..]) => {
+            parse_public_plugin_id(&arguments[1..], |plugin_id, root| {
+                PluginCommand::PublicRemove { plugin_id, root }
+            })
+        }
         "remove" => parse_remove(&arguments[1..]),
         "upgrade" => parse_upgrade(&arguments[1..]),
         "rollback" => parse_rollback(&arguments[1..]),
+        "status"
+            if !arguments[1..]
+                .iter()
+                .any(|argument| argument == "--verbose") =>
+        {
+            parse_root_only(&arguments[1..]).map(|root| PluginCommand::List { root })
+        }
         "status" => parse_status(&arguments[1..]),
         "history" => parse_history(&arguments[1..]),
         "inspect" => parse_inspect(&arguments[1..]),
@@ -137,6 +185,21 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
 
 pub async fn run(command: PluginCommand) -> Result<(), String> {
     match command {
+        PluginCommand::Help => {
+            println!("{}", usage());
+            Ok(())
+        }
+        PluginCommand::List { root } => run_public_status(&root),
+        PluginCommand::Add { bundle, root } => run_add(&bundle, &root).await,
+        PluginCommand::PublicEnable { plugin_id, root } => {
+            run_public_enable(&plugin_id, &root).await
+        }
+        PluginCommand::PublicDisable { plugin_id, root } => {
+            run_public_disable(&plugin_id, &root).await
+        }
+        PluginCommand::PublicRemove { plugin_id, root } => {
+            run_public_remove(&plugin_id, &root).await
+        }
         PluginCommand::Enable {
             bundled,
             evidence,
@@ -275,6 +338,193 @@ fn run_status(root: &Path, verbose: bool) -> Result<(), String> {
     if verbose {
         println!("plugin-set: {}", authority.lock.digest());
     }
+    Ok(())
+}
+
+fn run_public_status(root: &Path) -> Result<(), String> {
+    if let Some(snapshot) = source_selection()? {
+        let source_root = source_plugin_root(&snapshot, root)?;
+        let mut plugins = BTreeMap::<String, (String, &'static str)>::new();
+        for selection in &snapshot.selection.enabled {
+            let name = bundled_selection_name(selection)?;
+            let bundle = bundled_plugin(name)?;
+            let manifest =
+                CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+                    .map_err(control_error)?;
+            plugins.insert(
+                manifest.value().plugin_id.clone(),
+                (manifest.value().release_version.clone(), "enabled"),
+            );
+        }
+        let installed = source_store_is_active(&source_root)?
+            .then(|| load_generation_authority(&source_root))
+            .transpose()?;
+        if let Some(authority) = &installed {
+            for plugin in authority.lock.value().plugins.clone() {
+                plugins.insert(plugin.plugin_id, (plugin.release_version, "enabled"));
+            }
+        }
+        let discovery = source_generation_snapshot_with_explicit(
+            &snapshot.selection,
+            &snapshot.definition_path,
+            &source_discovery_root(&snapshot),
+            &source_root,
+            installed,
+        )?;
+        let blocked = discovery
+            .blocked
+            .iter()
+            .map(|blocked| blocked.entry.clone())
+            .collect::<BTreeSet<_>>();
+        for plugin in discovery.discovered {
+            plugins.insert(plugin.plugin_id, (plugin.release_version, "enabled"));
+        }
+        for release in load_disabled_releases(&source_root)?.releases.into_values() {
+            plugins.insert(
+                release.plugin_id,
+                (release.manifest.release_version, "disabled"),
+            );
+        }
+        if plugins.is_empty() && blocked.is_empty() {
+            println!("No plugins.");
+        } else {
+            for (plugin_id, (release_version, state)) in plugins {
+                println!("{plugin_id}@{release_version}  {state}");
+            }
+            for entry in blocked {
+                println!("{entry}  blocked");
+            }
+        }
+        return Ok(());
+    }
+    let active = load_active_set(root)?;
+    let disabled = load_disabled_releases(root)?;
+    if active.releases.is_empty() && disabled.releases.is_empty() {
+        println!("No plugins.");
+        return Ok(());
+    }
+    for release in &active.releases {
+        println!(
+            "{}@{}  enabled",
+            release.plugin_id, release.manifest.release_version
+        );
+    }
+    for release in disabled.releases.values() {
+        println!(
+            "{}@{}  disabled",
+            release.plugin_id, release.manifest.release_version
+        );
+    }
+    Ok(())
+}
+
+async fn run_add(bundle: &Path, root: &Path) -> Result<(), String> {
+    let loaded = load_public_bundle_input(bundle)?;
+    let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &loaded.manifest)
+        .map_err(control_error)?;
+    let plugin_id = manifest.value().plugin_id.clone();
+    let release_version = manifest.value().release_version.clone();
+    if let Some(snapshot) = source_selection()? {
+        let source_root = source_plugin_root(&snapshot, root)?;
+        add_loaded_into_source_app(root, loaded, snapshot).await?;
+        forget_disabled_release(&source_root, &plugin_id)?;
+    } else if load_active_set(root)?
+        .lock
+        .plugins
+        .iter()
+        .any(|plugin| plugin.plugin_id == plugin_id)
+    {
+        add_loaded(root, loaded, true).await?;
+    } else {
+        add_loaded(root, loaded, false).await?;
+    }
+    if source_selection()?.is_none() {
+        forget_disabled_release(root, &plugin_id)?;
+    }
+    println!("Plugin {plugin_id}@{release_version} added.");
+    Ok(())
+}
+
+async fn run_public_disable(plugin_id: &str, root: &Path) -> Result<(), String> {
+    if let Some(snapshot) = source_selection()? {
+        if bundled_name_for_plugin_id(plugin_id).is_some() || bundled_plugin_id(plugin_id).is_some()
+        {
+            run_disable(plugin_id, None, root).await?;
+            println!("Plugin {plugin_id} disabled.");
+            return Ok(());
+        }
+        let source_root = source_plugin_root(&snapshot, root)?;
+        let release = load_active_set(&source_root)?
+            .releases
+            .into_iter()
+            .find(|release| release.plugin_id == plugin_id)
+            .ok_or_else(|| format!("Plugin `{plugin_id}` is not enabled"))?;
+        remove_from_source_app(root, plugin_id, snapshot).await?;
+        remember_disabled_release(&source_root, release)?;
+        println!("Plugin {plugin_id} disabled.");
+        return Ok(());
+    }
+    let release = load_active_set(root)?
+        .releases
+        .into_iter()
+        .find(|release| release.plugin_id == plugin_id)
+        .ok_or_else(|| format!("Plugin `{plugin_id}` is not enabled"))?;
+    disable(root, plugin_id, &crate::plan_bytes(None)?).await?;
+    remember_disabled_release(root, release)?;
+    println!("Plugin {plugin_id} disabled.");
+    Ok(())
+}
+
+async fn run_public_enable(plugin_id: &str, root: &Path) -> Result<(), String> {
+    if let Some(snapshot) = source_selection()? {
+        if bundled_name_for_plugin_id(plugin_id).is_some() || bundled_plugin_id(plugin_id).is_some()
+        {
+            return run_source_enable(plugin_id, &crate::plan_bytes(None)?, root, snapshot).await;
+        }
+        enable_disabled_into_source_app(root, plugin_id, snapshot).await?;
+        println!("Plugin {plugin_id} enabled.");
+        return Ok(());
+    }
+    enable_disabled(root, plugin_id, &crate::plan_bytes(None)?).await?;
+    forget_disabled_release(root, plugin_id)?;
+    println!("Plugin {plugin_id} enabled.");
+    Ok(())
+}
+
+async fn run_public_remove(plugin_id: &str, root: &Path) -> Result<(), String> {
+    if let Some(snapshot) = source_selection()? {
+        let source_root = source_plugin_root(&snapshot, root)?;
+        if load_active_set(&source_root)?
+            .lock
+            .plugins
+            .iter()
+            .any(|plugin| plugin.plugin_id == plugin_id)
+        {
+            remove_from_source_app(root, plugin_id, snapshot).await?;
+        } else if !load_disabled_releases(&source_root)?
+            .releases
+            .contains_key(plugin_id)
+        {
+            return Err(format!("Plugin `{plugin_id}` is not present"));
+        }
+        forget_disabled_release(&source_root, plugin_id)?;
+        println!("Plugin {plugin_id} removed.");
+        return Ok(());
+    } else if load_active_set(root)?
+        .lock
+        .plugins
+        .iter()
+        .any(|plugin| plugin.plugin_id == plugin_id)
+    {
+        disable(root, plugin_id, &crate::plan_bytes(None)?).await?;
+    } else if !load_disabled_releases(root)?
+        .releases
+        .contains_key(plugin_id)
+    {
+        return Err(format!("Plugin `{plugin_id}` is not present"));
+    }
+    forget_disabled_release(root, plugin_id)?;
+    println!("Plugin {plugin_id} removed.");
     Ok(())
 }
 
@@ -572,6 +822,37 @@ fn parse_install(arguments: &[String]) -> Result<PluginCommand, String> {
     })
 }
 
+fn parse_public_plugin_path(arguments: &[String]) -> Result<PluginCommand, String> {
+    let (bundle, root) = parse_public_subject(arguments)?;
+    Ok(PluginCommand::Add {
+        bundle: PathBuf::from(bundle),
+        root,
+    })
+}
+
+fn parse_public_plugin_id(
+    arguments: &[String],
+    command: impl FnOnce(String, PathBuf) -> PluginCommand,
+) -> Result<PluginCommand, String> {
+    let (plugin_id, root) = parse_public_subject(arguments)?;
+    Ok(command(plugin_id, root))
+}
+
+fn parse_public_subject(arguments: &[String]) -> Result<(String, PathBuf), String> {
+    match arguments {
+        [subject] if !subject.starts_with('-') => Ok((subject.clone(), default_root())),
+        [subject, flag, root] if !subject.starts_with('-') && flag == "--root" => {
+            Ok((subject.clone(), PathBuf::from(root)))
+        }
+        _ => Err(usage()),
+    }
+}
+
+fn is_public_plugin_id_command(arguments: &[String]) -> bool {
+    matches!(arguments, [subject] if !subject.starts_with('-'))
+        || matches!(arguments, [subject, flag, _] if !subject.starts_with('-') && flag == "--root")
+}
+
 fn parse_pack(arguments: &[String]) -> Result<PluginCommand, String> {
     let mut bundle = None;
     let mut output = None;
@@ -754,7 +1035,8 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <available|pack --bundle <directory> --output <file.lenso-plugin>|enable <text-tools|workspace-edit|skills|local-process|subagent|code-mode|approval|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory-or-file.lenso-plugin> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory-or-file.lenso-plugin> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--verbose] [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "Manage Plugins:\n  list\n  add <bundle>\n  status\n  enable <plugin-id>\n  disable <plugin-id>\n  remove <plugin-id>\n\nAdvanced storage location:\n  --root <directory>"
+        .to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -926,6 +1208,12 @@ struct ActiveRelease {
     admission_receipt_digest: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     configuration_overrides: PluginConfigurationOverrides,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct DisabledReleases {
+    releases: BTreeMap<String, ActiveRelease>,
 }
 
 #[derive(Debug)]
@@ -1247,6 +1535,134 @@ async fn install_into_source_app(
     record_active_set(root, &candidate)?;
     write_active_set(root, &candidate)?;
     Ok(outcome)
+}
+
+async fn add_loaded(root: &Path, bundle: LoadedBundle, replacing: bool) -> Result<(), String> {
+    let plan = crate::plan_bytes(None)?;
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let candidate = if replacing {
+        let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+            .map_err(control_error)?;
+        validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
+        let selected =
+            validate_selection(manifest.value(), &[], &profiles).map_err(control_error)?;
+        let (evidence, _) = admission_evidence(
+            None,
+            &profiles,
+            manifest.value(),
+            &selected.module_contribution_ids,
+        )?;
+        let receipt = store
+            .admit(
+                &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
+                &LocalReviewPolicy {
+                    evidence: &evidence,
+                    profiles: &profiles,
+                },
+            )
+            .map_err(control_error)?;
+        replacement_active_set(
+            &current,
+            &manifest,
+            receipt.digest(),
+            Vec::new(),
+            &store,
+            &profiles,
+        )?
+    } else {
+        build_install_candidate(&store, &profiles, &current, bundle, None, Vec::new())?.0
+    };
+    let current_authority = generation_authority_from_active(root, current.value().clone())?;
+    let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
+    crate::generation::ready_check_maintenance_transition(
+        &plan,
+        current_authority,
+        candidate_authority,
+        root,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)
+}
+
+async fn add_loaded_into_source_app(
+    root: &Path,
+    bundle: LoadedBundle,
+    snapshot: SourceSelectionSnapshot,
+) -> Result<(), String> {
+    let root = source_plugin_root(&snapshot, root)?;
+    let root = root.as_path();
+    let plan = crate::plan_bytes(None)?;
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+        .map_err(control_error)?;
+    let replacing = current
+        .value()
+        .lock
+        .plugins
+        .iter()
+        .any(|plugin| plugin.plugin_id == manifest.value().plugin_id);
+    let candidate = if replacing {
+        let selected =
+            validate_selection(manifest.value(), &[], &profiles).map_err(control_error)?;
+        let (evidence, _) = admission_evidence(
+            None,
+            &profiles,
+            manifest.value(),
+            &selected.module_contribution_ids,
+        )?;
+        let receipt = store
+            .admit(
+                &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
+                &LocalReviewPolicy {
+                    evidence: &evidence,
+                    profiles: &profiles,
+                },
+            )
+            .map_err(control_error)?;
+        replacement_active_set(
+            &current,
+            &manifest,
+            receipt.digest(),
+            Vec::new(),
+            &store,
+            &profiles,
+        )?
+    } else {
+        build_install_candidate(&store, &profiles, &current, bundle, None, Vec::new())?.0
+    };
+    let discovery_root = source_discovery_root(&snapshot);
+    let authority = |active: &CanonicalDocument<ActivePluginSet>| {
+        source_generation_snapshot_with_explicit(
+            &snapshot.selection,
+            &snapshot.definition_path,
+            &discovery_root,
+            root,
+            Some(generation_authority_from_document(
+                PluginStore::open(root.join("store")).map_err(control_error)?,
+                active,
+            )?),
+        )
+        .map(|snapshot| snapshot.authority)
+    };
+    crate::generation::ready_check_source_transition(
+        &plan,
+        authority(&current)?,
+        authority(&candidate)?,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)
 }
 
 async fn enable_loaded(
@@ -2356,6 +2772,94 @@ async fn disable(root: &Path, plugin_id: &str, plan: &[u8]) -> Result<DisableOut
     })
 }
 
+async fn enable_disabled(root: &Path, plugin_id: &str, plan: &[u8]) -> Result<(), String> {
+    let disabled = load_disabled_releases(root)?;
+    let release = disabled
+        .releases
+        .get(plugin_id)
+        .ok_or_else(|| format!("Plugin `{plugin_id}` is not disabled"))?;
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let manifest = CanonicalDocument::from_value(MANIFEST_FILE, release.manifest.clone())
+        .map_err(control_error)?;
+    let candidate = replacement_active_set(
+        &current,
+        &manifest,
+        &release.admission_receipt_digest,
+        Vec::new(),
+        &store,
+        &profiles,
+    )?;
+    let current_authority = generation_authority_from_active(root, current.value().clone())?;
+    let candidate_authority = generation_authority_from_active(root, candidate.value().clone())?;
+    crate::generation::ready_check_maintenance_transition(
+        plan,
+        current_authority,
+        candidate_authority,
+        root,
+    )
+    .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)
+}
+
+async fn enable_disabled_into_source_app(
+    root: &Path,
+    plugin_id: &str,
+    snapshot: SourceSelectionSnapshot,
+) -> Result<(), String> {
+    let source_root = source_plugin_root(&snapshot, root)?;
+    let disabled = load_disabled_releases(&source_root)?;
+    let release = disabled
+        .releases
+        .get(plugin_id)
+        .ok_or_else(|| format!("Plugin `{plugin_id}` is not disabled"))?;
+    let plan = crate::plan_bytes(None)?;
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(&source_root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(source_root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(&source_root)?, &store, &profiles)?;
+    let manifest = CanonicalDocument::from_value(MANIFEST_FILE, release.manifest.clone())
+        .map_err(control_error)?;
+    let candidate = replacement_active_set(
+        &current,
+        &manifest,
+        &release.admission_receipt_digest,
+        Vec::new(),
+        &store,
+        &profiles,
+    )?;
+    let discovery_root = source_discovery_root(&snapshot);
+    let authority = |active: &CanonicalDocument<ActivePluginSet>| {
+        source_generation_snapshot_with_explicit(
+            &snapshot.selection,
+            &snapshot.definition_path,
+            &discovery_root,
+            &source_root,
+            Some(generation_authority_from_document(
+                PluginStore::open(source_root.join("store")).map_err(control_error)?,
+                active,
+            )?),
+        )
+        .map(|snapshot| snapshot.authority)
+    };
+    crate::generation::ready_check_source_transition(
+        &plan,
+        authority(&current)?,
+        authority(&candidate)?,
+    )
+    .await?;
+    record_active_set(&source_root, &current)?;
+    record_active_set(&source_root, &candidate)?;
+    write_active_set(&source_root, &candidate)?;
+    forget_disabled_release(&source_root, plugin_id)
+}
+
 async fn upgrade(
     root: &Path,
     bundle_root: &Path,
@@ -3398,6 +3902,187 @@ fn load_bundle_input(path: &Path) -> Result<LoadedBundle, String> {
     }
 }
 
+fn load_public_bundle_input(path: &Path) -> Result<LoadedBundle, String> {
+    let bundle = load_bundle_input(path)?;
+    let temporary;
+    let verification_root = if path.is_dir() {
+        path
+    } else {
+        temporary = tempfile::tempdir()
+            .map_err(|error| format!("failed to stage Plugin verification: {error}"))?;
+        fs::write(temporary.path().join(MANIFEST_FILE), &bundle.manifest)
+            .map_err(|error| format!("failed to stage Plugin Manifest: {error}"))?;
+        for (relative, bytes) in &bundle.files {
+            let destination = temporary.path().join(relative);
+            if let Some(parent) = destination.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| format!("failed to stage Plugin file: {error}"))?;
+            }
+            fs::write(destination, bytes)
+                .map_err(|error| format!("failed to stage Plugin file: {error}"))?;
+        }
+        temporary.path()
+    };
+    let verified = verify_bundle_directory(verification_root)
+        .map_err(|error| format!("Plugin Bundle is invalid: {error}"))?;
+    let schema_version = serde_json::from_slice::<serde_json::Value>(&bundle.manifest)
+        .ok()
+        .and_then(|manifest| {
+            manifest
+                .get("schema_version")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .ok_or_else(|| "Plugin Manifest schema_version is missing".to_owned())?;
+    if schema_version == 1 {
+        return Ok(bundle);
+    }
+    if schema_version != 2 {
+        return Err(format!(
+            "unsupported Plugin Manifest schema version {schema_version}"
+        ));
+    }
+    let source = serde_json::from_slice::<PluginManifestV2>(&bundle.manifest)
+        .map_err(|error| format!("V2 Plugin Manifest is invalid: {error}"))?;
+    if verified.plugin_id != source.plugin_id || verified.release_version != source.release_version
+    {
+        return Err("verified Plugin identity does not match its source Manifest".to_owned());
+    }
+    lower_source_plugin(source, bundle.files)
+}
+
+fn lower_source_plugin(
+    source: PluginManifestV2,
+    files: BTreeMap<String, Vec<u8>>,
+) -> Result<LoadedBundle, String> {
+    validate_source_tool_descriptor(&source.entry.descriptor)?;
+    let artifact_id = "plugin-component".to_owned();
+    let contribution_id = "plugin-entry".to_owned();
+    let manifest = PluginManifest {
+        schema_version: 1,
+        plugin_id: source.plugin_id.clone(),
+        release_version: source.release_version,
+        artifacts: vec![ArtifactDeclaration {
+            id: artifact_id.clone(),
+            kind: ArtifactKind::WasmComponent,
+            digest: source.artifact.digest,
+            size: source.artifact.size,
+            media_type: source.artifact.media_type,
+            path: source.artifact.path,
+            targets: vec![
+                "aarch64-linux".to_owned(),
+                "aarch64-macos".to_owned(),
+                "x86_64-linux".to_owned(),
+                "x86_64-macos".to_owned(),
+            ],
+        }],
+        module_contributions: vec![ModuleContribution {
+            id: contribution_id,
+            package_id: source.plugin_id,
+            configuration_schema_digest: sha256_digest(EMPTY_CONFIGURATION_SCHEMA),
+            provides: vec![CapabilityDeclaration {
+                capability_id: "lenso.agent.tool-provider@2".to_owned(),
+                descriptor_version: "2.0.0".to_owned(),
+                descriptor_digest:
+                    "sha256:96374f17b271da64adeaba5201883a79e9a5233b9217d84d3bc8cbc5477c4e46"
+                        .to_owned(),
+                request_operations: vec!["catalog".to_owned(), "execute".to_owned()],
+                operation_kinds: BTreeMap::new(),
+            }],
+            requires: Vec::new(),
+            implementations: vec![ImplementationVariant {
+                id: "wasm".to_owned(),
+                artifact: Some(artifact_id),
+                built_in_factory: None,
+                entrypoint: "plugin".to_owned(),
+                execution_class: "lenso.wasm-component@1".to_owned(),
+                targets: vec![
+                    "aarch64-linux".to_owned(),
+                    "aarch64-macos".to_owned(),
+                    "x86_64-linux".to_owned(),
+                    "x86_64-macos".to_owned(),
+                ],
+                profiles: vec!["agent-tool-provider-v2".to_owned()],
+                support_channel: SupportChannel::Experimental,
+                trust: TrustLevel::Isolated,
+            }],
+            permission_request_ids: Vec::new(),
+            state: None,
+        }],
+        data_contributions: Vec::new(),
+        permission_requests: Vec::new(),
+        features: Vec::new(),
+        binding_templates: Vec::new(),
+        product_metadata: Vec::new(),
+    };
+    let manifest = CanonicalDocument::from_value(MANIFEST_FILE, manifest).map_err(control_error)?;
+    Ok(LoadedBundle {
+        manifest: manifest.bytes().to_vec(),
+        files,
+    })
+}
+
+fn validate_source_tool_descriptor(descriptor: &serde_json::Value) -> Result<(), String> {
+    let descriptor = descriptor
+        .as_object()
+        .ok_or_else(|| "Plugin entry descriptor must be an object".to_owned())?;
+    let abi = descriptor.get("abi").and_then(serde_json::Value::as_str);
+    let capabilities = descriptor
+        .get("capabilities")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Plugin entry must declare capabilities".to_owned())?;
+    if descriptor
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        != BTreeSet::from(["abi", "capabilities"])
+        || abi != Some("lenso.json-request@1")
+        || capabilities.len() != 1
+    {
+        return Err(
+            "Harness V1 accepts one request-only tool-provider entry with no dependencies"
+                .to_owned(),
+        );
+    }
+    let capability = capabilities[0]
+        .as_object()
+        .ok_or_else(|| "Plugin capability descriptor must be an object".to_owned())?;
+    let capability_id = capability
+        .get("capability_id")
+        .and_then(serde_json::Value::as_str);
+    let descriptor_version = capability
+        .get("descriptor_version")
+        .and_then(serde_json::Value::as_str);
+    let operations = capability
+        .get("request_operations")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|operations| {
+            operations
+                .iter()
+                .map(serde_json::Value::as_str)
+                .collect::<Option<Vec<_>>>()
+        })
+        .map(|operations| {
+            operations
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        });
+    if capability
+        .keys()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        != BTreeSet::from(["capability_id", "descriptor_version", "request_operations"])
+        || capability_id != Some("lenso.agent.tool-provider@2")
+        || descriptor_version != Some("2.0.0")
+        || operations.as_deref() != Some(&["catalog".to_owned(), "execute".to_owned()])
+    {
+        return Err(
+            "Harness V1 accepts exactly lenso.agent.tool-provider@2 catalog and execute".to_owned(),
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn pack_bundle(root: &Path, output: &Path) -> Result<String, String> {
     if !is_packaged_bundle_path(output) {
         return Err(format!(
@@ -3656,6 +4341,69 @@ fn load_active_set(root: &Path) -> Result<ActivePluginSet, String> {
     CanonicalDocument::<ActivePluginSet>::parse("active-set.json", &bytes)
         .map(CanonicalDocument::into_value)
         .map_err(control_error)
+}
+
+fn load_disabled_releases(root: &Path) -> Result<DisabledReleases, String> {
+    let path = root.join(DISABLED_RELEASES_FILE);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => return Err("disabled Plugin Releases are not a regular file".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DisabledReleases::default());
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect disabled Plugin Releases: {error}"
+            ));
+        }
+    }
+    let bytes = fs::read(path)
+        .map_err(|error| format!("failed to read disabled Plugin Releases: {error}"))?;
+    serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse disabled Plugin Releases: {error}"))
+}
+
+fn write_disabled_releases(root: &Path, disabled: &DisabledReleases) -> Result<(), String> {
+    fs::create_dir_all(root)
+        .map_err(|error| format!("failed to create Plugin authority root: {error}"))?;
+    let bytes = serde_json::to_vec(disabled)
+        .map_err(|error| format!("failed to encode disabled Plugin Releases: {error}"))?;
+    let destination = root.join(DISABLED_RELEASES_FILE);
+    let temporary = root.join(format!(
+        ".{DISABLED_RELEASES_FILE}.{}.tmp",
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(|error| format!("failed to create disabled Plugin transaction: {error}"))?;
+        file.write_all(&bytes)
+            .map_err(|error| format!("failed to write disabled Plugin transaction: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("failed to sync disabled Plugin transaction: {error}"))?;
+        fs::rename(&temporary, destination)
+            .map_err(|error| format!("failed to commit disabled Plugin transaction: {error}"))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(temporary);
+    }
+    result
+}
+
+fn remember_disabled_release(root: &Path, release: ActiveRelease) -> Result<(), String> {
+    let mut disabled = load_disabled_releases(root)?;
+    disabled.releases.insert(release.plugin_id.clone(), release);
+    write_disabled_releases(root, &disabled)
+}
+
+fn forget_disabled_release(root: &Path, plugin_id: &str) -> Result<(), String> {
+    let mut disabled = load_disabled_releases(root)?;
+    if disabled.releases.remove(plugin_id).is_some() {
+        write_disabled_releases(root, &disabled)?;
+    }
+    Ok(())
 }
 
 fn active_set_record_path(root: &Path, digest: &str) -> Result<PathBuf, String> {

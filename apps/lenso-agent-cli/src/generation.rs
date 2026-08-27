@@ -1997,7 +1997,7 @@ mod tests {
     use super::*;
     use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
     use lenso_kernel::StreamEvent;
-    use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
+    use lenso_plugin_bundle::{SourcePluginBuild, build_source_plugin_bundle};
 
     #[derive(Debug)]
     struct TerminalFailureRuntime {
@@ -3173,7 +3173,7 @@ mod tests {
                 "wasm32-unknown-unknown",
                 "--manifest-path",
             ])
-            .arg(source.join("guest/Cargo.toml"))
+            .arg(source.join("Cargo.toml"))
             .arg("--target-dir")
             .arg(&target)
             .output()
@@ -3183,25 +3183,17 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&build.stderr)
         );
-        let artifact = target.join("wasm32-unknown-unknown/release/external_wasm_text_tools.wasm");
+        let artifact =
+            target.join("wasm32-unknown-unknown/release/dev_example_wasm_text_tools.wasm");
         let output = directory.join("plugins/invalid-wasm");
-        build_bundle(&BundleBuild {
-            template: source.join("lenso-plugin.template.json"),
+        build_source_plugin_bundle(&SourcePluginBuild {
+            package_manifest: source.join("Cargo.toml"),
+            wasm_module: artifact,
             output: output.clone(),
-            artifact_sources: vec![ArtifactSource {
-                artifact_id: "tool-wasm".to_owned(),
-                path: artifact,
-            }],
         })
         .unwrap();
         let invalid = b"not a Wasm Component";
         fs::write(output.join("plugin.wasm"), invalid).unwrap();
-        let manifest_path = output.join("lenso-plugin.json");
-        let mut manifest: serde_json::Value =
-            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        manifest["artifacts"][0]["digest"] = sha256_digest(invalid).into();
-        manifest["artifacts"][0]["size"] = invalid.len().into();
-        fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
     }
 
     async fn run_turn_text(app: &AgentApp, input: &str) -> String {
