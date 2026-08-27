@@ -19,9 +19,10 @@ The Harness derives one bounded automatic local-admission path. It applies only
 when every selected executable contribution matches an existing product-owned
 Profile and is all of the following:
 
-- stable and trusted;
+- either stable and trusted Host-built code, or the exact experimental and
+  isolated Wasm Tool execution shape;
 - stateless and permission-free;
-- free of Capability dependencies and Artifact-backed implementations; and
+- free of Capability dependencies and Host imports; and
 - attached only by appending a provider to an existing `many` requirement.
 
 Passive Releases with no selected executable contribution use the same local
@@ -29,8 +30,9 @@ fast path. The Admission Receipt records the derived decision evidence rather
 than omitting evidence.
 
 Provider replacement, intra-Plugin dependencies, state, permissions,
-Artifact-backed execution, preview or experimental support, and any other
-Profile topology continue to require explicit `--evidence`.
+QuickJS or native Artifact-backed execution, Wasm with Host imports, preview
+support, and any other Profile topology continue to require explicit
+`--evidence`.
 
 During upgrade, `--expected-manifest` remains an optional explicit CAS guard.
 When it is omitted, the Host uses the active Manifest already validated while

@@ -153,8 +153,11 @@ not create more App files or modify reviewed source.
 
 Stable conservative Module defaults are locked into package-owned Descriptors.
 The App Definition records only product behavior, authority-bearing values, and
-overrides. Plan resolution materializes and validates one complete configuration
-for every selected Module before boot.
+overrides. Stateless Modules need no configuration file. The intended static
+Module authoring shape is one reviewed `config/modules/<instance>.toml` file
+referenced by `configuration_file` in the App Definition; that authoring-layer
+support is tracked separately. Plan resolution still materializes and validates
+one complete configuration for every selected Module before boot.
 
 Before boot, the Host validates the definition and selected Plugins, then
 resolves one immutable App Plan in memory for the candidate Generation. App
@@ -201,9 +204,14 @@ declared request/stream operation kinds when Plugin Manifests become Plans.
 
 The normal source-backed path expands bundled enabled IDs through the exact
 Host build, resolves the base Plan and Plugin contributions in memory, and
-stages an immutable Generation behind the existing Ready Gate. It creates no
-`.lenso/plugins` Store, Active Set, lock, Receipt, Plan, or Generation record.
-`plugins status` prints the exact local configuration path. Module graph,
+stages an immutable Generation behind the existing Ready Gate. Bundled-only
+selection creates no `.lenso/plugins` Store, Active Set, lock, Receipt, Plan,
+or Generation record. When a user installs a third-party Bundle, the Host
+retains that Release's immutable Store authority and merges it with the local
+bundled selection before resolving the same candidate Generation.
+`plugins status` prints the Plugin folder and a concise list of usable or
+problematic Plugins. `plugins status --verbose` adds the exact local
+configuration path and control-plane diagnostics. Module graph,
 binding, product behavior, and authority-bearing values remain in the reviewed
 `lenso.app.json`; stable implementation defaults come from locked Module
 Descriptors, and `lenso.local.toml` is not an arbitrary Module configuration
@@ -253,9 +261,122 @@ declared by that Manifest. Admission rejects undeclared files, symlinks, digest
 or size mismatches, unsupported selected targets, unregistered executable
 factories, privileged or stateful contributions, and unbounded review evidence.
 For exact Releases bundled with this Host, use `plugins enable <name>` and
-`plugins disable <name>`. Third-party acquisition, upgrade history, and durable
-rollback are not part of the source-backed slice; the legacy Store commands are
-rejected when a source App Definition is present.
+`plugins disable <name>`. `plugins install --bundle <directory>` and
+`plugins remove --plugin <id>` use the same source-backed App, Ready-check the
+combined bundled and third-party candidate, and leave the active selection
+unchanged when that candidate cannot start. Third-party upgrade history,
+operator-requested rollback, and Store inspection remain outside this first
+unified source-backed slice.
+
+For the narrow drop-in path, place either a packaged `.lenso-plugin` file or a
+Bundle directory beside the App Definition. The single-file path is the normal
+user workflow:
+
+```sh
+cargo run -p lenso-agent-cli -- plugins pack \
+  --bundle dist/my-tool \
+  --output my-tool.lenso-plugin
+cp my-tool.lenso-plugin plugins/
+```
+
+The Host reads the ZIP container directly without extracting executable files
+into the App tree. Removing the file unloads the Plugin through the same
+Generation switch. Directory Bundles remain useful during development:
+
+```text
+plugins/
+  my-tool/
+    lenso-plugin.json
+    tool.wasm
+```
+
+A Bundle can keep local Module settings in an adjacent file with the same stem:
+
+```text
+plugins/
+  my-tool.lenso-plugin
+  my-tool.config.toml
+```
+
+```toml
+[modules.my-tool]
+max_output_bytes = 65536
+```
+
+The Module contribution ID after `modules` must be selected by that Bundle.
+The Host merges the patch over its exact Profile default, permits only
+authority-reducing values, validates the complete value against the Module's
+package-owned JSON Schema, and places that complete configuration in the
+immutable Plugin lock. The sidecar does not make an otherwise governed Bundle
+eligible for automatic loading. A Module with no registered configurable
+fields needs no sidecar.
+
+The Host discovers these entries in deterministic name order at startup.
+Packaged files and directories share the same deterministic Plugin-ID conflict
+checks and Admission policy; a package suffix never self-authorizes its
+contents. Packages accept only Stored or Deflated entries with portable,
+root-confined paths. Encryption, symlinks, duplicate paths, file/directory
+collisions, excessive depth, file count, archive size, or expanded size fail
+closed before Admission.
+While a long-lived TUI or channel Host is running, native filesystem events
+wake reconciliation after the filesystem has been quiet for 200 milliseconds;
+continuous writes are bounded by a two-second settling limit. A low-frequency
+two-second consistency scan covers missed, coalesced, or unavailable events.
+Every wakeup rebuilds and fingerprints the complete Desired State, so event
+paths and event kinds never become authority. A
+permission-free, stateless, isolated Wasm Tool that only appends to the existing
+Tool collection is admitted automatically, staged as a fresh immutable
+Generation, and must pass the Ready Gate before the routing epoch switches.
+Existing Turns keep their old Generation Lease until they drain. Removing the
+Bundle file or directory stages the inverse switch without writing `active-set.json`.
+Editing its `.config.toml` sidecar follows the same path and creates a new
+Desired State and Generation; it never patches the running Kernel in place.
+Each online switch retains its exact predecessor for a one-second failure
+cushion. If the Runner reports an immediate terminal failure during that
+window, the Controller fences it and atomically restores the predecessor;
+ordinary Turn or Tool errors do not roll back the whole App. A later edit never
+rolls back through an older edge: if it selects an older still-live snapshot,
+reconciliation waits for bounded maintenance to retire that snapshot and then
+stages the requested state normally.
+
+For atomic directory publication, copy or extract the complete Bundle under a hidden
+immediate child and rename it only when complete. Hidden entries are an inert
+staging namespace and never appear as discovered or quarantined Plugins:
+
+```sh
+cp -R dist/my-tool plugins/.staging-my-tool
+mv plugins/.staging-my-tool plugins/my-tool
+```
+
+The rename must stay on the same filesystem to provide the atomic visibility
+guarantee. Direct `cp -R ... plugins/my-tool` remains supported; the quiet
+period suppresses ordinary short copy bursts, but it cannot make an arbitrarily
+slow or paused non-atomic copy transactional.
+
+`plugins install --bundle` and `plugins upgrade --bundle` accept either a
+directory or a `.lenso-plugin` file when broader reviewed governance is
+required. `plugins pack` writes through a temporary file and atomically
+publishes or replaces the completed package. Re-running the same command is the
+normal edit-and-reload loop; the watcher never observes a partially written
+archive produced by this command.
+
+`plugins status` reports the Plugin folder, usable Plugins, and problems in
+ordinary Plugin language. `plugins status --verbose` additionally reports the
+Desired State digest and durable surface Controller diagnostics for debugging.
+If native watching degrades, the TUI reports it while the
+consistency scan continues. TUI, Telegram, Discord, and combined-channel Hosts retain exact
+Generation Specs and Plugin authority before switching, so graceful restart or
+an unclean Host exit can recover the same active Generation. Controller state
+is namespaced per surface. The one-turn headless CLI remains process-local and
+does not create durable state solely for recovery it cannot use.
+
+QuickJS, native code, Provider replacement, Host imports, permissions, state,
+and non-isolated shapes are not auto-loaded. Discovery quarantines and reports
+them as blocked while the current App Generation remains routable;
+move them outside `plugins/` and use `plugins install --bundle ... --evidence
+...` when the Host's reviewed profile permits that shape. Duplicate Plugin IDs
+across bundled selections, explicit installs, or discovery fail closed rather
+than relying on load order.
 
 ```sh
 cargo run -p lenso-agent-cli -- plugins install \
@@ -285,6 +406,12 @@ cargo run -p lenso-agent-cli -- plugins install \
   --bundle dist/external-wasm-text-tools \
   --evidence local-review
 
+# Or use the isolated, permission-free drop-in path.
+mkdir -p plugins
+cp -R dist/external-wasm-text-tools plugins/text-tools
+cargo run -p lenso-agent-cli -- plugins status
+cargo run -p lenso-agent-cli -- "Use the text Plugin to uppercase Lenso plugin."
+
 # The network example follows the same build flow. Its Manifest must request
 # exact origins, and the base App must select those same origins in
 # the lenso.agent.http-fetch Provider configuration before Ready succeeds.
@@ -309,6 +436,10 @@ cargo run -p lenso-agent-cli -- generations inspect \
   --digest sha256:<generation-spec-digest>
 
 cargo run -p lenso-agent-cli -- generations gc-preview
+
+# Rebuild reachability under exclusive Host and Plugin authority fences, then
+# remove only unreferenced Generation Specs and recovery authority.
+cargo run -p lenso-agent-cli -- generations gc --apply
 
 cargo run -p lenso-agent-cli -- sessions provenance \
   --session <session-id>

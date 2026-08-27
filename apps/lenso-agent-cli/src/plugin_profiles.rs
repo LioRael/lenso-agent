@@ -595,21 +595,45 @@ impl PluginProfileCatalog {
                     ),
                 })?;
             let profile = self.matching_profile(contribution, target)?;
+            let trusted_built_in = profile.support_channel == SupportChannel::Stable
+                && profile.trust == TrustLevel::Trusted
+                && contribution
+                    .implementations
+                    .iter()
+                    .all(|implementation| implementation.artifact.is_none());
+            let isolated_wasm = profile.support_channel == SupportChannel::Experimental
+                && profile.trust == TrustLevel::Isolated
+                && profile.execution_class == WASM_EXECUTION_CLASS
+                && profile.fixed_host_imports.is_empty()
+                && contribution
+                    .implementations
+                    .iter()
+                    .all(|implementation| implementation.artifact.is_some());
             if !matches!(profile.attachment, AttachmentProfile::AppendMany { .. })
-                || profile.support_channel != SupportChannel::Stable
-                || profile.trust != TrustLevel::Trusted
                 || !profile.requires.is_empty()
                 || contribution.state.is_some()
                 || !contribution.permission_request_ids.is_empty()
-                || contribution
-                    .implementations
-                    .iter()
-                    .any(|implementation| implementation.artifact.is_some())
+                || !(trusted_built_in || isolated_wasm)
             {
                 return Ok(None);
             }
         }
-        Ok(Some("automatic:local-trusted-stateless-append-many"))
+        let isolated_wasm = selected_contribution_ids.iter().any(|contribution_id| {
+            manifest
+                .module_contributions
+                .iter()
+                .find(|contribution| &contribution.id == contribution_id)
+                .is_some_and(|contribution| {
+                    contribution.implementations.iter().any(|implementation| {
+                        implementation.execution_class == WASM_EXECUTION_CLASS
+                    })
+                })
+        });
+        Ok(Some(if isolated_wasm {
+            "automatic:local-isolated-wasm-append-many"
+        } else {
+            "automatic:local-trusted-stateless-append-many"
+        }))
     }
 
     pub(crate) fn permits_host_requirements(
@@ -701,8 +725,57 @@ impl PluginProfileCatalog {
         contribution: &ModuleContribution,
         target: &str,
     ) -> Result<String, ControlPlaneError> {
-        self.matching_profile(contribution, target)
-            .map(|profile| profile.configuration.clone())
+        self.configuration_for_override(contribution, target, None)
+    }
+
+    pub(crate) fn configuration_for_override(
+        &self,
+        contribution: &ModuleContribution,
+        target: &str,
+        configuration_override: Option<&serde_json::Value>,
+    ) -> Result<String, ControlPlaneError> {
+        let profile = self.matching_profile(contribution, target)?;
+        let Some(configuration_override) = configuration_override else {
+            return Ok(profile.configuration.clone());
+        };
+        let default: serde_json::Value =
+            serde_json::from_str(&profile.configuration).map_err(|error| {
+                ControlPlaneError::AdmissionRejected {
+                    detail: format!("Host Plugin profile configuration is invalid: {error}"),
+                }
+            })?;
+        validate_narrow_configuration(&default, configuration_override, "modules")?;
+        let mut configured = default;
+        merge_configuration(&mut configured, configuration_override);
+        let schema = configuration_schema(&profile.configuration_schema_digest).ok_or_else(
+            || ControlPlaneError::AdmissionRejected {
+                detail: format!(
+                    "Plugin contribution `{}` does not expose a user-configurable Module Schema",
+                    contribution.id
+                ),
+            },
+        )?;
+        let schema: serde_json::Value = serde_json::from_slice(schema).map_err(|error| {
+            ControlPlaneError::AdmissionRejected {
+                detail: format!("Host Module configuration Schema is invalid: {error}"),
+            }
+        })?;
+        let validator = jsonschema::draft202012::new(&schema).map_err(|error| {
+            ControlPlaneError::AdmissionRejected {
+                detail: format!("Host Module configuration Schema cannot be compiled: {error}"),
+            }
+        })?;
+        validator
+            .validate(&configured)
+            .map_err(|error| ControlPlaneError::AdmissionRejected {
+                detail: format!(
+                    "Plugin contribution `{}` configuration is invalid: {error}",
+                    contribution.id
+                ),
+            })?;
+        serde_json::to_string(&configured).map_err(|error| ControlPlaneError::AdmissionRejected {
+            detail: format!("Plugin Module configuration cannot be canonicalized: {error}"),
+        })
     }
 
     pub(crate) fn attachment_for(
@@ -2134,6 +2207,77 @@ fn validate_displaced_provider(
     Ok(())
 }
 
+fn configuration_schema(digest: &str) -> Option<&'static [u8]> {
+    [
+        EMPTY_CONFIGURATION_SCHEMA,
+        APPROVAL_HOOK_CONFIGURATION_SCHEMA,
+        FIXTURE_MODEL_CONFIGURATION_SCHEMA,
+        WORKSPACE_EDIT_CONFIGURATION_SCHEMA,
+        SKILLS_CONFIGURATION_SCHEMA,
+        PROCESS_TOOLS_CONFIGURATION_SCHEMA,
+        PROCESS_NATIVE_CONFIGURATION_SCHEMA,
+        SUBAGENT_TOOLS_CONFIGURATION_SCHEMA,
+        CODE_MODE_CONFIGURATION_SCHEMA,
+        OPENAI_MODEL_CONFIGURATION_SCHEMA,
+        CODEX_MODEL_CONFIGURATION_SCHEMA,
+        CODEX_AUTH_CONFIGURATION_SCHEMA,
+    ]
+    .into_iter()
+    .find(|schema| sha256_digest(schema) == digest)
+}
+
+fn validate_narrow_configuration(
+    default: &serde_json::Value,
+    configured: &serde_json::Value,
+    path: &str,
+) -> Result<(), ControlPlaneError> {
+    match (default, configured) {
+        (serde_json::Value::Object(default), serde_json::Value::Object(configured)) => {
+            for (key, value) in configured {
+                let field_path = format!("{path}.{key}");
+                let default = default.get(key).ok_or_else(|| {
+                    ControlPlaneError::AdmissionRejected {
+                        detail: format!(
+                            "Plugin Module configuration field `{field_path}` is not configurable"
+                        ),
+                    }
+                })?;
+                validate_narrow_configuration(default, value, &field_path)?;
+            }
+            Ok(())
+        }
+        (serde_json::Value::Array(default), serde_json::Value::Array(configured))
+            if configured.iter().all(|value| default.contains(value)) =>
+        {
+            Ok(())
+        }
+        (serde_json::Value::Number(default), serde_json::Value::Number(configured))
+            if default
+                .as_f64()
+                .zip(configured.as_f64())
+                .is_some_and(|(default, configured)| configured <= default) =>
+        {
+            Ok(())
+        }
+        _ if default == configured => Ok(()),
+        _ => rejected(format!(
+            "Plugin Module configuration field `{path}` may narrow, but not expand, the Host default"
+        )),
+    }
+}
+
+fn merge_configuration(base: &mut serde_json::Value, configured: &serde_json::Value) {
+    if let (Some(base), Some(configured)) = (base.as_object_mut(), configured.as_object()) {
+        for (key, value) in configured {
+            if let Some(base) = base.get_mut(key) {
+                merge_configuration(base, value);
+            }
+        }
+    } else {
+        base.clone_from(configured);
+    }
+}
+
 fn rejected<T>(detail: impl Into<String>) -> Result<T, ControlPlaneError> {
     Err(ControlPlaneError::AdmissionRejected {
         detail: detail.into(),
@@ -2216,6 +2360,68 @@ mod tests {
         let mut duplicate_factory = text_tools_profile();
         duplicate_factory.registration_id = "another-profile".to_owned();
         assert!(catalog.register(duplicate_factory).is_err());
+    }
+
+    #[test]
+    fn module_configuration_override_merges_a_narrow_patch_over_the_host_default() {
+        let profile = code_mode_tools_profile();
+        let contribution = contribution_for(&profile, "test-target");
+        let catalog = PluginProfileCatalog::default().register(profile).unwrap();
+
+        let configuration = catalog
+            .configuration_for_override(
+                &contribution,
+                "test-target",
+                Some(&serde_json::json!({"max_instructions": 500_000})),
+            )
+            .unwrap();
+        let configuration: serde_json::Value = serde_json::from_str(&configuration).unwrap();
+
+        assert_eq!(configuration["max_instructions"], 500_000);
+        assert_eq!(configuration["max_code_bytes"], 32_768);
+        assert_eq!(configuration["max_subcalls"], 16);
+    }
+
+    #[test]
+    fn module_configuration_override_cannot_expand_or_invent_host_authority() {
+        let profile = code_mode_tools_profile();
+        let contribution = contribution_for(&profile, "test-target");
+        let catalog = PluginProfileCatalog::default().register(profile).unwrap();
+
+        let expansion = catalog
+            .configuration_for_override(
+                &contribution,
+                "test-target",
+                Some(&serde_json::json!({"max_instructions": 1_000_001})),
+            )
+            .unwrap_err();
+        assert!(expansion.to_string().contains("may narrow, but not expand"));
+
+        let unknown = catalog
+            .configuration_for_override(
+                &contribution,
+                "test-target",
+                Some(&serde_json::json!({"new_authority": true})),
+            )
+            .unwrap_err();
+        assert!(unknown.to_string().contains("is not configurable"));
+    }
+
+    #[test]
+    fn module_configuration_override_still_obeys_the_module_schema() {
+        let profile = code_mode_tools_profile();
+        let contribution = contribution_for(&profile, "test-target");
+        let catalog = PluginProfileCatalog::default().register(profile).unwrap();
+
+        let error = catalog
+            .configuration_for_override(
+                &contribution,
+                "test-target",
+                Some(&serde_json::json!({"max_instructions": 0})),
+            )
+            .unwrap_err();
+
+        assert!(error.to_string().contains("configuration is invalid"));
     }
 
     #[test]
@@ -2322,6 +2528,36 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("not normalized HTTP authority")
+        );
+    }
+
+    #[test]
+    fn isolated_permission_free_wasm_tool_has_automatic_local_admission() {
+        let profile = third_party_wasm_tool_profile();
+        let contribution = contribution_for(&profile, "test-target");
+        let manifest = PluginManifest {
+            schema_version: 1,
+            plugin_id: "dev.example.isolated-tool".to_owned(),
+            release_version: "1.0.0".to_owned(),
+            artifacts: Vec::new(),
+            module_contributions: vec![contribution],
+            data_contributions: Vec::new(),
+            permission_requests: Vec::new(),
+            features: Vec::new(),
+            binding_templates: Vec::new(),
+            product_metadata: Vec::new(),
+        };
+        let catalog = PluginProfileCatalog::default().register(profile).unwrap();
+
+        assert_eq!(
+            catalog
+                .automatic_local_admission(
+                    &manifest,
+                    &["more-text-tools".to_owned()],
+                    "test-target",
+                )
+                .unwrap(),
+            Some("automatic:local-isolated-wasm-append-many")
         );
     }
 

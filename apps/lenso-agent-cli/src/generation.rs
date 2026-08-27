@@ -64,14 +64,16 @@ use lenso_kernel::{
 use lenso_native_adapter::NativeModuleRegistry;
 use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, BuiltInModule,
-    CanonicalDocument, CatalogFactory, ClassPolicy, ControlLifecycle, ControlPlaneError,
-    ControlStateStore, DurableControlState, DurableGenerationRoute, DurableGenerationSupervisor,
-    FileControlStateStore, GenerationController, GenerationControllerClient, HostBuildManifest,
-    HostExecutionPolicy, KernelGenerationRuntime, MemoryControlStateStore,
-    MultiExecutionCatalogFactory, ReplacementMode, ResolutionInput, ResolvedGeneration,
-    RolloutPolicy, resolve_generation, sha256_digest,
+    CanonicalDocument, CatalogFactory, ClassPolicy, ControlHealth, ControlLifecycle,
+    ControlPlaneError, ControlStateStore, DurableControlState, DurableGenerationRoute,
+    DurableGenerationSupervisor, DurableTransitionOutcome, FileControlStateStore,
+    GenerationController, GenerationControllerClient, GenerationControllerEvent,
+    GenerationMaintenanceOutcome, HostBuildManifest, HostExecutionPolicy, KernelGenerationRuntime,
+    MemoryControlStateStore, MultiExecutionCatalogFactory, ReplacementMode, ResolutionInput,
+    ResolvedGeneration, RolloutPolicy, resolve_generation, sha256_digest,
 };
 use lenso_secrets_env_module as _;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::plugin_profiles::{
     NATIVE_EXECUTION_CLASS, QUICKJS_EXECUTION_CLASS, WASM_EXECUTION_CLASS, harness_plugin_profiles,
@@ -83,6 +85,7 @@ const APP_ID: &str = "lenso.agent.harness";
 const READY_TIMEOUT_NANOS: u64 = 30_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const ONLINE_DRAIN_TIMEOUT_NANOS: u64 = 300_000_000_000;
+const ONLINE_ROLLBACK_WINDOW_NANOS: u64 = 1_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 const CONTROL_DIRECTORY: &str = "generation-control";
 const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
@@ -90,7 +93,9 @@ const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
 const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
 const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
-const RECONCILE_INTERVAL: Duration = Duration::from_millis(250);
+const RECONCILE_QUIET_PERIOD: Duration = Duration::from_millis(200);
+const RECONCILE_SETTLE_LIMIT: Duration = Duration::from_secs(2);
+const RECONCILE_CONSISTENCY_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_RECONCILE_EVENTS: usize = 32;
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_TUI_PANELS: usize = 64;
@@ -131,12 +136,138 @@ pub enum OnlineGenerationEvent {
         active_set_digest: Option<String>,
         detail: String,
     },
+    RolledBack {
+        failed_generation_spec_digest: String,
+        restored_generation_spec_digest: String,
+        routing_epoch: u64,
+        detail: String,
+    },
+    Failed {
+        generation_spec_digest: String,
+        detail: String,
+    },
+    WatchDegraded {
+        detail: String,
+    },
 }
 
 #[derive(Debug)]
 struct GenerationReconciler {
     stop: Option<oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Debug)]
+enum FilesystemReconcileSignal {
+    Changed,
+    Error(String),
+}
+
+struct FilesystemReconcileWatcher {
+    watcher: Option<RecommendedWatcher>,
+    signals: tokio::sync::mpsc::UnboundedReceiver<FilesystemReconcileSignal>,
+    _sender: tokio::sync::mpsc::UnboundedSender<FilesystemReconcileSignal>,
+    recursive_path: Option<PathBuf>,
+    recursive_watched: bool,
+}
+
+impl FilesystemReconcileWatcher {
+    fn start(non_recursive: &[&Path], recursive_path: Option<PathBuf>) -> (Self, Vec<String>) {
+        let (sender, signals) = tokio::sync::mpsc::unbounded_channel();
+        let callback_sender = sender.clone();
+        let mut errors = Vec::new();
+        let watcher =
+            match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                match event {
+                    Ok(_) => {
+                        let _ = callback_sender.send(FilesystemReconcileSignal::Changed);
+                    }
+                    Err(error) => {
+                        let _ = callback_sender
+                            .send(FilesystemReconcileSignal::Error(error.to_string()));
+                    }
+                }
+            }) {
+                Ok(mut watcher) => {
+                    let mut watched_paths = BTreeSet::new();
+                    for path in non_recursive
+                        .iter()
+                        .copied()
+                        .filter(|path| watched_paths.insert((*path).to_path_buf()))
+                    {
+                        if let Err(error) = watcher.watch(path, RecursiveMode::NonRecursive) {
+                            errors.push(format!(
+                                "failed to watch Desired State path {}: {error}",
+                                path.display()
+                            ));
+                        }
+                    }
+                    Some(watcher)
+                }
+                Err(error) => {
+                    errors.push(format!("failed to start filesystem watcher: {error}"));
+                    None
+                }
+            };
+        let mut watcher = Self {
+            watcher,
+            signals,
+            _sender: sender,
+            recursive_path,
+            recursive_watched: false,
+        };
+        if let Some(error) = watcher.refresh_recursive_watch() {
+            errors.push(error);
+        }
+        (watcher, errors)
+    }
+
+    fn refresh_recursive_watch(&mut self) -> Option<String> {
+        let path = self.recursive_path.as_ref()?;
+        let watcher = self.watcher.as_mut()?;
+        if path.is_dir() && !self.recursive_watched {
+            match watcher.watch(path, RecursiveMode::Recursive) {
+                Ok(()) => self.recursive_watched = true,
+                Err(error) => {
+                    return Some(format!(
+                        "failed to watch Plugin discovery path {}: {error}",
+                        path.display()
+                    ));
+                }
+            }
+        } else if !path.exists() && self.recursive_watched {
+            let _ = watcher.unwatch(path);
+            self.recursive_watched = false;
+        }
+        None
+    }
+
+    async fn changed(&mut self) -> Option<FilesystemReconcileSignal> {
+        self.signals.recv().await
+    }
+
+    async fn settle_after(&mut self, initial: Option<FilesystemReconcileSignal>) -> Vec<String> {
+        let mut errors = Vec::new();
+        if let Some(FilesystemReconcileSignal::Error(error)) = initial {
+            errors.push(error);
+        }
+        let deadline = tokio::time::Instant::now() + RECONCILE_SETTLE_LIMIT;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let quiet_period = RECONCILE_QUIET_PERIOD.min(remaining);
+            let Ok(Some(signal)) = tokio::time::timeout(quiet_period, self.signals.recv()).await
+            else {
+                break;
+            };
+            if let FilesystemReconcileSignal::Error(error) = signal {
+                errors.push(error);
+            }
+        }
+        errors
+    }
 }
 
 impl HostBuildIdentity {
@@ -227,27 +358,38 @@ pub struct AgentApp {
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
     host_lease: Option<crate::authority::AuthorityFence>,
+    generation_gc_lease: Option<crate::authority::AuthorityFence>,
 }
 
 impl AgentApp {
     pub async fn start(plan_bytes: &[u8]) -> Result<Self, String> {
-        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
-            return Self::start_with_source_authority(plan_bytes, authority).await;
+        if let Some(snapshot) = crate::plugins::current_source_generation_snapshot()? {
+            return Self::start_with_source_snapshot(plan_bytes, snapshot).await;
         }
         Self::start_with_store(plan_bytes, Path::new(".lenso/plugins")).await
     }
 
     pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
-        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
-            return Self::start_with_source_authority(plan_bytes, authority).await;
+        if let Some(snapshot) = crate::plugins::current_source_generation_snapshot()? {
+            return Self::start_with_durable_source_snapshot(
+                plan_bytes,
+                snapshot,
+                TUI_CONTROL_DIRECTORY,
+            )
+            .await;
         }
         Self::start_tui_with_store(plan_bytes, Path::new(".lenso/plugins")).await
     }
 
     /// Starts the Telegram surface with an independent durable Controller lineage.
     pub async fn start_telegram(plan_bytes: &[u8]) -> Result<Self, String> {
-        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
-            return Self::start_with_source_authority(plan_bytes, authority).await;
+        if let Some(snapshot) = crate::plugins::current_source_generation_snapshot()? {
+            return Self::start_with_durable_source_snapshot(
+                plan_bytes,
+                snapshot,
+                TELEGRAM_CONTROL_DIRECTORY,
+            )
+            .await;
         }
         Self::start_with_store_and_control_directory(
             plan_bytes,
@@ -259,8 +401,13 @@ impl AgentApp {
 
     /// Starts the Discord surface with an independent durable Controller lineage.
     pub async fn start_discord(plan_bytes: &[u8]) -> Result<Self, String> {
-        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
-            return Self::start_with_source_authority(plan_bytes, authority).await;
+        if let Some(snapshot) = crate::plugins::current_source_generation_snapshot()? {
+            return Self::start_with_durable_source_snapshot(
+                plan_bytes,
+                snapshot,
+                DISCORD_CONTROL_DIRECTORY,
+            )
+            .await;
         }
         Self::start_with_store_and_control_directory(
             plan_bytes,
@@ -272,8 +419,13 @@ impl AgentApp {
 
     /// Starts all configured messaging surfaces in one durable Controller lineage.
     pub async fn start_channels(plan_bytes: &[u8]) -> Result<Self, String> {
-        if let Some(authority) = crate::plugins::current_source_generation_authority()? {
-            return Self::start_with_source_authority(plan_bytes, authority).await;
+        if let Some(snapshot) = crate::plugins::current_source_generation_snapshot()? {
+            return Self::start_with_durable_source_snapshot(
+                plan_bytes,
+                snapshot,
+                CHANNEL_CONTROL_DIRECTORY,
+            )
+            .await;
         }
         Self::start_with_store_and_control_directory(
             plan_bytes,
@@ -311,12 +463,21 @@ impl AgentApp {
         .await
     }
 
-    async fn start_with_source_authority(
+    async fn start_with_source_snapshot(
         plan_bytes: &[u8],
-        authority: crate::plugins::GenerationPluginAuthority,
+        snapshot: crate::plugins::SourceGenerationSnapshot,
     ) -> Result<Self, String> {
+        let generation_gc_lease = if snapshot.store_root.exists() {
+            Some(
+                crate::authority::AuthorityCoordinator::prepare(&snapshot.store_root)?
+                    .generation_gc_snapshot()?,
+            )
+        } else {
+            None
+        };
         let host_build = HostBuildIdentity::current()?;
-        let generation = resolve_generation_with_authority(plan_bytes, &authority, &host_build)?;
+        let generation =
+            resolve_generation_with_authority(plan_bytes, &snapshot.authority, &host_build)?;
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
         let supervisor =
             DurableGenerationSupervisor::open(APP_ID, runtime, MemoryControlStateStore::default())
@@ -333,12 +494,125 @@ impl AgentApp {
             let _ = task.await;
             return Err(control_error(error));
         }
+        let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
+        if !snapshot.blocked.is_empty() {
+            push_reconcile_event(
+                &reconcile_events,
+                OnlineGenerationEvent::Rejected {
+                    active_set_digest: Some(snapshot.authority.active_set_digest.clone()),
+                    detail: blocked_discovery_detail(&snapshot.blocked),
+                },
+            );
+        }
+        let reconciler = start_source_generation_reconciler(
+            client.clone(),
+            plan_bytes.to_vec(),
+            snapshot.definition_path,
+            snapshot.store_root,
+            host_build,
+            snapshot.desired_state_digest,
+            reconcile_events.clone(),
+        );
         Ok(Self {
             client,
             controller: Some(task),
-            reconciler: None,
-            reconcile_events: Rc::new(RefCell::new(VecDeque::new())),
+            reconciler: Some(reconciler),
+            reconcile_events,
             host_lease: None,
+            generation_gc_lease,
+        })
+    }
+
+    async fn start_with_durable_source_snapshot(
+        plan_bytes: &[u8],
+        snapshot: crate::plugins::SourceGenerationSnapshot,
+        control_directory: &str,
+    ) -> Result<Self, String> {
+        let host_build = HostBuildIdentity::current()?;
+        Self::start_with_durable_source_snapshot_and_host_build(
+            plan_bytes,
+            snapshot,
+            control_directory,
+            host_build,
+        )
+        .await
+    }
+
+    async fn start_with_durable_source_snapshot_and_host_build(
+        plan_bytes: &[u8],
+        snapshot: crate::plugins::SourceGenerationSnapshot,
+        control_directory: &str,
+        host_build: HostBuildIdentity,
+    ) -> Result<Self, String> {
+        let coordinator = crate::authority::AuthorityCoordinator::prepare(&snapshot.store_root)?;
+        let generation_gc_lease = coordinator.generation_gc_snapshot()?;
+        let host_lease = coordinator.host_lease(control_directory)?;
+        let _authority_fence = coordinator.snapshot()?;
+        let generation =
+            resolve_generation_with_authority(plan_bytes, &snapshot.authority, &host_build)?;
+        record_generation_spec(&snapshot.store_root, &generation.spec)?;
+        crate::plugins::record_resolved_generation_authority_unfenced(
+            &snapshot.store_root,
+            &snapshot.authority,
+        )?;
+        let store = FileControlStateStore::open(snapshot.store_root.join(control_directory))
+            .map_err(control_error)?;
+        let durable = store.load(APP_ID).map_err(control_error)?;
+        let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
+        let supervisor = recover_or_open_supervisor(
+            plan_bytes,
+            &snapshot.store_root,
+            &host_build,
+            runtime,
+            store,
+            durable,
+        )
+        .await?;
+        let recovered_active = supervisor.state().active_generation_spec_digest.clone();
+        let (controller, client) =
+            GenerationController::new(supervisor, MAINTENANCE_INTERVAL).map_err(control_error)?;
+        let task = tokio::task::spawn_local(controller.run());
+        if recovered_active.as_deref() != Some(generation.spec.digest()) {
+            let transition = if let Some(active) = recovered_active.as_deref() {
+                online_overlap_transition(active, &generation).map_err(control_error)?
+            } else {
+                initial_transition(&generation).map_err(control_error)?
+            };
+            if let Err(error) = client
+                .transition(transition, generation, BTreeMap::new())
+                .await
+            {
+                drop(client);
+                let _ = task.await;
+                return Err(control_error(error));
+            }
+        }
+        let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
+        if !snapshot.blocked.is_empty() {
+            push_reconcile_event(
+                &reconcile_events,
+                OnlineGenerationEvent::Rejected {
+                    active_set_digest: Some(snapshot.authority.active_set_digest.clone()),
+                    detail: blocked_discovery_detail(&snapshot.blocked),
+                },
+            );
+        }
+        let reconciler = start_source_generation_reconciler(
+            client.clone(),
+            plan_bytes.to_vec(),
+            snapshot.definition_path,
+            snapshot.store_root,
+            host_build,
+            snapshot.desired_state_digest,
+            reconcile_events.clone(),
+        );
+        Ok(Self {
+            client,
+            controller: Some(task),
+            reconciler: Some(reconciler),
+            reconcile_events,
+            host_lease: Some(host_lease),
+            generation_gc_lease: Some(generation_gc_lease),
         })
     }
 
@@ -349,6 +623,7 @@ impl AgentApp {
         host_build: HostBuildIdentity,
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
+        let generation_gc_lease = authority.generation_gc_snapshot()?;
         let host_lease = authority.host_lease(control_directory)?;
         let _authority_fence = authority.snapshot()?;
         let (generation, active_set_digest) =
@@ -405,6 +680,7 @@ impl AgentApp {
             reconciler: Some(reconciler),
             reconcile_events,
             host_lease: Some(host_lease),
+            generation_gc_lease: Some(generation_gc_lease),
         })
     }
 
@@ -537,6 +813,7 @@ impl AgentApp {
             return Err("Generation Controller returned inconsistent durable state".to_owned());
         }
         self.host_lease.take();
+        self.generation_gc_lease.take();
         Ok(())
     }
 
@@ -544,6 +821,85 @@ impl AgentApp {
     pub fn take_online_generation_events(&self) -> Vec<OnlineGenerationEvent> {
         self.reconcile_events.borrow_mut().drain(..).collect()
     }
+}
+
+pub(crate) fn source_controller_status(store_root: &Path) -> Result<Vec<String>, String> {
+    let mut lines = Vec::new();
+    for (surface, state) in existing_controller_states(store_root)? {
+        lines.push(format!(
+            "controller: {surface} revision={} suspended={} active={}",
+            state.revision,
+            state.host_suspended,
+            state
+                .active_generation_spec_digest
+                .as_deref()
+                .unwrap_or("none")
+        ));
+        let mut generations = state.generations;
+        generations.sort_by(|left, right| {
+            left.generation_spec_digest
+                .cmp(&right.generation_spec_digest)
+        });
+        for generation in generations {
+            lines.push(format!(
+                "generation: {surface} {:?} health={:?} direction={:?} rollback-deadline={} retirement={:?} {}",
+                generation.lifecycle,
+                generation.health,
+                generation.activation_direction,
+                generation
+                    .rollback_deadline_unix_nanos
+                    .as_deref()
+                    .unwrap_or("none"),
+                generation.retirement_reason,
+                generation.generation_spec_digest,
+            ));
+        }
+    }
+    Ok(lines)
+}
+
+pub(crate) fn live_controller_generation_digests(
+    store_root: &Path,
+) -> Result<BTreeSet<String>, String> {
+    Ok(existing_controller_states(store_root)?
+        .into_iter()
+        .flat_map(|(_, state)| state.generations)
+        .filter(|record| record.lifecycle != ControlLifecycle::Retired)
+        .map(|record| record.generation_spec_digest)
+        .collect())
+}
+
+fn existing_controller_states(
+    store_root: &Path,
+) -> Result<Vec<(&'static str, DurableControlState)>, String> {
+    let mut states = Vec::new();
+    for (surface, directory) in [
+        ("headless", CONTROL_DIRECTORY),
+        ("tui", TUI_CONTROL_DIRECTORY),
+        ("telegram", TELEGRAM_CONTROL_DIRECTORY),
+        ("discord", DISCORD_CONTROL_DIRECTORY),
+        ("channels", CHANNEL_CONTROL_DIRECTORY),
+    ] {
+        let path = store_root.join(directory);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect `{surface}` Generation Controller: {error}"
+                ));
+            }
+        };
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(format!(
+                "`{surface}` Generation Controller state is not a regular directory"
+            ));
+        }
+        let store = FileControlStateStore::open(path).map_err(control_error)?;
+        let state = store.load(APP_ID).map_err(control_error)?;
+        states.push((surface, state));
+    }
+    Ok(states)
 }
 
 fn resolve_and_record_current_generation(
@@ -567,8 +923,12 @@ fn start_generation_reconciler(
     events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
 ) -> GenerationReconciler {
     let (stop, mut stopped) = oneshot::channel();
+    let mut controller_events = client.subscribe();
+    let (mut watcher, watcher_errors) =
+        FilesystemReconcileWatcher::start(&[store_root.as_path()], None);
+    report_watcher_errors(&events, watcher_errors);
     let task = tokio::task::spawn_local(async move {
-        let mut interval = tokio::time::interval(RECONCILE_INTERVAL);
+        let mut interval = tokio::time::interval(RECONCILE_CONSISTENCY_INTERVAL);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut last_attempted_active_set_digest = Some(initial_active_set_digest);
         let mut last_rejection = None::<OnlineGenerationEvent>;
@@ -576,7 +936,44 @@ fn start_generation_reconciler(
             tokio::select! {
                 biased;
                 _ = &mut stopped => break,
+                event = controller_events.recv() => {
+                    match event {
+                        Ok(event) => {
+                            if let Some(event) = online_event_from_controller_event(event) {
+                                push_reconcile_event(&events, event);
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            push_reconcile_event(&events, OnlineGenerationEvent::Rejected {
+                                active_set_digest: None,
+                                detail: format!(
+                                    "Generation Controller event stream lagged by {skipped} events"
+                                ),
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
                 _ = interval.tick() => {
+                    if let Some(event) = reconcile_online_generation(
+                        &client,
+                        &plan_bytes,
+                        &store_root,
+                        &host_build,
+                        &mut last_attempted_active_set_digest,
+                    ).await {
+                        if matches!(event, OnlineGenerationEvent::Switched { .. })
+                            || last_rejection.as_ref() != Some(&event)
+                        {
+                            push_reconcile_event(&events, event.clone());
+                        }
+                        last_rejection = matches!(event, OnlineGenerationEvent::Rejected { .. })
+                            .then_some(event);
+                    }
+                }
+                signal = watcher.changed() => {
+                    let errors = watcher.settle_after(signal).await;
+                    report_watcher_errors(&events, errors);
                     if let Some(event) = reconcile_online_generation(
                         &client,
                         &plan_bytes,
@@ -600,6 +997,276 @@ fn start_generation_reconciler(
         stop: Some(stop),
         task,
     }
+}
+
+fn start_source_generation_reconciler(
+    client: GenerationControllerClient<NativeApp>,
+    plan_bytes: Vec<u8>,
+    definition_path: PathBuf,
+    store_root: PathBuf,
+    host_build: HostBuildIdentity,
+    initial_desired_state_digest: String,
+    events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+) -> GenerationReconciler {
+    let (stop, mut stopped) = oneshot::channel();
+    let mut controller_events = client.subscribe();
+    let app_root = definition_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let discovery_root = app_root.join("plugins");
+    let (mut watcher, watcher_errors) = FilesystemReconcileWatcher::start(
+        &[app_root.as_path(), store_root.as_path()],
+        Some(discovery_root),
+    );
+    report_watcher_errors(&events, watcher_errors);
+    let task = tokio::task::spawn_local(async move {
+        let mut interval = tokio::time::interval(RECONCILE_CONSISTENCY_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut last_attempted_desired_state_digest = Some(initial_desired_state_digest);
+        let mut last_event = None::<OnlineGenerationEvent>;
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut stopped => break,
+                event = controller_events.recv() => {
+                    match event {
+                        Ok(event) => {
+                            if let Some(event) = online_event_from_controller_event(event) {
+                                push_reconcile_event(&events, event);
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            push_reconcile_event(&events, OnlineGenerationEvent::Rejected {
+                                active_set_digest: None,
+                                detail: format!(
+                                    "Generation Controller event stream lagged by {skipped} events"
+                                ),
+                            });
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+                _ = interval.tick() => {
+                    let errors = watcher.settle_after(None).await;
+                    report_watcher_errors(&events, errors);
+                    if let Some(error) = watcher.refresh_recursive_watch() {
+                        report_watcher_errors(&events, [error]);
+                    }
+                    for event in reconcile_source_generation(
+                        &client,
+                        &plan_bytes,
+                        &definition_path,
+                        &store_root,
+                        &host_build,
+                        &mut last_attempted_desired_state_digest,
+                    ).await {
+                        if matches!(event, OnlineGenerationEvent::Switched { .. })
+                            || last_event.as_ref() != Some(&event)
+                        {
+                            push_reconcile_event(&events, event.clone());
+                        }
+                        last_event = Some(event);
+                    }
+                }
+                signal = watcher.changed() => {
+                    let mut errors = watcher.settle_after(signal).await;
+                    if let Some(error) = watcher.refresh_recursive_watch() {
+                        errors.push(error);
+                    }
+                    report_watcher_errors(&events, errors);
+                    for event in reconcile_source_generation(
+                        &client,
+                        &plan_bytes,
+                        &definition_path,
+                        &store_root,
+                        &host_build,
+                        &mut last_attempted_desired_state_digest,
+                    ).await {
+                        if matches!(event, OnlineGenerationEvent::Switched { .. })
+                            || last_event.as_ref() != Some(&event)
+                        {
+                            push_reconcile_event(&events, event.clone());
+                        }
+                        last_event = Some(event);
+                    }
+                }
+            }
+        }
+    });
+    GenerationReconciler {
+        stop: Some(stop),
+        task,
+    }
+}
+
+fn online_event_from_controller_event(
+    event: GenerationControllerEvent,
+) -> Option<OnlineGenerationEvent> {
+    let GenerationControllerEvent::Maintained(GenerationMaintenanceOutcome::Failed(failure)) =
+        event
+    else {
+        return None;
+    };
+    let detail = format!("terminal App Generation failure: {:?}", failure.failure);
+    Some(match failure.automatic_rollback {
+        Some(rollback) => OnlineGenerationEvent::RolledBack {
+            failed_generation_spec_digest: failure.generation_spec_digest,
+            restored_generation_spec_digest: rollback.active_generation_spec_digest,
+            routing_epoch: rollback.routing_epoch,
+            detail,
+        },
+        None => OnlineGenerationEvent::Failed {
+            generation_spec_digest: failure.generation_spec_digest,
+            detail,
+        },
+    })
+}
+
+async fn activate_online_candidate(
+    client: &GenerationControllerClient<NativeApp>,
+    state: &DurableControlState,
+    previous_generation_spec_digest: &str,
+    candidate: ResolvedGeneration,
+) -> Result<Option<DurableTransitionOutcome>, String> {
+    let candidate_digest = candidate.spec.digest();
+    let retained_candidate = state.generations.iter().find(|record| {
+        record.generation_spec_digest == candidate_digest
+            && matches!(
+                record.lifecycle,
+                ControlLifecycle::Draining | ControlLifecycle::Standby
+            )
+            && record.health == ControlHealth::Healthy
+    });
+    if let Some(retained_candidate) = retained_candidate {
+        let is_direct_predecessor = state.generations.iter().any(|record| {
+            record.generation_spec_digest == previous_generation_spec_digest
+                && record.transition_spec_digest == retained_candidate.transition_spec_digest
+        });
+        if !is_direct_predecessor {
+            // A still-live standby from an older edit cannot be used as the
+            // rollback target for the current edge. Let bounded maintenance
+            // retire it, then retry this exact Desired State as a fresh stage.
+            return Ok(None);
+        }
+        return client
+            .rollback(candidate_digest)
+            .await
+            .map(Some)
+            .map_err(control_error);
+    }
+    let transition = online_overlap_transition(previous_generation_spec_digest, &candidate)
+        .map_err(control_error)?;
+    client
+        .transition(transition, candidate, BTreeMap::new())
+        .await
+        .map(Some)
+        .map_err(control_error)
+}
+
+async fn reconcile_source_generation(
+    client: &GenerationControllerClient<NativeApp>,
+    plan_bytes: &[u8],
+    definition_path: &Path,
+    store_root: &Path,
+    host_build: &HostBuildIdentity,
+    last_attempted_desired_state_digest: &mut Option<String>,
+) -> Vec<OnlineGenerationEvent> {
+    let rejected = |active_set_digest, detail| OnlineGenerationEvent::Rejected {
+        active_set_digest,
+        detail,
+    };
+    let _authority_fence = if store_root.exists() {
+        let coordinator = match crate::authority::AuthorityCoordinator::prepare(store_root) {
+            Ok(coordinator) => coordinator,
+            Err(detail) => return vec![rejected(None, detail)],
+        };
+        match coordinator.try_snapshot() {
+            Ok(Some(fence)) => Some(fence),
+            Ok(None) => return Vec::new(),
+            Err(detail) => return vec![rejected(None, detail)],
+        }
+    } else {
+        None
+    };
+    let snapshot = match crate::plugins::source_generation_snapshot_at(definition_path) {
+        Ok(snapshot) => snapshot,
+        Err(detail) => return vec![rejected(None, detail)],
+    };
+    if snapshot.store_root != store_root {
+        return vec![rejected(
+            None,
+            "source-backed Plugin authority root changed while the Host was running".to_owned(),
+        )];
+    }
+    if last_attempted_desired_state_digest.as_deref() == Some(&snapshot.desired_state_digest) {
+        return Vec::new();
+    }
+    *last_attempted_desired_state_digest = Some(snapshot.desired_state_digest.clone());
+    let active_set_digest = snapshot.authority.active_set_digest.clone();
+    let mut events = Vec::new();
+    if !snapshot.blocked.is_empty() {
+        events.push(rejected(
+            Some(active_set_digest.clone()),
+            blocked_discovery_detail(&snapshot.blocked),
+        ));
+    }
+    let candidate =
+        match resolve_generation_with_authority(plan_bytes, &snapshot.authority, host_build) {
+            Ok(candidate) => candidate,
+            Err(detail) => {
+                events.push(rejected(Some(active_set_digest), detail));
+                return events;
+            }
+        };
+    let state = match client.inspect().await.map_err(control_error) {
+        Ok(state) => state,
+        Err(detail) => {
+            events.push(rejected(Some(active_set_digest), detail));
+            return events;
+        }
+    };
+    let Some(previous_generation_spec_digest) = state.active_generation_spec_digest.as_deref()
+    else {
+        events.push(rejected(
+            Some(active_set_digest),
+            "online reconcile requires one active App Generation".to_owned(),
+        ));
+        return events;
+    };
+    if previous_generation_spec_digest == candidate.spec.digest() {
+        return events;
+    }
+    if let Err(detail) = record_generation_spec(store_root, &candidate.spec).and_then(|()| {
+        crate::plugins::record_resolved_generation_authority_unfenced(
+            store_root,
+            &snapshot.authority,
+        )
+    }) {
+        events.push(rejected(Some(active_set_digest), detail));
+        return events;
+    }
+    match activate_online_candidate(client, &state, previous_generation_spec_digest, candidate)
+        .await
+    {
+        Ok(Some(outcome)) => events.push(OnlineGenerationEvent::Switched {
+            active_set_digest,
+            generation_spec_digest: outcome.active_generation_spec_digest,
+            previous_generation_spec_digest: previous_generation_spec_digest.to_owned(),
+            routing_epoch: outcome.routing_epoch,
+        }),
+        Ok(None) => *last_attempted_desired_state_digest = None,
+        Err(detail) => events.push(rejected(Some(active_set_digest), detail)),
+    }
+    events
+}
+
+fn blocked_discovery_detail(blocked: &[crate::plugins::BlockedDiscoveredPlugin]) -> String {
+    blocked
+        .iter()
+        .map(|blocked| format!("{}: {}", blocked.entry, blocked.detail))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 async fn reconcile_online_generation(
@@ -660,7 +1327,8 @@ async fn reconcile_online_generation(
             });
         }
     };
-    let Some(previous_generation_spec_digest) = state.active_generation_spec_digest else {
+    let Some(previous_generation_spec_digest) = state.active_generation_spec_digest.as_deref()
+    else {
         return Some(OnlineGenerationEvent::Rejected {
             active_set_digest: Some(active_set_digest),
             detail: "online reconcile requires one active App Generation".to_owned(),
@@ -677,28 +1345,19 @@ async fn reconcile_online_generation(
             detail,
         });
     }
-    let transition = match online_overlap_transition(&previous_generation_spec_digest, &candidate)
-        .map_err(control_error)
-    {
-        Ok(transition) => transition,
-        Err(detail) => {
-            return Some(OnlineGenerationEvent::Rejected {
-                active_set_digest: Some(active_set_digest),
-                detail,
-            });
-        }
-    };
-    match client
-        .transition(transition, candidate, BTreeMap::new())
+    match activate_online_candidate(client, &state, previous_generation_spec_digest, candidate)
         .await
-        .map_err(control_error)
     {
-        Ok(outcome) => Some(OnlineGenerationEvent::Switched {
+        Ok(Some(outcome)) => Some(OnlineGenerationEvent::Switched {
             active_set_digest,
             generation_spec_digest: outcome.active_generation_spec_digest,
-            previous_generation_spec_digest,
+            previous_generation_spec_digest: previous_generation_spec_digest.to_owned(),
             routing_epoch: outcome.routing_epoch,
         }),
+        Ok(None) => {
+            *last_attempted_active_set_digest = None;
+            None
+        }
         Err(detail) => Some(OnlineGenerationEvent::Rejected {
             active_set_digest: Some(active_set_digest),
             detail,
@@ -715,6 +1374,18 @@ fn push_reconcile_event(
         events.pop_front();
     }
     events.push_back(event);
+}
+
+fn report_watcher_errors(
+    events: &Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+    errors: impl IntoIterator<Item = String>,
+) {
+    for detail in errors {
+        let event = OnlineGenerationEvent::WatchDegraded { detail };
+        if events.borrow().back() != Some(&event) {
+            push_reconcile_event(events, event);
+        }
+    }
 }
 
 fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), String> {
@@ -1237,8 +1908,8 @@ fn online_overlap_transition(
             rollout_policy: RolloutPolicy {
                 ready_timeout_nanos: READY_TIMEOUT_NANOS.to_string(),
                 drain_timeout_nanos: ONLINE_DRAIN_TIMEOUT_NANOS.to_string(),
-                rollback_window_nanos: "0".to_owned(),
-                automatic_rollback_on_generation_failure: false,
+                rollback_window_nanos: ONLINE_ROLLBACK_WINDOW_NANOS.to_string(),
+                automatic_rollback_on_generation_failure: true,
             },
         },
     )
@@ -1326,9 +1997,49 @@ mod tests {
     use super::*;
     use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
     use lenso_kernel::StreamEvent;
+    use lenso_plugin_bundle::{ArtifactSource, BundleBuild, build_bundle};
+
+    #[derive(Debug)]
+    struct TerminalFailureRuntime {
+        failed: Rc<RefCell<BTreeSet<String>>>,
+    }
+
+    impl lenso_plugin_control_plane::GenerationRuntime for TerminalFailureRuntime {
+        type Handle = String;
+        type Route = String;
+
+        fn stage<'a>(
+            &'a mut self,
+            generation: &'a ResolvedGeneration,
+            _ready_timeout_nanos: u64,
+        ) -> futures::future::LocalBoxFuture<'a, Result<Self::Handle, ControlPlaneError>> {
+            Box::pin(async move { Ok(generation.spec.digest().to_owned()) })
+        }
+
+        fn shutdown(
+            &mut self,
+            _handle: Self::Handle,
+            _drain_timeout_nanos: u64,
+        ) -> futures::future::LocalBoxFuture<'_, Result<(), ControlPlaneError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn terminal_failure(&self, handle: &Self::Handle) -> Option<ControlPlaneError> {
+            self.failed
+                .borrow()
+                .contains(handle)
+                .then(|| ControlPlaneError::HostFailure {
+                    detail: "terminal fixture".to_owned(),
+                })
+        }
+
+        fn route(&self, handle: &Self::Handle) -> Self::Route {
+            handle.clone()
+        }
+    }
 
     async fn next_online_event(app: &AgentApp) -> OnlineGenerationEvent {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 if let Some(event) = app.take_online_generation_events().into_iter().next() {
                     return event;
@@ -1340,6 +2051,44 @@ mod tests {
         .expect("online Generation event timed out")
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn filesystem_watcher_wakes_for_discovery_creation_and_nested_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let discovery_root = directory.path().join("plugins");
+        let (mut watcher, errors) =
+            FilesystemReconcileWatcher::start(&[directory.path()], Some(discovery_root.clone()));
+        assert!(errors.is_empty(), "watcher setup failed: {errors:?}");
+
+        fs::create_dir(&discovery_root).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), watcher.changed())
+            .await
+            .expect("discovery directory creation did not wake the watcher")
+            .expect("watcher signal channel closed");
+        assert_eq!(watcher.refresh_recursive_watch(), None);
+        watcher.settle_after(None).await;
+
+        let bundle = discovery_root.join("example");
+        fs::create_dir(&bundle).unwrap();
+        fs::write(bundle.join("lenso-plugin.json"), b"{}").unwrap();
+        tokio::time::timeout(Duration::from_secs(2), watcher.changed())
+            .await
+            .expect("nested discovery change did not wake the watcher")
+            .expect("watcher signal channel closed");
+    }
+
+    #[test]
+    fn repeated_watcher_degradation_is_reported_once() {
+        let events = Rc::new(RefCell::new(VecDeque::new()));
+        report_watcher_errors(&events, ["fixture failure".to_owned()]);
+        report_watcher_errors(&events, ["fixture failure".to_owned()]);
+        assert_eq!(
+            events.borrow().iter().collect::<Vec<_>>(),
+            vec![&OnlineGenerationEvent::WatchDegraded {
+                detail: "fixture failure".to_owned(),
+            }]
+        );
+    }
+
     #[test]
     fn initial_generation_preserves_the_approved_plan() {
         let directory = tempfile::tempdir().unwrap();
@@ -1349,6 +2098,175 @@ mod tests {
         assert_eq!(generation.plan, approved);
         assert!(generation.artifact_set.value().releases.is_empty());
         assert!(generation.artifact_set.value().instances.is_empty());
+    }
+
+    #[test]
+    fn online_source_transition_authorizes_one_bounded_automatic_rollback() {
+        let directory = tempfile::tempdir().unwrap();
+        let definition = source_definition(directory.path());
+        let host_build = HostBuildIdentity::current().unwrap();
+        let current_snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+        let current = resolve_generation_with_authority(
+            crate::test_support::headless_plan(),
+            &current_snapshot.authority,
+            &host_build,
+        )
+        .unwrap();
+        copy_text_tool_bundle(&directory.path().join("plugins/text-tools"));
+        let candidate_snapshot =
+            crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+        let candidate = resolve_generation_with_authority(
+            crate::test_support::headless_plan(),
+            &candidate_snapshot.authority,
+            &host_build,
+        )
+        .unwrap();
+
+        let transition = online_overlap_transition(current.spec.digest(), &candidate).unwrap();
+        assert_eq!(
+            transition.value().from_generation_spec_digest.as_deref(),
+            Some(current.spec.digest())
+        );
+        assert_eq!(
+            transition.value().rollout_policy.rollback_window_nanos,
+            ONLINE_ROLLBACK_WINDOW_NANOS.to_string()
+        );
+        assert!(
+            transition
+                .value()
+                .rollout_policy
+                .automatic_rollback_on_generation_failure
+        );
+    }
+
+    #[test]
+    fn terminal_controller_failure_is_presented_as_an_exact_automatic_rollback() {
+        let failure = lenso_plugin_control_plane::GenerationFailureOutcome {
+            generation_spec_digest: "sha256:failed".to_owned(),
+            failure: ControlPlaneError::HostFailure {
+                detail: "terminal fixture".to_owned(),
+            },
+            automatic_rollback: Some(lenso_plugin_control_plane::DurableTransitionOutcome {
+                active_generation_spec_digest: "sha256:restored".to_owned(),
+                supervisor_epoch: 3,
+                routing_epoch: 7,
+                draining_generation_spec_digest: Some("sha256:failed".to_owned()),
+                activation_direction: lenso_plugin_control_plane::ActivationDirection::Rollback,
+            }),
+        };
+
+        assert_eq!(
+            online_event_from_controller_event(GenerationControllerEvent::Maintained(
+                GenerationMaintenanceOutcome::Failed(failure)
+            )),
+            Some(OnlineGenerationEvent::RolledBack {
+                failed_generation_spec_digest: "sha256:failed".to_owned(),
+                restored_generation_spec_digest: "sha256:restored".to_owned(),
+                routing_epoch: 7,
+                detail:
+                    "terminal App Generation failure: HostFailure { detail: \"terminal fixture\" }"
+                        .to_owned(),
+            })
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn terminal_source_generation_failure_restores_the_exact_predecessor_route() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let host_build = HostBuildIdentity::current().unwrap();
+                let current_snapshot =
+                    crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let current = resolve_generation_with_authority(
+                    crate::test_support::headless_plan(),
+                    &current_snapshot.authority,
+                    &host_build,
+                )
+                .unwrap();
+                copy_text_tool_bundle(&directory.path().join("plugins/text-tools"));
+                let candidate_snapshot =
+                    crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let candidate = resolve_generation_with_authority(
+                    crate::test_support::headless_plan(),
+                    &candidate_snapshot.authority,
+                    &host_build,
+                )
+                .unwrap();
+                let current_digest = current.spec.digest().to_owned();
+                let candidate_digest = candidate.spec.digest().to_owned();
+                let failed = Rc::new(RefCell::new(BTreeSet::new()));
+                let runtime = TerminalFailureRuntime {
+                    failed: failed.clone(),
+                };
+                let store_root = directory.path().join(".lenso/plugins");
+                let supervisor = DurableGenerationSupervisor::open(
+                    APP_ID,
+                    runtime,
+                    FileControlStateStore::open(store_root.join(CONTROL_DIRECTORY)).unwrap(),
+                )
+                .unwrap();
+                let (controller, client) =
+                    GenerationController::new(supervisor, MAINTENANCE_INTERVAL).unwrap();
+                let mut events = client.subscribe();
+                let task = tokio::task::spawn_local(controller.run());
+                client
+                    .transition(
+                        initial_transition(&current).unwrap(),
+                        current,
+                        BTreeMap::new(),
+                    )
+                    .await
+                    .unwrap();
+                client
+                    .transition(
+                        online_overlap_transition(&current_digest, &candidate).unwrap(),
+                        candidate,
+                        BTreeMap::new(),
+                    )
+                    .await
+                    .unwrap();
+                failed.borrow_mut().insert(candidate_digest.clone());
+
+                let rollback = tokio::time::timeout(Duration::from_secs(2), async {
+                    loop {
+                        if let GenerationControllerEvent::Maintained(
+                            GenerationMaintenanceOutcome::Failed(failure),
+                        ) = events.recv().await.unwrap()
+                            && failure.generation_spec_digest == candidate_digest
+                        {
+                            break failure.automatic_rollback.unwrap();
+                        }
+                    }
+                })
+                .await
+                .expect("terminal source Generation did not roll back");
+                assert_eq!(rollback.active_generation_spec_digest, current_digest);
+                assert_eq!(client.route().await.unwrap().target(), &current_digest);
+                let status = source_controller_status(&store_root).unwrap();
+                assert!(
+                    status.iter().any(|line| {
+                        line.starts_with(
+                            "generation: headless Active health=Healthy direction=Rollback",
+                        ) && line.ends_with(&current_digest)
+                    }),
+                    "{status:?}"
+                );
+                assert!(
+                    status.iter().any(|line| {
+                        line.starts_with("generation: headless Retired health=Failed")
+                            && line.contains("retirement=Some(TerminalFailure)")
+                            && line.ends_with(&candidate_digest)
+                    }),
+                    "{status:?}"
+                );
+
+                client.shutdown().await.unwrap();
+                task.await.unwrap().unwrap();
+            })
+            .await;
     }
 
     #[test]
@@ -1525,7 +2443,8 @@ mod tests {
                         let state = app.client.inspect().await.unwrap();
                         if state.generations.iter().any(|record| {
                             record.generation_spec_digest == old_digest
-                                && record.lifecycle == ControlLifecycle::Retired
+                                && record.lifecycle == ControlLifecycle::Standby
+                                && record.health == ControlHealth::Healthy
                         }) {
                             break;
                         }
@@ -1533,7 +2452,7 @@ mod tests {
                     }
                 })
                 .await
-                .expect("old Generation did not retire after its final Lease");
+                .expect("old Generation did not become the healthy rollback standby");
                 app.shutdown().await.unwrap();
             })
             .await;
@@ -1566,6 +2485,456 @@ mod tests {
                 assert_eq!(after.generation_spec_digest(), before_digest);
                 drop(after);
                 app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn source_discovery_switches_online_and_removal_restores_the_base_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut app = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let old_turn = app.lease_turn().await.unwrap();
+                let base_digest = old_turn.generation_spec_digest().to_owned();
+
+                copy_text_tool_bundle(&directory.path().join("plugins/text-tools"));
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    previous_generation_spec_digest,
+                    ..
+                } = event
+                else {
+                    panic!("expected source discovery to switch the Generation")
+                };
+                assert_eq!(previous_generation_spec_digest, base_digest);
+                assert_ne!(generation_spec_digest, base_digest);
+                assert_eq!(
+                    run_turn_text(&app, "Use the text Plugin to uppercase Lenso plugin.").await,
+                    "Text Plugin result: LENSO PLUGIN"
+                );
+                assert_eq!(old_turn.generation_spec_digest(), base_digest);
+                drop(old_turn);
+
+                fs::remove_dir_all(directory.path().join("plugins/text-tools")).unwrap();
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    ..
+                } = event
+                else {
+                    panic!("expected source removal to switch the Generation")
+                };
+                assert_eq!(generation_spec_digest, base_digest);
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gradual_bundle_copy_settles_before_discovery_reconciles() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut app = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+
+                let bundle = directory.path().join("plugins/text-tools");
+                fs::create_dir_all(&bundle).unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../examples/plugins/text-tools/lenso-plugin.json");
+                fs::copy(source, bundle.join("lenso-plugin.json")).unwrap();
+
+                let event = next_online_event(&app).await;
+                assert!(
+                    matches!(event, OnlineGenerationEvent::Switched { .. }),
+                    "gradual copy produced an intermediate reconcile event: {event:?}"
+                );
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn hidden_staging_bundle_is_inert_until_atomic_publish() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut app = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let before = app.lease_turn().await.unwrap();
+                let base_digest = before.generation_spec_digest().to_owned();
+                drop(before);
+
+                let staging = directory.path().join("plugins/.staging-text-tools");
+                copy_text_tool_bundle(&staging);
+                tokio::time::sleep(RECONCILE_CONSISTENCY_INTERVAL + Duration::from_millis(500))
+                    .await;
+                assert!(app.take_online_generation_events().is_empty());
+                let staged = app.lease_turn().await.unwrap();
+                assert_eq!(staged.generation_spec_digest(), base_digest);
+                drop(staged);
+
+                fs::rename(staging, directory.path().join("plugins/text-tools")).unwrap();
+                let event = next_online_event(&app).await;
+                assert!(matches!(event, OnlineGenerationEvent::Switched { .. }));
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn packaged_bundle_drops_in_replaces_and_unloads_without_extraction() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut app = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let before = app.lease_turn().await.unwrap();
+                let base_digest = before.generation_spec_digest().to_owned();
+                drop(before);
+
+                fs::create_dir(directory.path().join("plugins")).unwrap();
+                let source = directory.path().join("bundle-source");
+                copy_text_tool_bundle(&source);
+                let package = directory.path().join("plugins/text-tools.lenso-plugin");
+                crate::plugins::pack_bundle(&source, &package).unwrap();
+
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    ..
+                } = event
+                else {
+                    panic!("expected packaged Bundle drop-in to switch the Generation")
+                };
+                assert_ne!(generation_spec_digest, base_digest);
+                assert_eq!(
+                    run_turn_text(&app, "Use the text Plugin to uppercase Lenso plugin.").await,
+                    "Text Plugin result: LENSO PLUGIN"
+                );
+                assert!(!directory.path().join("plugins/text-tools").exists());
+
+                let manifest_path = source.join("lenso-plugin.json");
+                let mut manifest: serde_json::Value =
+                    serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+                manifest["release_version"] = "2.0.0".into();
+                fs::write(
+                    &manifest_path,
+                    serde_json::to_vec_pretty(&manifest).unwrap(),
+                )
+                .unwrap();
+                crate::plugins::pack_bundle(&source, &package).unwrap();
+
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest: replacement_digest,
+                    ..
+                } = event
+                else {
+                    panic!("expected packaged Bundle replacement to switch the Generation")
+                };
+                assert_ne!(replacement_digest, generation_spec_digest);
+                assert_ne!(replacement_digest, base_digest);
+                assert_eq!(
+                    run_turn_text(&app, "Use the text Plugin to uppercase Lenso plugin.").await,
+                    "Text Plugin result: LENSO PLUGIN"
+                );
+
+                fs::remove_file(package).unwrap();
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    ..
+                } = &event
+                else {
+                    panic!("expected packaged Bundle removal to switch the Generation: {event:?}")
+                };
+                assert_eq!(generation_spec_digest, &base_digest);
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn blocked_source_bundle_keeps_routing_and_does_not_block_a_safe_bundle() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut app = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let before = app.lease_turn().await.unwrap();
+                let base_digest = before.generation_spec_digest().to_owned();
+                drop(before);
+
+                fs::create_dir_all(directory.path().join("plugins/malformed")).unwrap();
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Rejected { detail, .. } = event else {
+                    panic!("expected malformed discovery Bundle to be quarantined")
+                };
+                assert!(detail.contains("Plugin Bundle is missing `lenso-plugin.json`"));
+                let after_rejection = app.lease_turn().await.unwrap();
+                assert_eq!(after_rejection.generation_spec_digest(), base_digest);
+                drop(after_rejection);
+
+                copy_text_tool_bundle(&directory.path().join("plugins/text-tools"));
+                let switched = tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        for event in app.take_online_generation_events() {
+                            if let OnlineGenerationEvent::Switched { .. } = event {
+                                return event;
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("safe discovered Bundle did not switch while another Bundle was blocked");
+                let OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    ..
+                } = switched
+                else {
+                    unreachable!()
+                };
+                assert_ne!(generation_spec_digest, base_digest);
+                assert_eq!(
+                    run_turn_text(&app, "Use the text Plugin to uppercase Lenso plugin.").await,
+                    "Text Plugin result: LENSO PLUGIN"
+                );
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn source_candidate_that_cannot_become_ready_keeps_the_current_generation() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut app = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let before = app.lease_turn().await.unwrap();
+                let base_digest = before.generation_spec_digest().to_owned();
+                drop(before);
+
+                build_invalid_wasm_tool_bundle(directory.path());
+                let event = next_online_event(&app).await;
+                let OnlineGenerationEvent::Rejected { detail, .. } = event else {
+                    panic!("expected an unstartable source candidate to be rejected")
+                };
+                assert!(
+                    detail.contains("Wasm")
+                        || detail.contains("wasm")
+                        || detail.contains("Ready")
+                        || detail.contains("ready"),
+                    "{detail}"
+                );
+                let after = app.lease_turn().await.unwrap();
+                assert_eq!(after.generation_spec_digest(), base_digest);
+                drop(after);
+                assert_eq!(
+                    run_turn_text(&app, "Answer directly: current Generation is healthy").await,
+                    "Direct answer."
+                );
+                app.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn durable_source_generation_recovers_after_graceful_restart() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                copy_text_tool_bundle(&directory.path().join("plugins/text-tools"));
+
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut first = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    TUI_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let first_turn = first.lease_tui_turn().await.unwrap();
+                let first_digest = first_turn.generation_spec_digest().to_owned();
+                drop(first_turn);
+                first.shutdown().await.unwrap();
+
+                assert!(
+                    directory
+                        .path()
+                        .join(".lenso/plugins/tui-generation-control")
+                        .is_dir()
+                );
+                assert!(
+                    directory
+                        .path()
+                        .join(".lenso/plugins/generation-authorities")
+                        .is_dir()
+                );
+                let status =
+                    source_controller_status(&directory.path().join(".lenso/plugins")).unwrap();
+                assert!(status.iter().any(|line| {
+                    line.starts_with("controller: tui ") && line.contains("suspended=true")
+                }));
+                assert!(status.iter().any(|line| {
+                    line.starts_with("generation: tui Active ")
+                        || line.starts_with("generation: tui Standby ")
+                }));
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut recovered = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    TUI_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let recovered_turn = recovered.lease_tui_turn().await.unwrap();
+                assert_eq!(recovered_turn.generation_spec_digest(), first_digest);
+                drop(recovered_turn);
+                recovered.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn durable_source_generation_recovers_after_unclean_host_exit() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                copy_text_tool_bundle(&directory.path().join("plugins/text-tools"));
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut first = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CHANNEL_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let turn = first.lease_turn().await.unwrap();
+                let active_digest = turn.generation_spec_digest().to_owned();
+                drop(turn);
+                first.controller.take().unwrap().abort();
+                drop(first);
+
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut recovered = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CHANNEL_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let recovered_turn = recovered.lease_turn().await.unwrap();
+                assert_eq!(recovered_turn.generation_spec_digest(), active_digest);
+                drop(recovered_turn);
+                recovered.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn durable_source_controller_state_is_namespaced_per_surface() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let directory = tempfile::tempdir().unwrap();
+                let definition = source_definition(directory.path());
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut headless = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                let snapshot = crate::plugins::source_generation_snapshot_at(&definition).unwrap();
+                let mut tui = AgentApp::start_with_durable_source_snapshot(
+                    crate::test_support::headless_plan(),
+                    snapshot,
+                    TUI_CONTROL_DIRECTORY,
+                )
+                .await
+                .unwrap();
+                assert!(
+                    directory
+                        .path()
+                        .join(".lenso/plugins/generation-control")
+                        .is_dir()
+                );
+                assert!(
+                    directory
+                        .path()
+                        .join(".lenso/plugins/tui-generation-control")
+                        .is_dir()
+                );
+                let headless_turn = headless.lease_turn().await.unwrap();
+                let tui_turn = tui.lease_tui_turn().await.unwrap();
+                assert_eq!(
+                    headless_turn.generation_spec_digest(),
+                    tui_turn.generation_spec_digest()
+                );
+                drop(headless_turn);
+                drop(tui_turn);
+                headless.shutdown().await.unwrap();
+                tui.shutdown().await.unwrap();
             })
             .await;
     }
@@ -1772,5 +3141,96 @@ mod tests {
                 replacement.shutdown().await.unwrap();
             })
             .await;
+    }
+
+    fn source_definition(directory: &Path) -> PathBuf {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut definition: serde_json::Value =
+            serde_json::from_slice(&fs::read(repository.join("lenso.app.json")).unwrap()).unwrap();
+        definition["manifest"] = repository.join("Cargo.toml").display().to_string().into();
+        let path = directory.join("lenso.app.json");
+        fs::write(&path, serde_json::to_vec_pretty(&definition).unwrap()).unwrap();
+        path
+    }
+
+    fn copy_text_tool_bundle(destination: &Path) {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/plugins/text-tools/lenso-plugin.json");
+        fs::create_dir_all(destination).unwrap();
+        fs::copy(source, destination.join("lenso-plugin.json")).unwrap();
+    }
+
+    fn build_invalid_wasm_tool_bundle(directory: &Path) {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/external-plugins/wasm-text-tools");
+        let target = directory.join("wasm-target");
+        let build = std::process::Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--locked",
+                "--release",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--manifest-path",
+            ])
+            .arg(source.join("guest/Cargo.toml"))
+            .arg("--target-dir")
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            build.status.success(),
+            "{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let artifact = target.join("wasm32-unknown-unknown/release/external_wasm_text_tools.wasm");
+        let output = directory.join("plugins/invalid-wasm");
+        build_bundle(&BundleBuild {
+            template: source.join("lenso-plugin.template.json"),
+            output: output.clone(),
+            artifact_sources: vec![ArtifactSource {
+                artifact_id: "tool-wasm".to_owned(),
+                path: artifact,
+            }],
+        })
+        .unwrap();
+        let invalid = b"not a Wasm Component";
+        fs::write(output.join("plugin.wasm"), invalid).unwrap();
+        let manifest_path = output.join("lenso-plugin.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["artifacts"][0]["digest"] = sha256_digest(invalid).into();
+        manifest["artifacts"][0]["size"] = invalid.len().into();
+        fs::write(manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    }
+
+    async fn run_turn_text(app: &AgentApp, input: &str) -> String {
+        let turn = app.lease_turn().await.unwrap();
+        let stream = turn
+            .handle()
+            .open_with_context(
+                RUN_TURN_OPERATION,
+                turn.invocation_context().unwrap(),
+                RunTurnRequest {
+                    input: input.to_owned(),
+                    session_id: None,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        stream.close_send().await.unwrap();
+        let mut output = String::new();
+        loop {
+            match stream.receive().await.unwrap() {
+                StreamEvent::Message(message) if message.is_text_delta() => {
+                    output.push_str(&message.text);
+                }
+                StreamEvent::Message(_) | StreamEvent::PeerHalfClosed => {}
+                StreamEvent::Terminal(Ok(())) => break,
+                StreamEvent::Terminal(Err(error)) => panic!("Agent Turn failed: {error:?}"),
+            }
+        }
+        output
     }
 }

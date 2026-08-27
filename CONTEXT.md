@@ -161,7 +161,8 @@ Generation down after validation; it is not live hot loading or distributed
 coordination.
 
 Every running Host also owns one bounded online reconciler beside its durable
-Generation Controller. It non-blockingly observes committed Active Set changes,
+Generation Controller. Native filesystem events wake it, while a low-frequency
+consistency scan covers missed or unavailable events. It non-blockingly observes committed Active Set changes,
 resolves them against the exact startup Plan and Host Build, records their
 immutable recovery authority, and submits an `Overlap` transition. The
 candidate must become Ready before the routing epoch advances. Existing Turns
@@ -186,11 +187,15 @@ payload contract, and the CLI joins them without printing user input. Missing
 or corrupt Generation Specs are observable facts; inspection never repairs,
 deletes, activates, or rolls back authority.
 
-The Host can also produce a read-only Generation GC plan. It protects Specs
-referenced by current or retained Plugin Sets or by any durable Session Turn,
-and reports only the remaining Specs as candidates. A candidate is not deletion
-authorization; deletion, time-based retention, and Plugin Store collection
-remain deferred.
+The Host can produce a read-only Generation GC preview and can explicitly
+apply a newly fenced snapshot. Every Host using an existing Plugin authority
+root holds a shared process-lifetime GC lease. Apply waits for all such Hosts,
+takes the Plugin authority transition fence, and rebuilds reachability from
+current or retained Plugin Sets, every non-retired surface Controller record,
+and durable Session Turns. It removes only unreferenced Generation Specs and
+recovery authority, never treating preview output as deletion authorization.
+Controller record compaction, time-based retention, and Plugin Store Artifact
+collection remain deferred.
 
 The Catalog currently contains one exact native Tool Provider append-to-`many`
 entry plus reviewed workspace-edit, Skills, local-process, and Model Profiles;

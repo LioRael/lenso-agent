@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
 };
 
@@ -26,15 +26,19 @@ const ACTIVE_SET_FILE: &str = "active-set.json";
 const ACTIVE_SET_DIRECTORY: &str = "active-sets";
 const RECOVERY_AUTHORITY_DIRECTORY: &str = "generation-authorities";
 const MANIFEST_FILE: &str = "lenso-plugin.json";
+const PACKAGED_BUNDLE_EXTENSION: &str = "lenso-plugin";
+const PLUGIN_CONFIGURATION_SUFFIX: &str = ".config.toml";
 const LOCAL_REVIEW_PROVENANCE: &str = "local-review";
 const LOCAL_REVIEW_POLICY: &str = "lenso.agent.local-review@1";
 const BUNDLED_POLICY: &str = "lenso.agent.host-build@1";
 const BUNDLED_PROVENANCE: &str = "host-build";
 const PLUGIN_SELECTION_EXTENSION: &str = "lenso.agent.plugins";
+const DISCOVERY_DIRECTORY: &str = "plugins";
 const MAX_BUNDLE_FILES: usize = 4_096;
 const MAX_BUNDLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_BUNDLE_DEPTH: usize = 32;
 const MAX_EVIDENCE_BYTES: usize = 4_096;
+const MAX_PLUGIN_CONFIGURATION_BYTES: u64 = 256 * 1024;
 #[cfg(test)]
 const EMPTY_CONFIGURATION_SCHEMA: &[u8] = br#"{"additionalProperties":false,"type":"object"}"#;
 #[cfg(test)]
@@ -71,6 +75,10 @@ pub enum PluginCommand {
         root: PathBuf,
     },
     Available,
+    Pack {
+        bundle: PathBuf,
+        output: PathBuf,
+    },
     Install {
         bundle: PathBuf,
         evidence: Option<String>,
@@ -96,6 +104,7 @@ pub enum PluginCommand {
     },
     Status {
         root: PathBuf,
+        verbose: bool,
     },
     History {
         root: PathBuf,
@@ -114,6 +123,7 @@ pub fn parse_command(arguments: &[String]) -> Result<PluginCommand, String> {
         "enable" => parse_enable(&arguments[1..]),
         "disable" => parse_disable(&arguments[1..]),
         "available" if arguments.len() == 1 => Ok(PluginCommand::Available),
+        "pack" => parse_pack(&arguments[1..]),
         "install" => parse_install(&arguments[1..]),
         "remove" => parse_remove(&arguments[1..]),
         "upgrade" => parse_upgrade(&arguments[1..]),
@@ -142,41 +152,25 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
             print_available();
             Ok(())
         }
+        PluginCommand::Pack { bundle, output } => {
+            let digest = pack_bundle(&bundle, &output)?;
+            println!("package: {}", output.display());
+            println!("archive: {digest}");
+            Ok(())
+        }
         PluginCommand::Install {
             bundle,
             evidence,
             features,
             root,
-        } => run_install(&bundle, evidence.as_deref(), features, &root),
-        PluginCommand::Status { root } => {
-            if let Some(snapshot) = source_selection()? {
-                if snapshot.selection.enabled.is_empty() {
-                    println!("No bundled Plugins enabled.");
-                } else {
-                    for selection in &snapshot.selection.enabled {
-                        println!("enabled: {selection}");
-                    }
-                }
-                println!("config: {}", snapshot.local.path().display());
-                return Ok(());
-            }
-            let authority = load_generation_authority(&root)?;
-            if authority.lock.value().plugins.is_empty() {
-                println!("No active Plugin releases.");
-            } else {
-                for plugin in &authority.lock.value().plugins {
-                    println!(
-                        "{}@{} {}",
-                        plugin.plugin_id, plugin.release_version, plugin.manifest_digest
-                    );
-                }
-            }
-            println!("plugin-set: {}", authority.lock.digest());
-            Ok(())
-        }
+        } => run_install(&bundle, evidence.as_deref(), features, &root).await,
+        PluginCommand::Status { root, verbose } => run_status(&root, verbose),
         PluginCommand::Remove { plugin_id, root } => {
-            reject_store_operation_for_source_app("remove")?;
-            let digest = remove(&root, &plugin_id)?;
+            let digest = if let Some(snapshot) = source_selection()? {
+                remove_from_source_app(&root, &plugin_id, snapshot).await?
+            } else {
+                remove(&root, &plugin_id)?
+            };
             println!("removed: {plugin_id}");
             println!("plugin-set: {digest}");
             Ok(())
@@ -216,14 +210,85 @@ pub async fn run(command: PluginCommand) -> Result<(), String> {
     }
 }
 
-fn run_install(
+fn run_status(root: &Path, verbose: bool) -> Result<(), String> {
+    if let Some(snapshot) = source_selection()? {
+        let root = source_plugin_root(&snapshot, root)?;
+        let discovery_root = source_discovery_root(&snapshot);
+        println!("Plugin folder: {}", discovery_root.display());
+        let mut found = false;
+        for selection in &snapshot.selection.enabled {
+            println!("Plugin: {selection} (built in)");
+            found = true;
+        }
+        let store_is_active = source_store_is_active(&root)?;
+        if store_is_active {
+            let authority = load_generation_authority(&root)?;
+            for plugin in &authority.lock.value().plugins {
+                println!(
+                    "Plugin: {}@{} (installed)",
+                    plugin.plugin_id, plugin.release_version
+                );
+                found = true;
+            }
+        }
+        let installed = store_is_active
+            .then(|| load_generation_authority_unfenced(&root))
+            .transpose()?;
+        let source = source_generation_snapshot_with_explicit(
+            &snapshot.selection,
+            &snapshot.definition_path,
+            &discovery_root,
+            &root,
+            installed,
+        )?;
+        for plugin in &source.discovered {
+            println!("Plugin: {}@{}", plugin.plugin_id, plugin.release_version);
+            found = true;
+        }
+        for blocked in &source.blocked {
+            println!("Problem: {}: {}", blocked.entry, blocked.detail);
+        }
+        if !found {
+            println!("No plugins found.");
+        }
+        if !verbose {
+            return Ok(());
+        }
+        println!("desired-state: {}", source.desired_state_digest);
+        for line in crate::generation::source_controller_status(&root)? {
+            println!("{line}");
+        }
+        println!("config: {}", snapshot.local.path().display());
+        return Ok(());
+    }
+    let authority = load_generation_authority(root)?;
+    if authority.lock.value().plugins.is_empty() {
+        println!("No plugins installed.");
+    } else {
+        for plugin in &authority.lock.value().plugins {
+            println!("Plugin: {}@{}", plugin.plugin_id, plugin.release_version);
+            if verbose {
+                println!("  manifest: {}", plugin.manifest_digest);
+            }
+        }
+    }
+    if verbose {
+        println!("plugin-set: {}", authority.lock.digest());
+    }
+    Ok(())
+}
+
+async fn run_install(
     bundle: &Path,
     evidence: Option<&str>,
     features: Vec<String>,
     root: &Path,
 ) -> Result<(), String> {
-    reject_store_operation_for_source_app("install")?;
-    let outcome = install(root, bundle, evidence, features)?;
+    let outcome = if let Some(snapshot) = source_selection()? {
+        install_into_source_app(root, bundle, evidence, features, snapshot).await?
+    } else {
+        install(root, bundle, evidence, features)?
+    };
     println!(
         "installed: {}@{}",
         outcome.plugin_id, outcome.release_version
@@ -272,7 +337,7 @@ async fn run_rollback(to: &str, plan: Option<&Path>, root: &Path) -> Result<(), 
 fn reject_store_operation_for_source_app(operation: &str) -> Result<(), String> {
     if source_selection()?.is_some() {
         return Err(format!(
-            "plugins {operation} uses the legacy private Plugin Store and is unavailable for a source-backed App; bundled selections use `plugins enable` and `plugins disable`"
+            "plugins {operation} is not yet unified for a source-backed App; use `plugins install` and `plugins remove` for acquired Releases or `plugins enable` and `plugins disable` for bundled selections"
         ));
     }
     Ok(())
@@ -286,7 +351,7 @@ async fn run_enable(
 ) -> Result<(), String> {
     let plan = crate::plan_bytes(plan)?;
     if let Some(snapshot) = source_selection()? {
-        return run_source_enable(bundled, &plan, snapshot).await;
+        return run_source_enable(bundled, &plan, root, snapshot).await;
     }
     let outcome = enable_loaded(root, bundled_plugin(bundled)?, evidence, &plan).await?;
     println!("enabled: {bundled}");
@@ -303,7 +368,7 @@ async fn run_enable(
 async fn run_disable(plugin: &str, plan: Option<&Path>, root: &Path) -> Result<(), String> {
     let plan = crate::plan_bytes(plan)?;
     if let Some(snapshot) = source_selection()? {
-        return run_source_disable(plugin, &plan, snapshot).await;
+        return run_source_disable(plugin, &plan, root, snapshot).await;
     }
     let plugin_id = bundled_plugin_id(plugin).unwrap_or(plugin);
     let outcome = disable(root, plugin_id, &plan).await?;
@@ -317,8 +382,10 @@ async fn run_disable(plugin: &str, plan: Option<&Path>, root: &Path) -> Result<(
 async fn run_source_enable(
     bundled: &str,
     plan: &[u8],
+    root: &Path,
     snapshot: SourceSelectionSnapshot,
 ) -> Result<(), String> {
+    let root = source_plugin_root(&snapshot, root)?;
     let (name, selection_id) = if bundled.ends_with("@1") {
         (bundled_selection_name(bundled)?, bundled.to_owned())
     } else {
@@ -327,10 +394,21 @@ async fn run_source_enable(
     if snapshot.selection.enabled.contains(&selection_id) {
         return Err(format!("bundled Plugin `{name}` is already enabled"));
     }
-    let current_authority = source_generation_authority(&snapshot.selection)?;
+    let discovery_root = source_discovery_root(&snapshot);
+    let current_authority = source_generation_authority_with_store(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &discovery_root,
+        &root,
+    )?;
     let mut next = snapshot.selection.clone();
     next.enabled.insert(selection_id.clone());
-    let candidate_authority = source_generation_authority(&next)?;
+    let candidate_authority = source_generation_authority_with_store(
+        &next,
+        &snapshot.definition_path,
+        &discovery_root,
+        &root,
+    )?;
     let generation = crate::generation::ready_check_source_transition(
         plan,
         current_authority,
@@ -348,8 +426,10 @@ async fn run_source_enable(
 async fn run_source_disable(
     plugin: &str,
     plan: &[u8],
+    root: &Path,
     snapshot: SourceSelectionSnapshot,
 ) -> Result<(), String> {
+    let root = source_plugin_root(&snapshot, root)?;
     let selection_id = if plugin.ends_with("@1") {
         bundled_selection_name(plugin)?;
         plugin.to_owned()
@@ -365,10 +445,21 @@ async fn run_source_disable(
             "bundled Plugin selection `{selection_id}` is not enabled"
         ));
     }
-    let current_authority = source_generation_authority(&snapshot.selection)?;
+    let discovery_root = source_discovery_root(&snapshot);
+    let current_authority = source_generation_authority_with_store(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &discovery_root,
+        &root,
+    )?;
     let mut next = snapshot.selection.clone();
     next.enabled.remove(&selection_id);
-    let candidate_authority = source_generation_authority(&next)?;
+    let candidate_authority = source_generation_authority_with_store(
+        &next,
+        &snapshot.definition_path,
+        &discovery_root,
+        &root,
+    )?;
     let generation = crate::generation::ready_check_source_transition(
         plan,
         current_authority,
@@ -481,6 +572,23 @@ fn parse_install(arguments: &[String]) -> Result<PluginCommand, String> {
     })
 }
 
+fn parse_pack(arguments: &[String]) -> Result<PluginCommand, String> {
+    let mut bundle = None;
+    let mut output = None;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--bundle" => bundle = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            "--output" => output = Some(PathBuf::from(arguments.next().ok_or_else(usage)?)),
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Pack {
+        bundle: bundle.ok_or_else(usage)?,
+        output: output.ok_or_else(usage)?,
+    })
+}
+
 fn parse_enable(arguments: &[String]) -> Result<PluginCommand, String> {
     let mut bundled = None;
     let mut evidence = None;
@@ -531,12 +639,17 @@ fn parse_disable(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn parse_status(arguments: &[String]) -> Result<PluginCommand, String> {
-    let root = match arguments {
-        [] => default_root(),
-        [flag, root] if flag == "--root" => PathBuf::from(root),
-        _ => return Err(usage()),
-    };
-    Ok(PluginCommand::Status { root })
+    let mut root = default_root();
+    let mut verbose = false;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        match argument.as_str() {
+            "--root" => root = PathBuf::from(arguments.next().ok_or_else(usage)?),
+            "--verbose" => verbose = true,
+            _ => return Err(usage()),
+        }
+    }
+    Ok(PluginCommand::Status { root, verbose })
 }
 
 fn parse_history(arguments: &[String]) -> Result<PluginCommand, String> {
@@ -641,7 +754,7 @@ fn parse_rollback(arguments: &[String]) -> Result<PluginCommand, String> {
 }
 
 fn usage() -> String {
-    "usage: lenso-agent-cli plugins <available|enable <text-tools|workspace-edit|skills|local-process|subagent|code-mode|approval|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
+    "usage: lenso-agent-cli plugins <available|pack --bundle <directory> --output <file.lenso-plugin>|enable <text-tools|workspace-edit|skills|local-process|subagent|code-mode|approval|openai-compatible|fixture-model|codex-direct> [--evidence <review>] [--plan <path>] [--root <directory>]|disable <name-or-plugin-id> [--plan <path>] [--root <directory>]|install --bundle <directory-or-file.lenso-plugin> [--evidence <review>] [--feature <id>]... [--root <directory>]|upgrade --bundle <directory-or-file.lenso-plugin> [--evidence <review>] [--expected-manifest <sha256:digest>] [--plan <path>] [--feature <id>]... [--root <directory>]|rollback --to <sha256:active-set-digest> [--plan <path>] [--root <directory>]|remove --plugin <id> [--root <directory>]|status [--verbose] [--root <directory>]|history [--root <directory>]|inspect --active-set <sha256:digest> [--root <directory>]>".to_owned()
 }
 
 fn default_root() -> PathBuf {
@@ -669,10 +782,40 @@ struct SourceSelectionSnapshot {
     selection: PluginSelection,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub(crate) struct BlockedDiscoveredPlugin {
+    pub(crate) entry: String,
+    pub(crate) detail: String,
+}
+
+pub(crate) struct SourceGenerationSnapshot {
+    pub(crate) authority: GenerationPluginAuthority,
+    pub(crate) desired_state_digest: String,
+    pub(crate) definition_path: PathBuf,
+    pub(crate) store_root: PathBuf,
+    pub(crate) discovered: Vec<LockedPlugin>,
+    pub(crate) blocked: Vec<BlockedDiscoveredPlugin>,
+}
+
+struct DiscoveryOutcome {
+    authority: Option<GenerationPluginAuthority>,
+    blocked: Vec<BlockedDiscoveredPlugin>,
+}
+
+#[derive(Serialize)]
+struct SourceDesiredStateFingerprint<'a> {
+    authority_digest: &'a str,
+    blocked: &'a [BlockedDiscoveredPlugin],
+}
+
 fn source_selection() -> Result<Option<SourceSelectionSnapshot>, String> {
     let Some(path) = crate::existing_app_definition_path() else {
         return Ok(None);
     };
+    source_selection_at(path).map(Some)
+}
+
+fn source_selection_at(path: PathBuf) -> Result<SourceSelectionSnapshot, String> {
     let bytes =
         fs::read(&path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let definition = lenso_authoring::CargoAppDefinition::load(&path)
@@ -716,13 +859,38 @@ fn source_selection() -> Result<Option<SourceSelectionSnapshot>, String> {
     for id in &selection.enabled {
         bundled_selection_name(id)?;
     }
-    Ok(Some(SourceSelectionSnapshot {
+    Ok(SourceSelectionSnapshot {
         definition_path: path,
         definition_digest: sha256_digest(&bytes),
         local,
         legacy_extension: legacy.is_some(),
         selection,
-    }))
+    })
+}
+
+fn source_plugin_root(
+    snapshot: &SourceSelectionSnapshot,
+    requested: &Path,
+) -> Result<PathBuf, String> {
+    if requested != Path::new(".lenso/plugins") {
+        return Err(
+            "source-backed Apps keep acquired Releases beside the App Definition; custom `--root` is not supported"
+                .to_owned(),
+        );
+    }
+    Ok(snapshot
+        .definition_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(".lenso/plugins"))
+}
+
+fn source_discovery_root(snapshot: &SourceSelectionSnapshot) -> PathBuf {
+    snapshot
+        .definition_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(DISCOVERY_DIRECTORY)
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -756,6 +924,8 @@ struct ActiveRelease {
     plugin_id: String,
     manifest: PluginManifest,
     admission_receipt_digest: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    configuration_overrides: PluginConfigurationOverrides,
 }
 
 #[derive(Debug)]
@@ -822,10 +992,19 @@ struct RollbackOutcome {
     generation_spec: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 struct LoadedBundle {
     manifest: Vec<u8>,
     files: BTreeMap<String, Vec<u8>>,
+}
+
+type PluginConfigurationOverrides = BTreeMap<String, serde_json::Value>;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginConfigurationFile {
+    #[serde(default)]
+    modules: BTreeMap<String, toml::Value>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -875,7 +1054,7 @@ fn install(
     evidence: Option<&str>,
     features: Vec<String>,
 ) -> Result<InstallOutcome, String> {
-    install_loaded(root, load_bundle(bundle_root)?, evidence, features)
+    install_loaded(root, load_bundle_input(bundle_root)?, evidence, features)
 }
 
 #[allow(
@@ -886,16 +1065,35 @@ fn install_loaded(
     root: &Path,
     bundle: LoadedBundle,
     evidence: Option<&str>,
-    mut features: Vec<String>,
+    features: Vec<String>,
 ) -> Result<InstallOutcome, String> {
     let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
-    let mut active = validate_active_set(load_active_set(root)?, &store, &profiles)?.into_value();
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let (candidate, outcome) =
+        build_install_candidate(&store, &profiles, &current, bundle, evidence, features)?;
+    write_active_set(root, &candidate)?;
+    Ok(outcome)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one admission transaction keeps Bundle, Receipt, lock, and configuration closure together"
+)]
+fn build_install_candidate(
+    store: &PluginStore,
+    profiles: &PluginProfileCatalog,
+    current: &CanonicalDocument<ActivePluginSet>,
+    bundle: LoadedBundle,
+    evidence: Option<&str>,
+    mut features: Vec<String>,
+) -> Result<(CanonicalDocument<ActivePluginSet>, InstallOutcome), String> {
+    let mut active = current.value().clone();
     let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
         .map_err(control_error)?;
-    validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
+    validate_supported_manifest(manifest.value(), profiles).map_err(control_error)?;
     let feature_count = features.len();
     features.sort();
     features.dedup();
@@ -903,10 +1101,10 @@ fn install_loaded(
         return Err("selected Plugin Features contain a duplicate".to_owned());
     }
     let selected =
-        validate_selection(manifest.value(), &features, &profiles).map_err(control_error)?;
+        validate_selection(manifest.value(), &features, profiles).map_err(control_error)?;
     let (evidence, governance) = admission_evidence(
         evidence,
-        &profiles,
+        profiles,
         manifest.value(),
         &selected.module_contribution_ids,
     )?;
@@ -929,7 +1127,7 @@ fn install_loaded(
             &PluginBundle::new(bundle.manifest, bundle.files, LOCAL_REVIEW_PROVENANCE),
             &LocalReviewPolicy {
                 evidence: &evidence,
-                profiles: &profiles,
+                profiles,
             },
         )
         .map_err(control_error)?;
@@ -956,7 +1154,7 @@ fn install_loaded(
     active.lock.instances.extend(locked_instances(
         manifest.value(),
         &selected.module_contribution_ids,
-        &profiles,
+        profiles,
     )?);
     active
         .lock
@@ -966,7 +1164,7 @@ fn install_loaded(
         &mut active.lock.approved_grants,
         manifest.value(),
         &selected.module_contribution_ids,
-        &profiles,
+        profiles,
     )?;
     active
         .releases
@@ -975,25 +1173,80 @@ fn install_loaded(
         plugin_id: manifest.value().plugin_id.clone(),
         manifest: manifest.value().clone(),
         admission_receipt_digest: receipt.digest().to_owned(),
+        configuration_overrides: PluginConfigurationOverrides::new(),
     });
     active
         .releases
         .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
-    let active_document = validate_active_set(active, &store, &profiles)?;
-    write_active_set(root, &active_document)?;
+    let active_document = validate_active_set(active, store, profiles)?;
     let lock = CanonicalDocument::from_value(
         "lenso-plugins.lock.json",
         active_document.value().lock.clone(),
     )
     .map_err(control_error)?;
-    Ok(InstallOutcome {
+    let outcome = InstallOutcome {
         plugin_id: manifest.value().plugin_id.clone(),
         release_version: manifest.value().release_version.clone(),
         manifest_digest: manifest.digest().to_owned(),
         receipt_digest: receipt.digest().to_owned(),
         plugin_set_digest: lock.digest().to_owned(),
         governance,
-    })
+    };
+    Ok((active_document, outcome))
+}
+
+async fn install_into_source_app(
+    root: &Path,
+    bundle_root: &Path,
+    evidence: Option<&str>,
+    features: Vec<String>,
+    snapshot: SourceSelectionSnapshot,
+) -> Result<InstallOutcome, String> {
+    let root = source_plugin_root(&snapshot, root)?;
+    let root = root.as_path();
+    let plan = crate::plan_bytes(None)?;
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    let (candidate, outcome) = build_install_candidate(
+        &store,
+        &profiles,
+        &current,
+        load_bundle_input(bundle_root)?,
+        evidence,
+        features,
+    )?;
+    let discovery_root = source_discovery_root(&snapshot);
+    let current_authority = source_generation_snapshot_with_explicit(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &discovery_root,
+        root,
+        Some(generation_authority_from_document(
+            PluginStore::open(root.join("store")).map_err(control_error)?,
+            &current,
+        )?),
+    )?
+    .authority;
+    let candidate_authority = source_generation_snapshot_with_explicit(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &discovery_root,
+        root,
+        Some(generation_authority_from_document(
+            PluginStore::open(root.join("store")).map_err(control_error)?,
+            &candidate,
+        )?),
+    )?
+    .authority;
+    crate::generation::ready_check_source_transition(&plan, current_authority, candidate_authority)
+        .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)?;
+    Ok(outcome)
 }
 
 async fn enable_loaded(
@@ -1300,6 +1553,7 @@ pub(crate) fn source_generation_authority(
             plugin_id: manifest.value().plugin_id.clone(),
             manifest: manifest.value().clone(),
             admission_receipt_digest: receipt.digest().to_owned(),
+            configuration_overrides: PluginConfigurationOverrides::new(),
         });
         admission_receipts.insert(manifest.digest().to_owned(), receipt);
         manifests.insert(manifest.value().plugin_id.clone(), manifest);
@@ -1335,11 +1589,677 @@ pub(crate) fn source_generation_authority(
     })
 }
 
-pub(crate) fn current_source_generation_authority()
--> Result<Option<GenerationPluginAuthority>, String> {
-    source_selection()?
-        .map(|snapshot| source_generation_authority(&snapshot.selection))
-        .transpose()
+fn source_store_is_active(root: &Path) -> Result<bool, String> {
+    let path = root.join(ACTIVE_SET_FILE);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => Ok(true),
+        Ok(_) => Err("active Plugin Set is not a regular file".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("failed to inspect active Plugin Set: {error}")),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one discovery pass preserves deterministic quarantine and configuration pairing"
+)]
+fn discover_source_generation_authority(
+    discovery_root: &Path,
+    store_root: &Path,
+    reserved_plugin_ids: &BTreeSet<String>,
+) -> Result<DiscoveryOutcome, String> {
+    let entries = match discovery_entries(discovery_root) {
+        Ok(entries) => entries,
+        Err(blocked) => {
+            return Ok(DiscoveryOutcome {
+                authority: None,
+                blocked: vec![blocked],
+            });
+        }
+    };
+    if entries.is_empty() {
+        return Ok(DiscoveryOutcome {
+            authority: None,
+            blocked: Vec::new(),
+        });
+    }
+
+    let mut blocked = Vec::new();
+    let loaded = load_discovered_bundles(entries, &mut blocked);
+    if loaded.is_empty() {
+        return Ok(DiscoveryOutcome {
+            authority: None,
+            blocked,
+        });
+    }
+    let profiles = harness_plugin_profiles()?;
+    let store = PluginStore::open(store_root.join("store")).map_err(control_error)?;
+    let mut active =
+        CanonicalDocument::from_value("discovered Plugin Set", ActivePluginSet::empty())
+            .map_err(control_error)?;
+    let mut counts = BTreeMap::<String, usize>::new();
+    for (_, plugin_id, _, _) in &loaded {
+        *counts.entry(plugin_id.clone()).or_default() += 1;
+    }
+    let mut discovered_count = 0_usize;
+    let mut configured_instances = BTreeMap::new();
+    let mut configured_releases = BTreeMap::new();
+    for (name, plugin_id, bundle, configuration_overrides) in loaded {
+        if counts.get(&plugin_id).copied().unwrap_or_default() > 1 {
+            blocked.push(BlockedDiscoveredPlugin {
+                entry: name,
+                detail: format!("Plugin `{plugin_id}` appears in more than one discovery Bundle"),
+            });
+            continue;
+        }
+        if reserved_plugin_ids.contains(&plugin_id) {
+            blocked.push(BlockedDiscoveredPlugin {
+                entry: name,
+                detail: format!(
+                    "Plugin `{plugin_id}` is already selected as a bundled or installed Release"
+                ),
+            });
+            continue;
+        }
+        let manifest =
+            match CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest) {
+                Ok(manifest) => manifest,
+                Err(error) => {
+                    blocked.push(BlockedDiscoveredPlugin {
+                        entry: name,
+                        detail: control_error(error),
+                    });
+                    continue;
+                }
+            };
+        let selected = match validate_selection(manifest.value(), &[], &profiles) {
+            Ok(selected) => selected,
+            Err(error) => {
+                blocked.push(BlockedDiscoveredPlugin {
+                    entry: name,
+                    detail: control_error(error),
+                });
+                continue;
+            }
+        };
+        let configured = match resolve_plugin_configuration_overrides(
+            manifest.value(),
+            &selected.module_contribution_ids,
+            &profiles,
+            &configuration_overrides,
+        ) {
+            Ok(configured) => configured,
+            Err(detail) => {
+                blocked.push(BlockedDiscoveredPlugin {
+                    entry: name,
+                    detail,
+                });
+                continue;
+            }
+        };
+        let (candidate, _) =
+            match build_install_candidate(&store, &profiles, &active, bundle, None, Vec::new()) {
+                Ok(candidate) => candidate,
+                Err(detail) => {
+                    blocked.push(BlockedDiscoveredPlugin {
+                        entry: name,
+                        detail,
+                    });
+                    continue;
+                }
+            };
+        active = candidate;
+        configured_instances.extend(configured.into_iter().map(
+            |(contribution_id, configuration)| {
+                ((plugin_id.clone(), contribution_id), configuration)
+            },
+        ));
+        if !configuration_overrides.is_empty() {
+            configured_releases.insert(plugin_id, configuration_overrides);
+        }
+        discovered_count += 1;
+    }
+    blocked.sort_by(|left, right| left.entry.cmp(&right.entry));
+    let authority = if discovered_count == 0 {
+        None
+    } else {
+        if !configured_instances.is_empty() {
+            let mut configured = active.value().clone();
+            for instance in &mut configured.lock.instances {
+                if let Some(configuration) = configured_instances
+                    .get(&(instance.plugin_id.clone(), instance.contribution_id.clone()))
+                {
+                    instance.configuration.clone_from(configuration);
+                }
+            }
+            for release in &mut configured.releases {
+                if let Some(overrides) = configured_releases.get(&release.plugin_id) {
+                    release.configuration_overrides.clone_from(overrides);
+                }
+            }
+            active = validate_active_set(configured, &store, &profiles)?;
+        }
+        Some(generation_authority_from_document(
+            PluginStore::open(store_root.join("store")).map_err(control_error)?,
+            &active,
+        )?)
+    };
+    Ok(DiscoveryOutcome { authority, blocked })
+}
+
+fn discovery_entries(
+    discovery_root: &Path,
+) -> Result<Vec<std::fs::DirEntry>, BlockedDiscoveredPlugin> {
+    let metadata = match fs::symlink_metadata(discovery_root) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(blocked_discovery_root(
+                discovery_root,
+                format!("failed to inspect discovery directory: {error}"),
+            ));
+        }
+    };
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(blocked_discovery_root(
+            discovery_root,
+            "discovery path is not a regular directory".to_owned(),
+        ));
+    }
+    let entries = fs::read_dir(discovery_root).map_err(|error| {
+        blocked_discovery_root(
+            discovery_root,
+            format!("failed to enumerate discovery directory: {error}"),
+        )
+    })?;
+    let mut entries = entries.collect::<Result<Vec<_>, _>>().map_err(|error| {
+        blocked_discovery_root(
+            discovery_root,
+            format!("failed to enumerate discovered Plugins: {error}"),
+        )
+    })?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    Ok(entries)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Bundle and sidecar pairing shares one deterministic directory scan"
+)]
+fn load_discovered_bundles(
+    entries: Vec<std::fs::DirEntry>,
+    blocked: &mut Vec<BlockedDiscoveredPlugin>,
+) -> Vec<(String, String, LoadedBundle, PluginConfigurationOverrides)> {
+    let mut loaded = Vec::new();
+    let entries = entries
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                entry.path(),
+            )
+        })
+        .filter(|(name, _)| !name.starts_with('.'))
+        .collect::<Vec<_>>();
+    let mut configurations = entries
+        .iter()
+        .filter_map(|(name, path)| {
+            plugin_configuration_stem(name)
+                .map(|stem| (stem.to_owned(), (name.clone(), path.clone())))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for (name, path) in entries {
+        // Hidden entries are an inert staging namespace. A publisher can copy a
+        // Bundle completely under `plugins/.staging-*` and expose it with one
+        // same-filesystem rename without discovery observing partial authority.
+        if plugin_configuration_stem(&name).is_some() {
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                blocked.push(BlockedDiscoveredPlugin {
+                    entry: name,
+                    detail: format!("failed to inspect Bundle: {error}"),
+                });
+                continue;
+            }
+        };
+        if metadata.file_type().is_symlink() {
+            blocked.push(BlockedDiscoveredPlugin {
+                entry: name,
+                detail: "Bundle directory is a symlink".to_owned(),
+            });
+            continue;
+        }
+        let (bundle, stem) = if metadata.is_dir() {
+            (load_bundle(&path), name.as_str())
+        } else if metadata.is_file() && is_packaged_bundle_path(&path) {
+            (
+                load_packaged_bundle(&path),
+                name.strip_suffix(".lenso-plugin").unwrap_or_default(),
+            )
+        } else {
+            blocked.push(BlockedDiscoveredPlugin {
+                entry: name,
+                detail:
+                    "discovery entry is neither a Bundle directory nor a `.lenso-plugin` package"
+                        .to_owned(),
+            });
+            continue;
+        };
+        let bundle = match bundle {
+            Ok(bundle) => bundle,
+            Err(detail) => {
+                blocked.push(BlockedDiscoveredPlugin {
+                    entry: name,
+                    detail,
+                });
+                continue;
+            }
+        };
+        let configuration = match configurations.remove(stem) {
+            Some((configuration_name, configuration_path)) => {
+                match load_plugin_configuration(&configuration_path) {
+                    Ok(configuration) => configuration,
+                    Err(detail) => {
+                        blocked.push(BlockedDiscoveredPlugin {
+                            entry: configuration_name,
+                            detail,
+                        });
+                        continue;
+                    }
+                }
+            }
+            None => PluginConfigurationOverrides::new(),
+        };
+        match CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest) {
+            Ok(manifest) => loaded.push((
+                name,
+                manifest.value().plugin_id.clone(),
+                bundle,
+                configuration,
+            )),
+            Err(error) => blocked.push(BlockedDiscoveredPlugin {
+                entry: name,
+                detail: control_error(error),
+            }),
+        }
+    }
+    blocked.extend(
+        configurations
+            .into_values()
+            .map(|(name, _)| BlockedDiscoveredPlugin {
+                entry: name,
+                detail: "Plugin configuration has no matching Bundle".to_owned(),
+            }),
+    );
+    loaded
+}
+
+fn plugin_configuration_stem(name: &str) -> Option<&str> {
+    name.strip_suffix(PLUGIN_CONFIGURATION_SUFFIX)
+        .filter(|stem| !stem.is_empty())
+}
+
+fn load_plugin_configuration(path: &Path) -> Result<PluginConfigurationOverrides, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect Plugin configuration: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Plugin configuration is not a regular file".to_owned());
+    }
+    if metadata.len() > MAX_PLUGIN_CONFIGURATION_BYTES {
+        return Err("Plugin configuration exceeds the 256 KiB limit".to_owned());
+    }
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read Plugin configuration: {error}"))?;
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|error| format!("Plugin configuration is not UTF-8: {error}"))?;
+    let configuration = toml::from_str::<PluginConfigurationFile>(text)
+        .map_err(|error| format!("Plugin configuration is invalid TOML: {error}"))?;
+    configuration
+        .modules
+        .into_iter()
+        .map(|(contribution_id, value)| {
+            if !value.is_table() {
+                return Err(format!(
+                    "Plugin Module configuration `{contribution_id}` must be a TOML table"
+                ));
+            }
+            reject_toml_datetime(&value, &format!("modules.{contribution_id}"))?;
+            let value = serde_json::to_value(value).map_err(|error| {
+                format!("failed to convert Plugin Module configuration to JSON: {error}")
+            })?;
+            Ok((contribution_id, value))
+        })
+        .collect()
+}
+
+fn reject_toml_datetime(value: &toml::Value, path: &str) -> Result<(), String> {
+    match value {
+        toml::Value::Datetime(_) => Err(format!(
+            "Plugin Module configuration `{path}` uses a TOML datetime; use an explicit string"
+        )),
+        toml::Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                reject_toml_datetime(value, &format!("{path}[{index}]"))?;
+            }
+            Ok(())
+        }
+        toml::Value::Table(values) => {
+            for (key, value) in values {
+                reject_toml_datetime(value, &format!("{path}.{key}"))?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn resolve_plugin_configuration_overrides(
+    manifest: &PluginManifest,
+    selected_contributions: &[String],
+    profiles: &PluginProfileCatalog,
+    overrides: &PluginConfigurationOverrides,
+) -> Result<BTreeMap<String, String>, String> {
+    let selected = selected_contributions.iter().collect::<BTreeSet<_>>();
+    let target = host_target();
+    overrides
+        .iter()
+        .map(|(contribution_id, configuration)| {
+            if !selected.contains(contribution_id) {
+                return Err(format!(
+                    "Plugin configuration targets unknown or unselected Module `{contribution_id}`"
+                ));
+            }
+            let contribution = manifest
+                .module_contributions
+                .iter()
+                .find(|contribution| contribution.id == *contribution_id)
+                .ok_or_else(|| {
+                    format!("Plugin configuration targets unknown Module `{contribution_id}`")
+                })?;
+            let configuration = profiles
+                .configuration_for_override(contribution, &target, Some(configuration))
+                .map_err(control_error)?;
+            Ok((contribution_id.clone(), configuration))
+        })
+        .collect()
+}
+
+fn blocked_discovery_root(discovery_root: &Path, detail: String) -> BlockedDiscoveredPlugin {
+    BlockedDiscoveredPlugin {
+        entry: discovery_root.display().to_string(),
+        detail,
+    }
+}
+
+fn source_generation_authority_with_store(
+    selection: &PluginSelection,
+    definition_path: &Path,
+    discovery_root: &Path,
+    root: &Path,
+) -> Result<GenerationPluginAuthority, String> {
+    let installed = source_store_is_active(root)?
+        .then(|| load_generation_authority_unfenced(root))
+        .transpose()?;
+    source_generation_snapshot_with_explicit(
+        selection,
+        definition_path,
+        discovery_root,
+        root,
+        installed,
+    )
+    .map(|snapshot| snapshot.authority)
+}
+
+fn source_generation_snapshot_with_explicit(
+    selection: &PluginSelection,
+    definition_path: &Path,
+    discovery_root: &Path,
+    root: &Path,
+    installed: Option<GenerationPluginAuthority>,
+) -> Result<SourceGenerationSnapshot, String> {
+    let mut authority = source_generation_authority(selection)?;
+    if let Some(installed) = installed {
+        authority = merge_generation_authorities(authority, installed)?;
+    }
+    let reserved_plugin_ids = authority
+        .lock
+        .value()
+        .plugins
+        .iter()
+        .map(|plugin| plugin.plugin_id.clone())
+        .collect::<BTreeSet<_>>();
+    let discovery =
+        discover_source_generation_authority(discovery_root, root, &reserved_plugin_ids)?;
+    let discovered = discovery
+        .authority
+        .as_ref()
+        .map_or_else(Vec::new, |authority| authority.lock.value().plugins.clone());
+    if let Some(discovered) = discovery.authority {
+        authority = merge_generation_authorities(authority, discovered)?;
+    }
+    let fingerprint = SourceDesiredStateFingerprint {
+        authority_digest: &authority.active_set_digest,
+        blocked: &discovery.blocked,
+    };
+    let desired_state_digest = sha256_digest(
+        &serde_json::to_vec(&fingerprint)
+            .map_err(|error| format!("failed to fingerprint Plugin Desired State: {error}"))?,
+    );
+    Ok(SourceGenerationSnapshot {
+        authority,
+        desired_state_digest,
+        definition_path: definition_path.to_path_buf(),
+        store_root: root.to_path_buf(),
+        discovered,
+        blocked: discovery.blocked,
+    })
+}
+
+fn merge_generation_authorities(
+    source: GenerationPluginAuthority,
+    store: GenerationPluginAuthority,
+) -> Result<GenerationPluginAuthority, String> {
+    let mut active = source.active_set.value().clone();
+    for plugin in &store.active_set.value().lock.plugins {
+        if active
+            .lock
+            .plugins
+            .iter()
+            .any(|existing| existing.plugin_id == plugin.plugin_id)
+        {
+            return Err(format!(
+                "Plugin `{}` is selected more than once across bundled, installed, or discovered authority",
+                plugin.plugin_id
+            ));
+        }
+    }
+    active
+        .lock
+        .plugins
+        .extend(store.active_set.value().lock.plugins.clone());
+    active
+        .lock
+        .instances
+        .extend(store.active_set.value().lock.instances.clone());
+    active
+        .lock
+        .approved_grants
+        .extend(store.active_set.value().lock.approved_grants.clone());
+    active
+        .releases
+        .extend(store.active_set.value().releases.clone());
+    active
+        .lock
+        .plugins
+        .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    active
+        .lock
+        .instances
+        .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+    active.lock.approved_grants.sort_by(|left, right| {
+        (&left.instance_key, &left.permission_request_id)
+            .cmp(&(&right.instance_key, &right.permission_request_id))
+    });
+    active
+        .releases
+        .sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+    ensure_sorted_unique(
+        active.lock.plugins.iter().map(|plugin| &plugin.plugin_id),
+        "combined Plugin",
+    )?;
+    ensure_sorted_unique(
+        active
+            .lock
+            .instances
+            .iter()
+            .map(|instance| &instance.instance_key),
+        "combined Plugin Instance",
+    )?;
+    let active =
+        CanonicalDocument::from_value("source Plugin authority", active).map_err(control_error)?;
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", active.value().lock.clone())
+            .map_err(control_error)?;
+
+    let GenerationPluginAuthority {
+        artifact_source,
+        manifests: store_manifests,
+        admission_receipts: store_receipts,
+        ..
+    } = store;
+    let mut manifests = source.manifests;
+    for (plugin_id, manifest) in store_manifests {
+        if manifests.insert(plugin_id.clone(), manifest).is_some() {
+            return Err(format!(
+                "Plugin `{plugin_id}` has duplicate Manifest authority"
+            ));
+        }
+    }
+    let mut admission_receipts = source.admission_receipts;
+    admission_receipts.extend(store_receipts);
+    Ok(GenerationPluginAuthority {
+        active_set_digest: active.digest().to_owned(),
+        active_set: active,
+        artifact_source,
+        lock,
+        manifests,
+        admission_receipts,
+    })
+}
+
+pub(crate) fn current_source_generation_snapshot()
+-> Result<Option<SourceGenerationSnapshot>, String> {
+    let Some(path) = crate::existing_app_definition_path() else {
+        return Ok(None);
+    };
+    source_generation_snapshot_at(&path).map(Some)
+}
+
+pub(crate) fn source_generation_snapshot_at(
+    definition_path: &Path,
+) -> Result<SourceGenerationSnapshot, String> {
+    let snapshot = source_selection_at(definition_path.to_path_buf())?;
+    let root = source_plugin_root(&snapshot, Path::new(".lenso/plugins"))?;
+    let installed = source_store_is_active(&root)?
+        .then(|| load_generation_authority_unfenced(&root))
+        .transpose()?;
+    source_generation_snapshot_with_explicit(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &source_discovery_root(&snapshot),
+        &root,
+        installed,
+    )
+}
+
+async fn remove_from_source_app(
+    root: &Path,
+    plugin_id: &str,
+    snapshot: SourceSelectionSnapshot,
+) -> Result<String, String> {
+    let root = source_plugin_root(&snapshot, root)?;
+    let root = root.as_path();
+    if !source_store_is_active(root)? {
+        return Err(format!(
+            "Plugin `{plugin_id}` is not an installed third-party Release; use `plugins disable` for bundled Plugins"
+        ));
+    }
+    let plan = crate::plan_bytes(None)?;
+    let profiles = harness_plugin_profiles()?;
+    let coordinator = AuthorityCoordinator::prepare(root)?;
+    let _fence = coordinator.transition()?;
+    let store = PluginStore::open(root.join("store")).map_err(control_error)?;
+    let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
+    if !current
+        .value()
+        .lock
+        .plugins
+        .iter()
+        .any(|plugin| plugin.plugin_id == plugin_id)
+    {
+        return Err(format!(
+            "Plugin `{plugin_id}` is not an installed third-party Release; use `plugins disable` for bundled Plugins"
+        ));
+    }
+    let mut candidate = current.value().clone();
+    let removed_instances = candidate
+        .lock
+        .instances
+        .iter()
+        .filter(|instance| instance.plugin_id == plugin_id)
+        .map(|instance| instance.instance_key.clone())
+        .collect::<BTreeSet<_>>();
+    candidate
+        .lock
+        .plugins
+        .retain(|plugin| plugin.plugin_id != plugin_id);
+    candidate
+        .lock
+        .instances
+        .retain(|instance| instance.plugin_id != plugin_id);
+    candidate
+        .lock
+        .approved_grants
+        .retain(|grant| !removed_instances.contains(&grant.instance_key));
+    candidate
+        .releases
+        .retain(|release| release.plugin_id != plugin_id);
+    let candidate = validate_active_set(candidate, &store, &profiles)?;
+    let discovery_root = source_discovery_root(&snapshot);
+    let current_authority = source_generation_snapshot_with_explicit(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &discovery_root,
+        root,
+        Some(generation_authority_from_document(
+            PluginStore::open(root.join("store")).map_err(control_error)?,
+            &current,
+        )?),
+    )?
+    .authority;
+    let candidate_authority = source_generation_snapshot_with_explicit(
+        &snapshot.selection,
+        &snapshot.definition_path,
+        &discovery_root,
+        root,
+        Some(generation_authority_from_document(
+            PluginStore::open(root.join("store")).map_err(control_error)?,
+            &candidate,
+        )?),
+    )?
+    .authority;
+    crate::generation::ready_check_source_transition(&plan, current_authority, candidate_authority)
+        .await?;
+    record_active_set(root, &current)?;
+    record_active_set(root, &candidate)?;
+    write_active_set(root, &candidate)?;
+    let lock =
+        CanonicalDocument::from_value("lenso-plugins.lock.json", candidate.value().lock.clone())
+            .map_err(control_error)?;
+    Ok(lock.digest().to_owned())
 }
 
 fn remove(root: &Path, plugin_id: &str) -> Result<String, String> {
@@ -1450,7 +2370,7 @@ async fn upgrade(
     let _fence = coordinator.transition()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
-    let bundle = load_bundle(bundle_root)?;
+    let bundle = load_bundle_input(bundle_root)?;
     let manifest = CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
         .map_err(control_error)?;
     validate_supported_manifest(manifest.value(), &profiles).map_err(control_error)?;
@@ -1608,6 +2528,7 @@ fn replacement_active_set(
         plugin_id: manifest.value().plugin_id.clone(),
         manifest: manifest.value().clone(),
         admission_receipt_digest: receipt_digest.to_owned(),
+        configuration_overrides: PluginConfigurationOverrides::new(),
     });
     candidate
         .releases
@@ -1668,9 +2589,15 @@ pub(crate) fn record_resolved_generation_authority_unfenced(
 pub(crate) fn recovery_generation_authorities(
     root: &Path,
 ) -> Result<Vec<GenerationPluginAuthority>, String> {
-    let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::prepare(root)?;
     let _fence = coordinator.snapshot()?;
+    recovery_generation_authorities_unfenced(root)
+}
+
+fn recovery_generation_authorities_unfenced(
+    root: &Path,
+) -> Result<Vec<GenerationPluginAuthority>, String> {
+    let profiles = harness_plugin_profiles()?;
     let store = PluginStore::open(root.join("store")).map_err(control_error)?;
     let directory = root.join(RECOVERY_AUTHORITY_DIRECTORY);
     let metadata = fs::symlink_metadata(&directory)
@@ -1710,6 +2637,58 @@ pub(crate) fn recovery_generation_authorities(
             generation_authority_from_document(authority_store, &active)
         })
         .collect()
+}
+
+pub(crate) fn prune_recovery_generation_authorities_unfenced(
+    root: &Path,
+    retained_plugin_set_lock_digests: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    let candidates = recovery_generation_authority_gc_candidates_unfenced(
+        root,
+        retained_plugin_set_lock_digests,
+    )?;
+    let directory = root.join(RECOVERY_AUTHORITY_DIRECTORY);
+    for digest in &candidates {
+        let path = active_set_record_path_in(root, RECOVERY_AUTHORITY_DIRECTORY, digest.as_str())?;
+        fs::remove_file(path)
+            .map_err(|error| format!("failed to remove Generation recovery authority: {error}"))?;
+    }
+    if !candidates.is_empty() {
+        File::open(&directory)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| {
+                format!("failed to sync Generation recovery authority directory: {error}")
+            })?;
+    }
+    Ok(candidates)
+}
+
+pub(crate) fn recovery_generation_authority_gc_candidates_unfenced(
+    root: &Path,
+    retained_plugin_set_lock_digests: &BTreeSet<String>,
+) -> Result<Vec<String>, String> {
+    let directory = root.join(RECOVERY_AUTHORITY_DIRECTORY);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err("Generation recovery authority is not a regular directory".to_owned());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect Generation recovery authority: {error}"
+            ));
+        }
+    }
+    let authorities = recovery_generation_authorities_unfenced(root)?;
+    let mut candidates = Vec::new();
+    for authority in authorities {
+        if retained_plugin_set_lock_digests.contains(authority.lock.digest()) {
+            continue;
+        }
+        candidates.push(authority.active_set_digest);
+    }
+    Ok(candidates)
 }
 
 pub(crate) fn load_generation_authority_unfenced(
@@ -2071,11 +3050,25 @@ fn validate_active_set(
                 locked.plugin_id
             ));
         }
-        expected_instances.extend(locked_instances(
+        let mut release_instances = locked_instances(
             manifest.value(),
             &selected.module_contribution_ids,
             profiles,
-        )?);
+        )?;
+        if !release.configuration_overrides.is_empty() {
+            let configured = resolve_plugin_configuration_overrides(
+                manifest.value(),
+                &selected.module_contribution_ids,
+                profiles,
+                &release.configuration_overrides,
+            )?;
+            for instance in &mut release_instances {
+                if let Some(configuration) = configured.get(&instance.contribution_id) {
+                    instance.configuration.clone_from(configuration);
+                }
+            }
+        }
+        expected_instances.extend(release_instances);
         expected_grants.extend(
             profiles
                 .approved_grants_for(
@@ -2385,6 +3378,204 @@ fn load_bundle(root: &Path) -> Result<LoadedBundle, String> {
     })
 }
 
+fn load_bundle_input(path: &Path) -> Result<LoadedBundle, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to open Plugin Bundle {}: {error}", path.display()))?;
+    if metadata.is_file() && !metadata.file_type().is_symlink() && is_packaged_bundle_path(path) {
+        load_packaged_bundle(path)
+    } else {
+        load_bundle(path)
+    }
+}
+
+pub(crate) fn pack_bundle(root: &Path, output: &Path) -> Result<String, String> {
+    if !is_packaged_bundle_path(output) {
+        return Err(format!(
+            "packaged Plugin Bundle output must end in `.{PACKAGED_BUNDLE_EXTENSION}`"
+        ));
+    }
+    let bundle = load_bundle(root)?;
+    CanonicalDocument::<PluginManifest>::parse(MANIFEST_FILE, &bundle.manifest)
+        .map_err(control_error)?;
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create package output directory: {error}"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| format!("failed to create temporary Plugin package: {error}"))?;
+    {
+        let mut archive = zip::ZipWriter::new(temporary.as_file_mut());
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .last_modified_time(zip::DateTime::default())
+            .unix_permissions(0o644);
+        archive
+            .start_file(MANIFEST_FILE, options)
+            .and_then(|()| archive.write_all(&bundle.manifest).map_err(Into::into))
+            .map_err(|error: zip::result::ZipError| {
+                format!("failed to write packaged Plugin Manifest: {error}")
+            })?;
+        for (path, bytes) in bundle.files {
+            archive
+                .start_file(&path, options)
+                .and_then(|()| archive.write_all(&bytes).map_err(Into::into))
+                .map_err(|error: zip::result::ZipError| {
+                    format!("failed to write packaged Bundle file `{path}`: {error}")
+                })?;
+        }
+        archive
+            .finish()
+            .map_err(|error| format!("failed to finish packaged Plugin Bundle: {error}"))?;
+    }
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("failed to sync packaged Plugin Bundle: {error}"))?;
+    temporary.persist(output).map_err(|error| {
+        format!(
+            "failed to publish packaged Plugin Bundle {}: {}",
+            output.display(),
+            error.error
+        )
+    })?;
+    let bytes = fs::read(output)
+        .map_err(|error| format!("failed to verify packaged Plugin Bundle output: {error}"))?;
+    Ok(sha256_digest(&bytes))
+}
+
+fn is_packaged_bundle_path(path: &Path) -> bool {
+    path.extension().and_then(std::ffi::OsStr::to_str) == Some(PACKAGED_BUNDLE_EXTENSION)
+}
+
+fn load_packaged_bundle(path: &Path) -> Result<LoadedBundle, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to open packaged Plugin Bundle: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("packaged Plugin Bundle is not a regular file".to_owned());
+    }
+    if metadata.len() > MAX_BUNDLE_BYTES {
+        return Err("packaged Plugin Bundle exceeds the input byte limit".to_owned());
+    }
+    let input = File::open(path)
+        .map_err(|error| format!("failed to open packaged Plugin Bundle: {error}"))?;
+    let mut archive = zip::ZipArchive::new(input)
+        .map_err(|error| format!("failed to read packaged Plugin Bundle: {error}"))?;
+    if archive.len() > MAX_BUNDLE_FILES {
+        return Err("packaged Plugin Bundle contains too many entries".to_owned());
+    }
+
+    let mut entries = BTreeMap::<String, bool>::new();
+    let mut manifest = None;
+    let mut files = BTreeMap::new();
+    let mut total = 0_u64;
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|error| format!("failed to read packaged Bundle entry: {error}"))?;
+        if file.encrypted() {
+            return Err(format!(
+                "packaged Bundle entry `{}` is encrypted",
+                file.name()
+            ));
+        }
+        if file.is_symlink() || (!file.is_file() && !file.is_dir()) {
+            return Err(format!(
+                "packaged Bundle entry `{}` is not a regular file or directory",
+                file.name()
+            ));
+        }
+        if !matches!(
+            file.compression(),
+            zip::CompressionMethod::Stored | zip::CompressionMethod::Deflated
+        ) {
+            return Err(format!(
+                "packaged Bundle entry `{}` uses an unsupported compression method",
+                file.name()
+            ));
+        }
+        let relative = packaged_entry_path(&file)?;
+        if entries.insert(relative.clone(), file.is_dir()).is_some() {
+            return Err(format!(
+                "packaged Plugin Bundle contains duplicate path `{relative}`"
+            ));
+        }
+        if file.is_dir() {
+            continue;
+        }
+        total = total
+            .checked_add(file.size())
+            .ok_or_else(|| "packaged Plugin Bundle byte count overflowed".to_owned())?;
+        if total > MAX_BUNDLE_BYTES {
+            return Err("packaged Plugin Bundle exceeds the total byte limit".to_owned());
+        }
+        let expected_size = file.size();
+        let mut bytes = Vec::new();
+        (&mut file)
+            .take(expected_size.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|error| format!("failed to decompress Bundle file `{relative}`: {error}"))?;
+        if u64::try_from(bytes.len()).unwrap_or(u64::MAX) != expected_size {
+            return Err(format!(
+                "packaged Bundle file `{relative}` did not match its declared size"
+            ));
+        }
+        if relative == MANIFEST_FILE {
+            manifest = Some(bytes);
+        } else {
+            files.insert(relative, bytes);
+        }
+    }
+    reject_packaged_file_directory_collisions(&entries)?;
+    Ok(LoadedBundle {
+        manifest: manifest.ok_or_else(|| format!("Plugin Bundle is missing `{MANIFEST_FILE}`"))?,
+        files,
+    })
+}
+
+fn packaged_entry_path<R: Read>(file: &zip::read::ZipFile<'_, R>) -> Result<String, String> {
+    file.enclosed_name()
+        .ok_or_else(|| format!("packaged Bundle entry `{}` escapes its root", file.name()))?;
+    let name = file.name().trim_end_matches('/');
+    let components = name.split('/').collect::<Vec<_>>();
+    if components.is_empty()
+        || components.len() > MAX_BUNDLE_DEPTH
+        || components.iter().any(|component| {
+            component.is_empty()
+                || *component == "."
+                || *component == ".."
+                || component.contains(['\\', ':', '\0'])
+        })
+    {
+        return Err(format!(
+            "packaged Bundle entry `{}` is not a portable normalized path",
+            file.name()
+        ));
+    }
+    Ok(components.join("/"))
+}
+
+fn reject_packaged_file_directory_collisions(
+    entries: &BTreeMap<String, bool>,
+) -> Result<(), String> {
+    for path in entries.keys() {
+        let mut ancestor = Path::new(path).parent();
+        while let Some(parent) = ancestor.filter(|parent| !parent.as_os_str().is_empty()) {
+            let parent = parent
+                .to_str()
+                .ok_or_else(|| "packaged Plugin Bundle path is not UTF-8".to_owned())?;
+            if entries.get(parent) == Some(&false) {
+                return Err(format!(
+                    "packaged Plugin Bundle path `{path}` is nested below file `{parent}`"
+                ));
+            }
+            ancestor = Path::new(parent).parent();
+        }
+    }
+    Ok(())
+}
+
 fn collect_bundle_paths(
     root: &Path,
     directory: &Path,
@@ -2512,9 +3703,15 @@ fn active_set_by_digest(
 fn active_set_history(
     root: &Path,
 ) -> Result<(String, BTreeMap<String, CanonicalDocument<ActivePluginSet>>), String> {
-    let profiles = harness_plugin_profiles()?;
     let coordinator = AuthorityCoordinator::open_existing(root)?;
     let _fence = coordinator.snapshot()?;
+    active_set_history_unfenced(root)
+}
+
+fn active_set_history_unfenced(
+    root: &Path,
+) -> Result<(String, BTreeMap<String, CanonicalDocument<ActivePluginSet>>), String> {
+    let profiles = harness_plugin_profiles()?;
     let store = open_existing_store(root)?;
     let current = validate_active_set(load_active_set(root)?, &store, &profiles)?;
     let current_digest = current.digest().to_owned();
@@ -2565,7 +3762,15 @@ fn active_set_history(
 }
 
 pub(crate) fn retained_plugin_set_digests(root: &Path) -> Result<BTreeSet<String>, String> {
-    let (_, history) = active_set_history(root)?;
+    let coordinator = AuthorityCoordinator::open_existing(root)?;
+    let _fence = coordinator.snapshot()?;
+    retained_plugin_set_digests_unfenced(root)
+}
+
+pub(crate) fn retained_plugin_set_digests_unfenced(
+    root: &Path,
+) -> Result<BTreeSet<String>, String> {
+    let (_, history) = active_set_history_unfenced(root)?;
     history
         .into_values()
         .map(|active| {
@@ -2770,6 +3975,179 @@ mod tests {
 
     fn plan() -> &'static [u8] {
         crate::test_support::headless_plan()
+    }
+
+    #[test]
+    fn packaged_bundle_round_trips_deterministically() {
+        let directory = tempfile::tempdir().unwrap();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/text-tools");
+        let first = directory.path().join("first.lenso-plugin");
+        let second = directory.path().join("second.lenso-plugin");
+        let first_digest = pack_bundle(&source, &first).unwrap();
+        let second_digest = pack_bundle(&source, &second).unwrap();
+
+        assert_eq!(first_digest, second_digest);
+        assert_eq!(
+            load_packaged_bundle(&first).unwrap(),
+            load_bundle(&source).unwrap()
+        );
+        assert_eq!(pack_bundle(&source, &first).unwrap(), first_digest);
+    }
+
+    #[test]
+    fn plugin_configuration_sidecar_resolves_module_patches_to_full_configuration() {
+        let manifest = CanonicalDocument::<PluginManifest>::parse(
+            MANIFEST_FILE,
+            include_bytes!("../../../examples/plugins/code-mode/lenso-plugin.json"),
+        )
+        .unwrap();
+        let profiles = harness_plugin_profiles().unwrap();
+        let overrides = BTreeMap::from([(
+            "code-mode-tools".to_owned(),
+            serde_json::json!({"max_instructions": 500_000}),
+        )]);
+
+        let configured = resolve_plugin_configuration_overrides(
+            manifest.value(),
+            &["code-mode-tools".to_owned()],
+            &profiles,
+            &overrides,
+        )
+        .unwrap();
+        let configured: serde_json::Value =
+            serde_json::from_str(&configured["code-mode-tools"]).unwrap();
+
+        assert_eq!(configured["max_instructions"], 500_000);
+        assert_eq!(configured["max_memory_bytes"], 8_388_608);
+    }
+
+    #[test]
+    fn plugin_configuration_sidecar_rejects_toml_datetimes() {
+        let directory = tempfile::tempdir().unwrap();
+        let sidecar = directory.path().join("code-mode.config.toml");
+        fs::write(
+            &sidecar,
+            "[modules.code-mode-tools]\ncreated_at = 2026-08-27T00:00:00Z\n",
+        )
+        .unwrap();
+
+        let error = load_plugin_configuration(&sidecar).unwrap_err();
+
+        assert!(error.contains("uses a TOML datetime"), "{error}");
+    }
+
+    #[test]
+    fn active_set_closure_reconstructs_the_exact_sidecar_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let store = PluginStore::open(root.path().join("store")).unwrap();
+        let profiles = harness_plugin_profiles().unwrap();
+        let current = CanonicalDocument::from_value("active", ActivePluginSet::empty()).unwrap();
+        let (candidate, _) = build_install_candidate(
+            &store,
+            &profiles,
+            &current,
+            bundled_plugin("code-mode").unwrap(),
+            Some("reviewed configuration test"),
+            Vec::new(),
+        )
+        .unwrap();
+        let overrides = BTreeMap::from([(
+            "code-mode-tools".to_owned(),
+            serde_json::json!({"max_instructions": 500_000}),
+        )]);
+        let configured = resolve_plugin_configuration_overrides(
+            &candidate.value().releases[0].manifest,
+            &["code-mode-tools".to_owned()],
+            &profiles,
+            &overrides,
+        )
+        .unwrap();
+        let default_configuration = candidate.value().lock.instances[0].configuration.clone();
+        let mut candidate = candidate.into_value();
+        candidate.releases[0].configuration_overrides = overrides;
+        candidate.lock.instances[0]
+            .configuration
+            .clone_from(&configured["code-mode-tools"]);
+
+        let validated = validate_active_set(candidate, &store, &profiles).unwrap();
+        let mut tampered = validated.into_value();
+        tampered.lock.instances[0].configuration = default_configuration;
+
+        let error = validate_active_set(tampered, &store, &profiles).unwrap_err();
+        assert!(error.contains("do not exactly close"), "{error}");
+    }
+
+    #[test]
+    fn explicit_install_accepts_a_packaged_bundle() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let source =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/text-tools");
+        let package = directory.path().join("text-tools.lenso-plugin");
+        pack_bundle(&source, &package).unwrap();
+
+        let outcome = install(root.path(), &package, None, Vec::new()).unwrap();
+        assert_eq!(outcome.plugin_id, "example.text-tools");
+        assert!(
+            load_generation_authority(root.path())
+                .unwrap()
+                .lock
+                .value()
+                .plugins
+                .iter()
+                .any(|plugin| plugin.plugin_id == "example.text-tools")
+        );
+    }
+
+    #[test]
+    fn packaged_bundle_rejects_path_escape_and_symlink_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        let escaped = directory.path().join("escaped.lenso-plugin");
+        {
+            let mut archive = zip::ZipWriter::new(File::create(&escaped).unwrap());
+            archive.start_file("../escape", options).unwrap();
+            archive.write_all(b"escape").unwrap();
+            archive.finish().unwrap();
+        }
+        assert!(
+            load_packaged_bundle(&escaped)
+                .unwrap_err()
+                .contains("escapes its root")
+        );
+
+        let symlink = directory.path().join("symlink.lenso-plugin");
+        {
+            let mut archive = zip::ZipWriter::new(File::create(&symlink).unwrap());
+            archive.add_symlink("link", "target", options).unwrap();
+            archive.finish().unwrap();
+        }
+        let error = load_packaged_bundle(&symlink).unwrap_err();
+        assert!(error.contains("not a regular file or directory"), "{error}");
+    }
+
+    #[test]
+    fn packaged_bundle_rejects_a_file_used_as_a_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let package = directory.path().join("collision.lenso-plugin");
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        {
+            let mut archive = zip::ZipWriter::new(File::create(&package).unwrap());
+            archive.start_file("parent", options).unwrap();
+            archive.write_all(b"file").unwrap();
+            archive.start_file("parent/child", options).unwrap();
+            archive.write_all(b"child").unwrap();
+            archive.finish().unwrap();
+        }
+        assert!(
+            load_packaged_bundle(&package)
+                .unwrap_err()
+                .contains("nested below file")
+        );
     }
 
     #[test]

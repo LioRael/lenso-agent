@@ -10,7 +10,15 @@ use lenso_agent_session_file_module::{
 };
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
 
-use crate::plugins::retained_plugin_set_digests;
+use crate::{
+    authority::AuthorityCoordinator,
+    generation::live_controller_generation_digests,
+    plugins::{
+        prune_recovery_generation_authorities_unfenced,
+        recovery_generation_authority_gc_candidates_unfenced, retained_plugin_set_digests,
+        retained_plugin_set_digests_unfenced,
+    },
+};
 
 const GENERATION_DIRECTORY: &str = "generations";
 const APP_ID: &str = "lenso.agent.harness";
@@ -19,6 +27,7 @@ const APP_ID: &str = "lenso.agent.harness";
 pub enum GenerationCommand {
     Inspect { digest: String, root: PathBuf },
     GcPreview { root: PathBuf, sessions: PathBuf },
+    GcApply { root: PathBuf, sessions: PathBuf },
 }
 
 #[derive(Debug)]
@@ -37,6 +46,7 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     let mut root = PathBuf::from(".lenso/plugins");
     let mut sessions = PathBuf::from(".lenso/sessions");
     let mut digest = None;
+    let mut apply = false;
     let mut arguments = rest.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -47,6 +57,10 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
             "--sessions" if command == "gc-preview" || command == "gc-plan" => {
                 sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
             }
+            "--sessions" if command == "gc" => {
+                sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
+            }
+            "--apply" if command == "gc" => apply = true,
             _ => return Err(generation_usage()),
         }
     }
@@ -56,6 +70,7 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
             root,
         }),
         "gc-preview" | "gc-plan" => Ok(GenerationCommand::GcPreview { root, sessions }),
+        "gc" if apply => Ok(GenerationCommand::GcApply { root, sessions }),
         _ => Err(generation_usage()),
     }
 }
@@ -115,11 +130,43 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
             Ok(())
         }
         GenerationCommand::GcPreview { root, sessions } => print_gc_preview(&root, &sessions),
+        GenerationCommand::GcApply { root, sessions } => apply_gc(&root, &sessions),
     }
 }
 
 fn print_gc_preview(root: &Path, sessions: &Path) -> Result<(), String> {
-    let plugin_sets = retained_plugin_set_digests(root)?;
+    let plugin_sets = retained_plugin_set_roots(root, false)?;
+    print_gc_plan(&build_gc_plan(root, sessions, &plugin_sets)?)
+}
+
+#[derive(Debug)]
+struct GenerationGcPlan {
+    generations: BTreeMap<String, CanonicalDocument<AppGenerationSpec>>,
+    reasons: BTreeMap<String, Vec<&'static str>>,
+}
+
+impl GenerationGcPlan {
+    fn candidates(&self) -> impl Iterator<Item = &String> {
+        self.reasons
+            .iter()
+            .filter_map(|(digest, reasons)| reasons.is_empty().then_some(digest))
+    }
+
+    fn protected_plugin_set_locks(&self) -> BTreeSet<String> {
+        self.reasons
+            .iter()
+            .filter(|(_, reasons)| !reasons.is_empty())
+            .filter_map(|(digest, _)| self.generations.get(digest))
+            .map(|generation| generation.value().plugin_set_lock_digest.clone())
+            .collect()
+    }
+}
+
+fn build_gc_plan(
+    root: &Path,
+    sessions: &Path,
+    plugin_sets: &BTreeSet<String>,
+) -> Result<GenerationGcPlan, String> {
     let session_generations = inspect_all_turn_started_events(sessions)?
         .into_iter()
         .map(|stored| {
@@ -137,25 +184,51 @@ fn print_gc_preview(root: &Path, sessions: &Path) -> Result<(), String> {
             })
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
+    let controller_generations = live_controller_generation_digests(root)?;
     let generations = load_all_generations(root)?;
-    for digest in &session_generations {
-        if !generations.contains_key(digest) {
-            return Err(format!(
-                "Session provenance references missing Generation Spec `{digest}`"
-            ));
+    for (source, digests) in [
+        ("Session provenance", &session_generations),
+        ("Generation Controller", &controller_generations),
+    ] {
+        for digest in digests {
+            if !generations.contains_key(digest) {
+                return Err(format!(
+                    "{source} references missing Generation Spec `{digest}`"
+                ));
+            }
         }
     }
 
+    let reasons = generations
+        .iter()
+        .map(|(digest, generation)| {
+            let mut reasons = Vec::new();
+            if plugin_sets.contains(&generation.value().plugin_set_lock_digest) {
+                reasons.push("plugin-set");
+            }
+            if controller_generations.contains(digest) {
+                reasons.push("controller");
+            }
+            if session_generations.contains(digest) {
+                reasons.push("session");
+            }
+            (digest.clone(), reasons)
+        })
+        .collect();
+    Ok(GenerationGcPlan {
+        generations,
+        reasons,
+    })
+}
+
+fn print_gc_plan(plan: &GenerationGcPlan) -> Result<(), String> {
     let mut protected = 0;
     let mut candidates = 0;
-    for (digest, generation) in generations {
-        let mut reasons = Vec::new();
-        if plugin_sets.contains(&generation.value().plugin_set_lock_digest) {
-            reasons.push("plugin-set");
-        }
-        if session_generations.contains(&digest) {
-            reasons.push("session");
-        }
+    for digest in plan.generations.keys() {
+        let reasons = plan
+            .reasons
+            .get(digest)
+            .ok_or_else(|| "Generation GC plan lost one classification".to_owned())?;
         if reasons.is_empty() {
             candidates += 1;
             println!("candidate: {digest}");
@@ -166,6 +239,61 @@ fn print_gc_preview(root: &Path, sessions: &Path) -> Result<(), String> {
     }
     println!("summary: protected={protected} candidates={candidates}");
     Ok(())
+}
+
+fn apply_gc(root: &Path, sessions: &Path) -> Result<(), String> {
+    let coordinator = AuthorityCoordinator::open_existing(root)?;
+    let _gc_fence = coordinator.generation_gc_transition()?;
+    let _authority_fence = coordinator.transition()?;
+    let plugin_sets = retained_plugin_set_roots(root, true)?;
+    let plan = build_gc_plan(root, sessions, &plugin_sets)?;
+    let candidates = plan.candidates().cloned().collect::<Vec<_>>();
+    let mut retained_locks = plan.protected_plugin_set_locks();
+    retained_locks.extend(plugin_sets);
+    recovery_generation_authority_gc_candidates_unfenced(root, &retained_locks)?;
+    for digest in &candidates {
+        remove_generation(root, digest)?;
+        println!("removed-generation: {digest}");
+    }
+    let removed_authorities =
+        prune_recovery_generation_authorities_unfenced(root, &retained_locks)?;
+    for digest in &removed_authorities {
+        println!("removed-recovery-authority: {digest}");
+    }
+    println!(
+        "summary: removed-generations={} removed-recovery-authorities={}",
+        candidates.len(),
+        removed_authorities.len()
+    );
+    Ok(())
+}
+
+fn retained_plugin_set_roots(
+    root: &Path,
+    authority_fenced: bool,
+) -> Result<BTreeSet<String>, String> {
+    match fs::symlink_metadata(root.join("active-set.json")) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            if authority_fenced {
+                retained_plugin_set_digests_unfenced(root)
+            } else {
+                retained_plugin_set_digests(root)
+            }
+        }
+        Ok(_) => Err("active Plugin Set is not a regular file".to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
+        Err(error) => Err(format!("failed to inspect active Plugin Set: {error}")),
+    }
+}
+
+fn remove_generation(root: &Path, digest: &str) -> Result<(), String> {
+    load_generation(root, digest)?;
+    let hash = canonical_digest_hash(digest)?;
+    fs::remove_file(root.join(GENERATION_DIRECTORY).join(format!("{hash}.json")))
+        .map_err(|error| format!("failed to remove Generation Spec `{digest}`: {error}"))?;
+    fs::File::open(root.join(GENERATION_DIRECTORY))
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("failed to sync Generation provenance directory: {error}"))
 }
 
 fn load_all_generations(
@@ -300,7 +428,7 @@ fn canonical_digest_hash(digest: &str) -> Result<&str, String> {
 }
 
 fn generation_usage() -> String {
-    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-preview [--root <plugin-root>] [--sessions <session-directory>]>".to_owned()
+    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-preview [--root <plugin-root>] [--sessions <session-directory>]|gc --apply [--root <plugin-root>] [--sessions <session-directory>]>".to_owned()
 }
 
 fn session_usage() -> String {

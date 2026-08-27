@@ -31,6 +31,82 @@ fn local_configuration(workspace: &Path) -> std::path::PathBuf {
 }
 
 #[test]
+fn cli_status_defaults_to_plugin_language() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+
+    assert!(status.status.success());
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert_eq!(
+        stdout,
+        format!(
+            "Plugin folder: {}\nNo plugins found.\n",
+            workspace.path().join("plugins").display()
+        )
+    );
+}
+
+#[test]
+fn cli_packs_and_discovers_one_file_without_extracting_it() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/text-tools");
+    let plugins = workspace.path().join("plugins");
+    fs::create_dir(&plugins).unwrap();
+    let package = plugins.join("text-tools.lenso-plugin");
+
+    let pack = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "pack", "--bundle"])
+        .arg(&source)
+        .arg("--output")
+        .arg(&package)
+        .output()
+        .unwrap();
+    assert!(
+        pack.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pack.stderr)
+    );
+    assert!(String::from_utf8_lossy(&pack.stdout).contains("archive: sha256:"));
+
+    let repack = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .args(["plugins", "pack", "--bundle"])
+        .arg(&source)
+        .arg("--output")
+        .arg(&package)
+        .output()
+        .unwrap();
+    assert!(
+        repack.status.success(),
+        "{}",
+        String::from_utf8_lossy(&repack.stderr)
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    assert!(String::from_utf8_lossy(&status.stdout).contains("Plugin: example.text-tools@1.0.0"));
+    assert!(!plugins.join("text-tools").exists());
+}
+
+#[test]
 fn bundled_selection_uses_local_user_intent_and_runs_without_plugin_state() {
     let workspace = tempfile::tempdir().unwrap();
     let definition = source_app_definition(workspace.path());
@@ -65,13 +141,27 @@ fn bundled_selection_uses_local_user_intent_and_runs_without_plugin_state() {
         .output()
         .unwrap();
     assert!(status.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&status.stdout),
-        format!(
-            "enabled: text-tools@1\nconfig: {}\n",
-            local_configuration(workspace.path()).display()
-        )
-    );
+    let status_stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(status_stdout.contains("Plugin: text-tools@1 (built in)\n"));
+    assert!(!status_stdout.contains("desired-state:"));
+    assert!(status_stdout.contains(&format!(
+        "Plugin folder: {}\n",
+        workspace.path().join("plugins").display()
+    )));
+
+    let verbose_status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status", "--verbose"])
+        .output()
+        .unwrap();
+    assert!(verbose_status.status.success());
+    let verbose_stdout = String::from_utf8_lossy(&verbose_status.stdout);
+    assert!(verbose_stdout.contains("desired-state: sha256:"));
+    assert!(verbose_stdout.contains(&format!(
+        "config: {}\n",
+        local_configuration(workspace.path()).display()
+    )));
 
     let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())
@@ -107,6 +197,205 @@ fn bundled_selection_uses_local_user_intent_and_runs_without_plugin_state() {
     assert_eq!(fs::read(&definition).unwrap(), definition_before);
     assert!(!local_configuration(workspace.path()).exists());
     assert!(!workspace.path().join(".lenso/plugins").exists());
+}
+
+#[test]
+fn source_app_discovers_runs_and_unloads_an_isolated_wasm_bundle() {
+    let _plugin_test_guard = plugin_test_guard();
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let external = tempfile::tempdir().unwrap();
+    let discovered = workspace.path().join("plugins/text-tools");
+    fs::write(workspace.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    copy_external_wasm_tool_source(external.path());
+    let artifact = build_external_wasm_tool(external.path());
+    build_external_wasm_tool_bundle(external.path(), discovered, &artifact, "1.0.0");
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&status.stdout)
+            .contains("Plugin: dev.example.wasm-text-tools@1.0.0")
+    );
+    assert!(
+        !workspace
+            .path()
+            .join(".lenso/plugins/active-set.json")
+            .exists()
+    );
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Use the text Plugin to uppercase Lenso plugin."])
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Text Plugin result: LENSO PLUGIN\n"
+    );
+
+    fs::remove_dir_all(workspace.path().join("plugins/text-tools")).unwrap();
+    let after_remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["--plan"])
+        .arg(plan_path())
+        .args(["--prompt", "Use the text Plugin to uppercase Lenso plugin."])
+        .output()
+        .unwrap();
+    assert!(!after_remove.status.success());
+    assert!(
+        String::from_utf8_lossy(&after_remove.stderr).contains("InvalidRequest"),
+        "{}",
+        String::from_utf8_lossy(&after_remove.stderr)
+    );
+}
+
+#[test]
+fn source_discovery_reports_governed_and_malformed_bundles() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let governed = workspace.path().join("plugins/quickjs-agent");
+    fs::create_dir_all(&governed).unwrap();
+    let fixture =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/quickjs-agent");
+    fs::copy(
+        fixture.join("lenso-plugin.json"),
+        governed.join("lenso-plugin.json"),
+    )
+    .unwrap();
+    fs::copy(fixture.join("plugin.mjs"), governed.join("plugin.mjs")).unwrap();
+
+    let blocked = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(blocked.status.success());
+    let blocked_status = String::from_utf8_lossy(&blocked.stdout);
+    assert!(blocked_status.contains("Problem: quickjs-agent:"));
+    assert!(blocked_status.contains("--evidence <review>"));
+
+    fs::remove_dir_all(&governed).unwrap();
+    fs::create_dir_all(workspace.path().join("plugins/malformed")).unwrap();
+    let malformed = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(malformed.status.success());
+    assert!(String::from_utf8_lossy(&malformed.stdout).contains("Problem: malformed:"));
+    assert!(
+        String::from_utf8_lossy(&malformed.stdout)
+            .contains("Plugin Bundle is missing `lenso-plugin.json`")
+    );
+}
+
+#[test]
+fn source_discovery_reports_an_orphan_plugin_configuration_without_blocking_other_bundles() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let plugins = workspace.path().join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    fs::write(
+        plugins.join("missing.config.toml"),
+        "[modules.missing]\nmax_items = 1\n",
+    )
+    .unwrap();
+    let passive = plugins.join("passive");
+    fs::create_dir_all(&passive).unwrap();
+    write_passive_bundle(&passive);
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+
+    assert!(status.status.success());
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("Problem: missing.config.toml:"), "{stdout}");
+    assert!(
+        stdout.contains("Plugin configuration has no matching Bundle"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("example.passive"), "{stdout}");
+}
+
+#[test]
+fn source_discovery_rejects_a_plugin_configuration_that_expands_host_limits() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let plugins = workspace.path().join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    let bundle = plugins.join("code-mode");
+    fs::create_dir_all(&bundle).unwrap();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/code-mode");
+    fs::copy(
+        fixture.join("lenso-plugin.json"),
+        bundle.join("lenso-plugin.json"),
+    )
+    .unwrap();
+    fs::write(
+        plugins.join("code-mode.config.toml"),
+        "[modules.code-mode-tools]\nmax_instructions = 1000001\n",
+    )
+    .unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+
+    assert!(status.status.success());
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(stdout.contains("Problem: code-mode:"), "{stdout}");
+    assert!(stdout.contains("may narrow, but not expand"), "{stdout}");
+}
+
+#[test]
+fn source_discovery_rejects_duplicate_plugin_ids() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    for name in ["one", "two"] {
+        let bundle = workspace.path().join("plugins").join(name);
+        fs::create_dir_all(&bundle).unwrap();
+        write_passive_bundle(&bundle);
+    }
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    assert!(
+        String::from_utf8_lossy(&status.stdout)
+            .contains("Plugin `example.passive` appears in more than one discovery Bundle")
+    );
 }
 
 #[test]
@@ -210,8 +499,188 @@ fn source_app_rejects_legacy_store_commands_without_creating_plugin_state() {
         .unwrap();
 
     assert!(!history.status.success());
-    assert!(String::from_utf8_lossy(&history.stderr).contains("legacy private Plugin Store"));
+    assert!(String::from_utf8_lossy(&history.stderr).contains("not yet unified"));
     assert!(!workspace.path().join(".lenso/plugins").exists());
+}
+
+#[test]
+fn source_app_installs_and_removes_a_third_party_release_alongside_bundled_plugins() {
+    let workspace = tempfile::tempdir().unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    write_passive_bundle(bundle.path());
+
+    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "enable", "text-tools", "--plan"])
+        .arg(plan_path())
+        .output()
+        .unwrap();
+    assert!(
+        enable.status.success(),
+        "{}",
+        String::from_utf8_lossy(&enable.stderr)
+    );
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(bundle.path())
+        .args(["--feature", "extras"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(String::from_utf8_lossy(&install.stdout).contains("installed: example.passive@1.0.0"));
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        stdout.contains("Plugin: text-tools@1 (built in)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Plugin: example.passive@1.0.0 (installed)"),
+        "{stdout}"
+    );
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["--plan"])
+        .arg(plan_path())
+        .arg("Use the text Plugin to uppercase Lenso plugin.")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Text Plugin result: LENSO PLUGIN\n"
+    );
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["plugins", "remove", "--plugin", "example.passive"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
+
+    let status = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["plugins", "status"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        stdout.contains("Plugin: text-tools@1 (built in)"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("example.passive"), "{stdout}");
+}
+
+#[test]
+fn source_app_install_keeps_active_state_unchanged_when_ready_check_fails() {
+    let workspace = tempfile::tempdir().unwrap();
+    let bundle = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let invalid_plan = workspace.path().join("invalid-plan.json");
+    fs::write(&invalid_plan, b"{}\n").unwrap();
+    write_passive_bundle(bundle.path());
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .env("LENSO_RESOLVED_PLAN", &invalid_plan)
+        .args(["plugins", "install", "--bundle"])
+        .arg(bundle.path())
+        .args(["--feature", "extras"])
+        .output()
+        .unwrap();
+
+    assert!(!install.status.success());
+    assert!(String::from_utf8_lossy(&install.stderr).contains("resolved Plan"));
+    assert!(
+        !workspace
+            .path()
+            .join(".lenso/plugins/active-set.json")
+            .exists()
+    );
+}
+
+#[test]
+fn source_app_installs_and_runs_an_artifact_backed_quickjs_plugin() {
+    let workspace = tempfile::tempdir().unwrap();
+    let definition = source_app_definition(workspace.path());
+    let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/quickjs-agent");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["plugins", "install", "--bundle"])
+        .arg(&bundle)
+        .args(["--evidence", "reviewed local QuickJS Agent"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&install.stdout).contains("installed: example.quickjs-agent@1.0.0")
+    );
+
+    let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .args(["--plan"])
+        .arg(plan_path())
+        .arg("hello")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "Direct answer.\n");
+
+    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(workspace.path())
+        .env("LENSO_APP_DEFINITION", &definition)
+        .env("LENSO_RESOLVED_PLAN", plan_path())
+        .args(["plugins", "remove", "--plugin", "example.quickjs-agent"])
+        .output()
+        .unwrap();
+    assert!(
+        remove.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remove.stderr)
+    );
 }
 
 #[test]
@@ -360,7 +829,7 @@ fn cli_installs_lists_and_runs_with_a_reviewed_passive_release() {
         .output()
         .unwrap();
     assert!(status.status.success());
-    assert!(String::from_utf8_lossy(&status.stdout).contains("example.passive@1.0.0 sha256:"));
+    assert!(String::from_utf8_lossy(&status.stdout).contains("Plugin: example.passive@1.0.0"));
 
     let run = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(workspace.path())

@@ -40,7 +40,9 @@ does not modify any file and does not cover Plugin Store objects.
 - A candidate is an observation, not deletion authorization. Concurrent startup
   or Session writes can change reachability after inspection.
 - Deletion, retention windows, background work, Plugin Store collection, and a
-  stronger apply-time consistency protocol remain deferred.
+  stronger apply-time consistency protocol were deferred by this decision.
+  ADR-0035 later adds an explicitly applied, process-fenced deletion path while
+  preserving this command as read-only preview.
 - This stays in the Host control plane. It adds no Kernel contract, Runtime
   Driver, Capability, policy DSL, or generic graph engine.
 

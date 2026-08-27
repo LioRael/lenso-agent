@@ -1321,12 +1321,7 @@ async fn run_loop(
 async fn present_online_generation_events(app: &AgentApp, state: &mut TuiState) {
     for event in app.take_online_generation_events() {
         match event {
-            OnlineGenerationEvent::Switched {
-                generation_spec_digest,
-                previous_generation_spec_digest,
-                routing_epoch,
-                ..
-            } => {
+            OnlineGenerationEvent::Switched { .. } => {
                 match app.tui_panels().await {
                     Ok(panels) => {
                         state.panels = panels;
@@ -1336,33 +1331,51 @@ async fn present_online_generation_events(app: &AgentApp, state: &mut TuiState) 
                     }
                     Err(error) => state.transcript.push(TranscriptEntry::Error {
                         text: format!(
-                            "App Generation switched, but TUI contributions could not refresh: {error}"
+                            "Plugin changes were applied, but the interface could not refresh: {error}"
                         ),
                     }),
                 }
-                state.push_system(format!(
-                    "App Generation switched {} → {} at routing epoch {routing_epoch}",
-                    short_digest(&previous_generation_spec_digest),
-                    short_digest(&generation_spec_digest),
-                ));
+                state.push_system("Plugin changes applied.".to_owned());
             }
-            OnlineGenerationEvent::Rejected {
-                active_set_digest,
-                detail,
-            } => state.transcript.push(TranscriptEntry::Error {
+            OnlineGenerationEvent::Rejected { detail, .. } => state.transcript.push(TranscriptEntry::Error {
                 text: format!(
-                    "Plugin update was rejected{}; the current App Generation remains active: {detail}",
-                    active_set_digest.as_deref().map_or_else(String::new, |digest| {
-                        format!(" ({})", short_digest(digest))
-                    })
+                    "Plugin changes were not loaded; the current plugins remain active: {detail}"
                 ),
             }),
+            OnlineGenerationEvent::RolledBack { detail, .. } => {
+                match app.tui_panels().await {
+                    Ok(panels) => {
+                        state.panels = panels;
+                        state.selected_panel = state
+                            .selected_panel
+                            .min(state.panels.len().saturating_sub(1));
+                    }
+                    Err(error) => state.transcript.push(TranscriptEntry::Error {
+                        text: format!(
+                            "The previous plugins were restored, but the interface could not refresh: {error}"
+                        ),
+                    }),
+                }
+                state.transcript.push(TranscriptEntry::Error {
+                    text: format!(
+                        "A plugin change failed and the previous plugins were restored: {detail}"
+                    ),
+                });
+            }
+            OnlineGenerationEvent::Failed { detail, .. } => state.transcript.push(TranscriptEntry::Error {
+                text: format!(
+                    "A plugin change failed and no working previous setup was available; new requests are paused: {detail}"
+                ),
+            }),
+            OnlineGenerationEvent::WatchDegraded { detail } => {
+                state.transcript.push(TranscriptEntry::Error {
+                    text: format!(
+                        "Plugin folder watching encountered a problem; periodic scanning remains active: {detail}"
+                    ),
+                });
+            }
         }
     }
-}
-
-fn short_digest(digest: &str) -> &str {
-    digest.get(..digest.len().min(15)).unwrap_or(digest)
 }
 
 fn handle_terminal_event(
