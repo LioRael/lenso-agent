@@ -32,13 +32,14 @@ fn resolve_base_plan() -> Result<Vec<u8>, String> {
     let definition = app_definition_path();
     let app = CargoAppDefinition::load(&definition)
         .map_err(|error| format!("failed to load {}: {error}", definition.display()))?;
-    let root = definition.parent().unwrap_or_else(|| Path::new("."));
-    app.resolve_canonical(root).map_err(|error| {
-        format!(
-            "failed to resolve the App from {}: {error}",
-            definition.display()
-        )
-    })
+    let catalog = generation::linked_module_catalog()?;
+    app.resolve_with_catalog_canonical(&catalog)
+        .map_err(|error| {
+            format!(
+                "failed to resolve the App from {}: {error}",
+                definition.display()
+            )
+        })
 }
 
 pub(crate) fn app_definition_path() -> PathBuf {

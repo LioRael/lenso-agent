@@ -644,7 +644,7 @@ fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environmen
 }
 
 #[test]
-fn product_runner_resolves_the_single_base_app_without_a_plan_path() {
+fn product_runner_resolves_the_base_app_without_cargo_or_a_plan_path() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let definition = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lenso.app.json");
@@ -652,6 +652,7 @@ fn product_runner_resolves_the_single_base_app_without_a_plan_path() {
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
         .env("LENSO_APP_DEFINITION", definition)
+        .env("CARGO", temporary.path().join("missing-cargo"))
         .arg("Answer directly: hello")
         .output()
         .unwrap();

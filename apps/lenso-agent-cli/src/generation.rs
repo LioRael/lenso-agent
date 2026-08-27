@@ -39,7 +39,7 @@ use lenso_agent_workspace_edit_module as _;
 use lenso_agent_workspace_import_read_module as _;
 use lenso_agent_workspace_read_module as _;
 use lenso_agent_workspace_read_tools_module as _;
-use lenso_app_plan::ResolvedAppPlan;
+use lenso_app_plan::{ResolvedAppPlan, authoring::ModuleCatalog};
 use lenso_capability_agent::{Agent, AgentJsonCodec};
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
@@ -1256,6 +1256,37 @@ fn native_host_build() -> (NativeModuleRegistry, Vec<BuiltInModule>) {
         .collect::<Vec<_>>();
     built_in_modules.sort_by(|left, right| left.factory_identity.cmp(&right.factory_identity));
     (registry, built_in_modules)
+}
+
+pub(crate) fn linked_module_catalog() -> Result<ModuleCatalog, String> {
+    let descriptor_json = [
+        lenso_agent_cli_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_discord_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_http_fetch_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_loop_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_model_fixture_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_prompt_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_prompt_static_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_session_file_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_telegram_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_tools_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_tui_command_suggestions_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_tui_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_tui_static_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_tui_workspace_suggestions_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_workspace_import_read_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_workspace_read_module::MODULE_DESCRIPTOR_JSON,
+        lenso_agent_workspace_read_tools_module::MODULE_DESCRIPTOR_JSON,
+    ];
+    let descriptors = descriptor_json
+        .into_iter()
+        .map(|json| {
+            serde_json::from_str(json)
+                .map_err(|error| format!("linked Module has an invalid Descriptor: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    ModuleCatalog::new(descriptors)
+        .map_err(|error| format!("linked Module catalog is invalid: {error}"))
 }
 
 fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
