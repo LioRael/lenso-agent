@@ -85,6 +85,11 @@ continued returning the V2 result. Disable retained the release, enable
 restored it, remove produced `No plugins.`, and the base App still completed a
 Turn with `README summary: # Lenso Agent Harness`.
 
+The deterministic regression
+`committed_plugin_authority_switches_online_while_an_old_turn_is_leased`
+also passed: a newly leased Turn observed the replacement Generation while the
+already leased Turn retained its original Generation and completed normally.
+
 This closes the public clean-room gate for the four-command authoring workflow:
 `plugin new → check → dev → pack`. Integrity is checked by `pack` and checked
 again at Harness admission; no separate `plugin verify` command is required.
