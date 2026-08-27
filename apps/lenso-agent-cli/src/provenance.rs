@@ -4,8 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lenso_agent_loop_module::inspect_turn_generation_provenance;
-use lenso_agent_session_file_module::{
+use lenso_agent_loop_plugin::inspect_turn_generation_provenance;
+use lenso_agent_session_file_plugin::{
     inspect_all_turn_started_events, inspect_turn_started_events,
 };
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
@@ -13,10 +13,10 @@ use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
 use crate::{
     authority::AuthorityCoordinator,
     generation::live_controller_generation_digests,
-    plugins::{
+    generation_authority::{
         prune_recovery_generation_authorities_unfenced,
-        recovery_generation_authority_gc_candidates_unfenced, retained_plugin_set_digests,
-        retained_plugin_set_digests_unfenced,
+        recovery_generation_authority_gc_candidates_unfenced,
+        retained_resolution_authority_digests, retained_resolution_authority_digests_unfenced,
     },
 };
 
@@ -35,7 +35,7 @@ pub enum SessionCommand {
     Provenance {
         session_id: String,
         directory: PathBuf,
-        plugin_root: PathBuf,
+        runtime_root: PathBuf,
     },
 }
 
@@ -43,7 +43,7 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     let [command, rest @ ..] = arguments else {
         return Err(generation_usage());
     };
-    let mut root = PathBuf::from(".lenso/plugins");
+    let mut root = PathBuf::from(".lenso/runtime");
     let mut sessions = PathBuf::from(".lenso/sessions");
     let mut digest = None;
     let mut apply = false;
@@ -84,14 +84,14 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     }
     let mut session_id = None;
     let mut directory = PathBuf::from(".lenso/sessions");
-    let mut plugin_root = PathBuf::from(".lenso/plugins");
+    let mut runtime_root = PathBuf::from(".lenso/runtime");
     let mut arguments = rest.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--session" => session_id = Some(arguments.next().ok_or_else(session_usage)?.clone()),
             "--directory" => directory = PathBuf::from(arguments.next().ok_or_else(session_usage)?),
-            "--plugin-root" => {
-                plugin_root = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
+            "--runtime-root" => {
+                runtime_root = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
             }
             _ => return Err(session_usage()),
         }
@@ -99,7 +99,7 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     Ok(SessionCommand::Provenance {
         session_id: session_id.ok_or_else(session_usage)?,
         directory,
-        plugin_root,
+        runtime_root,
     })
 }
 
@@ -118,7 +118,10 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
                 generation.value().host_execution_policy_digest
             );
             println!("plan: {}", generation.value().resolved_plan_digest);
-            println!("plugin-set: {}", generation.value().plugin_set_lock_digest);
+            println!(
+                "resolution-authority: {}",
+                generation.value().resolution_authority_digest
+            );
             println!(
                 "artifact-set: {}",
                 generation.value().resolved_artifact_set_digest
@@ -135,8 +138,8 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
 }
 
 fn print_gc_preview(root: &Path, sessions: &Path) -> Result<(), String> {
-    let plugin_sets = retained_plugin_set_roots(root, false)?;
-    print_gc_plan(&build_gc_plan(root, sessions, &plugin_sets)?)
+    let resolution_authorities = retained_resolution_authority_roots(root, false);
+    print_gc_plan(&build_gc_plan(root, sessions, &resolution_authorities)?)
 }
 
 #[derive(Debug)]
@@ -152,12 +155,12 @@ impl GenerationGcPlan {
             .filter_map(|(digest, reasons)| reasons.is_empty().then_some(digest))
     }
 
-    fn protected_plugin_set_locks(&self) -> BTreeSet<String> {
+    fn protected_resolution_authorities(&self) -> BTreeSet<String> {
         self.reasons
             .iter()
             .filter(|(_, reasons)| !reasons.is_empty())
             .filter_map(|(digest, _)| self.generations.get(digest))
-            .map(|generation| generation.value().plugin_set_lock_digest.clone())
+            .map(|generation| generation.value().resolution_authority_digest.clone())
             .collect()
     }
 }
@@ -165,7 +168,7 @@ impl GenerationGcPlan {
 fn build_gc_plan(
     root: &Path,
     sessions: &Path,
-    plugin_sets: &BTreeSet<String>,
+    resolution_authorities: &BTreeSet<String>,
 ) -> Result<GenerationGcPlan, String> {
     let session_generations = inspect_all_turn_started_events(sessions)?
         .into_iter()
@@ -203,8 +206,8 @@ fn build_gc_plan(
         .iter()
         .map(|(digest, generation)| {
             let mut reasons = Vec::new();
-            if plugin_sets.contains(&generation.value().plugin_set_lock_digest) {
-                reasons.push("plugin-set");
+            if resolution_authorities.contains(&generation.value().resolution_authority_digest) {
+                reasons.push("resolution-authority");
             }
             if controller_generations.contains(digest) {
                 reasons.push("controller");
@@ -245,18 +248,18 @@ fn apply_gc(root: &Path, sessions: &Path) -> Result<(), String> {
     let coordinator = AuthorityCoordinator::open_existing(root)?;
     let _gc_fence = coordinator.generation_gc_transition()?;
     let _authority_fence = coordinator.transition()?;
-    let plugin_sets = retained_plugin_set_roots(root, true)?;
-    let plan = build_gc_plan(root, sessions, &plugin_sets)?;
+    let resolution_authorities = retained_resolution_authority_roots(root, true);
+    let plan = build_gc_plan(root, sessions, &resolution_authorities)?;
     let candidates = plan.candidates().cloned().collect::<Vec<_>>();
-    let mut retained_locks = plan.protected_plugin_set_locks();
-    retained_locks.extend(plugin_sets);
-    recovery_generation_authority_gc_candidates_unfenced(root, &retained_locks)?;
+    let mut retained_authorities = plan.protected_resolution_authorities();
+    retained_authorities.extend(resolution_authorities);
+    recovery_generation_authority_gc_candidates_unfenced(root, &retained_authorities);
     for digest in &candidates {
         remove_generation(root, digest)?;
         println!("removed-generation: {digest}");
     }
     let removed_authorities =
-        prune_recovery_generation_authorities_unfenced(root, &retained_locks)?;
+        prune_recovery_generation_authorities_unfenced(root, &retained_authorities);
     for digest in &removed_authorities {
         println!("removed-recovery-authority: {digest}");
     }
@@ -268,21 +271,11 @@ fn apply_gc(root: &Path, sessions: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn retained_plugin_set_roots(
-    root: &Path,
-    authority_fenced: bool,
-) -> Result<BTreeSet<String>, String> {
-    match fs::symlink_metadata(root.join("active-set.json")) {
-        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-            if authority_fenced {
-                retained_plugin_set_digests_unfenced(root)
-            } else {
-                retained_plugin_set_digests(root)
-            }
-        }
-        Ok(_) => Err("active Plugin Set is not a regular file".to_owned()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
-        Err(error) => Err(format!("failed to inspect active Plugin Set: {error}")),
+fn retained_resolution_authority_roots(root: &Path, authority_fenced: bool) -> BTreeSet<String> {
+    if authority_fenced {
+        retained_resolution_authority_digests_unfenced(root)
+    } else {
+        retained_resolution_authority_digests(root)
     }
 }
 
@@ -344,7 +337,7 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
         SessionCommand::Provenance {
             session_id,
             directory,
-            plugin_root,
+            runtime_root,
         } => {
             let events = inspect_turn_started_events(&directory, &session_id)?;
             let provenance = events
@@ -362,7 +355,7 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
                 println!("No Turn Generation provenance.");
             }
             for turn in provenance {
-                let status = generation_status(&plugin_root, &turn.generation_spec_digest);
+                let status = generation_status(&runtime_root, &turn.generation_spec_digest);
                 println!(
                     "turn: {} revision={} generation={} spec={status}",
                     turn.turn_id, turn.revision, turn.generation_spec_digest
@@ -432,5 +425,5 @@ fn generation_usage() -> String {
 }
 
 fn session_usage() -> String {
-    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>] [--plugin-root <plugin-root>]".to_owned()
+    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>] [--runtime-root <plugin-root>]".to_owned()
 }

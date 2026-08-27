@@ -1,0 +1,23 @@
+[package]
+name = "lenso-agent-telegram-plugin"
+version = "0.1.0"
+description = "Telegram surface consumer Plugin identity for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.telegram"
+root-slot = "surfaces"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-agent = { path = "../lenso-capability-agent" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

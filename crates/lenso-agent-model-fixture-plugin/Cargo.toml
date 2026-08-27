@@ -1,0 +1,26 @@
+[package]
+name = "lenso-agent-model-fixture-plugin"
+version = "0.2.0"
+description = "Deterministic Model Plugin for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.model.fixture"
+root-slot = "model"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-agent-native-support = { path = "../lenso-agent-native-support" }
+lenso-kernel.workspace = true
+lenso-native-adapter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

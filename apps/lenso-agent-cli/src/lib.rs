@@ -3,24 +3,22 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lenso_authoring::CargoAppDefinition;
-
 mod authority;
 pub mod channel;
 pub mod channel_host;
 pub mod discord;
 pub mod generation;
-mod local_config;
-mod plugin_profiles;
-pub mod plugins;
+mod generation_authority;
+mod plugin_root;
 pub mod provenance;
 pub mod telegram;
 #[cfg(test)]
 mod test_support;
 pub mod tui;
 
-/// Loads an exact Plan override or resolves the product App Definition in memory.
+/// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.
 pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {
+    ensure_host_catalog()?;
     explicit_plan
         .map(PathBuf::from)
         .or_else(|| env::var_os("LENSO_RESOLVED_PLAN").map(PathBuf::from))
@@ -29,26 +27,38 @@ pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {
         })
 }
 
+fn ensure_host_catalog() -> Result<(), String> {
+    let path = Path::new(".lenso/host-catalog.json");
+    let catalog = generation::linked_host_catalog()?;
+    let mut bytes = serde_json::to_vec_pretty(&catalog)
+        .map_err(|error| format!("failed to encode the Host Catalog: {error}"))?;
+    bytes.push(b'\n');
+    if fs::read(path).is_ok_and(|current| current == bytes) {
+        return Ok(());
+    }
+    let parent = path.parent().expect("Host Catalog has a parent");
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    let temporary = parent.join("host-catalog.json.tmp");
+    fs::write(&temporary, &bytes)
+        .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
+    fs::rename(&temporary, path)
+        .map_err(|error| format!("failed to publish {}: {error}", path.display()))
+}
+
 fn resolve_base_plan() -> Result<Vec<u8>, String> {
-    let definition = app_definition_path();
-    let app = CargoAppDefinition::load(&definition)
-        .map_err(|error| format!("failed to load {}: {error}", definition.display()))?;
-    let catalog = generation::linked_module_catalog()?;
-    app.resolve_with_catalog_canonical(&catalog)
-        .map_err(|error| {
-            format!(
-                "failed to resolve the App from {}: {error}",
-                definition.display()
-            )
-        })
+    derived_plan_bytes(&plugin_root_path())
 }
 
-pub(crate) fn app_definition_path() -> PathBuf {
-    env::var_os("LENSO_APP_DEFINITION")
-        .map_or_else(|| PathBuf::from("lenso.app.json"), PathBuf::from)
+/// Derives the immutable runtime Plan from this Host and one Plugin Root.
+///
+/// The returned bytes are execution evidence, never authoring input.
+pub fn derived_plan_bytes(plugin_root: &Path) -> Result<Vec<u8>, String> {
+    let snapshot = plugin_root::snapshot(plugin_root)?;
+    let plan = generation::resolve_host_plan(&snapshot)?;
+    serde_json::to_vec(&plan).map_err(|error| format!("failed to encode the derived App: {error}"))
 }
 
-pub(crate) fn existing_app_definition_path() -> Option<PathBuf> {
-    let path = app_definition_path();
-    (env::var_os("LENSO_APP_DEFINITION").is_some() || path.is_file()).then_some(path)
+pub(crate) fn plugin_root_path() -> PathBuf {
+    env::var_os("LENSO_PLUGIN_ROOT").map_or_else(|| PathBuf::from("plugins"), PathBuf::from)
 }

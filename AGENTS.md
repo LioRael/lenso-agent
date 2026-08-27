@@ -3,13 +3,12 @@
 Read `CONTEXT.md` and the accepted ADRs before changing architecture or
 contracts.
 
-- Treat the Agent Harness as an ordinary Lenso App Composition. Do not add
-  Agent concepts, plugin discovery, package installation, or graph mutation to
-  `lenso-kernel`.
-- Use `Module`, `Capability`, `App Composition`, `Resolved App Plan`, `Runtime
-  Driver`, and `Execution Adapter` as the canonical runtime vocabulary.
-  `Plugin` is an ecosystem and authoring term only.
-- Keep every durable fact with one Module owner. The first Session Module must
+- Treat the Agent Harness as one Host plus a visible `plugins/` Plugin Root. Do
+  not add Agent concepts, Plugin discovery, package installation, or graph
+  mutation to `lenso-kernel`.
+- Use `Plugin` for every removable behavior unit. `Module` is retired public
+  vocabulary and must not be restored as a compatibility alias.
+- Keep every durable fact with one Plugin owner. The first Session Plugin must
   fail closed when its durable store is unavailable; it must not fall back to
   memory.
 - Treat native Rust, Bun, and installed package code as trusted. Do not claim
@@ -19,13 +18,12 @@ contracts.
   authoring source; committed Descriptors and package-local Schemas are locked
   cross-language artifacts and generated Rust/TypeScript bindings must not be
   hand-edited. Unmigrated Capability crates still own their Descriptor and
-  Schemas directly. For Modules already migrated to source-first authoring, do
+  Schemas directly. For Plugins already migrated to source-first authoring, do
   not restore hand-written factories, endpoint glue, Schemas, or Host
   registration.
-- Edit the base App through the source-derived root `lenso.app.json` definition
-  and select optional Modules through Plugin Desired State. Never hand-edit the
-  generated `.lenso/resolved-plan.json` Plan. Run `lenso app check` and
-  `lenso app resolve` for the root definition.
+- Host defaults and private wiring are generated into the immutable Host
+  Catalog. App differences live only under `plugins/<plugin-id>/`; never add a
+  central App Definition or local enabled list. Never hand-edit a derived Plan.
 - Use `/Users/leosouthey/Projects/framework/.lenso-tools/bin/lenso-cargo` for
   local Cargo commands. Public documentation must use portable `cargo`
   commands without local absolute paths.

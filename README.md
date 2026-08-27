@@ -23,33 +23,35 @@ for one Turn, or repeat `--allow-tool <name>` to narrow the selected Tools.
 
 ## Choose Plugins
 
-The base App is read-only. List the Plugins shipped with this Host and enable
-only the behavior you need:
+The Host boots its read-only defaults when `plugins/` is absent or empty. App
+differences use one directory per Plugin and one TOML file per Instance:
 
 ```sh
-cargo run -p lenso-agent-cli -- plugins list
-cargo run -p lenso-agent-cli -- plugins enable workspace-edit
-cargo run -p lenso-agent-cli -- plugins status
+lenso plugins list
+lenso plugins configure lenso.agent.workspace-edit
 
 cargo run -p lenso-agent-cli -- \
   "Create and edit a workspace note."
 
-cargo run -p lenso-agent-cli -- plugins disable workspace-edit
+lenso plugins disable lenso.agent.workspace-edit
+lenso plugins enable lenso.agent.workspace-edit
 ```
 
-Normal Plugin management has six commands:
+The visible state is ordinary files:
 
 ```text
-list
-add <bundle>
-status
-enable <plugin-id>
-disable <plugin-id>
-remove <plugin-id>
+plugins/
+  lenso.agent.workspace-edit/
+    default.toml
+    default.disabled        # present only while disabled
+  example.uppercase/
+    plugin.lenso-plugin/    # immutable package, for external Plugins
+    default.toml
 ```
 
-Adding a newer Bundle with the same Plugin ID updates it. Disable keeps the
-selected Release available for re-enabling; remove forgets it from this App.
+There is no `lenso.app.json`, `lenso.app.toml`, `lenso.local.toml`, enabled
+list, or user-authored binding document. `lenso app check` and `lenso app show`
+derive the App from the Host Catalog plus this directory.
 
 ## Build a Plugin
 
@@ -65,11 +67,10 @@ lenso plugin dev --operation execute \
 lenso plugin pack
 ```
 
-Add the package to the Harness:
+Add the package to the Harness App:
 
 ```sh
-cargo run -p lenso-agent-cli -- plugins add \
-  path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
+lenso plugins add path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
 ```
 
 `pack` checks the exact bytes it writes and the Harness checks received bytes

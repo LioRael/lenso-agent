@@ -1,6 +1,5 @@
 /target
 /node_modules
 .lenso/
-/lenso.local.toml
 *.log
 .DS_Store

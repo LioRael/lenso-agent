@@ -1,7 +1,7 @@
 //! Shared host-side orchestration for ordered Tool Hooks.
 
 use lenso_kernel::{InvocationContext, RuntimeFailure};
-use lenso_module_authoring::ManyPort;
+use lenso_plugin_authoring::ManyPort;
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
@@ -181,7 +181,7 @@ pub async fn finish_hooks(
                 },
                 content: terminal_content.to_owned(),
                 metadata_json: metadata_json.to_owned().try_into().map_err(|_| {
-                    RuntimeFailure::ModuleFailure {
+                    RuntimeFailure::PluginFailure {
                         detail: "Tool Provider returned invalid metadata JSON".to_owned(),
                     }
                 })?,
@@ -201,7 +201,7 @@ fn hook_failure(
 ) -> RuntimeFailure {
     match error {
         ToolHookBeforeExecuteInvocationError::Runtime(error) => error,
-        ToolHookBeforeExecuteInvocationError::Domain(_) => RuntimeFailure::ModuleFailure {
+        ToolHookBeforeExecuteInvocationError::Domain(_) => RuntimeFailure::PluginFailure {
             detail: format!("Tool Hook {index} failed during {operation}"),
         },
     }
@@ -210,7 +210,7 @@ fn hook_failure(
 fn after_hook_failure(index: usize, error: ToolHookAfterExecuteInvocationError) -> RuntimeFailure {
     match error {
         ToolHookAfterExecuteInvocationError::Runtime(error) => error,
-        ToolHookAfterExecuteInvocationError::Domain(_) => RuntimeFailure::ModuleFailure {
+        ToolHookAfterExecuteInvocationError::Domain(_) => RuntimeFailure::PluginFailure {
             detail: format!("Tool Hook {index} failed during after_execute"),
         },
     }

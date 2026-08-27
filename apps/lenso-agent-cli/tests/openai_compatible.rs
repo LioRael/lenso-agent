@@ -19,11 +19,11 @@ fn test_plan(root: &Path, base_url: &str) -> PathBuf {
         &fs::read(canonical_plan_path()).expect("read canonical OpenAI Plan"),
     )
     .expect("decode canonical OpenAI Plan");
-    let model = plan["module_instances"]
+    let model = plan["plugin_instances"]
         .as_array_mut()
-        .expect("Plan module_instances")
+        .expect("Plan plugin_instances")
         .iter_mut()
-        .find(|module| module["instance_key"] == "model")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.model.openai-compatible/model")
         .expect("OpenAI Model Instance");
     let mut configuration = serde_json::from_str::<serde_json::Value>(
         model["configuration"]

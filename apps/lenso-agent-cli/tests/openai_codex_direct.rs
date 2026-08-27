@@ -25,19 +25,19 @@ fn test_plan(root: &Path, base_url: &str, credential_file: &Path) -> PathBuf {
         &fs::read(canonical_plan_path()).expect("read canonical direct Codex Plan"),
     )
     .expect("decode canonical direct Codex Plan");
-    let modules = plan["module_instances"]
+    let plugins = plan["plugin_instances"]
         .as_array_mut()
-        .expect("Plan module_instances");
-    let model = modules
+        .expect("Plan plugin_instances");
+    let model = plugins
         .iter_mut()
-        .find(|module| module["instance_key"] == "model")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.model.openai-codex-direct/model")
         .expect("direct Codex Model Instance");
     update_configuration(model, |configuration| {
         configuration["base_url"] = serde_json::Value::String(base_url.to_owned());
     });
-    let auth = modules
+    let auth = plugins
         .iter_mut()
-        .find(|module| module["instance_key"] == "auth")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.auth.openai-codex/auth")
         .expect("direct Codex Auth Instance");
     update_configuration(auth, |configuration| {
         configuration["credential_file"] =
@@ -49,17 +49,17 @@ fn test_plan(root: &Path, base_url: &str, credential_file: &Path) -> PathBuf {
 }
 
 fn update_configuration(
-    module: &mut serde_json::Value,
+    plugin: &mut serde_json::Value,
     update: impl FnOnce(&mut serde_json::Value),
 ) {
     let mut configuration = serde_json::from_str::<serde_json::Value>(
-        module["configuration"]
+        plugin["configuration"]
             .as_str()
-            .expect("Module configuration bytes"),
+            .expect("Plugin configuration bytes"),
     )
-    .expect("decode Module configuration");
+    .expect("decode Plugin configuration");
     update(&mut configuration);
-    module["configuration"] = serde_json::Value::String(configuration.to_string());
+    plugin["configuration"] = serde_json::Value::String(configuration.to_string());
 }
 
 fn write_credential(path: &Path) {

@@ -1,6 +1,6 @@
 # Architecture decision records
 
-- [0001 — Compose the Agent Harness from ordinary Lenso Modules](0001-compose-the-agent-harness-from-ordinary-lenso-modules.md)
+- [0001 — Compose the Agent Harness from ordinary Lenso Modules](0001-compose-the-agent-harness-from-ordinary-lenso-plugins.md)
 - [0002 — Own direct ChatGPT subscription access](0002-own-direct-chatgpt-subscription-access.md)
 - [0003 — Compose Prompt and Skill contributions](0003-compose-prompt-and-skill-contributions.md)
 - [0004 — Use minimal composed Tool profiles and progressive Skills](0004-use-minimal-composed-tool-profiles-and-progressive-skills.md)
@@ -22,7 +22,7 @@
 - [0020 — Enter a composed TUI from the product entrypoint](0020-enter-a-composed-tui-from-the-product-entrypoint.md)
 - [0021 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0021-bind-reviewed-wasm-tools-to-workspace-read.md)
 - [0022 — Compose optional built-ins through Plugin state](0022-compose-optional-builtins-through-plugin-state.md)
-- [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-modules-through-plugin-state.md)
+- [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-plugins-through-plugin-state.md)
 - [0024 — Derive typed Agent Tool Providers](0024-derive-agent-tool-providers.md)
 - [0025 — Enforce reviewed network grants through one HTTP Capability](0025-enforce-reviewed-network-grants-through-http-capability.md)
 - [0026 — Reconcile committed Plugin state online](0026-reconcile-committed-plugin-state-online.md)
@@ -38,3 +38,4 @@
 - [0036 — Wake Plugin reconciliation from filesystem events](0036-wake-plugin-reconciliation-from-filesystem-events.md)
 - [0037 — Consume packaged Plugin Bundles without extraction](0037-consume-packaged-plugin-bundles-without-extraction.md)
 - [0038 — Configure discovered Plugin Modules with adjacent sidecars](0038-configure-discovered-plugin-modules-with-sidecars.md)
+- [0039 — Derive the App from the Host Catalog and Plugin Root](0039-derive-app-from-host-catalog-and-plugin-root.md)

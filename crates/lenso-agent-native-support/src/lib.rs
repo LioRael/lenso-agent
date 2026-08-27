@@ -1,4 +1,4 @@
-//! Small native-runtime helpers shared by Agent Harness Modules.
+//! Small native-runtime helpers shared by Agent Harness Plugins.
 
 use std::{
     any::Any,

@@ -1,4 +1,4 @@
-use lenso::{Ctx, ModuleError};
+use lenso::{Ctx, PluginError};
 use lenso_agent_tool_sdk::prelude::*;
 use lenso_capability_agent_tool_provider::{CatalogRequest, ExecuteRequest, ToolExecutionClass};
 use lenso_kernel::CancellationToken;
@@ -10,7 +10,7 @@ struct Message {
     value: String,
 }
 
-#[lenso::module]
+#[lenso::plugin]
 #[derive(Clone, Copy, Debug)]
 struct FixtureTools {}
 
@@ -99,6 +99,6 @@ fn one_provider_derives_and_dispatches_multiple_typed_tools() {
     ));
     assert!(matches!(
         invalid,
-        Err(ModuleError::Domain(ExecuteError::InvalidArguments))
+        Err(PluginError::Domain(ExecuteError::InvalidArguments))
     ));
 }

@@ -1,0 +1,26 @@
+[package]
+name = "lenso-agent-code-mode-tools-plugin"
+version = "0.1.0"
+description = "Bounded Code Mode Tool Provider Plugin for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.code-mode-tools"
+root-slot = "tool-providers"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
+lenso-kernel.workspace = true
+mlua.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

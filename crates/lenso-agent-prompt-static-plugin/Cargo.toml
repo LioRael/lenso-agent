@@ -1,0 +1,25 @@
+[package]
+name = "lenso-agent-prompt-static-plugin"
+version = "0.1.0"
+description = "Static Prompt and Skill contribution Plugin for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.prompt.static"
+root-slot = "prompt-providers"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
+lenso-kernel.workspace = true
+lenso-native-adapter.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

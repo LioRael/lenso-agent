@@ -30,35 +30,35 @@ name = "lenso-agent-channel"
 path = "src/channel_main.rs"
 
 [dependencies]
-lenso-agent-approval-hook-module = { path = "../../crates/lenso-agent-approval-hook-module" }
-lenso-agent-cli-module = { path = "../../crates/lenso-agent-cli-module" }
-lenso-agent-code-mode-tools-module = { path = "../../crates/lenso-agent-code-mode-tools-module" }
-lenso-agent-tui-module = { path = "../../crates/lenso-agent-tui-module" }
-lenso-agent-tui-static-module = { path = "../../crates/lenso-agent-tui-static-module" }
-lenso-agent-telegram-module = { path = "../../crates/lenso-agent-telegram-module" }
-lenso-agent-discord-module = { path = "../../crates/lenso-agent-discord-module" }
-lenso-agent-tui-command-suggestions-module = { path = "../../crates/lenso-agent-tui-command-suggestions-module" }
-lenso-agent-tui-workspace-suggestions-module = { path = "../../crates/lenso-agent-tui-workspace-suggestions-module" }
-lenso-agent-auth-openai-codex-module = { path = "../../crates/lenso-agent-auth-openai-codex-module" }
-lenso-agent-loop-module = { path = "../../crates/lenso-agent-loop-module" }
-lenso-agent-http-fetch-module = { path = "../../crates/lenso-agent-http-fetch-module" }
-lenso-agent-model-fixture-module = { path = "../../crates/lenso-agent-model-fixture-module" }
-lenso-agent-model-openai-compatible-module = { path = "../../crates/lenso-agent-model-openai-compatible-module" }
-lenso-agent-model-openai-codex-direct-module = { path = "../../crates/lenso-agent-model-openai-codex-direct-module" }
-lenso-agent-prompt-filesystem-module = { path = "../../crates/lenso-agent-prompt-filesystem-module" }
-lenso-agent-prompt-module = { path = "../../crates/lenso-agent-prompt-module" }
-lenso-agent-prompt-static-module = { path = "../../crates/lenso-agent-prompt-static-module" }
-lenso-agent-process-native-module = { path = "../../crates/lenso-agent-process-native-module" }
-lenso-agent-process-tools-module = { path = "../../crates/lenso-agent-process-tools-module" }
-lenso-agent-session-file-module = { path = "../../crates/lenso-agent-session-file-module" }
-lenso-agent-skills-filesystem-module = { path = "../../crates/lenso-agent-skills-filesystem-module" }
-lenso-agent-subagent-tools-module = { path = "../../crates/lenso-agent-subagent-tools-module" }
-lenso-agent-tools-module = { path = "../../crates/lenso-agent-tools-module" }
-lenso-agent-text-tools-module = { path = "../../crates/lenso-agent-text-tools-module" }
-lenso-agent-workspace-edit-module = { path = "../../crates/lenso-agent-workspace-edit-module" }
-lenso-agent-workspace-import-read-module = { path = "../../crates/lenso-agent-workspace-import-read-module" }
-lenso-agent-workspace-read-tools-module = { path = "../../crates/lenso-agent-workspace-read-tools-module" }
-lenso-agent-workspace-read-module = { path = "../../crates/lenso-agent-workspace-read-module" }
+lenso-agent-approval-hook-plugin = { path = "../../crates/lenso-agent-approval-hook-plugin" }
+lenso-agent-cli-plugin = { path = "../../crates/lenso-agent-cli-plugin" }
+lenso-agent-code-mode-tools-plugin = { path = "../../crates/lenso-agent-code-mode-tools-plugin" }
+lenso-agent-tui-plugin = { path = "../../crates/lenso-agent-tui-plugin" }
+lenso-agent-tui-static-plugin = { path = "../../crates/lenso-agent-tui-static-plugin" }
+lenso-agent-telegram-plugin = { path = "../../crates/lenso-agent-telegram-plugin" }
+lenso-agent-discord-plugin = { path = "../../crates/lenso-agent-discord-plugin" }
+lenso-agent-tui-command-suggestions-plugin = { path = "../../crates/lenso-agent-tui-command-suggestions-plugin" }
+lenso-agent-tui-workspace-suggestions-plugin = { path = "../../crates/lenso-agent-tui-workspace-suggestions-plugin" }
+lenso-agent-auth-openai-codex-plugin = { path = "../../crates/lenso-agent-auth-openai-codex-plugin" }
+lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
+lenso-agent-http-fetch-plugin = { path = "../../crates/lenso-agent-http-fetch-plugin" }
+lenso-agent-model-fixture-plugin = { path = "../../crates/lenso-agent-model-fixture-plugin" }
+lenso-agent-model-openai-compatible-plugin = { path = "../../crates/lenso-agent-model-openai-compatible-plugin" }
+lenso-agent-model-openai-codex-direct-plugin = { path = "../../crates/lenso-agent-model-openai-codex-direct-plugin" }
+lenso-agent-prompt-filesystem-plugin = { path = "../../crates/lenso-agent-prompt-filesystem-plugin" }
+lenso-agent-prompt-plugin = { path = "../../crates/lenso-agent-prompt-plugin" }
+lenso-agent-prompt-static-plugin = { path = "../../crates/lenso-agent-prompt-static-plugin" }
+lenso-agent-process-native-plugin = { path = "../../crates/lenso-agent-process-native-plugin" }
+lenso-agent-process-tools-plugin = { path = "../../crates/lenso-agent-process-tools-plugin" }
+lenso-agent-session-file-plugin = { path = "../../crates/lenso-agent-session-file-plugin" }
+lenso-agent-skills-filesystem-plugin = { path = "../../crates/lenso-agent-skills-filesystem-plugin" }
+lenso-agent-subagent-tools-plugin = { path = "../../crates/lenso-agent-subagent-tools-plugin" }
+lenso-agent-tools-plugin = { path = "../../crates/lenso-agent-tools-plugin" }
+lenso-agent-text-tools-plugin = { path = "../../crates/lenso-agent-text-tools-plugin" }
+lenso-agent-workspace-edit-plugin = { path = "../../crates/lenso-agent-workspace-edit-plugin" }
+lenso-agent-workspace-import-read-plugin = { path = "../../crates/lenso-agent-workspace-import-read-plugin" }
+lenso-agent-workspace-read-tools-plugin = { path = "../../crates/lenso-agent-workspace-read-tools-plugin" }
+lenso-agent-workspace-read-plugin = { path = "../../crates/lenso-agent-workspace-read-plugin" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-auth-openai-codex = { path = "../../crates/lenso-capability-agent-auth-openai-codex" }
 lenso-capability-agent-http-fetch = { path = "../../crates/lenso-capability-agent-http-fetch" }
@@ -81,15 +81,15 @@ futures.workspace = true
 fs2.workspace = true
 notify.workspace = true
 lenso-app-plan.workspace = true
-lenso-authoring.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 lenso-plugin-control-plane.workspace = true
+lenso-runtime-codec.workspace = true
 lenso-plugin-bundle.workspace = true
 lenso-runner.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true
-lenso-secrets-env-module.workspace = true
+lenso-secrets-env-plugin.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jsonschema.workspace = true

@@ -44,7 +44,7 @@ It requires exactly one `lenso.agent@2` provider and `many`
 `lenso.agent.tui-contribution@1` providers.
 
 Update, 2026-08-26: the public source-first facade now supports
-`#[lenso::module(consumer)]`. The TUI and CLI anchors derive their endpoint-free
+`#[lenso::plugin(consumer)]`. The TUI and CLI anchors derive their endpoint-free
 Descriptors and linked factories from typed Ports; the former explicit native
 factory compatibility form has been removed without adding a fake Capability.
 

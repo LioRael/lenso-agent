@@ -56,7 +56,7 @@ fn expand(implementation: &mut ItemImpl) -> syn::Result<proc_macro2::TokenStream
                 &self,
                 _context: ::lenso::Ctx,
                 _request: ::lenso_agent_tool_sdk::__private::contract::CatalogRequest,
-            ) -> ::lenso::ModuleResult<
+            ) -> ::lenso::PluginResult<
                 ::lenso_agent_tool_sdk::__private::contract::CatalogResponse,
                 ::lenso_agent_tool_sdk::__private::contract::CatalogError,
             > {
@@ -69,13 +69,13 @@ fn expand(implementation: &mut ItemImpl) -> syn::Result<proc_macro2::TokenStream
                 &self,
                 _context: ::lenso::Ctx,
                 request: ::lenso_agent_tool_sdk::__private::contract::ExecuteRequest,
-            ) -> ::lenso::ModuleResult<
+            ) -> ::lenso::PluginResult<
                 ::lenso_agent_tool_sdk::__private::contract::ExecuteResponse,
                 ::lenso_agent_tool_sdk::__private::contract::ExecuteError,
             > {
                 match request.name.as_str() {
                     #(#dispatch_arms,)*
-                    _ => Err(::lenso::ModuleError::domain(
+                    _ => Err(::lenso::PluginError::domain(
                         ::lenso_agent_tool_sdk::__private::contract::ExecuteError::NotFound,
                     )),
                 }
@@ -101,7 +101,7 @@ fn validate_impl(implementation: &ItemImpl) -> syn::Result<()> {
     if !matches!(&*implementation.self_ty, syn::Type::Path(_)) {
         return Err(syn::Error::new(
             implementation.self_ty.span(),
-            "tool_provider requires a named Module type",
+            "tool_provider requires a named Plugin type",
         ));
     }
     Ok(())
@@ -247,10 +247,10 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
                 ::lenso_agent_tool_sdk::__private::serde_json::from_str(
                     request.arguments_json.as_str(),
                 )
-                .map_err(|_| ::lenso::ModuleError::domain(
+                .map_err(|_| ::lenso::PluginError::domain(
                     ::lenso_agent_tool_sdk::__private::contract::ExecuteError::InvalidArguments,
                 ))?;
-            #invoke.map_err(::lenso::ModuleError::domain)
+            #invoke.map_err(::lenso::PluginError::domain)
         }
     }
 }

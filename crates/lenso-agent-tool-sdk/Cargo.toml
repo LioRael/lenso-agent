@@ -9,7 +9,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.lenso]
-package-id = "lenso.agent.tool-sdk.fixture"
+plugin-id = "lenso.agent.tool-sdk.fixture"
+root-slot = "tool-providers"
 
 [dependencies]
 lenso-agent-tool-sdk-macros = { version = "0.2.0", path = "../lenso-agent-tool-sdk-macros" }
