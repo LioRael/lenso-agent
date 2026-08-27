@@ -44,7 +44,11 @@ fn validate_config(config: &WorkspaceSuggestionsConfig) -> Result<(), RuntimeFai
     Ok(())
 }
 
-#[lenso::module(configuration_schema = "config.schema.json", validate = validate_config)]
+#[lenso::module(
+    configuration_schema = "config.schema.json",
+    configuration_defaults = "config.defaults.json",
+    validate = validate_config
+)]
 #[derive(Clone, Debug)]
 struct WorkspaceSuggestions {
     #[config]

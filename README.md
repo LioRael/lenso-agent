@@ -148,8 +148,13 @@ The running Kernel never discovers packages or mutates its graph.
 
 The repository has one source App Definition: `lenso.app.json`. It describes the
 small read-only base. Optional Modules are selected through the persisted Plugin
-enabled list in that same definition, so combinations do not create more App
-files.
+enabled list in the visible, Git-ignored `lenso.local.toml`, so combinations do
+not create more App files or modify reviewed source.
+
+Stable conservative Module defaults are locked into package-owned Descriptors.
+The App Definition records only product behavior, authority-bearing values, and
+overrides. Plan resolution materializes and validates one complete configuration
+for every selected Module before boot.
 
 Before boot, the Host validates the definition and selected Plugins, then
 resolves one immutable App Plan in memory for the candidate Generation. App
@@ -182,13 +187,14 @@ Contribution providers leaves the Shell valid with only the conversation.
 
 ## Runtime baseline
 
-The host currently resolves `lenso-app-plan 0.2.0` and `lenso-kernel 0.1.12`.
-All runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
-`fe84b16b4362f76b5fd37a0aaba405a1834289f2`; contract authoring and codegen are
+The host currently resolves `lenso-app-plan 0.2.0` from reviewed core revision
+`d25a785577354dbc942fa792fac3baff95c58515` and `lenso-kernel 0.1.12`. All
+runtime crates are locked to one reviewed `lenso-runtime-rust` commit,
+`f2e506de04ee5286251d0c9cabd9cf56ccacefe4`; contract authoring and codegen are
 locked to `lenso-protocols` revision
 `8a9b2482278224973417aaac1fd925ba1cfa5370`. App Definition extensions are
 locked to `lenso-cli` revision
-`5b12da4b267edfc294d8d9d1cd6fc59e12f8b8e8`. This closes the generic dynamic
+`68c361ac484ae340d48389d3ed163ac269bbf679`. This closes the generic dynamic
 Plugin control plane and preview Wasm Component, QuickJS, and native-dylib
 Execution Adapters alongside the existing native host runtime, and preserves
 declared request/stream operation kinds when Plugin Manifests become Plans.
@@ -198,8 +204,9 @@ Host build, resolves the base Plan and Plugin contributions in memory, and
 stages an immutable Generation behind the existing Ready Gate. It creates no
 `.lenso/plugins` Store, Active Set, lock, Receipt, Plan, or Generation record.
 `plugins status` prints the exact local configuration path. Module graph,
-binding, security limits, and product defaults remain in the reviewed
-`lenso.app.json`; `lenso.local.toml` is not an arbitrary Module configuration
+binding, product behavior, and authority-bearing values remain in the reviewed
+`lenso.app.json`; stable implementation defaults come from locked Module
+Descriptors, and `lenso.local.toml` is not an arbitrary Module configuration
 overlay.
 Each Agent Turn still holds a Generation lease until its stream reaches a
 terminal outcome, and the Kernel still receives only one immutable Plan.

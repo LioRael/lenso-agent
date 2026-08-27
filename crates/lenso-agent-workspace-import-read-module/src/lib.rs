@@ -32,6 +32,7 @@ fn validate_config(config: &WorkspaceImportReadConfig) -> Result<(), RuntimeFail
 #[lenso::module(
     lifecycle,
     configuration_schema = "config.schema.json",
+    configuration_defaults = "config.defaults.json",
     validate = validate_config
 )]
 #[derive(Clone, Debug)]

@@ -38,21 +38,17 @@
       },
       {
         "key": "cli",
-        "package": "lenso.agent.cli",
-        "configuration": {}
+        "package": "lenso.agent.cli"
       },
       {
         "key": "discord",
-        "package": "lenso.agent.discord",
-        "configuration": {}
+        "package": "lenso.agent.discord"
       },
       {
         "key": "http-fetch",
         "package": "lenso.agent.http-fetch",
         "configuration": {
-          "allowed_origins": [],
-          "max_response_bytes": 262144,
-          "timeout_ms": 10000
+          "allowed_origins": []
         }
       },
       {
@@ -64,11 +60,7 @@
       },
       {
         "key": "prompt",
-        "package": "lenso.agent.prompt",
-        "configuration": {
-          "max_contributions": 16,
-          "max_total_bytes": 65536
-        }
+        "package": "lenso.agent.prompt"
       },
       {
         "key": "sessions",
@@ -105,18 +97,15 @@
       },
       {
         "key": "restricted-read-tools",
-        "package": "lenso.agent.workspace-read-tools",
-        "configuration": {}
+        "package": "lenso.agent.workspace-read-tools"
       },
       {
         "key": "tools",
-        "package": "lenso.agent.tools",
-        "configuration": {}
+        "package": "lenso.agent.tools"
       },
       {
         "key": "tui",
-        "package": "lenso.agent.tui",
-        "configuration": {}
+        "package": "lenso.agent.tui"
       },
       {
         "key": "tui-help",
@@ -133,8 +122,7 @@
       },
       {
         "key": "telegram",
-        "package": "lenso.agent.telegram",
-        "configuration": {}
+        "package": "lenso.agent.telegram"
       },
       {
         "key": "tui-commands",
@@ -166,30 +154,21 @@
         "key": "tui-workspace-suggestions",
         "package": "lenso.agent.tui-workspace-suggestions",
         "configuration": {
-          "root": ".",
-          "max_files": 2048,
-          "max_entries": 20000,
-          "exclude_directories": ["node_modules", "target"]
+          "root": "."
         }
       },
       {
         "key": "workspace-import-read",
         "package": "lenso.agent.workspace-import-read",
         "configuration": {
-          "root": ".",
-          "max_output_bytes": 1048576
+          "root": "."
         }
       },
       {
         "key": "workspace-read",
         "package": "lenso.agent.workspace-read",
         "configuration": {
-          "root": ".",
-          "max_output_bytes": 1048576,
-          "max_list_entries": 1000,
-          "max_search_entries": 10000,
-          "max_search_bytes": 16777216,
-          "max_search_matches": 1000
+          "root": "."
         }
       }
     ],

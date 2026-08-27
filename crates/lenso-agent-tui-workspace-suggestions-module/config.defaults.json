@@ -1,0 +1,5 @@
+{
+  "max_files": 2048,
+  "max_entries": 20000,
+  "exclude_directories": ["node_modules", "target"]
+}
