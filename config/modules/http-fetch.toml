@@ -1,1 +1,3 @@
 allowed_origins = []
+max_response_bytes = 262144
+timeout_ms = 30000

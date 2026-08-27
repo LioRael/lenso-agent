@@ -7,6 +7,7 @@ cd "${repo_root}"
 mkdir -p .lenso
 proof_root="$(mktemp -d .lenso/removal-proof.XXXXXX)"
 trap 'rm -rf "${proof_root}"' EXIT
+cp -R config "${proof_root}/config"
 
 "${lenso_bin}" app check --definition lenso.app.json
 

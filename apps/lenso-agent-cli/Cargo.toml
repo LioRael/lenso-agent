@@ -85,6 +85,7 @@ lenso-authoring.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 lenso-plugin-control-plane.workspace = true
+lenso-plugin-bundle.workspace = true
 lenso-runner.workspace = true
 ratatui.workspace = true
 reqwest.workspace = true
@@ -102,6 +103,3 @@ uuid.workspace = true
 
 [lints]
 workspace = true
-
-[dev-dependencies]
-lenso-plugin-bundle.workspace = true

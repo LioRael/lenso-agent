@@ -116,7 +116,7 @@ removed when the selection becomes empty:
 
 ```sh
 # See the exact Releases bundled with this Host.
-cargo run -p lenso-agent-cli -- plugins available
+cargo run -p lenso-agent-cli -- plugins list
 
 # Low-risk append-to-many Tool Provider: automatic local admission.
 cargo run -p lenso-agent-cli -- plugins enable text-tools
@@ -254,281 +254,41 @@ automatic rollback, distributed coordination, Generation deletion, Plugin
 Store garbage collection, native-dylib product acceptance, and general
 third-party Host Capability permissions remain deferred.
 
-## Install, upgrade, roll back, and remove a Plugin release
+## Manage Plugins
 
-A Bundle is a directory containing `lenso-plugin.json` plus exactly the files
-declared by that Manifest. Admission rejects undeclared files, symlinks, digest
-or size mismatches, unsupported selected targets, unregistered executable
-factories, privileged or stateful contributions, and unbounded review evidence.
-For exact Releases bundled with this Host, use `plugins enable <name>` and
-`plugins disable <name>`. `plugins install --bundle <directory>` and
-`plugins remove --plugin <id>` use the same source-backed App, Ready-check the
-combined bundled and third-party candidate, and leave the active selection
-unchanged when that candidate cannot start. Third-party upgrade history,
-operator-requested rollback, and Store inspection remain outside this first
-unified source-backed slice.
-
-For the narrow drop-in path, place either a packaged `.lenso-plugin` file or a
-Bundle directory beside the App Definition. The single-file path is the normal
-user workflow:
+The normal Harness workflow has one user-facing unit: the Plugin. A Plugin project is created and
+packed with the `lenso plugin` authoring commands, then managed by the Harness with six commands:
 
 ```sh
-cargo run -p lenso-agent-cli -- plugins pack \
-  --bundle dist/my-tool \
-  --output my-tool.lenso-plugin
-cp my-tool.lenso-plugin plugins/
-```
-
-The Host reads the ZIP container directly without extracting executable files
-into the App tree. Removing the file unloads the Plugin through the same
-Generation switch. Directory Bundles remain useful during development:
-
-```text
-plugins/
-  my-tool/
-    lenso-plugin.json
-    tool.wasm
-```
-
-A Bundle can keep local Module settings in an adjacent file with the same stem:
-
-```text
-plugins/
-  my-tool.lenso-plugin
-  my-tool.config.toml
-```
-
-```toml
-[modules.my-tool]
-max_output_bytes = 65536
-```
-
-The Module contribution ID after `modules` must be selected by that Bundle.
-The Host merges the patch over its exact Profile default, permits only
-authority-reducing values, validates the complete value against the Module's
-package-owned JSON Schema, and places that complete configuration in the
-immutable Plugin lock. The sidecar does not make an otherwise governed Bundle
-eligible for automatic loading. A Module with no registered configurable
-fields needs no sidecar.
-
-The Host discovers these entries in deterministic name order at startup.
-Packaged files and directories share the same deterministic Plugin-ID conflict
-checks and Admission policy; a package suffix never self-authorizes its
-contents. Packages accept only Stored or Deflated entries with portable,
-root-confined paths. Encryption, symlinks, duplicate paths, file/directory
-collisions, excessive depth, file count, archive size, or expanded size fail
-closed before Admission.
-While a long-lived TUI or channel Host is running, native filesystem events
-wake reconciliation after the filesystem has been quiet for 200 milliseconds;
-continuous writes are bounded by a two-second settling limit. A low-frequency
-two-second consistency scan covers missed, coalesced, or unavailable events.
-Every wakeup rebuilds and fingerprints the complete Desired State, so event
-paths and event kinds never become authority. A
-permission-free, stateless, isolated Wasm Tool that only appends to the existing
-Tool collection is admitted automatically, staged as a fresh immutable
-Generation, and must pass the Ready Gate before the routing epoch switches.
-Existing Turns keep their old Generation Lease until they drain. Removing the
-Bundle file or directory stages the inverse switch without writing `active-set.json`.
-Editing its `.config.toml` sidecar follows the same path and creates a new
-Desired State and Generation; it never patches the running Kernel in place.
-Each online switch retains its exact predecessor for a one-second failure
-cushion. If the Runner reports an immediate terminal failure during that
-window, the Controller fences it and atomically restores the predecessor;
-ordinary Turn or Tool errors do not roll back the whole App. A later edit never
-rolls back through an older edge: if it selects an older still-live snapshot,
-reconciliation waits for bounded maintenance to retire that snapshot and then
-stages the requested state normally.
-
-For atomic directory publication, copy or extract the complete Bundle under a hidden
-immediate child and rename it only when complete. Hidden entries are an inert
-staging namespace and never appear as discovered or quarantined Plugins:
-
-```sh
-cp -R dist/my-tool plugins/.staging-my-tool
-mv plugins/.staging-my-tool plugins/my-tool
-```
-
-The rename must stay on the same filesystem to provide the atomic visibility
-guarantee. Direct `cp -R ... plugins/my-tool` remains supported; the quiet
-period suppresses ordinary short copy bursts, but it cannot make an arbitrarily
-slow or paused non-atomic copy transactional.
-
-`plugins install --bundle` and `plugins upgrade --bundle` accept either a
-directory or a `.lenso-plugin` file when broader reviewed governance is
-required. `plugins pack` writes through a temporary file and atomically
-publishes or replaces the completed package. Re-running the same command is the
-normal edit-and-reload loop; the watcher never observes a partially written
-archive produced by this command.
-
-`plugins status` reports the Plugin folder, usable Plugins, and problems in
-ordinary Plugin language. `plugins status --verbose` additionally reports the
-Desired State digest and durable surface Controller diagnostics for debugging.
-If native watching degrades, the TUI reports it while the
-consistency scan continues. TUI, Telegram, Discord, and combined-channel Hosts retain exact
-Generation Specs and Plugin authority before switching, so graceful restart or
-an unclean Host exit can recover the same active Generation. Controller state
-is namespaced per surface. The one-turn headless CLI remains process-local and
-does not create durable state solely for recovery it cannot use.
-
-QuickJS, native code, Provider replacement, Host imports, permissions, state,
-and non-isolated shapes are not auto-loaded. Discovery quarantines and reports
-them as blocked while the current App Generation remains routable;
-move them outside `plugins/` and use `plugins install --bundle ... --evidence
-...` when the Host's reviewed profile permits that shape. Duplicate Plugin IDs
-across bundled selections, explicit installs, or discovery fail closed rather
-than relying on load order.
-
-```sh
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle ./reviewed-plugin \
-  --feature extras
-
-# Install the checked-in non-native Agent Loop replacement.
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle examples/plugins/quickjs-agent \
-  --evidence local-review
-
+cargo run -p lenso-agent-cli -- plugins list
+cargo run -p lenso-agent-cli -- plugins add ./dist/my-plugin
 cargo run -p lenso-agent-cli -- plugins status
-
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle examples/plugins/text-tools
-
-# Build and install the standalone third-party Wasm Tool example.
-cargo build \
-  --manifest-path examples/external-plugins/wasm-text-tools/guest/Cargo.toml \
-  --release --target wasm32-unknown-unknown
-lenso plugin build \
-  --manifest examples/external-plugins/wasm-text-tools/lenso-plugin.template.json \
-  --artifact tool-wasm=examples/external-plugins/wasm-text-tools/guest/target/wasm32-unknown-unknown/release/external_wasm_text_tools.wasm \
-  --output dist/external-wasm-text-tools
-lenso plugin verify --bundle dist/external-wasm-text-tools
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle dist/external-wasm-text-tools \
-  --evidence local-review
-
-# Or use the isolated, permission-free drop-in path.
-mkdir -p plugins
-cp -R dist/external-wasm-text-tools plugins/text-tools
-cargo run -p lenso-agent-cli -- plugins status
-cargo run -p lenso-agent-cli -- "Use the text Plugin to uppercase Lenso plugin."
-
-# The network example follows the same build flow. Its Manifest must request
-# exact origins, and the base App must select those same origins in
-# the lenso.agent.http-fetch Provider configuration before Ready succeeds.
-cargo build \
-  --manifest-path examples/external-plugins/wasm-http-fetch/guest/Cargo.toml \
-  --release --target wasm32-unknown-unknown
-
-# The Host reads the active Manifest CAS under its authority fence.
-cargo run -p lenso-agent-cli -- plugins upgrade \
-  --bundle examples/plugins/text-tools-v2
-
-# Use the previous-active-set digest printed by upgrade.
-cargo run -p lenso-agent-cli -- plugins rollback \
-  --to sha256:<previous-active-set-digest>
-
-cargo run -p lenso-agent-cli -- plugins history
-
-cargo run -p lenso-agent-cli -- plugins inspect \
-  --active-set sha256:<active-set-digest>
-
-cargo run -p lenso-agent-cli -- generations inspect \
-  --digest sha256:<generation-spec-digest>
-
-cargo run -p lenso-agent-cli -- generations gc-preview
-
-# Rebuild reachability under exclusive Host and Plugin authority fences, then
-# remove only unreferenced Generation Specs and recovery authority.
-cargo run -p lenso-agent-cli -- generations gc --apply
-
-cargo run -p lenso-agent-cli -- sessions provenance \
-  --session <session-id>
-
-cargo run -p lenso-agent-cli -- \
-  "Use uppercase to uppercase Lenso plugin."
-
-cargo run -p lenso-agent-cli -- plugins remove \
-  --plugin example.text-tools
-
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle examples/plugins/model-fixture \
-  --evidence "review-ticket-88"
-
-cargo run -p lenso-agent-cli -- \
-  "Answer directly: hello"
-
-cargo run -p lenso-agent-cli -- plugins remove \
-  --plugin example.fixture-model
-
-cargo run -p lenso-agent-cli -- auth login
-
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle examples/plugins/codex-direct \
-  --evidence "review-ticket-92"
-
-cargo run -p lenso-agent-cli -- \
-  "Summarize this repository."
-
-cargo run -p lenso-agent-cli -- plugins remove \
-  --plugin example.codex-direct
+cargo run -p lenso-agent-cli -- plugins disable dev.example.my-plugin
+cargo run -p lenso-agent-cli -- plugins enable dev.example.my-plugin
+cargo run -p lenso-agent-cli -- plugins remove dev.example.my-plugin
 ```
 
-Passive Releases and selected executable contributions that are stable,
-trusted, stateless, permission-free, dependency-free, Artifact-free, and only
-append to a `many` requirement receive automatic local admission. The Receipt
-records that derived decision and the CLI prints it as `governance`.
-Replacement, state, permissions, dependencies, Artifact-backed execution, and
-preview or experimental Profiles still require explicit `--evidence`. An
-explicit `--expected-manifest` remains available for automation that already
-owns a prior CAS value. Upgrade and rollback use the root base definition by
-default. `LENSO_APP_DEFINITION`, `LENSO_RESOLVED_PLAN`, and `--plan <path>`
-remain advanced overrides for automation and exact Plan replay.
+Run `plugins add` again with a newer Release of the same Plugin ID to update it. The Harness
+validates and stages the candidate, waits for Ready, switches new work, and lets existing work
+drain. `disable` keeps the selected Release so it can be enabled again; `remove` forgets it.
+Ordinary output contains only Plugin IDs, versions, and status. Runtime coordination stays private.
 
-Review evidence does not itself create runtime authority. For the network
-profile, the publisher's exact origin request is admitted as an
-`ApprovedGrant`; the App must also select `lenso.agent.http-fetch` and configure
-an allowlist containing that scope. The checked-in `lenso.app.json` keeps
-the allowlist empty by default, so it grants no ambient network access.
+New external Plugins use the bounded Rust/Wasm shape produced by `lenso plugin new`: one Component,
+one `lenso.agent.tool-provider@2` entry, and no dependencies, permissions, state, mounts, features,
+replacement behavior, or publisher-selected bindings. See
+`examples/external-plugins/wasm-text-tools` for the complete `new → check → dev → pack → add`
+workflow.
 
-Admission stores immutable objects and its receipt under
-`.lenso/plugins/store`. Activation atomically writes
-`.lenso/plugins/active-set.json`, which embeds the exact `PluginSetLock`,
-Manifest authorities, and Admission Receipt digests. A running Host observes a
-new committed Active Set without blocking on a Plugin command's authority
-fence, resolves and stages a fresh immutable Generation, and advances the
-routing epoch only after its Ready Gate succeeds. Existing Turns keep their old
-Generation Lease; new Turns use the new Generation, and the old Generation is
-retired after its final Lease is released. A stopped Host digest-verifies the
-same closure on its next start. The Catalog derives the registered Tool
-Provider attachment to the existing `tools` aggregator only when that consumer
-declares the exact Capability with `many` cardinality. Its Model profile
-requires `one` cardinality, the exact base `agent -> model` edge, and the
-allowlisted fixture package; it removes the displaced Instance and all of that
-Instance's bindings before resolving the next Generation. The Codex Direct
-Bundle additionally closes exact Model and Auth contribution profiles, one
-`model -> auth` requirement/template, `gpt-5.6-luna` with medium reasoning, and
-the compatible base Agent configuration. Removing any replacement Plugin
-atomically removes its Release, Instances, and derived bindings and restores
-the exact base Plan. `plugins upgrade` admits a different immutable Manifest
-only after an explicit Manifest CAS and a Runtime maintenance Ready Gate. It
-retains canonical authorities by digest under `.lenso/plugins/active-sets`;
-`plugins rollback` applies the same Ready-before-commit rule to an exact
-retained digest. The commands remain offline validation and commit
-transactions; a running Host separately reconciles the committed authority
-through an overlap Generation transition. This is not running-Kernel graph
-mutation. A Host-owned cross-process authority fence lets startup and validated
-inspection snapshot either the complete old authority or the complete committed
-authority, while install, remove, upgrade, and rollback retain exclusive
-ownership from their first authority read through atomic commit. The read-only
-history and inspection commands validate every selected canonical record and
-its closure; Session provenance reports each Turn's Spec as available, missing,
-or invalid without rendering the stored input. The local filesystem fence is
-not a distributed lease or network-filesystem portability claim. Adding another
-executable shape remains a Host code and review change. The one
-package-independent pure Wasm Tool shape is not runtime discovery or general
-permission to import Host Capabilities or replace a `one` binding. The
-separately reviewed workspace-reader shape imports only the Host-selected
-`workspace-read@1/read_text` Capability recorded in its immutable Generation.
+### Safety boundary
+
+A Plugin command never patches a running process in place. The Harness verifies immutable Bundle
+bytes, derives the bounded execution attachment privately, stages the candidate, and publishes the
+new selection only after Ready succeeds. Existing work drains on its previous selection. Startup
+validates the same stored authority before use. These mechanics are absent from the normal Plugin
+CLI and are not concepts Plugin authors must supply.
+
+Broader executable shapes, Host imports, permissions, state, provider replacement, and arbitrary
+bindings remain unsupported by the public Plugin workflow.
 
 ## Run the deterministic slice
 

@@ -1,34 +1,25 @@
-# External Wasm Tool Plugin
+# dev.example.wasm-text-tools
 
-This standalone Cargo project models a third-party Tool Plugin. It has no path dependency on the
-Agent Harness workspace and can be copied to another repository unchanged.
+This standalone project was created with `lenso plugin new`. It provides one Tool Plugin without a
+hand-written manifest or Host-specific internal wiring.
 
-Build and package it from the Agent Harness repository root:
+Use the public Plugin workflow from this directory:
 
 ```sh
-cargo build --manifest-path examples/external-plugins/wasm-text-tools/guest/Cargo.toml \
-  --release --target wasm32-unknown-unknown
-
-lenso plugin build \
-  --manifest examples/external-plugins/wasm-text-tools/lenso-plugin.template.json \
-  --artifact tool-wasm=examples/external-plugins/wasm-text-tools/guest/target/wasm32-unknown-unknown/release/external_wasm_text_tools.wasm \
-  --output dist/external-wasm-text-tools
-
-lenso plugin verify --bundle dist/external-wasm-text-tools
+lenso plugin check
+lenso plugin dev
+lenso plugin pack
 ```
 
-Install and exercise the reviewed Bundle:
+Add and exercise the Bundle from the Agent Harness:
 
 ```sh
-cargo run -p lenso-agent-cli -- plugins install \
-  --bundle dist/external-wasm-text-tools \
-  --evidence local-review
+cargo run -p lenso-agent-cli -- plugins add \
+  examples/external-plugins/wasm-text-tools/dist/dev.example.wasm-text-tools-1.0.0.lenso-plugin
 
 cargo run -p lenso-agent-cli -- \
   "Use the text Plugin to uppercase Lenso plugin."
 ```
 
-The Host accepts this shape without registering its package identity in code. Admission remains
-bounded to an isolated Wasm Component that provides the exact Agent Tool Provider Capability,
-requires no Host Capability, requests no permission or state, uses empty configuration, and appends
-only to the existing `tools` aggregate.
+The Harness admits only the bounded V1 shape: one isolated Wasm Component, one Agent Tool Provider
+entry, no dependencies, permissions, state, mounts, features, or replacement behavior.

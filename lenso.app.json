@@ -49,7 +49,8 @@
       },
       {
         "key": "prompt",
-        "package": "lenso.agent.prompt"
+        "package": "lenso.agent.prompt",
+        "configuration_file": "config/modules/prompt.toml"
       },
       {
         "key": "sessions",
