@@ -119,8 +119,9 @@ Status: implementation baseline for the first executable slice.
   revision and event rows commit together.
 - **Failure policy:** schema, constraint, corruption, and I/O failures are
   Runtime Failures; there is no file or in-memory fallback.
-- **First behavior:** can replace the file Adapter through a Profile without
-  changing the Agent Loop or provenance tooling.
+- **First behavior:** provides the default transactional Session store; a
+  Profile can replace it with the file Adapter without changing the Agent Loop
+  or provenance tooling.
 
 ## `lenso.agent.loop`
 

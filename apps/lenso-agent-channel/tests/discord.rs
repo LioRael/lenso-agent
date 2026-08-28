@@ -9,6 +9,7 @@ use std::{
 
 use futures::{SinkExt, StreamExt};
 use lenso_agent_discord_plugin as _;
+use lenso_agent_session_inspection::SessionInspector;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[path = "../../../tests/support/mod.rs"]
@@ -82,20 +83,18 @@ fn discord_messages_run_real_agent_turns_and_resume_gateway_and_session() {
             0o700
         );
     }
-    let session_path = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let session: serde_json::Value =
-        serde_json::from_slice(&fs::read(session_path).unwrap()).unwrap();
+    let sessions = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(
+        temporary.path().join(".lenso/sessions.sqlite3"),
+    )
+    .inspect_all()
+    .unwrap();
+    assert_eq!(sessions.len(), 1);
+    let session = &sessions[0];
     assert_eq!(
-        session["events"]
-            .as_array()
-            .unwrap()
+        session
+            .events
             .iter()
-            .filter(|event| event["kind"] == "turn_started")
+            .filter(|event| event.kind == "turn_started")
             .count(),
         2
     );

@@ -22,8 +22,12 @@ also persist new Session provenance while another process is collecting.
 The Harness exposes:
 
 ```text
-generations gc --apply [--root <plugin-root>] [--sessions <session-directory>]
+generations gc --apply [--root <plugin-root>]
+  [--session-database <sqlite-path> | --sessions <session-directory>]
 ```
+
+The command inspects `.lenso/sessions.sqlite3` by default. `--sessions` selects
+an explicit file Adapter directory.
 
 Every Host that uses an existing Plugin authority root holds a shared
 process-lifetime Generation GC lease. Apply takes the exclusive form of that

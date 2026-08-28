@@ -2279,6 +2279,8 @@ dependencies = [
  "lenso-agent-discord-plugin",
  "lenso-agent-host",
  "lenso-agent-loop-plugin",
+ "lenso-agent-session-inspection",
+ "lenso-agent-session-sqlite-plugin",
  "lenso-agent-telegram-plugin",
  "lenso-capability-agent",
  "lenso-kernel",
