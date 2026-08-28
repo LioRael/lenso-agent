@@ -576,13 +576,25 @@ while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
     *\"method\":\"server/discover\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{},"prompts":{},"resources":{}}}}\n' "$id"
       ;;
     *\"method\":\"tools/list\"*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}\n' "$id"
       ;;
     *\"method\":\"tools/call\"*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}\n' "$id"
+      ;;
+    *\"method\":\"prompts/get\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","description":"Fixture review","messages":[{"role":"user","content":{"type":"text","text":"Review carefully."}}]}}\n' "$id"
+      ;;
+    *\"method\":\"prompts/list\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","prompts":[{"name":"review","description":"Review carefully.","arguments":[]}]}}\n' "$id"
+      ;;
+    *\"method\":\"resources/read\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","contents":[{"uri":"fixture://guide","mimeType":"text/plain","text":"Fixture guide content."}]}}\n' "$id"
+      ;;
+    *\"method\":\"resources/list\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","resources":[{"uri":"fixture://guide","name":"Fixture Guide","description":"Fixture guide.","mimeType":"text/plain"}]}}\n' "$id"
       ;;
   esac
 done
@@ -628,6 +640,33 @@ request_timeout_ms = 1000
                 .is_some_and(|payload| payload.contains("mcp__fixture__ping"))
     }));
     assert!(events.iter().any(|event| event["kind"] == "turn_completed"));
+
+    let catalog_output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .arg("contexts")
+        .output()
+        .unwrap();
+    assert!(catalog_output.status.success());
+    let catalog: serde_json::Value = serde_json::from_slice(&catalog_output.stdout).unwrap();
+    assert_eq!(catalog["prompts"][0]["name"], "review");
+    assert_eq!(catalog["resources"][0]["uri"], "fixture://guide");
+
+    let context_output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .arg("Use the selected context.")
+        .args(["--context-prompt", "fixture/review"])
+        .args(["--context-resource", "fixture=fixture://guide"])
+        .output()
+        .unwrap();
+    assert!(
+        context_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&context_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&context_output.stdout),
+        "Context result: prompt and resource applied\n"
+    );
 }
 
 #[test]

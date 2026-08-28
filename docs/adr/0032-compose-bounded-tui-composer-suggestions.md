@@ -14,7 +14,8 @@ press would also make terminal responsiveness depend on workspace size.
 ## Decision
 
 Define native-only request Capability `lenso.agent.tui-suggestion@1`. Its
-`snapshot` Operation returns bounded semantic `command`, `skill`, or `file` items with a
+`snapshot` Operation returns bounded semantic `command`, `skill`, `file`,
+`prompt`, or `resource` items with a
 stable ID, label, exact insertion text, and description. The TUI Shell consumes
 explicitly bound providers with `many` cardinality, snapshots them before raw
 terminal mode, rejects duplicate IDs and aggregate limit violations, and then
@@ -33,6 +34,12 @@ snapshot. Selecting `/skill-name` inserts the explicit Skill invocation and a
 space without submitting the Turn; the user can then write the task. The same
 Plugin's Prompt contribution tells the Agent to read that exact Skill before
 following it, so the TUI never reads or executes Skill contents itself.
+
+The TUI also projects metadata from its explicitly bound Context Sources.
+No-argument Prompts and text Resources appear under `/`; accepting one inserts
+a semantic selection token and leaves the task composer open. The Shell resolves
+that exact selection on submit, so MCP Prompt selection remains user-controlled
+and Resource attachment remains application-controlled.
 
 The Shell owns trigger parsing, ranking, keyboard selection, token replacement,
 scrolling, and responsive rendering. `/` is recognized only at the start of the

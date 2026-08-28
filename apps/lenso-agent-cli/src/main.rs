@@ -14,6 +14,9 @@ use lenso_agent_cli_plugin as _;
 use lenso_agent_host::{AgentHost, HeadlessSurface, Profile, generation, provenance};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
+use lenso_capability_agent_context_source::{
+    ContextRole, ReadResourceRequest, RenderPromptRequest,
+};
 use lenso_kernel::StreamEvent;
 
 #[derive(Debug)]
@@ -23,6 +26,21 @@ struct Args {
     profile: Option<String>,
     prompt: String,
     session: Option<String>,
+    context_prompt: Option<ContextPromptSelection>,
+    context_resources: Vec<ContextResourceSelection>,
+}
+
+#[derive(Debug)]
+struct ContextPromptSelection {
+    source: String,
+    name: String,
+    arguments_json: String,
+}
+
+#[derive(Debug)]
+struct ContextResourceSelection {
+    source: String,
+    uri: String,
 }
 
 #[derive(Debug)]
@@ -33,6 +51,7 @@ enum CliCommand {
     Generations(provenance::GenerationCommand),
     Sessions(provenance::SessionCommand),
     Approvals(ApprovalCommand),
+    Contexts { profile: Option<String> },
 }
 
 #[derive(Debug)]
@@ -72,6 +91,7 @@ async fn run() -> Result<(), String> {
         CliCommand::Generations(command) => return provenance::run_generation(command),
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
+        CliCommand::Contexts { profile } => return run_contexts(profile).await,
     };
     let profile = selected_profile(args.plan.clone(), args.profile.clone());
     let host = AgentHost::builder()
@@ -80,11 +100,92 @@ async fn run() -> Result<(), String> {
         .build()
         .map_err(|error| format!("Host composition failed: {error}"))?;
     let mut app = host.run(profile).await?;
+    let mut args = args;
+    args.prompt = compose_context(&app, &args).await?;
     let turn = app.lease_turn().await?;
     let result = invoke(&turn, args).await;
     drop(turn);
     let shutdown = app.shutdown().await;
     result.and(shutdown)
+}
+
+async fn run_contexts(profile: Option<String>) -> Result<(), String> {
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(HeadlessSurface::stdio())
+        .build()
+        .map_err(|error| format!("Host composition failed: {error}"))?;
+    let mut app = host
+        .run(profile.map_or(Profile::Default, Profile::named))
+        .await?;
+    let snapshot = app.cli_context_sources().await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&snapshot)
+            .map_err(|error| format!("failed to encode Context Sources: {error}"))?
+    );
+    app.shutdown().await
+}
+
+async fn compose_context(app: &generation::AgentApp, args: &Args) -> Result<String, String> {
+    if args.context_prompt.is_none() && args.context_resources.is_empty() {
+        return Ok(args.prompt.clone());
+    }
+    let mut sections = Vec::new();
+    if let Some(prompt) = &args.context_prompt {
+        let rendered = app
+            .render_cli_context_prompt(RenderPromptRequest {
+                source: prompt.source.clone(),
+                name: prompt.name.clone(),
+                arguments_json: prompt
+                    .arguments_json
+                    .clone()
+                    .try_into()
+                    .map_err(|error| format!("invalid Context Prompt arguments JSON: {error}"))?,
+            })
+            .await?;
+        let messages = rendered
+            .messages
+            .into_iter()
+            .map(|message| {
+                let role = match message.role {
+                    ContextRole::User => "user",
+                    ContextRole::Assistant => "assistant",
+                };
+                format!("[{role}]\n{}", message.text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        sections.push(format!(
+            "Selected Context Prompt: {}/{}\n{}",
+            prompt.source, prompt.name, messages
+        ));
+    }
+    for resource in &args.context_resources {
+        let response = app
+            .read_cli_context_resource(ReadResourceRequest {
+                source: resource.source.clone(),
+                uri: resource.uri.clone(),
+            })
+            .await?;
+        let contents = response
+            .contents
+            .into_iter()
+            .map(|content| {
+                format!(
+                    "URI: {}\nMIME: {}\n{}",
+                    content.uri, content.mime_type, content.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        sections.push(format!(
+            "Selected Context Resource: {}/{}\n{}",
+            resource.source, resource.uri, contents
+        ));
+    }
+    sections.push(format!("User task:\n{}", args.prompt));
+    Ok(sections.join("\n\n---\n\n"))
 }
 
 fn selected_profile(plan: Option<PathBuf>, profile: Option<String>) -> Profile {
@@ -154,6 +255,10 @@ async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), Str
 
 fn parse_args() -> Result<CliCommand, String> {
     let raw = env::args().skip(1).collect::<Vec<_>>();
+    parse_command(raw)
+}
+
+fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "auth") {
         return parse_auth(&raw[1..]).map(CliCommand::Auth);
     }
@@ -172,6 +277,23 @@ fn parse_args() -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "approvals") {
         return parse_approval(&raw[1..]).map(CliCommand::Approvals);
     }
+    if raw.first().is_some_and(|value| value == "contexts") {
+        return parse_contexts(&raw[1..]);
+    }
+    parse_run_args(raw)
+}
+
+fn parse_contexts(arguments: &[String]) -> Result<CliCommand, String> {
+    match arguments {
+        [] => Ok(CliCommand::Contexts { profile: None }),
+        [flag, profile] if flag == "--profile" && !profile.is_empty() => Ok(CliCommand::Contexts {
+            profile: Some(profile.clone()),
+        }),
+        _ => Err("usage: lenso-agent-cli contexts [--profile <name>]".to_owned()),
+    }
+}
+
+fn parse_run_args(raw: Vec<String>) -> Result<CliCommand, String> {
     let mut plan = None;
     let mut plan_source = None;
     let mut prompt = None;
@@ -179,6 +301,9 @@ fn parse_args() -> Result<CliCommand, String> {
     let mut session = None;
     let mut allowed_tools = None::<Vec<String>>;
     let mut no_tools = false;
+    let mut context_prompt = None;
+    let mut context_arguments = None;
+    let mut context_resources = Vec::new();
     let mut arguments = raw.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -193,14 +318,26 @@ fn parse_args() -> Result<CliCommand, String> {
                 )?));
                 plan_source = Some("--plan");
             }
-            "--prompt" => {
-                prompt = Some(required_value(&mut arguments, "--prompt", "text")?);
-            }
+            "--prompt" => prompt = Some(required_value(&mut arguments, "--prompt", "text")?),
             "--profile" => {
                 profile = Some(required_value(&mut arguments, "--profile", "a name")?);
             }
-            "--session" => {
-                session = Some(required_value(&mut arguments, "--session", "an ID")?);
+            "--session" => session = Some(required_value(&mut arguments, "--session", "an ID")?),
+            "--context-prompt" => {
+                context_prompt = Some(parse_context_prompt(
+                    &mut arguments,
+                    context_prompt.as_ref(),
+                )?);
+            }
+            "--context-arguments" => {
+                context_arguments = Some(required_value(
+                    &mut arguments,
+                    "--context-arguments",
+                    "a JSON object",
+                )?);
+            }
+            "--context-resource" => {
+                context_resources.push(parse_context_resource(&mut arguments)?);
             }
             "--allow-tool" => {
                 if no_tools {
@@ -238,13 +375,60 @@ fn parse_args() -> Result<CliCommand, String> {
             }
         }
     }
+    if context_arguments.is_some() && context_prompt.is_none() {
+        return Err("--context-arguments requires --context-prompt".to_owned());
+    }
+    let context_prompt = context_prompt.map(|(source, name)| ContextPromptSelection {
+        source,
+        name,
+        arguments_json: context_arguments.unwrap_or_else(|| "{}".to_owned()),
+    });
     Ok(CliCommand::Run(Args {
         allowed_tools,
         plan,
         profile,
         prompt: prompt.ok_or_else(|| "a prompt is required".to_owned())?,
         session,
+        context_prompt,
+        context_resources,
     }))
+}
+
+fn parse_context_prompt(
+    arguments: &mut impl Iterator<Item = String>,
+    current: Option<&(String, String)>,
+) -> Result<(String, String), String> {
+    if current.is_some() {
+        return Err("only one --context-prompt is accepted".to_owned());
+    }
+    let value = required_value(arguments, "--context-prompt", "source/name")?;
+    split_context_identity(&value, "--context-prompt")
+}
+
+fn parse_context_resource(
+    arguments: &mut impl Iterator<Item = String>,
+) -> Result<ContextResourceSelection, String> {
+    let value = required_value(arguments, "--context-resource", "source=URI")?;
+    let (source, uri) = value
+        .split_once('=')
+        .ok_or_else(|| "--context-resource requires source=URI".to_owned())?;
+    if source.is_empty() || uri.is_empty() {
+        return Err("--context-resource requires non-empty source=URI".to_owned());
+    }
+    Ok(ContextResourceSelection {
+        source: source.to_owned(),
+        uri: uri.to_owned(),
+    })
+}
+
+fn split_context_identity(value: &str, option: &str) -> Result<(String, String), String> {
+    let (source, name) = value
+        .split_once('/')
+        .ok_or_else(|| format!("{option} requires source/name"))?;
+    if source.is_empty() || name.is_empty() {
+        return Err(format!("{option} requires non-empty source/name"));
+    }
+    Ok((source.to_owned(), name.to_owned()))
 }
 
 fn required_value(
@@ -258,7 +442,7 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host defaults boot with an empty `plugins/` directory. Manage App differences with `lenso plugins`; select `profiles/<name>.toml` with `--profile`.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host defaults boot with an empty `plugins/` directory. Manage App differences with `lenso plugins`; select `profiles/<name>.toml` with `--profile`.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {

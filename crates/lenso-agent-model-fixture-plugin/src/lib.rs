@@ -106,6 +106,13 @@ impl FixtureModel {
         if current_user == "Use the MCP fixture to ping." {
             return mcp_plugin_response(request, &tool_results);
         }
+        if current_user.contains("Selected Context Prompt: fixture/review")
+            && current_user.contains("Selected Context Resource: fixture/fixture://guide")
+            && current_user.contains("Review carefully.")
+            && current_user.contains("Fixture guide content.")
+        {
+            return Ok(context_source_result());
+        }
         if current_user == "Ask me which mode to use." {
             return ask_user_response(request, &tool_results);
         }
@@ -992,6 +999,22 @@ fn mcp_plugin_result() -> Vec<CompleteMessage> {
             "1",
             CompleteMessageKind::TextDelta,
             "MCP result: pong",
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
+    ]
+}
+
+fn context_source_result() -> Vec<CompleteMessage> {
+    vec![
+        response(
+            "1",
+            CompleteMessageKind::TextDelta,
+            "Context result: prompt and resource applied",
             "",
             "",
             "{}",

@@ -22,7 +22,14 @@ use lenso_app_plan::{
 };
 use lenso_capability_agent::{Agent, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID};
 use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
-use lenso_capability_agent_context_source::ContextSourceJsonCodec;
+use lenso_capability_agent_context_source::{
+    ContextSourceJsonCodec, ContextSourceReadResource, ContextSourceRenderPrompt,
+    ContextSourceSnapshot, READ_RESOURCE_OPERATION, RENDER_PROMPT_OPERATION, ReadResourceError,
+    ReadResourceRequest, ReadResourceResponse, RenderPromptError, RenderPromptRequest,
+    RenderPromptResponse, SNAPSHOT_OPERATION as CONTEXT_SNAPSHOT_OPERATION,
+    SnapshotError as ContextSnapshotError, SnapshotRequest as ContextSnapshotRequest,
+    SnapshotResponse as ContextSnapshotResponse,
+};
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_memory::MemoryJsonCodec;
@@ -97,6 +104,7 @@ const RECONCILE_SETTLE_LIMIT: Duration = Duration::from_secs(2);
 const RECONCILE_CONSISTENCY_INTERVAL: Duration = Duration::from_secs(2);
 const MAX_RECONCILE_EVENTS: usize = 32;
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
+const CONTEXT_SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_TUI_PANELS: usize = 64;
 const MAX_TUI_PANEL_BYTES: usize = 262_144;
 const MAX_TUI_SUGGESTIONS: usize = 2_112;
@@ -453,6 +461,178 @@ impl AgentApp {
     /// Pins one browser-submitted Agent Turn to the active App Generation.
     pub async fn lease_web_turn(&self) -> Result<TurnGeneration, String> {
         self.lease_turn_for("web").await
+    }
+
+    /// Snapshots Prompt and Resource metadata explicitly visible to the CLI surface.
+    pub async fn cli_context_sources(&self) -> Result<ContextSnapshotResponse, String> {
+        self.context_sources("lenso.agent.cli/cli").await
+    }
+
+    /// Snapshots Prompt and Resource metadata explicitly visible to the TUI surface.
+    pub async fn tui_context_sources(&self) -> Result<ContextSnapshotResponse, String> {
+        self.context_sources("lenso.agent.tui/tui").await
+    }
+
+    /// Renders one user-selected Context Prompt for the CLI surface.
+    pub async fn render_cli_context_prompt(
+        &self,
+        request: RenderPromptRequest,
+    ) -> Result<RenderPromptResponse, String> {
+        self.render_context_prompt("lenso.agent.cli/cli", request)
+            .await
+    }
+
+    /// Reads one application-selected Context Resource for the CLI surface.
+    pub async fn read_cli_context_resource(
+        &self,
+        request: ReadResourceRequest,
+    ) -> Result<ReadResourceResponse, String> {
+        self.read_context_resource("lenso.agent.cli/cli", request)
+            .await
+    }
+
+    /// Renders one user-selected Context Prompt for the TUI surface.
+    pub async fn render_tui_context_prompt(
+        &self,
+        request: RenderPromptRequest,
+    ) -> Result<RenderPromptResponse, String> {
+        self.render_context_prompt("lenso.agent.tui/tui", request)
+            .await
+    }
+
+    /// Reads one application-selected Context Resource for the TUI surface.
+    pub async fn read_tui_context_resource(
+        &self,
+        request: ReadResourceRequest,
+    ) -> Result<ReadResourceResponse, String> {
+        self.read_context_resource("lenso.agent.tui/tui", request)
+            .await
+    }
+
+    async fn context_sources(
+        &self,
+        consumer_instance: &str,
+    ) -> Result<ContextSnapshotResponse, String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        let handle = route
+            .target()
+            .many_handle::<ContextSourceSnapshot>(consumer_instance)
+            .map_err(|error| format!("Context Source snapshot route is unavailable: {error:?}"))?;
+        let cancellation = CancellationToken::new();
+        let context = route
+            .target()
+            .invocation_context_after(CONTEXT_SOURCE_TIMEOUT, cancellation.clone());
+        let invocation = handle.invoke_many_with_context(
+            CONTEXT_SNAPSHOT_OPERATION,
+            context,
+            ContextSnapshotRequest {},
+        );
+        let responses = match tokio::time::timeout(CONTEXT_SOURCE_TIMEOUT, invocation).await {
+            Ok(result) => {
+                result.map_err(|error| format!("Context Source snapshot failed: {error:?}"))?
+            }
+            Err(_) => {
+                cancellation.cancel();
+                return Err("Context Source snapshot timed out".to_owned());
+            }
+        };
+        let mut prompts = Vec::new();
+        let mut resources = Vec::new();
+        let mut prompt_keys = BTreeSet::new();
+        let mut resource_keys = BTreeSet::new();
+        for response in responses {
+            let response = match response {
+                Ok(response) => response,
+                Err(ContextSnapshotError::NotFound) => continue,
+                Err(error) => {
+                    return Err(format!("Context Source rejected its snapshot: {error:?}"));
+                }
+            };
+            for prompt in response.prompts {
+                if !prompt_keys.insert((prompt.source.clone(), prompt.name.clone())) {
+                    return Err(format!(
+                        "duplicate Context Prompt `{}/{}`",
+                        prompt.source, prompt.name
+                    ));
+                }
+                prompts.push(prompt);
+            }
+            for resource in response.resources {
+                if !resource_keys.insert((resource.source.clone(), resource.uri.clone())) {
+                    return Err(format!(
+                        "duplicate Context Resource `{}/{}`",
+                        resource.source, resource.uri
+                    ));
+                }
+                resources.push(resource);
+            }
+        }
+        if prompts.len() > lenso_capability_agent_context_source::MAX_PROMPTS
+            || resources.len() > lenso_capability_agent_context_source::MAX_RESOURCES
+        {
+            return Err("aggregate Context Source catalog exceeded its limit".to_owned());
+        }
+        Ok(ContextSnapshotResponse { prompts, resources })
+    }
+
+    async fn render_context_prompt(
+        &self,
+        consumer_instance: &str,
+        request: RenderPromptRequest,
+    ) -> Result<RenderPromptResponse, String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        let handle = route
+            .target()
+            .many_handle::<ContextSourceRenderPrompt>(consumer_instance)
+            .map_err(|error| format!("Context Prompt route is unavailable: {error:?}"))?;
+        let context = route
+            .target()
+            .invocation_context_after(CONTEXT_SOURCE_TIMEOUT, CancellationToken::new());
+        let responses = handle
+            .invoke_many_with_context(RENDER_PROMPT_OPERATION, context, request)
+            .await
+            .map_err(|error| format!("Context Prompt rendering failed: {error:?}"))?;
+        let mut found = None;
+        for response in responses {
+            match response {
+                Ok(response) if found.is_none() => found = Some(response),
+                Ok(_) => return Err("multiple Context Sources rendered the Prompt".to_owned()),
+                Err(RenderPromptError::NotFound) => {}
+                Err(error) => return Err(format!("Context Source rejected the Prompt: {error:?}")),
+            }
+        }
+        found.ok_or_else(|| "Context Prompt was not found".to_owned())
+    }
+
+    async fn read_context_resource(
+        &self,
+        consumer_instance: &str,
+        request: ReadResourceRequest,
+    ) -> Result<ReadResourceResponse, String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        let handle = route
+            .target()
+            .many_handle::<ContextSourceReadResource>(consumer_instance)
+            .map_err(|error| format!("Context Resource route is unavailable: {error:?}"))?;
+        let context = route
+            .target()
+            .invocation_context_after(CONTEXT_SOURCE_TIMEOUT, CancellationToken::new());
+        let responses = handle
+            .invoke_many_with_context(READ_RESOURCE_OPERATION, context, request)
+            .await
+            .map_err(|error| format!("Context Resource read failed: {error:?}"))?;
+        let mut found = None;
+        for response in responses {
+            match response {
+                Ok(response) if found.is_none() => found = Some(response),
+                Ok(_) => return Err("multiple Context Sources read the Resource".to_owned()),
+                Err(ReadResourceError::NotFound) => {}
+                Err(error) => {
+                    return Err(format!("Context Source rejected the Resource: {error:?}"));
+                }
+            }
+        }
+        found.ok_or_else(|| "Context Resource was not found".to_owned())
     }
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {

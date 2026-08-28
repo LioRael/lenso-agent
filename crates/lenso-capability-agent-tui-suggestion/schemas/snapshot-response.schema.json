@@ -44,7 +44,7 @@
     },
     "SuggestionKind": {
       "type": "string",
-      "enum": ["command", "file", "skill"]
+      "enum": ["command", "file", "prompt", "resource", "skill"]
     }
   },
   "title": "SnapshotResponse"

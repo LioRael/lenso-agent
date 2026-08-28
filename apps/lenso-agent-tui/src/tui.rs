@@ -24,8 +24,13 @@ use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{
     Agent, RUN_TURN_OPERATION, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
 };
+use lenso_capability_agent_context_source::{
+    ContextRole, ReadResourceRequest, RenderPromptRequest,
+};
 use lenso_capability_agent_tui_contribution::SnapshotResponsePanelsItem;
-use lenso_capability_agent_tui_suggestion::{Suggestion, SuggestionKind};
+use lenso_capability_agent_tui_suggestion::{
+    Suggestion, SuggestionKind, validate_snapshot_suggestions,
+};
 use lenso_capability_agent_user_interaction::PendingInteraction;
 use lenso_kernel::{NativeStream, StreamEvent};
 use ratatui::{
@@ -952,7 +957,10 @@ impl TuiState {
                 if matches_kind {
                     matches!(
                         suggestion.kind,
-                        SuggestionKind::Command | SuggestionKind::Skill
+                        SuggestionKind::Command
+                            | SuggestionKind::Prompt
+                            | SuggestionKind::Resource
+                            | SuggestionKind::Skill
                     )
                 } else {
                     suggestion.kind == SuggestionKind::File
@@ -994,7 +1002,10 @@ impl TuiState {
         let mut replacement = suggestion.insert_text.clone();
         if matches!(
             suggestion.kind,
-            SuggestionKind::File | SuggestionKind::Skill
+            SuggestionKind::File
+                | SuggestionKind::Prompt
+                | SuggestionKind::Resource
+                | SuggestionKind::Skill
         ) {
             replacement.push(' ');
         }
@@ -1285,7 +1296,9 @@ fn current_branch_label() -> Option<String> {
 /// Runs the TUI until the user exits, restoring terminal state on every return path.
 pub async fn run(app: &AgentApp, options: TuiOptions) -> Result<(), String> {
     let panels = app.tui_panels().await?;
-    let suggestions = app.tui_suggestions().await?;
+    let mut suggestions = app.tui_suggestions().await?;
+    suggestions.extend(context_source_suggestions(app).await?);
+    validate_snapshot_suggestions(&suggestions)?;
     let mut terminal = TerminalSession::start()?;
     let mut events = EventStream::new();
     let mut state = TuiState::new(&options, panels);
@@ -1301,6 +1314,50 @@ pub async fn run(app: &AgentApp, options: TuiOptions) -> Result<(), String> {
     .await;
     terminal.restore()?;
     result
+}
+
+async fn context_source_suggestions(app: &AgentApp) -> Result<Vec<Suggestion>, String> {
+    let snapshot = app.tui_context_sources().await?;
+    let mut suggestions = Vec::new();
+    for (index, prompt) in snapshot.prompts.into_iter().enumerate() {
+        let schema: serde_json::Value = serde_json::from_str(prompt.arguments_schema_json.as_str())
+            .map_err(|error| format!("Context Prompt schema is invalid: {error}"))?;
+        if schema["required"]
+            .as_array()
+            .is_some_and(|required| !required.is_empty())
+            || !safe_context_token(&prompt.source)
+            || !safe_context_token(&prompt.name)
+        {
+            continue;
+        }
+        suggestions.push(Suggestion {
+            id: format!("mcp.prompt.{index}"),
+            kind: SuggestionKind::Prompt,
+            label: format!("/prompt:{}/{}", prompt.source, prompt.name),
+            insert_text: format!("/mcp-prompt {}/{}", prompt.source, prompt.name),
+            description: prompt.description,
+        });
+    }
+    for (index, resource) in snapshot.resources.into_iter().enumerate() {
+        if !safe_context_token(&resource.source) || resource.uri.contains(char::is_whitespace) {
+            continue;
+        }
+        suggestions.push(Suggestion {
+            id: format!("mcp.resource.{index}"),
+            kind: SuggestionKind::Resource,
+            label: format!("/resource:{}/{}", resource.source, resource.name),
+            insert_text: format!("/mcp-resource {}={}", resource.source, resource.uri),
+            description: resource.description,
+        });
+    }
+    Ok(suggestions)
+}
+
+fn safe_context_token(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
 async fn run_loop(
@@ -1942,6 +1999,7 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         }
         _ => {}
     }
+    let model_input = compose_tui_context(app, &input).await?;
     state.transcript.push(TranscriptEntry::User {
         text: input.clone(),
         created_at: current_timestamp(),
@@ -1964,7 +2022,7 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
             RUN_TURN_OPERATION,
             context,
             RunTurnRequest {
-                input,
+                input: model_input,
                 session_id: state.session_id.clone(),
             },
         )
@@ -1981,6 +2039,73 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         started_at,
     });
     Ok(())
+}
+
+async fn compose_tui_context(app: &AgentApp, input: &str) -> Result<String, String> {
+    if let Some(selection) = input.strip_prefix("/mcp-prompt ") {
+        let (identity, task) = selection.split_once(char::is_whitespace).ok_or_else(|| {
+            "an MCP Prompt selection must be followed by the user task".to_owned()
+        })?;
+        let (source, name) = identity
+            .split_once('/')
+            .ok_or_else(|| "invalid MCP Prompt source/name".to_owned())?;
+        let rendered = app
+            .render_tui_context_prompt(RenderPromptRequest {
+                source: source.to_owned(),
+                name: name.to_owned(),
+                arguments_json: "{}"
+                    .to_owned()
+                    .try_into()
+                    .expect("empty JSON object is valid"),
+            })
+            .await?;
+        let messages = rendered
+            .messages
+            .into_iter()
+            .map(|message| {
+                let role = match message.role {
+                    ContextRole::User => "user",
+                    ContextRole::Assistant => "assistant",
+                };
+                format!("[{role}]\n{}", message.text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(format!(
+            "Selected Context Prompt: {source}/{name}\n{messages}\n\n---\n\nUser task:\n{}",
+            task.trim()
+        ));
+    }
+    if let Some(selection) = input.strip_prefix("/mcp-resource ") {
+        let (identity, task) = selection.split_once(char::is_whitespace).ok_or_else(|| {
+            "an MCP Resource selection must be followed by the user task".to_owned()
+        })?;
+        let (source, uri) = identity
+            .split_once('=')
+            .ok_or_else(|| "invalid MCP Resource source=URI".to_owned())?;
+        let response = app
+            .read_tui_context_resource(ReadResourceRequest {
+                source: source.to_owned(),
+                uri: uri.to_owned(),
+            })
+            .await?;
+        let contents = response
+            .contents
+            .into_iter()
+            .map(|content| {
+                format!(
+                    "URI: {}\nMIME: {}\n{}",
+                    content.uri, content.mime_type, content.text
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(format!(
+            "Selected Context Resource: {source}/{uri}\n{contents}\n\n---\n\nUser task:\n{}",
+            task.trim()
+        ));
+    }
+    Ok(input.to_owned())
 }
 
 fn handle_stream_event(

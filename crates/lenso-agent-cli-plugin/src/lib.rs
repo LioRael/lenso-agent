@@ -1,13 +1,15 @@
 //! Endpoint-free CLI consumer Plugin.
 
-use lenso::{Port, plugin};
+use lenso::{ManyPort, Port, plugin};
 use lenso_capability_agent as agent_capability;
+use lenso_capability_agent_context_source as context_source_capability;
 
 /// Statically linked binding anchor used only by the CLI Host.
 #[plugin(consumer)]
 #[derive(Clone, Debug)]
 struct AgentCliAnchor {
     agent: Port<agent_capability::AgentClient>,
+    context_sources: ManyPort<context_source_capability::ContextSourceClient>,
 }
 
 #[cfg(test)]
@@ -20,11 +22,18 @@ mod tests {
         assert_eq!(descriptor["provided_capabilities"], serde_json::json!([]));
         assert_eq!(
             descriptor["required_capabilities"],
-            serde_json::json!([{
-                "capability_id": "lenso.agent@3",
-                "descriptor_version": "3.0.0",
-                "cardinality": "one"
-            }])
+            serde_json::json!([
+                {
+                    "capability_id": "lenso.agent@3",
+                    "descriptor_version": "3.0.0",
+                    "cardinality": "one"
+                },
+                {
+                    "capability_id": "lenso.agent.context-source@1",
+                    "descriptor_version": "1.0.0",
+                    "cardinality": "many"
+                }
+            ])
         );
     }
 }

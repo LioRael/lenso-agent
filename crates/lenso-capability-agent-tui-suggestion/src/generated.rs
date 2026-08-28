@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.tui-suggestion@1";
-pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_VERSION: &str = "1.2.0";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TUI_SUGGESTION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const TUI_SUGGESTION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_tui_suggestion { () => { "{\"capability_id\":\"lenso.agent.tui-suggestion@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"snapshot\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_tui_suggestion { () => { "{\"capability_id\":\"lenso.agent.tui-suggestion@1\",\"descriptor_version\":\"1.2.0\",\"operations\":[\"snapshot\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_tui_suggestion_client { () => { "{\"capability_id\":\"lenso.agent.tui-suggestion@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_tui_suggestion_client { () => { "{\"capability_id\":\"lenso.agent.tui-suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_tui_suggestion_client { () => { "{\"capability_id\":\"lenso.agent.tui-suggestion@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_tui_suggestion_client { () => { "{\"capability_id\":\"lenso.agent.tui-suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" }; }
 
 pub const SNAPSHOT_OPERATION: &str = "snapshot";
 
@@ -65,6 +65,10 @@ pub enum SuggestionKind {
     Command,
     #[serde(rename = "file")]
     File,
+    #[serde(rename = "prompt")]
+    Prompt,
+    #[serde(rename = "resource")]
+    Resource,
     #[serde(rename = "skill")]
     Skill,
 }

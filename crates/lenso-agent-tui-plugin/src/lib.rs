@@ -2,6 +2,7 @@
 
 use lenso::{ManyPort, Port, plugin};
 use lenso_capability_agent as agent_capability;
+use lenso_capability_agent_context_source as context_source_capability;
 use lenso_capability_agent_tui_contribution as tui_capability;
 use lenso_capability_agent_tui_suggestion as suggestion_capability;
 use lenso_capability_agent_user_interaction as interaction_capability;
@@ -11,6 +12,7 @@ use lenso_capability_agent_user_interaction as interaction_capability;
 #[derive(Clone, Debug)]
 struct AgentTuiShell {
     agent: Port<agent_capability::AgentClient>,
+    context_sources: ManyPort<context_source_capability::ContextSourceClient>,
     contributions: ManyPort<tui_capability::TuiContributionClient>,
     suggestions: ManyPort<suggestion_capability::TuiSuggestionClient>,
     interaction: Port<interaction_capability::UserInteractionClient>,
@@ -33,13 +35,18 @@ mod tests {
                     "cardinality": "one"
                 },
                 {
+                    "capability_id": "lenso.agent.context-source@1",
+                    "descriptor_version": "1.0.0",
+                    "cardinality": "many"
+                },
+                {
                     "capability_id": "lenso.agent.tui-contribution@1",
                     "descriptor_version": "1.0.0",
                     "cardinality": "many"
                 },
                 {
                     "capability_id": "lenso.agent.tui-suggestion@1",
-                    "descriptor_version": "1.1.0",
+                    "descriptor_version": "1.2.0",
                     "cardinality": "many"
                 },
                 {

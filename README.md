@@ -305,6 +305,8 @@ resolved only into the running Plugin. HTTP requests send the required
 protocol/method/name headers, support JSON or request-scoped SSE responses,
 and mirror valid `x-mcp-header` Tool parameters. The Tool catalog is refreshed
 at each new Turn; the current Turn keeps its already admitted immutable set.
+Prompt and Resource metadata use the separate `lenso.agent.context-source@1`
+contract instead of becoming model-controlled Tools.
 
 Select it only for the Profile that needs those Tools:
 
@@ -319,9 +321,28 @@ Remote names are normalized to lowercase snake case and exposed as
 are treated as exclusive because MCP does not provide a portable side-effect
 or concurrency classification. The process runs as trusted native code with a cleared
 environment plus the explicit allowlist; it is not a sandbox. Removing the
-Instance removes the process and every projected Tool. This first Adapter maps
-MCP Tools only. Prompts, Resources, Elicitation, and Sampling require their own
-typed Harness capabilities rather than being flattened into Tools.
+Instance removes the process and every projected Tool or Context Source.
+
+The CLI can explicitly render one user-selected Prompt and attach one or more
+application-selected Resources before opening the Turn:
+
+```sh
+lenso-agent-cli contexts --profile code
+
+lenso-agent-cli \
+  --profile code \
+  --context-prompt filesystem/review \
+  --context-arguments '{"focus":"safety"}' \
+  --context-resource 'filesystem=file:///workspace/README.md' \
+  "Review this project."
+```
+
+The TUI adds no-argument MCP Prompts and text Resources to `/` completion as
+`/prompt:<source>/<name>` and `/resource:<source>/<name>`. Selecting one leaves
+the composer open for the task. Required-argument Prompts remain available
+through the CLI, where arguments are explicit JSON. Version 1 rejects binary
+MCP content rather than dropping it. Elicitation and Sampling remain request
+continuations over User Interaction and Model—not Context Sources or Tools.
 
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed Session, Turn-start, and terminal Turn events to
