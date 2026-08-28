@@ -2307,6 +2307,7 @@ dependencies = [
  "lenso-agent-session-inspection",
  "lenso-agent-session-sqlite-plugin",
  "lenso-capability-agent",
+ "lenso-capability-agent-context-source",
  "lenso-kernel",
  "lenso-plugin-control-plane",
  "serde",
@@ -2324,6 +2325,7 @@ version = "0.1.0"
 dependencies = [
  "lenso",
  "lenso-capability-agent",
+ "lenso-capability-agent-context-source",
  "serde_json",
 ]
 
@@ -2860,6 +2862,7 @@ dependencies = [
  "lenso-agent-tui-static-plugin",
  "lenso-agent-tui-workspace-suggestions-plugin",
  "lenso-capability-agent",
+ "lenso-capability-agent-context-source",
  "lenso-capability-agent-tool-progress",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
@@ -2889,6 +2892,7 @@ version = "0.1.0"
 dependencies = [
  "lenso",
  "lenso-capability-agent",
+ "lenso-capability-agent-context-source",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
  "lenso-capability-agent-user-interaction",

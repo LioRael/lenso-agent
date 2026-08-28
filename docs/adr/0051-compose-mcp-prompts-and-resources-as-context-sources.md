@@ -33,10 +33,13 @@ connection. Its configured namespace is the source identity, list operations
 are paginated and bounded, and catalogs refresh when requested. A server may
 provide any non-empty combination of Tools, Prompts, and Resources.
 
-Context Source is not automatically connected to Agent Loop. A presentation
-surface must explicitly bind it and expose user selection or application
-attachment. This keeps MCP Prompt/Resource content out of the System Instrument
-and prevents silent model authority expansion.
+CLI and TUI presentation Plugins bind Context Source with `many` cardinality.
+The CLI accepts an explicit Prompt plus JSON arguments and repeated Resources.
+The TUI snapshots metadata into its bounded `/` catalog; it offers no-argument
+Prompts and text Resources, then resolves the selected item only when the user
+submits a task. Both surfaces label the selected content before passing it as
+task context. This keeps MCP Prompt/Resource content out of the System
+Instrument and prevents silent model authority expansion.
 
 MCP Elicitation and Sampling are not Context Source operations. They require a
 separate continuation coordinator over User Interaction and Model capabilities;
@@ -49,5 +52,4 @@ they must not be represented as Tools or hidden inside a Resource read.
   contract.
 - Text-only v1 fails explicitly for images, audio, blobs, and embedded
   resources instead of dropping information.
-- Surface integration and MCP request continuations remain separate authority
-  reviews.
+- MCP request continuations remain a separate authority review.
