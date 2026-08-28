@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use lenso_agent_session_inspection::SessionInspector;
 use lenso_agent_telegram_plugin as _;
 
 #[path = "../../../tests/support/mod.rs"]
@@ -71,20 +72,18 @@ fn telegram_updates_run_real_agent_turns_and_resume_one_durable_session() {
             .as_str()
             .is_some_and(|session_id| !session_id.is_empty())
     );
-    let session_path = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let session: serde_json::Value =
-        serde_json::from_slice(&fs::read(session_path).unwrap()).unwrap();
+    let sessions = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(
+        temporary.path().join(".lenso/sessions.sqlite3"),
+    )
+    .inspect_all()
+    .unwrap();
+    assert_eq!(sessions.len(), 1);
+    let session = &sessions[0];
     assert_eq!(
-        session["events"]
-            .as_array()
-            .unwrap()
+        session
+            .events
             .iter()
-            .filter(|event| event["kind"] == "turn_started")
+            .filter(|event| event.kind == "turn_started")
             .count(),
         2
     );

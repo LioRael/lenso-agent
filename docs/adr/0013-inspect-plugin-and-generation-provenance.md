@@ -25,7 +25,7 @@ The Harness exposes a read-only provenance surface:
 - `sessions provenance --session <id>` lists each Turn's Generation digest and
   classifies its Spec as `available`, `missing`, or `invalid`.
 
-The File Session Module owns validation of its private store and projects only
+Each Session Adapter owns validation of its private store and projects only
 `turn_started` records. The Agent Loop owns interpretation of its exact event
 payload. The CLI joins those two projections without printing user input or
 other Session payloads.

@@ -77,7 +77,8 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     };
     let mut root = PathBuf::from(".lenso/runtime");
     let mut sessions = PathBuf::from(".lenso/sessions");
-    let mut session_database = None;
+    let mut session_database = Some(PathBuf::from(".lenso/sessions.sqlite3"));
+    let mut session_database_explicit = false;
     let mut sessions_explicit = false;
     let mut digest = None;
     let mut apply = false;
@@ -90,10 +91,12 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(generation_usage)?),
             "--sessions" if command == "gc-preview" || command == "gc-plan" => {
                 sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
+                session_database = None;
                 sessions_explicit = true;
             }
             "--sessions" if command == "gc" => {
                 sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
+                session_database = None;
                 sessions_explicit = true;
             }
             "--session-database"
@@ -102,12 +105,13 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
                 session_database = Some(PathBuf::from(
                     arguments.next().ok_or_else(generation_usage)?,
                 ));
+                session_database_explicit = true;
             }
             "--apply" if command == "gc" => apply = true,
             _ => return Err(generation_usage()),
         }
     }
-    if sessions_explicit && session_database.is_some() {
+    if sessions_explicit && session_database_explicit {
         return Err(generation_usage());
     }
     match command.as_str() {
@@ -136,7 +140,8 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     }
     let mut session_id = None;
     let mut directory = PathBuf::from(".lenso/sessions");
-    let mut database = None;
+    let mut database = Some(PathBuf::from(".lenso/sessions.sqlite3"));
+    let mut database_explicit = false;
     let mut directory_explicit = false;
     let mut runtime_root = PathBuf::from(".lenso/runtime");
     let mut runtime_root_explicit = false;
@@ -147,10 +152,12 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
             "--session" => session_id = Some(arguments.next().ok_or_else(session_usage)?.clone()),
             "--directory" => {
                 directory = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
+                database = None;
                 directory_explicit = true;
             }
             "--database" => {
                 database = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
+                database_explicit = true;
             }
             "--runtime-root" => {
                 runtime_root = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
@@ -162,7 +169,7 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
             _ => return Err(session_usage()),
         }
     }
-    if directory_explicit && database.is_some() {
+    if directory_explicit && database_explicit {
         return Err(session_usage());
     }
     let store = database.map_or(SessionStore::File(directory), SessionStore::Sqlite);

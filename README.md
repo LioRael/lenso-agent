@@ -105,24 +105,29 @@ including exact Plugin configurations and bindings, remains the execution and
 Session-provenance authority. Editing the selected Profile or its Plugin files
 goes through the same online Ready Gate as any other Plugin change.
 
-For a transactional local Session store, configure the SQLite Adapter through
-the same Plugin directory:
+The default Session Adapter stores transactional local history in
+`.lenso/sessions.sqlite3`.
+
+To use the transparent file Adapter instead, configure it through the same
+Plugin directory:
 
 ```toml
-# plugins/lenso.agent.session.sqlite/local.toml
-database = ".lenso/sessions.sqlite3"
+# plugins/lenso.agent.session.file/local.toml
+directory = ".lenso/sessions"
 ```
 
-Then select it from a Profile; it replaces the default file Session slot:
+Then select it from a Profile; it replaces the default SQLite Session slot:
 
 ```toml
-# profiles/sqlite.toml
-description = "SQLite-backed sessions"
-instances = ["lenso.agent.session.sqlite/local"]
+# profiles/file-sessions.toml
+description = "File-backed sessions"
+instances = ["lenso.agent.session.file/local"]
 ```
 
 Inspect its Generation provenance with
-`lenso-agent-cli sessions provenance --session <id> --database .lenso/sessions.sqlite3`.
+`lenso-agent-cli sessions provenance --session <id>`. Pass
+`--directory .lenso/sessions` when inspecting an explicitly selected file
+store.
 
 Long Sessions use the replaceable Context Compaction seam instead of silently
 dropping old history. The bundled offline Adapter stores a bounded extractive

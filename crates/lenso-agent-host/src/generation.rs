@@ -1964,10 +1964,10 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
             }),
         ),
         default_plugin(
-            "lenso.agent.session.file",
+            "lenso.agent.session.sqlite",
             "sessions",
             serde_json::json!({
-                "directory": ".lenso/sessions"
+                "database": ".lenso/sessions.sqlite3"
             }),
         ),
         default_skills_plugin(),

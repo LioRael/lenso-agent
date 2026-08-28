@@ -16,8 +16,12 @@ mechanism is considered.
 The Harness Host provides a read-only command:
 
 ```text
-generations gc-plan [--root <plugin-root>] [--sessions <session-directory>]
+generations gc-plan [--root <plugin-root>]
+  [--session-database <sqlite-path> | --sessions <session-directory>]
 ```
+
+The default Session database is `.lenso/sessions.sqlite3`; `--sessions` selects
+an explicit file Adapter directory.
 
 The public CLI now calls this `generations gc-preview` so the read-only report
 is not confused with an executable Resolved App Plan. `gc-plan` remains a

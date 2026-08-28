@@ -35,13 +35,13 @@ shared validation and Turn provenance projection happen above that interface.
 The Host selects a file directory or SQLite database without importing either
 private representation.
 
-SQLite is selectable through normal Profile and `plugins/` configuration. The
-existing file Adapter remains the default. Explicit `sessions export`,
-`sessions import`, and `sessions migrate` commands transfer complete validated
-histories through versioned `lenso.agent.session-archive@1` documents. Imports
-reject existing Session IDs instead of silently replacing durable state;
-SQLite imports are transactional and file imports stage every record before
-commit.
+SQLite is the Host default. The file Adapter remains selectable through normal
+Profile and `plugins/` configuration for transparent fixtures and small
+installations. Explicit `sessions export`, `sessions import`, and `sessions
+migrate` commands transfer complete validated histories through versioned
+`lenso.agent.session-archive@1` documents. Imports reject existing Session IDs
+instead of silently replacing durable state; SQLite imports are transactional
+and file imports stage every record before commit.
 
 ## Consequences
 
@@ -51,5 +51,5 @@ commit.
   Session semantics.
 - Offline inspection validates complete Session histories before provenance or
   archive projection; each Adapter separately owns its offline importer.
-- Store migration is an explicit operator action, never an implicit fallback or
-  default switch.
+- Store migration is an explicit operator action; neither Adapter falls back to
+  the other or migrates existing histories implicitly.

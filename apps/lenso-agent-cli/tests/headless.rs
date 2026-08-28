@@ -65,8 +65,26 @@ fn configure_plugin_with(root: &Path, plugin_id: &str, configuration: &str) {
 }
 
 fn stored_session(root: &Path) -> serde_json::Value {
-    let path = stored_session_path(root);
-    serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    let sessions = stored_sessions(root);
+    assert_eq!(sessions.len(), 1);
+    sessions.into_iter().next().unwrap()
+}
+
+fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
+    let database = root.join(".lenso/sessions.sqlite3");
+    let sessions = if database.is_file() {
+        lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(database)
+            .inspect_all()
+            .unwrap()
+    } else {
+        lenso_agent_session_file_plugin::FileSessionInspector::new(root.join(".lenso/sessions"))
+            .inspect_all()
+            .unwrap()
+    };
+    sessions
+        .into_iter()
+        .map(|session| serde_json::to_value(session).unwrap())
+        .collect()
 }
 
 fn stored_session_path(root: &Path) -> std::path::PathBuf {
@@ -76,6 +94,18 @@ fn stored_session_path(root: &Path) -> std::path::PathBuf {
         .unwrap()
         .unwrap()
         .path()
+}
+
+fn stored_file_session(root: &Path) -> serde_json::Value {
+    serde_json::from_slice(&fs::read(stored_session_path(root)).unwrap()).unwrap()
+}
+
+fn configure_file_sessions(root: &Path) {
+    configure_plugin_with(
+        root,
+        "lenso.agent.session.file",
+        "directory = \".lenso/sessions\"\n",
+    );
 }
 
 fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
@@ -272,15 +302,9 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
         String::from_utf8_lossy(&second.stdout),
         "Previous answer: README summary: # Durable Fixture\n"
     );
-    let stored = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(stored.len(), 1);
-    let state: serde_json::Value =
-        serde_json::from_slice(&fs::read(stored[0].path()).unwrap()).unwrap();
-    assert_eq!(state["revision"], 17);
-    assert_eq!(state["events"].as_array().unwrap().len(), 17);
+    let state = stored_session(temporary.path());
+    assert_eq!(state["revision"], 18);
+    assert_eq!(state["events"].as_array().unwrap().len(), 18);
     assert_eq!(
         state["events"]
             .as_array()
@@ -369,18 +393,14 @@ fn automatic_compaction_commits_a_durable_projection_without_rewriting_session_h
 fn resumed_session_reuses_its_installed_system_instruction() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    let first = run(
-        temporary.path(),
-        &plan_path(),
-        "Answer directly: first",
-        None,
-    );
+    configure_file_sessions(temporary.path());
+    let first = run_derived(temporary.path(), "Answer directly: first", None);
     assert!(first.status.success());
     let first_stderr = String::from_utf8(first.stderr).unwrap();
     let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
 
     let path = stored_session_path(temporary.path());
-    let mut state = stored_session(temporary.path());
+    let mut state = stored_file_session(temporary.path());
     let installed = state["events"]
         .as_array_mut()
         .unwrap()
@@ -395,9 +415,8 @@ fn resumed_session_reuses_its_installed_system_instruction() {
     installed["payload_json"] = payload.to_string().into();
     fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
 
-    let second = run(
+    let second = run_derived(
         temporary.path(),
-        &plan_path(),
         "Answer directly: second",
         Some(session_id),
     );
@@ -431,18 +450,14 @@ fn resumed_session_reuses_its_installed_system_instruction() {
 fn legacy_session_installs_one_system_instruction_when_first_resumed() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    let first = run(
-        temporary.path(),
-        &plan_path(),
-        "Answer directly: first",
-        None,
-    );
+    configure_file_sessions(temporary.path());
+    let first = run_derived(temporary.path(), "Answer directly: first", None);
     assert!(first.status.success());
     let first_stderr = String::from_utf8(first.stderr).unwrap();
     let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
 
     let path = stored_session_path(temporary.path());
-    let mut state = stored_session(temporary.path());
+    let mut state = stored_file_session(temporary.path());
     let events = state["events"].as_array_mut().unwrap();
     events.retain(|event| event["kind"] != "system_instruction_installed");
     for (index, event) in events.iter_mut().enumerate() {
@@ -451,9 +466,8 @@ fn legacy_session_installs_one_system_instruction_when_first_resumed() {
     state["revision"] = u64::try_from(events.len()).unwrap().into();
     fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
 
-    let second = run(
+    let second = run_derived(
         temporary.path(),
-        &plan_path(),
         "Answer directly: second",
         Some(session_id),
     );
@@ -474,13 +488,14 @@ fn legacy_session_installs_one_system_instruction_when_first_resumed() {
 fn resumed_session_closes_a_host_interrupted_turn_before_new_work() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Durable Fixture\n").unwrap();
+    configure_file_sessions(temporary.path());
     let first = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(first.status.success());
     let first_stderr = String::from_utf8(first.stderr).unwrap();
     let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
 
     let path = stored_session_path(temporary.path());
-    let mut session = stored_session(temporary.path());
+    let mut session = stored_file_session(temporary.path());
     let generation_spec_digest = turn_generation_digests(&session).pop().unwrap();
     let interrupted_revision = session["revision"].as_u64().unwrap() + 1;
     let interrupted_payload = serde_json::json!({
@@ -686,8 +701,7 @@ max_sampling_tokens = 64
 fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Generation Fixture\n").unwrap();
-    let plan = plan_path();
-    let first = run(temporary.path(), &plan, "Answer directly: hello", None);
+    let first = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(
         first.status.success(),
         "{}",
@@ -754,13 +768,9 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     configure_plugin(temporary.path(), "lenso.agent.text-tools");
     let second = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(second.status.success());
-    let digests = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .map(|entry| {
-            let session: serde_json::Value =
-                serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
-            turn_generation_digests(&session).pop().unwrap()
-        })
+    let digests = stored_sessions(temporary.path())
+        .iter()
+        .map(|session| turn_generation_digests(session).pop().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(digests.len(), 2);
 
@@ -875,12 +885,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
 fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Generation Fixture\n").unwrap();
-    let first = run(
-        temporary.path(),
-        &plan_path(),
-        "Answer directly: hello",
-        None,
-    );
+    let first = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(first.status.success());
     let before = stored_session(temporary.path());
     let digest = turn_generation_digests(&before).pop().unwrap();
@@ -909,12 +914,7 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
         String::from_utf8_lossy(&gc_preview.stderr).contains("Generation Spec validation failed")
     );
 
-    let second = run(
-        temporary.path(),
-        &plan_path(),
-        "Answer directly: this must not run",
-        None,
-    );
+    let second = run_derived(temporary.path(), "Answer directly: this must not run", None);
     assert!(!second.status.success());
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(stderr.contains("App startup failed"));
@@ -934,13 +934,7 @@ fn direct_answer_finishes_without_a_tool_call() {
     );
     assert!(output.status.success());
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     assert_eq!(state["revision"], 8);
     assert!(
         !state["events"]
@@ -1023,13 +1017,7 @@ fn completed_turns_are_recalled_across_sessions_with_durable_provenance() {
             .is_file()
     );
 
-    let sessions = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .map(|entry| {
-            serde_json::from_slice::<serde_json::Value>(&fs::read(entry.unwrap().path()).unwrap())
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
+    let sessions = stored_sessions(temporary.path());
     assert_eq!(sessions.len(), 2);
     assert!(sessions.iter().any(|session| {
         session["events"]
@@ -1259,8 +1247,8 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
         String::from_utf8_lossy(&migrated.stderr)
     );
 
-    let original = lenso_agent_session_file_plugin::FileSessionInspector::new(
-        temporary.path().join(".lenso/sessions"),
+    let original = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(
+        temporary.path().join(".lenso/sessions.sqlite3"),
     )
     .inspect_one(&session_id)
     .unwrap();
@@ -1401,13 +1389,7 @@ fn explicitly_selected_filesystem_skill_reaches_the_model_and_session_manifest()
         "Filesystem: Direct answer.\n"
     );
 
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     let requested = state["events"]
         .as_array()
         .unwrap()
@@ -1453,14 +1435,8 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
         String::from_utf8_lossy(&output.stdout),
         "README summary: # Multi Tool\n"
     );
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
-    assert_eq!(state["revision"], 14);
+    let state = stored_session(temporary.path());
+    assert_eq!(state["revision"], 16);
     assert_eq!(
         state["events"]
             .as_array()
@@ -1519,13 +1495,7 @@ fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
         "Navigation result: NAVIGATION_TARGET: bounded workspace discovery.\n"
     );
 
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     let requests = state["events"]
         .as_array()
         .unwrap()
@@ -1569,13 +1539,7 @@ fn workspace_edit_plugin_creates_edits_then_reads_back_one_file() {
         "after\n"
     );
 
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     let events = state["events"].as_array().unwrap();
     let requests = events
         .iter()
@@ -1657,13 +1621,7 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
         "pub fn value() -> u32 { 2 }\n"
     );
 
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     let events = state["events"].as_array().unwrap();
     let requests = events
         .iter()
@@ -1827,13 +1785,7 @@ fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
         "Skill applied: Rust review used the selected instructions.\n"
     );
 
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     let events = state["events"].as_array().unwrap();
     let requests = events
         .iter()
@@ -1901,13 +1853,7 @@ fn skill_resources_are_listed_then_one_resource_is_read_without_executing_script
     );
     assert!(!temporary.path().join("resource-script-executed").exists());
 
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     let events = state["events"].as_array().unwrap();
     let requests = events
         .iter()
@@ -1973,13 +1919,7 @@ fn step_limit_fails_before_a_tool_that_cannot_be_resumed() {
     let output = run(temporary.path(), &plan, "Summarize the README.", None);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("StepLimitExceeded"));
-    let session = fs::read_dir(temporary.path().join(".lenso/sessions"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
+    let state = stored_session(temporary.path());
     assert!(
         !state["events"]
             .as_array()
