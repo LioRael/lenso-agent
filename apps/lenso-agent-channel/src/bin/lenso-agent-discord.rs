@@ -3,7 +3,7 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::{ArgAction, Parser};
 use lenso_agent_channel::discord::{self, ChannelAllowlist, DiscordOptions};
 use lenso_agent_discord_plugin as _;
-use lenso_agent_host::{generation::AgentApp, plan_bytes};
+use lenso_agent_host::{AgentHost, DiscordSurface, Profile};
 
 /// Run the composed Lenso Agent as a Discord Bot.
 #[derive(Debug, Parser)]
@@ -64,7 +64,6 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    lenso_agent_default_plugins::link();
     if args.max_messages == Some(0) {
         return Err("--max-messages must be greater than zero".to_owned());
     }
@@ -75,10 +74,12 @@ async fn run(args: Args) -> Result<(), String> {
         )
     })?;
     let allowed_channels = ChannelAllowlist::parse(&args.allowed_channels)?;
-    let bytes = plan_bytes(args.plan.as_deref())?;
-    let mut app = AgentApp::start_discord(&bytes)
-        .await
-        .map_err(|error| format!("App startup failed: {error}"))?;
+    let profile = args.plan.map_or(Profile::Default, Profile::resolved_plan);
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(DiscordSurface::messaging())
+        .build()?;
+    let mut app = host.run(profile).await?;
     let mut options = DiscordOptions::new(token, allowed_channels, args.state);
     options.allowed_tools = args.allowed_tools;
     options.respond_all_guilds = args.respond_all_guilds;

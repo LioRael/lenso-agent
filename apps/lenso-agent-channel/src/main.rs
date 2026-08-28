@@ -3,7 +3,7 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::Parser;
 use lenso_agent_channel::{channel_host::ChannelHostConfig, discord, telegram};
 use lenso_agent_discord_plugin as _;
-use lenso_agent_host::{generation::AgentApp, plan_bytes};
+use lenso_agent_host::{AgentHost, ChannelSurface, Profile, generation::AgentApp};
 use lenso_agent_telegram_plugin as _;
 
 /// Run the composed Lenso Agent through every configured messaging Channel.
@@ -36,12 +36,13 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    lenso_agent_default_plugins::link();
     let options = ChannelHostConfig::load(&args.config)?.resolve()?;
-    let bytes = plan_bytes(args.plan.as_deref())?;
-    let mut app = AgentApp::start_channels(&bytes)
-        .await
-        .map_err(|error| format!("App startup failed: {error}"))?;
+    let profile = args.plan.map_or(Profile::Default, Profile::resolved_plan);
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(ChannelSurface::messaging())
+        .build()?;
+    let mut app = host.run(profile).await?;
     let route_validation = validate_routes(&app, &options).await;
     if let Err(error) = route_validation {
         return match app.shutdown().await {

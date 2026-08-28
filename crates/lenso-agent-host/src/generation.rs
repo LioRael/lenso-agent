@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
     authoring::{
@@ -43,12 +44,11 @@ use lenso_native_adapter::NativePluginRegistry;
 use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, CanonicalDocument,
     CatalogFactory, ControlHealth, ControlLifecycle, ControlPlaneError, ControlStateStore,
-    DurableControlState, DurableGenerationRoute, DurableGenerationSupervisor,
-    DurableTransitionOutcome, EmbeddedPlugin, FileControlStateStore, GenerationController,
-    GenerationControllerClient, GenerationControllerEvent, GenerationMaintenanceOutcome,
-    HostBuildManifest, HostExecutionPolicy, KernelGenerationRuntime, MultiExecutionCatalogFactory,
-    PlanGenerationInput, ReplacementMode, ResolvedGeneration, RolloutPolicy,
-    resolve_plan_generation, sha256_digest,
+    DurableControlState, DurableGenerationRoute, DurableTransitionOutcome, EmbeddedPlugin,
+    FileControlStateStore, GenerationControllerClient, GenerationControllerEvent,
+    GenerationMaintenanceOutcome, HostBuildManifest, HostExecutionPolicy, KernelGenerationRuntime,
+    MultiExecutionCatalogFactory, PlanGenerationInput, ReplacementMode, ResolvedGeneration,
+    RolloutPolicy, resolve_plan_generation, sha256_digest,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -66,11 +66,11 @@ const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const ONLINE_DRAIN_TIMEOUT_NANOS: u64 = 300_000_000_000;
 const ONLINE_ROLLBACK_WINDOW_NANOS: u64 = 1_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
-const CONTROL_DIRECTORY: &str = "generation-control";
-const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
-const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
-const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
-const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
+pub(crate) const CONTROL_DIRECTORY: &str = "generation-control";
+pub(crate) const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
+pub(crate) const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
+pub(crate) const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
+pub(crate) const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const RECONCILE_QUIET_PERIOD: Duration = Duration::from_millis(200);
 const RECONCILE_SETTLE_LIMIT: Duration = Duration::from_secs(2);
@@ -100,7 +100,7 @@ impl CatalogFactory for HarnessCatalogFactory {
 }
 
 #[derive(Clone, Debug)]
-struct HostBuildIdentity {
+pub(crate) struct HostBuildIdentity {
     executable_digest: String,
 }
 
@@ -252,7 +252,7 @@ impl FilesystemReconcileWatcher {
 }
 
 impl HostBuildIdentity {
-    fn current() -> Result<Self, String> {
+    pub(crate) fn current() -> Result<Self, String> {
         let executable = env::current_exe()
             .map_err(|error| format!("failed to locate Host executable: {error}"))?;
         let executable_bytes = fs::read(&executable).map_err(|error| {
@@ -267,15 +267,21 @@ impl HostBuildIdentity {
     }
 }
 
-async fn recover_or_open_supervisor<F: CatalogFactory>(
+fn framework_host_builder<F: CatalogFactory>(
+    runtime: KernelGenerationRuntime<F>,
+    store: FileControlStateStore,
+) -> FrameworkHostBuilder<KernelGenerationRuntime<F>, FileControlStateStore> {
+    FrameworkHostBuilder::new(APP_ID, runtime, store).maintenance_interval(MAINTENANCE_INTERVAL)
+}
+
+async fn recover_or_open_host<F: CatalogFactory>(
     plan_bytes: &[u8],
     store_root: &Path,
     host_build: &HostBuildIdentity,
     runtime: KernelGenerationRuntime<F>,
     store: FileControlStateStore,
     durable: DurableControlState,
-) -> Result<DurableGenerationSupervisor<KernelGenerationRuntime<F>, FileControlStateStore>, String>
-{
+) -> Result<FrameworkHost<NativeApp>, String> {
     let has_live_state = durable.generations.iter().any(|record| {
         matches!(
             record.lifecycle,
@@ -287,7 +293,9 @@ async fn recover_or_open_supervisor<F: CatalogFactory>(
         )
     });
     if !has_live_state {
-        return DurableGenerationSupervisor::open(APP_ID, runtime, store).map_err(control_error);
+        return framework_host_builder(runtime, store)
+            .build()
+            .map_err(control_error);
     }
     let live_digests = durable
         .generations
@@ -305,18 +313,14 @@ async fn recover_or_open_supervisor<F: CatalogFactory>(
         .iter()
         .all(|digest| recoverable.contains_key(*digest));
     if all_live_generations_are_recoverable {
-        return DurableGenerationSupervisor::recover(
-            APP_ID,
-            runtime,
-            store,
-            &recoverable,
-            now_unix_nanos()?,
-        )
-        .await
-        .map_err(control_error);
+        return framework_host_builder(runtime, store)
+            .recover(&recoverable, now_unix_nanos()?)
+            .await
+            .map_err(control_error);
     }
     if durable.host_suspended {
-        return DurableGenerationSupervisor::replace_suspended_host(APP_ID, runtime, store)
+        return framework_host_builder(runtime, store)
+            .replace_suspended()
             .map_err(control_error);
     }
 
@@ -328,14 +332,14 @@ async fn recover_or_open_supervisor<F: CatalogFactory>(
     store
         .compare_and_swap(APP_ID, revision, exited_host)
         .map_err(control_error)?;
-    DurableGenerationSupervisor::replace_suspended_host(APP_ID, runtime, store)
+    framework_host_builder(runtime, store)
+        .replace_suspended()
         .map_err(control_error)
 }
 
 #[derive(Debug)]
 pub struct AgentApp {
-    client: GenerationControllerClient<NativeApp>,
-    controller: Option<tokio::task::JoinHandle<Result<DurableControlState, ControlPlaneError>>>,
+    host: FrameworkHost<NativeApp>,
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
     host_lease: Option<crate::authority::AuthorityFence>,
@@ -343,126 +347,7 @@ pub struct AgentApp {
 }
 
 impl AgentApp {
-    pub async fn start(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_with_profile(plan_bytes, None).await
-    }
-
-    pub async fn start_with_profile(
-        plan_bytes: &[u8],
-        profile_name: Option<String>,
-    ) -> Result<Self, String> {
-        Self::start_with_store_and_profile(plan_bytes, Path::new(".lenso/runtime"), profile_name)
-            .await
-    }
-
-    pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_tui_with_profile(plan_bytes, None).await
-    }
-
-    pub async fn start_tui_with_profile(
-        plan_bytes: &[u8],
-        profile_name: Option<String>,
-    ) -> Result<Self, String> {
-        Self::start_tui_with_store_and_profile(
-            plan_bytes,
-            Path::new(".lenso/runtime"),
-            profile_name,
-        )
-        .await
-    }
-
-    /// Starts the Telegram surface with an independent durable Controller lineage.
-    pub async fn start_telegram(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_with_store_and_control_directory(
-            plan_bytes,
-            Path::new(".lenso/runtime"),
-            TELEGRAM_CONTROL_DIRECTORY,
-        )
-        .await
-    }
-
-    /// Starts the Discord surface with an independent durable Controller lineage.
-    pub async fn start_discord(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_with_store_and_control_directory(
-            plan_bytes,
-            Path::new(".lenso/runtime"),
-            DISCORD_CONTROL_DIRECTORY,
-        )
-        .await
-    }
-
-    /// Starts all configured messaging surfaces in one durable Controller lineage.
-    pub async fn start_channels(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_with_store_and_control_directory(
-            plan_bytes,
-            Path::new(".lenso/runtime"),
-            CHANNEL_CONTROL_DIRECTORY,
-        )
-        .await
-    }
-
-    async fn start_with_store_and_profile(
-        plan_bytes: &[u8],
-        store_root: &Path,
-        profile_name: Option<String>,
-    ) -> Result<Self, String> {
-        Self::start_with_store_control_directory_profile_and_host_build(
-            plan_bytes,
-            store_root,
-            CONTROL_DIRECTORY,
-            profile_name,
-            HostBuildIdentity::current()?,
-        )
-        .await
-    }
-
-    async fn start_tui_with_store_and_profile(
-        plan_bytes: &[u8],
-        store_root: &Path,
-        profile_name: Option<String>,
-    ) -> Result<Self, String> {
-        Self::start_with_store_control_directory_profile_and_host_build(
-            plan_bytes,
-            store_root,
-            TUI_CONTROL_DIRECTORY,
-            profile_name,
-            HostBuildIdentity::current()?,
-        )
-        .await
-    }
-
-    async fn start_with_store_and_control_directory(
-        plan_bytes: &[u8],
-        store_root: &Path,
-        control_directory: &str,
-    ) -> Result<Self, String> {
-        let host_build = HostBuildIdentity::current()?;
-        Self::start_with_store_control_directory_and_host_build(
-            plan_bytes,
-            store_root,
-            control_directory,
-            host_build,
-        )
-        .await
-    }
-
-    async fn start_with_store_control_directory_and_host_build(
-        plan_bytes: &[u8],
-        store_root: &Path,
-        control_directory: &str,
-        host_build: HostBuildIdentity,
-    ) -> Result<Self, String> {
-        Self::start_with_store_control_directory_profile_and_host_build(
-            plan_bytes,
-            store_root,
-            control_directory,
-            None,
-            host_build,
-        )
-        .await
-    }
-
-    async fn start_with_store_control_directory_profile_and_host_build(
+    pub(crate) async fn start_with_store_control_directory_profile_and_host_build(
         plan_bytes: &[u8],
         store_root: &Path,
         control_directory: &str,
@@ -479,19 +364,14 @@ impl AgentApp {
             .map_err(control_error)?;
         let durable = store.load(APP_ID).map_err(control_error)?;
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
-        let supervisor = recover_or_open_supervisor(
-            plan_bytes,
-            store_root,
-            &host_build,
-            runtime,
-            store,
-            durable,
-        )
-        .await?;
-        let recovered_active = supervisor.state().active_generation_spec_digest.clone();
-        let (controller, client) =
-            GenerationController::new(supervisor, MAINTENANCE_INTERVAL).map_err(control_error)?;
-        let task = tokio::task::spawn_local(controller.run());
+        let mut host =
+            recover_or_open_host(plan_bytes, store_root, &host_build, runtime, store, durable)
+                .await?;
+        let recovered_active = host
+            .inspect()
+            .await
+            .map_err(control_error)?
+            .active_generation_spec_digest;
         if recovered_active.as_deref() != Some(generation.spec.digest()) {
             let transition = if let Some(active) = recovered_active.as_deref() {
                 let recoverable =
@@ -503,15 +383,15 @@ impl AgentApp {
             } else {
                 initial_transition(&generation).map_err(control_error)?
             };
-            if let Err(error) = client
+            if let Err(error) = host
                 .transition(transition, generation, BTreeMap::new())
                 .await
             {
-                drop(client);
-                let _ = task.await;
+                let _ = host.shutdown().await;
                 return Err(control_error(error));
             }
         }
+        let client = host.controller();
         let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
         let authoring_managed = plan_is_authoring_managed(plan_bytes, profile_name.as_deref());
         let reconciler = start_generation_reconciler(
@@ -523,8 +403,7 @@ impl AgentApp {
             reconcile_events.clone(),
         );
         Ok(Self {
-            client,
-            controller: Some(task),
+            host,
             reconciler: Some(reconciler),
             reconcile_events,
             host_lease: Some(host_lease),
@@ -552,7 +431,7 @@ impl AgentApp {
     }
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
-        let route = self.client.route().await.map_err(control_error)?;
+        let route = self.host.route().await.map_err(control_error)?;
         let consumer_instance = match consumer_instance {
             "cli" => "lenso.agent.cli/cli",
             "tui" => "lenso.agent.tui/tui",
@@ -571,7 +450,7 @@ impl AgentApp {
 
     /// Snapshots every TUI panel provider in deterministic resolved order.
     pub async fn tui_panels(&self) -> Result<Vec<SnapshotResponsePanelsItem>, String> {
-        let route = self.client.route().await.map_err(control_error)?;
+        let route = self.host.route().await.map_err(control_error)?;
         let handle = route
             .target()
             .many_handle::<TuiContribution>("lenso.agent.tui/tui")
@@ -608,7 +487,7 @@ impl AgentApp {
 
     /// Snapshots every composer suggestion provider in deterministic resolved order.
     pub async fn tui_suggestions(&self) -> Result<Vec<Suggestion>, String> {
-        let route = self.client.route().await.map_err(control_error)?;
+        let route = self.host.route().await.map_err(control_error)?;
         let handle = route
             .target()
             .many_handle::<TuiSuggestion>("lenso.agent.tui/tui")
@@ -655,18 +534,7 @@ impl AgentApp {
                 .await
                 .map_err(|error| format!("Generation Reconciler task failed: {error}"))?;
         }
-        let expected = self.client.suspend().await.map_err(control_error)?;
-        let task = self
-            .controller
-            .take()
-            .ok_or_else(|| "Generation Controller is already stopped".to_owned())?;
-        let actual = task
-            .await
-            .map_err(|error| format!("Generation Controller task failed: {error}"))?
-            .map_err(control_error)?;
-        if actual != expected {
-            return Err("Generation Controller returned inconsistent durable state".to_owned());
-        }
+        self.host.suspend().await.map_err(control_error)?;
         self.host_lease.take();
         self.generation_gc_lease.take();
         Ok(())

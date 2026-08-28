@@ -6,11 +6,17 @@ use std::{
 mod authority;
 pub mod generation;
 mod generation_authority;
+mod host;
 mod plugin_root;
 mod profile;
 pub mod provenance;
 #[cfg(test)]
 mod test_support;
+
+pub use host::{
+    AgentHost, AgentHostBuilder, AgentSurface, ChannelSurface, ConfiguredAgentHost, DiscordSurface,
+    HeadlessSurface, Profile, TelegramSurface, TuiSurface,
+};
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.
 pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {

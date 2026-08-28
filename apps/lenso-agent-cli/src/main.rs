@@ -11,7 +11,7 @@ use lenso_agent_auth_openai_codex_plugin::{
     complete_device_login, direct_auth_status, direct_logout,
 };
 use lenso_agent_cli_plugin as _;
-use lenso_agent_host::{generation, plan_bytes_for_profile, provenance};
+use lenso_agent_host::{AgentHost, HeadlessSurface, Profile, generation, provenance};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
@@ -62,7 +62,6 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
-    lenso_agent_default_plugins::link();
     let args = match parse_args()? {
         CliCommand::Run(args) => args,
         CliCommand::Help => {
@@ -74,16 +73,27 @@ async fn run() -> Result<(), String> {
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
     };
-    let bytes = plan_bytes_for_profile(args.plan.as_deref(), args.profile.as_deref())
-        .map_err(|error| format!("App resolution failed: {error}"))?;
-    let mut app = generation::AgentApp::start_with_profile(&bytes, args.profile.clone())
-        .await
-        .map_err(|error| format!("App startup failed: {error}"))?;
+    let profile = selected_profile(args.plan.clone(), args.profile.clone());
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(HeadlessSurface::stdio())
+        .build()
+        .map_err(|error| format!("Host composition failed: {error}"))?;
+    let mut app = host.run(profile).await?;
     let turn = app.lease_turn().await?;
     let result = invoke(&turn, args).await;
     drop(turn);
     let shutdown = app.shutdown().await;
     result.and(shutdown)
+}
+
+fn selected_profile(plan: Option<PathBuf>, profile: Option<String>) -> Profile {
+    match (plan, profile) {
+        (Some(plan), None) => Profile::resolved_plan(plan),
+        (None, Some(profile)) => Profile::named(profile),
+        (None, None) => Profile::Default,
+        (Some(_), Some(_)) => unreachable!("argument parser rejects Plan/Profile conflicts"),
+    }
 }
 
 async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), String> {

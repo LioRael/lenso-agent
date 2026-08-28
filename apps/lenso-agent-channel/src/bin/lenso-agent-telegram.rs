@@ -2,7 +2,7 @@ use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
 use lenso_agent_channel::telegram::{self, ChatAllowlist, TelegramOptions};
-use lenso_agent_host::{generation::AgentApp, plan_bytes};
+use lenso_agent_host::{AgentHost, Profile, TelegramSurface};
 use lenso_agent_telegram_plugin as _;
 
 /// Run the composed Lenso Agent as a Telegram Bot.
@@ -69,7 +69,6 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    lenso_agent_default_plugins::link();
     if args.max_updates == Some(0) {
         return Err("--max-updates must be greater than zero".to_owned());
     }
@@ -80,10 +79,12 @@ async fn run(args: Args) -> Result<(), String> {
         )
     })?;
     let allowed_chats = ChatAllowlist::parse(&args.allowed_chats)?;
-    let bytes = plan_bytes(args.plan.as_deref())?;
-    let mut app = AgentApp::start_telegram(&bytes)
-        .await
-        .map_err(|error| format!("App startup failed: {error}"))?;
+    let profile = args.plan.map_or(Profile::Default, Profile::resolved_plan);
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(TelegramSurface::messaging())
+        .build()?;
+    let mut app = host.run(profile).await?;
     let mut options = TelegramOptions::new(token, allowed_chats, args.state);
     options.allowed_tools = args.allowed_tools;
     options.respond_all_groups = args.respond_all_groups;
