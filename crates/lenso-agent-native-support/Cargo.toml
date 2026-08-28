@@ -11,6 +11,9 @@ rust-version.workspace = true
 [dependencies]
 futures.workspace = true
 lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

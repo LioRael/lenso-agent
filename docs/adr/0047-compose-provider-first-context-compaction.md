@@ -28,6 +28,14 @@ summary, and incorporates the previous checkpoint. A semantic model-backed,
 domain-specific, process, Wasm, or remote Adapter can replace it through the
 same Capability.
 
+The optional `lenso.agent.context-compaction.command` Adapter establishes that
+replacement path with one bounded JSON stdin/stdout exchange. It invokes an
+exact absolute executable without shell lookup, propagates cancellation,
+enforces timeout and response-size limits, and maps stable domain-error codes
+back to the portable Capability. The executable may implement a local model,
+an HTTP client, or an MCP bridge; those transport details do not enter the
+Agent Loop.
+
 The Agent Loop owns when compaction is required because it owns model-context
 assembly. It invokes the selected Adapter after the configured number of new
 Session events. It rejects empty or oversized summaries and any retained

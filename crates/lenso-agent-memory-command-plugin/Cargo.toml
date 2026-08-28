@@ -1,0 +1,24 @@
+[package]
+name = "lenso-agent-memory-command-plugin"
+version = "0.1.0"
+description = "Bounded command Adapter for remote Agent Memory providers."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.memory.command"
+root-slot = "memory"
+
+[dependencies]
+lenso.workspace = true
+lenso-agent-native-support = { path = "../lenso-agent-native-support" }
+lenso-capability-agent-memory = { path = "../lenso-capability-agent-memory" }
+lenso-kernel.workspace = true
+serde.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true

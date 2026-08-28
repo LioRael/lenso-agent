@@ -49,6 +49,14 @@ The Host Catalog exposes one replaceable `memory` Slot. Plugin instance
 configuration selects the database and scope, so two Profiles can use the same
 Plugin code with isolated stores or policies.
 
+The optional `lenso.agent.memory.command` Adapter provides a concrete
+third-party/remote seam. It sends `memory.observe`, `memory.recall`,
+`memory.remember`, or `memory.forget` through one bounded JSON stdin/stdout
+exchange with an exact executable, cancellation, timeout, and response-size
+limits. A deployment may point that executable at HTTP, MCP, an embedding
+service, or another store without coupling those transports to the Agent Loop
+or SQLite implementation.
+
 ## Consequences
 
 - A fresh default Harness gains durable cross-Session recall without a hosted

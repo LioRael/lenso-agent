@@ -133,6 +133,16 @@ A Profile can select a different native, Wasm, process, or remote Plugin for
 `lenso.agent.context-compaction@1`; the Agent Loop still owns trigger policy,
 checkpoint validation, and durable Session facts.
 
+For a model service or remote gateway, select the bundled command Adapter:
+
+```toml
+# plugins/lenso.agent.context-compaction.command/semantic.toml
+program = "/absolute/path/to/compaction-gateway"
+arguments = []
+timeout_ms = 30000
+max_response_bytes = 1048576
+```
+
 Cross-Session Memory uses a separate replaceable seam. The default offline
 Adapter stores bounded, provenance-bearing memories in SQLite and recalls them
 with FTS5. Configure its Instance under the standard Plugin directory:
@@ -153,6 +163,22 @@ a different database or scope, or replace it with a remote Adapter for
 per-Profile policy without a central App file. Recalled text is always
 lower-authority request context; it never edits the Session's System
 Instruction.
+
+The bundled remote-friendly Adapter uses the same configuration shape:
+
+```toml
+# plugins/lenso.agent.memory.command/team-memory.toml
+program = "/absolute/path/to/memory-gateway"
+arguments = ["--endpoint", "https://memory.example.test"]
+timeout_ms = 10000
+max_response_bytes = 1048576
+```
+
+Both command Adapters receive one
+`lenso.agent.command-adapter@1` JSON request on stdin and must return exactly
+one JSON response on stdout. The executable can bridge HTTP or MCP; the
+Harness never interprets a shell command or embeds transport credentials in
+the Plugin protocol.
 
 Secrets use the same Profile and Plugin-directory model. The distributed Host
 links four interchangeable Providers for `lenso.secrets@1`: environment
@@ -269,8 +295,8 @@ MCP Tools only. Prompts, Resources, Elicitation, and Sampling require their own
 typed Harness capabilities rather than being flattened into Tools.
 
 Lifecycle integrations use ordinary Plugin configuration. The default local
-audit Adapter writes typed `session_started`, `session_resumed`, and
-`turn_started` events to `.lenso/lifecycle/events.jsonl`. A trusted command
+audit Adapter writes typed Session, Turn-start, and terminal Turn events to
+`.lenso/lifecycle/events.jsonl`. A trusted command
 Adapter can be added without changing the Agent Loop:
 
 ```toml
