@@ -1,4 +1,4 @@
-//! Bounded, profile-scoped MCP client projected as Agent Tools.
+//! Bounded, profile-scoped MCP client projected as Agent Tools and Context Sources.
 
 use std::{
     cell::RefCell,
@@ -13,6 +13,13 @@ use std::{
 use base64::Engine as _;
 use futures::StreamExt;
 use lenso::prelude::*;
+use lenso_capability_agent_context_source::{
+    self as context_contract, ContextMessage, ContextRole, PromptDefinition, ReadResourceError,
+    ReadResourceRequest, ReadResourceResponse, RenderPromptError, RenderPromptRequest,
+    RenderPromptResponse, ResourceContent, ResourceDefinition,
+    SnapshotError as ContextSnapshotError, SnapshotRequest as ContextSnapshotRequest,
+    SnapshotResponse as ContextSnapshotResponse,
+};
 use lenso_capability_agent_tool_provider::{
     self as tool_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
@@ -34,6 +41,8 @@ const MAX_PAGES: usize = 16;
 const MAX_SCHEMA_BYTES: usize = 65_536;
 const MAX_OUTPUT_BYTES: usize = 1_048_576;
 const MAX_MESSAGE_BYTES: usize = 1_310_720;
+const MAX_PROMPTS: usize = 256;
+const MAX_RESOURCES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -127,7 +136,7 @@ fn validate_config(config: &McpClientConfig) -> Result<(), RuntimeFailure> {
                 && reqwest::Url::parse(endpoint).is_ok_and(|url| {
                     url.scheme() == "https"
                         || (url.scheme() == "http"
-                            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")))
+                            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1")))
                 })
                 && authorization_environment
                     .as_ref()
@@ -170,7 +179,7 @@ struct McpClientPlugin {
     ready: Rc<RefCell<Option<ReadyClient>>>,
 }
 
-#[lenso::provides(tool_contract::ToolProvider)]
+#[lenso::provides(tool_contract::ToolProvider, context_contract::ContextSource)]
 impl McpClientPlugin {
     async fn catalog(
         &self,
@@ -234,6 +243,100 @@ impl McpClientPlugin {
             .await
             .map_err(PluginError::runtime)?;
         map_tool_result(&response).map_err(PluginError::domain)
+    }
+    async fn snapshot(
+        &self,
+        context: Ctx,
+        _request: ContextSnapshotRequest,
+    ) -> PluginResult<ContextSnapshotResponse, ContextSnapshotError> {
+        let ready = self.context_ready()?;
+        let prompts = list_context_collection(
+            &ready,
+            &self.config,
+            &context,
+            "prompts/list",
+            "prompts",
+            MAX_PROMPTS,
+        )
+        .await
+        .map_err(PluginError::runtime)?;
+        let resources = list_context_collection(
+            &ready,
+            &self.config,
+            &context,
+            "resources/list",
+            "resources",
+            MAX_RESOURCES,
+        )
+        .await
+        .map_err(PluginError::runtime)?;
+        Ok(ContextSnapshotResponse {
+            prompts: project_prompts(&self.config.tool_namespace, prompts)
+                .map_err(PluginError::runtime)?,
+            resources: project_resources(&self.config.tool_namespace, resources)
+                .map_err(PluginError::runtime)?,
+        })
+    }
+
+    async fn render_prompt(
+        &self,
+        context: Ctx,
+        request: RenderPromptRequest,
+    ) -> PluginResult<RenderPromptResponse, RenderPromptError> {
+        if request.source != self.config.tool_namespace {
+            return Err(PluginError::domain(RenderPromptError::NotFound));
+        }
+        let arguments: Value = serde_json::from_str(&request.arguments_json)
+            .map_err(|_| PluginError::domain(RenderPromptError::InvalidRequest))?;
+        if !arguments.is_object() {
+            return Err(PluginError::domain(RenderPromptError::InvalidRequest));
+        }
+        let ready = self.context_ready()?;
+        let response = ready
+            .request_with_context(
+                &self.config,
+                &context,
+                "prompts/get",
+                json!({"name": request.name, "arguments": arguments}),
+                &BTreeMap::new(),
+            )
+            .await
+            .map_err(PluginError::runtime)?;
+        project_rendered_prompt(rpc_result(&response).map_err(PluginError::runtime)?)
+            .map_err(PluginError::domain)
+    }
+
+    async fn read_resource(
+        &self,
+        context: Ctx,
+        request: ReadResourceRequest,
+    ) -> PluginResult<ReadResourceResponse, ReadResourceError> {
+        if request.source != self.config.tool_namespace {
+            return Err(PluginError::domain(ReadResourceError::NotFound));
+        }
+        let ready = self.context_ready()?;
+        let response = ready
+            .request_with_context(
+                &self.config,
+                &context,
+                "resources/read",
+                json!({"uri": request.uri}),
+                &BTreeMap::new(),
+            )
+            .await
+            .map_err(PluginError::runtime)?;
+        project_resource_contents(rpc_result(&response).map_err(PluginError::runtime)?)
+            .map_err(PluginError::domain)
+    }
+}
+
+impl McpClientPlugin {
+    fn context_ready<E>(&self) -> PluginResult<ReadyClient, E> {
+        self.ready.borrow().clone().ok_or_else(|| {
+            PluginError::runtime(RuntimeFailure::Unavailable {
+                capability: context_contract::CAPABILITY_ID,
+            })
+        })
     }
 }
 
@@ -731,9 +834,9 @@ async fn select_protocol(
 
 fn validate_modern_discovery(message: &Value) -> Result<(), RuntimeFailure> {
     let result = rpc_result(message)?;
-    if !result["capabilities"]["tools"].is_object() {
+    if !declares_supported_server_capability(&result["capabilities"]) {
         return Err(protocol_failure(
-            "MCP server does not declare the Tools capability",
+            "MCP server declares none of Tools, Prompts, or Resources",
         ));
     }
     let versions = result["supportedVersions"]
@@ -780,14 +883,20 @@ async fn initialize(
             "MCP server selected unsupported legacy protocol version `{version}`"
         )));
     }
-    if !result["capabilities"]["tools"].is_object() {
+    if !declares_supported_server_capability(&result["capabilities"]) {
         return Err(protocol_failure(
-            "MCP server does not declare the Tools capability",
+            "MCP server declares none of Tools, Prompts, or Resources",
         ));
     }
     session
         .notify("notifications/initialized", json!({}), protocol)
         .await
+}
+
+fn declares_supported_server_capability(capabilities: &Value) -> bool {
+    ["tools", "prompts", "resources"]
+        .iter()
+        .any(|name| capabilities[*name].is_object())
 }
 
 async fn connect(config: &McpClientConfig, ready: &ReadyClient) -> Result<Session, RuntimeFailure> {
@@ -814,6 +923,9 @@ async fn list_tools_stdio(
         let response = session
             .request("tools/list", params, protocol, timeout_ms)
             .await?;
+        if response["error"]["code"].as_i64() == Some(-32601) {
+            return Ok(Vec::new());
+        }
         let result = rpc_result(&response)?;
         let page = result["tools"]
             .as_array()
@@ -850,6 +962,9 @@ async fn list_tools_http(
             .as_ref()
             .map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
         let response = http_request_raw(ready, "tools/list", params, timeout_ms).await?;
+        if response["error"]["code"].as_i64() == Some(-32601) {
+            return Ok(Vec::new());
+        }
         let result = rpc_result(&response)?;
         let page = result["tools"]
             .as_array()
@@ -872,6 +987,242 @@ async fn list_tools_http(
         }
     }
     Err(protocol_failure("MCP tools/list exceeded the page limit"))
+}
+
+async fn list_context_collection(
+    ready: &ReadyClient,
+    config: &McpClientConfig,
+    context: &Ctx,
+    method: &str,
+    result_key: &str,
+    limit: usize,
+) -> Result<Vec<Value>, RuntimeFailure> {
+    let mut items = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
+    for _ in 0..MAX_PAGES {
+        let params = cursor
+            .as_ref()
+            .map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
+        let response = ready
+            .request_with_context(config, context, method, params, &BTreeMap::new())
+            .await?;
+        if response["error"]["code"].as_i64() == Some(-32601) {
+            return Ok(Vec::new());
+        }
+        let result = rpc_result(&response)?;
+        let page = result[result_key]
+            .as_array()
+            .ok_or_else(|| protocol_failure(format!("MCP {method} omitted `{result_key}`")))?;
+        if items.len().saturating_add(page.len()) > limit {
+            return Err(protocol_failure(format!(
+                "MCP {method} exceeded the {limit}-item limit"
+            )));
+        }
+        items.extend(page.iter().cloned());
+        cursor = result
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(next) = cursor.as_ref() else {
+            return Ok(items);
+        };
+        if next.is_empty() || !seen_cursors.insert(next.clone()) {
+            return Err(protocol_failure(format!(
+                "MCP {method} returned an invalid pagination cursor"
+            )));
+        }
+    }
+    Err(protocol_failure(format!(
+        "MCP {method} exceeded the page limit"
+    )))
+}
+
+fn project_prompts(
+    source: &str,
+    prompts: Vec<Value>,
+) -> Result<Vec<PromptDefinition>, RuntimeFailure> {
+    prompts
+        .into_iter()
+        .map(|prompt| {
+            let name = bounded_required_string(&prompt, "name", 256, "MCP Prompt")?;
+            let description = bounded_optional_string(&prompt, "description", 1_024)?;
+            let arguments = prompt
+                .get("arguments")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if arguments.len() > 64 {
+                return Err(protocol_failure(
+                    "MCP Prompt declared more than 64 arguments",
+                ));
+            }
+            let mut properties = serde_json::Map::new();
+            let mut required = Vec::new();
+            for argument in arguments {
+                let argument_name =
+                    bounded_required_string(&argument, "name", 128, "MCP Prompt argument")?;
+                if properties.contains_key(&argument_name) {
+                    return Err(protocol_failure("MCP Prompt argument names were duplicate"));
+                }
+                let argument_description =
+                    bounded_optional_string(&argument, "description", 1_024)?;
+                properties.insert(
+                    argument_name.clone(),
+                    json!({"type":"string", "description": argument_description}),
+                );
+                if argument["required"].as_bool().unwrap_or(false) {
+                    required.push(argument_name);
+                }
+            }
+            let schema = json!({
+                "type":"object",
+                "additionalProperties":false,
+                "properties":properties,
+                "required":required
+            })
+            .to_string();
+            if schema.len() > MAX_SCHEMA_BYTES {
+                return Err(protocol_failure(
+                    "MCP Prompt argument schema exceeded the limit",
+                ));
+            }
+            Ok(PromptDefinition {
+                source: source.to_owned(),
+                name,
+                description,
+                arguments_schema_json: schema
+                    .try_into()
+                    .expect("projected Prompt argument schema must be valid JSON"),
+            })
+        })
+        .collect()
+}
+
+fn project_resources(
+    source: &str,
+    resources: Vec<Value>,
+) -> Result<Vec<ResourceDefinition>, RuntimeFailure> {
+    resources
+        .into_iter()
+        .map(|resource| {
+            Ok(ResourceDefinition {
+                source: source.to_owned(),
+                uri: bounded_required_string(&resource, "uri", 4_096, "MCP Resource")?,
+                name: bounded_required_string(&resource, "name", 256, "MCP Resource")?,
+                description: bounded_optional_string(&resource, "description", 1_024)?,
+                mime_type: bounded_optional_string(&resource, "mimeType", 256)?,
+            })
+        })
+        .collect()
+}
+
+fn project_rendered_prompt(result: &Value) -> Result<RenderPromptResponse, RenderPromptError> {
+    let messages = result["messages"]
+        .as_array()
+        .ok_or(RenderPromptError::UpstreamFailed)?;
+    if messages.is_empty() || messages.len() > 64 {
+        return Err(RenderPromptError::UpstreamFailed);
+    }
+    let mut projected = Vec::with_capacity(messages.len());
+    let mut total_bytes = 0_usize;
+    for message in messages {
+        let role = match message["role"].as_str() {
+            Some("user") => ContextRole::User,
+            Some("assistant") => ContextRole::Assistant,
+            _ => return Err(RenderPromptError::UnsupportedContent),
+        };
+        let content = &message["content"];
+        if content["type"].as_str() != Some("text") {
+            return Err(RenderPromptError::UnsupportedContent);
+        }
+        let text = content["text"]
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .ok_or(RenderPromptError::UnsupportedContent)?;
+        total_bytes = total_bytes.saturating_add(text.len());
+        if total_bytes > context_contract::MAX_TEXT_BYTES {
+            return Err(RenderPromptError::UnsupportedContent);
+        }
+        projected.push(ContextMessage {
+            role,
+            text: text.to_owned(),
+        });
+    }
+    let description = result["description"].as_str().unwrap_or_default();
+    if description.len() > 1_024 {
+        return Err(RenderPromptError::UpstreamFailed);
+    }
+    Ok(RenderPromptResponse {
+        description: description.to_owned(),
+        messages: projected,
+    })
+}
+
+fn project_resource_contents(result: &Value) -> Result<ReadResourceResponse, ReadResourceError> {
+    let contents = result["contents"]
+        .as_array()
+        .ok_or(ReadResourceError::UpstreamFailed)?;
+    if contents.is_empty() || contents.len() > 64 {
+        return Err(ReadResourceError::UpstreamFailed);
+    }
+    let mut projected = Vec::with_capacity(contents.len());
+    let mut total_bytes = 0_usize;
+    for content in contents {
+        if content.get("blob").is_some() {
+            return Err(ReadResourceError::UnsupportedContent);
+        }
+        let text = content["text"]
+            .as_str()
+            .ok_or(ReadResourceError::UnsupportedContent)?;
+        total_bytes = total_bytes.saturating_add(text.len());
+        if total_bytes > context_contract::MAX_TEXT_BYTES {
+            return Err(ReadResourceError::UnsupportedContent);
+        }
+        let uri = content["uri"]
+            .as_str()
+            .filter(|uri| !uri.is_empty() && uri.len() <= 4_096)
+            .ok_or(ReadResourceError::UpstreamFailed)?;
+        let mime_type = content["mimeType"].as_str().unwrap_or_default();
+        if mime_type.len() > 256 {
+            return Err(ReadResourceError::UpstreamFailed);
+        }
+        projected.push(ResourceContent {
+            uri: uri.to_owned(),
+            mime_type: mime_type.to_owned(),
+            text: text.to_owned(),
+        });
+    }
+    Ok(ReadResourceResponse {
+        contents: projected,
+    })
+}
+
+fn bounded_required_string(
+    value: &Value,
+    field: &str,
+    maximum: usize,
+    object: &str,
+) -> Result<String, RuntimeFailure> {
+    value[field]
+        .as_str()
+        .filter(|text| !text.is_empty() && text.len() <= maximum)
+        .map(str::to_owned)
+        .ok_or_else(|| protocol_failure(format!("{object} has an invalid `{field}`")))
+}
+
+fn bounded_optional_string(
+    value: &Value,
+    field: &str,
+    maximum: usize,
+) -> Result<String, RuntimeFailure> {
+    let text = value[field].as_str().unwrap_or_default();
+    if text.len() > maximum {
+        return Err(protocol_failure(format!(
+            "MCP metadata field `{field}` exceeded the limit"
+        )));
+    }
+    Ok(text.to_owned())
 }
 
 async fn http_request(
@@ -1793,7 +2144,7 @@ done
     }
 
     #[test]
-    fn descriptor_exposes_only_the_tool_provider_contract() {
+    fn descriptor_exposes_tool_and_context_source_contracts() {
         let descriptor: Value = serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
         assert_eq!(descriptor["plugin_id"], "lenso.agent.mcp-client");
         assert_eq!(
@@ -1801,12 +2152,37 @@ done
                 .as_array()
                 .unwrap()
                 .len(),
-            1
+            2
         );
         assert_eq!(
             descriptor["provided_capabilities"][0]["capability_id"],
             "lenso.agent.tool-provider@2"
         );
+        assert_eq!(
+            descriptor["provided_capabilities"][1]["capability_id"],
+            "lenso.agent.context-source@1"
+        );
         assert_eq!(descriptor["required_capabilities"], json!([]));
+    }
+
+    #[test]
+    fn context_projection_preserves_prompt_roles_and_rejects_binary_resources() {
+        let prompt = project_rendered_prompt(&json!({
+            "description":"Review",
+            "messages":[
+                {"role":"user","content":{"type":"text","text":"Review this."}},
+                {"role":"assistant","content":{"type":"text","text":"Ready."}}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(prompt.messages.len(), 2);
+        assert!(matches!(prompt.messages[0].role, ContextRole::User));
+
+        assert!(matches!(
+            project_resource_contents(&json!({
+                "contents":[{"uri":"fixture://image","blob":"AA=="}]
+            })),
+            Err(ReadResourceError::UnsupportedContent)
+        ));
     }
 }

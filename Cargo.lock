@@ -2444,6 +2444,7 @@ dependencies = [
  "lenso-app-plan",
  "lenso-capability-agent",
  "lenso-capability-agent-context-compaction",
+ "lenso-capability-agent-context-source",
  "lenso-capability-agent-http-fetch",
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-memory",
@@ -2543,6 +2544,7 @@ dependencies = [
  "base64",
  "futures",
  "lenso",
+ "lenso-capability-agent-context-source",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "lenso-native-adapter",
@@ -3071,6 +3073,23 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "lenso-capability-agent-context-source"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

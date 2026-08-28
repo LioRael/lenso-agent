@@ -22,6 +22,7 @@ use lenso_app_plan::{
 };
 use lenso_capability_agent::{Agent, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID};
 use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
+use lenso_capability_agent_context_source::ContextSourceJsonCodec;
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_memory::MemoryJsonCodec;
@@ -2128,6 +2129,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
     MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
         .with_wasm_codec(AgentJsonCodec)
         .with_wasm_codec(ContextCompactionJsonCodec)
+        .with_wasm_codec(ContextSourceJsonCodec)
         .with_wasm_codec(MemoryJsonCodec)
         .with_wasm_codec(HttpFetchJsonCodec)
         .with_wasm_codec(LifecycleJsonCodec)
@@ -2141,6 +2143,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
         .with_quickjs_codec(ContextCompactionJsonCodec)
+        .with_quickjs_codec(ContextSourceJsonCodec)
         .with_quickjs_codec(MemoryJsonCodec)
         .with_quickjs_codec(LifecycleJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)
@@ -2152,6 +2155,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(WorkspaceReadJsonCodec)
         .with_process_codec(AgentJsonCodec)
         .with_process_codec(ContextCompactionJsonCodec)
+        .with_process_codec(ContextSourceJsonCodec)
         .with_process_codec(MemoryJsonCodec)
         .with_process_codec(HttpFetchJsonCodec)
         .with_process_codec(LifecycleJsonCodec)

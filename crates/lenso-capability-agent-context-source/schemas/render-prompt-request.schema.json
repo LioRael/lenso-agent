@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["source", "name", "arguments_json"],
+  "properties": {
+    "source": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "arguments_json": {
+      "type": "string",
+      "maxLength": 65536
+    }
+  },
+  "additionalProperties": false,
+  "title": "RenderPromptRequest"
+}

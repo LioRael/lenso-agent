@@ -20,6 +20,7 @@ lenso-plugin-control-plane.workspace = true
 lenso-runtime-codec.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-context-compaction = { path = "../lenso-capability-agent-context-compaction" }
+lenso-capability-agent-context-source = { path = "../lenso-capability-agent-context-source" }
 lenso-capability-agent-memory = { path = "../lenso-capability-agent-memory" }
 lenso-capability-agent-http-fetch = { path = "../lenso-capability-agent-http-fetch" }
 lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle" }

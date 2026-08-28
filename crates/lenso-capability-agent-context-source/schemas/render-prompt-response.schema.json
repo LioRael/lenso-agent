@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["description", "messages"],
+  "properties": {
+    "description": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "messages": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/ContextMessage"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ContextMessage": {
+      "type": "object",
+      "required": ["role", "text"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ContextRole"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextRole": {
+      "type": "string",
+      "enum": ["user", "assistant"]
+    }
+  },
+  "title": "RenderPromptResponse"
+}
