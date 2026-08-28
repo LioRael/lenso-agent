@@ -1,0 +1,29 @@
+{
+  "id": "lenso.agent.context-source@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "snapshot",
+      "interaction": "request",
+      "request_schema": "schemas/snapshot-request.schema.json",
+      "response_schema": "schemas/snapshot-response.schema.json",
+      "domain_error_schema": "schemas/snapshot-error.schema.json"
+    },
+    {
+      "name": "render_prompt",
+      "interaction": "request",
+      "request_schema": "schemas/render-prompt-request.schema.json",
+      "response_schema": "schemas/render-prompt-response.schema.json",
+      "domain_error_schema": "schemas/render-prompt-error.schema.json"
+    },
+    {
+      "name": "read_resource",
+      "interaction": "request",
+      "request_schema": "schemas/read-resource-request.schema.json",
+      "response_schema": "schemas/read-resource-response.schema.json",
+      "domain_error_schema": "schemas/read-resource-error.schema.json"
+    }
+  ]
+}
