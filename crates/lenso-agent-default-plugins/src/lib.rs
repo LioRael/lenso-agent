@@ -30,7 +30,10 @@ use lenso_agent_workspace_edit_plugin as _;
 use lenso_agent_workspace_import_read_plugin as _;
 use lenso_agent_workspace_read_plugin as _;
 use lenso_agent_workspace_read_tools_plugin as _;
+use lenso_secrets_command_plugin as _;
+use lenso_secrets_encrypted_file_plugin as _;
 use lenso_secrets_env_plugin as _;
+use lenso_secrets_keychain_plugin as _;
 
 /// Forces the standard Plugin inventory into the final Host executable.
 pub fn link() {}

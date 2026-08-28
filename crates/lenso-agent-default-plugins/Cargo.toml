@@ -39,7 +39,10 @@ lenso-agent-workspace-edit-plugin = { path = "../lenso-agent-workspace-edit-plug
 lenso-agent-workspace-import-read-plugin = { path = "../lenso-agent-workspace-import-read-plugin" }
 lenso-agent-workspace-read-plugin = { path = "../lenso-agent-workspace-read-plugin" }
 lenso-agent-workspace-read-tools-plugin = { path = "../lenso-agent-workspace-read-tools-plugin" }
+lenso-secrets-command-plugin.workspace = true
+lenso-secrets-encrypted-file-plugin.workspace = true
 lenso-secrets-env-plugin.workspace = true
+lenso-secrets-keychain-plugin.workspace = true
 
 [lints]
 workspace = true

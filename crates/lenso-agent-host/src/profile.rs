@@ -211,6 +211,53 @@ mod tests {
     }
 
     #[test]
+    fn profiles_select_distinct_configurations_of_the_same_plugin() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                instance("lenso.secrets.keychain", "code").with_configuration(serde_json::json!({
+                    "service": "com.lenso.agent.code",
+                    "references": {"model/openai-api-key": "code-openai"}
+                })),
+                instance("lenso.secrets.keychain", "game").with_configuration(serde_json::json!({
+                    "service": "com.lenso.agent.game",
+                    "references": {"model/openai-api-key": "game-openai"}
+                })),
+            ],
+            [],
+        );
+        let code = apply(
+            "code",
+            &ProfileDocument {
+                _description: String::new(),
+                agent: default_agent(),
+                instances: vec!["lenso.secrets.keychain/code".to_owned()],
+            },
+            &root,
+        )
+        .unwrap();
+        let game = apply(
+            "game",
+            &ProfileDocument {
+                _description: String::new(),
+                agent: default_agent(),
+                instances: vec!["lenso.secrets.keychain/game".to_owned()],
+            },
+            &root,
+        )
+        .unwrap();
+
+        assert_eq!(
+            code.root().instances()[0].configuration()["service"],
+            "com.lenso.agent.code"
+        );
+        assert_eq!(
+            game.root().instances()[0].configuration()["service"],
+            "com.lenso.agent.game"
+        );
+    }
+
+    #[test]
     fn profile_rejects_missing_and_duplicate_instances() {
         let root = PluginRootSnapshot::default();
         let missing = apply(

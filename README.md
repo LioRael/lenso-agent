@@ -140,6 +140,48 @@ per-Profile policy without a central App file. Recalled text is always
 lower-authority request context; it never edits the Session's System
 Instruction.
 
+Secrets use the same Profile and Plugin-directory model. The distributed Host
+links four interchangeable Providers for `lenso.secrets@1`: environment
+variables, macOS Keychain, an age-encrypted local file, and a bounded command
+resolver for 1Password or another remote Secret Manager CLI. Provider
+configuration is never hidden in the Host Catalog.
+
+For example, two Profiles can use the same Keychain Plugin code with isolated
+service and account mappings:
+
+```toml
+# plugins/lenso.secrets.keychain/code.toml
+service = "com.lenso.agent.code"
+
+[references]
+"model/openai-api-key" = "openai-api-key"
+```
+
+```toml
+# plugins/lenso.secrets.keychain/game.toml
+service = "com.lenso.agent.game"
+
+[references]
+"model/openai-api-key" = "openai-api-key"
+```
+
+```toml
+# profiles/code.toml
+description = "Code agent with macOS Keychain credentials"
+instances = [
+  "lenso.agent.model.openai-compatible/code",
+  "lenso.secrets.keychain/code",
+]
+```
+
+The Profile selects only the Instance identity; the TOML beside the Plugin
+remains the sole configuration authority. Selecting a Provider verifies every
+configured source before the Generation becomes ready. Values stay in the
+Provider and never enter Profile files, Plans, diagnostics, or Session facts.
+See the
+[Secrets Plugins repository](https://github.com/LioRael/lenso-secrets-plugin)
+for encrypted-file and remote resolver configuration.
+
 Git support is an opt-in semantic Tool Plugin rather than unrestricted command
 access. Configure it beside the Process provider that authorizes `git`:
 

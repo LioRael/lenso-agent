@@ -28,17 +28,19 @@ Status: implementation baseline for the first real provider slice.
 
 ## Secrets selection
 
-The development profile selects external package `lenso.secrets.env` pinned to
-repository commit `8fcef31d2f27b3b1bb8785855613b14e273a3e96`. The Host Plugin Profile
-maps `model/openai-api-key` to `OPENAI_API_KEY`; the resolved value never enters
-the project document or Plan. The Profile selects the external
-`lenso-capability-secrets` Cargo contract package; `lenso compose` reads its
-owner-local Descriptor and generated Rust binding through Cargo metadata during
-authoring validation. The Harness does not vendor a second contract copy.
+The distributed Host links environment, macOS Keychain, age-encrypted-file,
+and bounded-command Providers from the Secrets Plugins repository. A Session
+Profile selects exactly one configured Provider Instance from `plugins/`; the
+Profile itself contains no mapping or credential. The OpenAI-compatible Model
+continues to request only `model/openai-api-key`, so switching Provider or using
+different mappings per Profile does not change the Model Plugin.
+
+The Harness imports the owner-local `lenso-capability-secrets` crate and does
+not vendor a second contract copy. Resolved values never enter Plugin
+configuration, Profiles, Plans, errors, or Session facts.
 
 ## Removal proof
 
-Removing the OpenAI-compatible Model Instance, Env Secrets Instance, their
-binding, package selections, and Cargo contract selection leaves the existing
-root fixture App valid and executable. Kernel has no
+Removing the OpenAI-compatible Model Instance and its selected Secrets
+Provider Instance leaves the default direct-Codex App valid. Kernel has no
 provider-specific branch or runtime plugin registry.
