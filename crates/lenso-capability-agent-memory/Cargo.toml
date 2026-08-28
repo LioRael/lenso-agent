@@ -1,0 +1,38 @@
+[package]
+name = "lenso-capability-agent-memory"
+version = "0.1.0"
+description = "Portable curated-memory Capability for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+build = "build.rs"
+
+[package.metadata.lenso.contract]
+descriptor = "capability.json"
+projection = "rust-runtime"
+output = "src/generated.rs"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-contract-authoring.workspace = true
+lenso-contract-runtime.workspace = true
+lenso-guest-sdk.workspace = true
+lenso-kernel.workspace = true
+lenso-plugin-authoring.workspace = true
+lenso-runtime-codec.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+lenso-contract-authoring.workspace = true
+lenso-contract-codegen.workspace = true
+schemars.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true

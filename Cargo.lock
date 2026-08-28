@@ -1795,6 +1795,7 @@ dependencies = [
  "lenso-agent-lifecycle-audit-plugin",
  "lenso-agent-lifecycle-command-plugin",
  "lenso-agent-loop-plugin",
+ "lenso-agent-memory-sqlite-plugin",
  "lenso-agent-model-fixture-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
  "lenso-agent-model-openai-compatible-plugin",
@@ -1844,6 +1845,7 @@ dependencies = [
  "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-http-fetch",
  "lenso-capability-agent-lifecycle",
+ "lenso-capability-agent-memory",
  "lenso-capability-agent-model",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
@@ -1919,6 +1921,7 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-lifecycle",
+ "lenso-capability-agent-memory",
  "lenso-capability-agent-model",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
@@ -1929,6 +1932,21 @@ dependencies = [
  "sha2",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "lenso-agent-memory-sqlite-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-memory",
+ "lenso-kernel",
+ "rusqlite",
+ "serde",
+ "sha2",
+ "tempfile",
+ "time",
 ]
 
 [[package]]
@@ -2409,6 +2427,25 @@ name = "lenso-capability-agent-lifecycle"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "lenso-capability-agent-memory"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
  "lenso-contract-authoring",
  "lenso-contract-codegen",
  "lenso-contract-runtime",

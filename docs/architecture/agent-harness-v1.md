@@ -19,6 +19,7 @@ Host defaults + plugins/
        |- Tool Runtime Plugin -> Tool Provider Plugins
        |- Prompt Plugin -> Prompt Provider Plugins
        |- Context Compaction Plugin
+       |- Memory Plugin
        `- Session Plugin
 ```
 
@@ -46,6 +47,9 @@ running graph.
 - Agent owns volatile Turn orchestration reconstructed from Session events.
 - Context Compaction owns replaceable summary and retained-tail behavior; the
   Agent owns trigger, validation, and durable checkpoint transactions.
+- Memory owns curated cross-Session knowledge, provenance, retrieval, and
+  deletion; the Agent owns when bounded recall enters one Turn and records the
+  observable outcome in Session.
 - Tool Runtime owns catalog aggregation and routing, but no second Plugin list.
 - Tool Providers own definitions, resource policy, execution, and final domain
   authorization.

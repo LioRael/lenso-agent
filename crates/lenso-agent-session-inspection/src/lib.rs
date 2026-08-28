@@ -108,6 +108,13 @@ fn known_event_kind(kind: &str) -> bool {
         kind,
         "session_created"
             | "system_instruction_installed"
+            | "context_compaction_started"
+            | "context_compaction_committed"
+            | "context_compaction_failed"
+            | "memory_recalled"
+            | "memory_recall_failed"
+            | "memory_committed"
+            | "memory_commit_failed"
             | "turn_started"
             | "model_requested"
             | "model_output"

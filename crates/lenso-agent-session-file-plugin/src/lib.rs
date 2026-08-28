@@ -526,6 +526,10 @@ fn event_kind(
         Kind::ContextCompactionStarted => "context_compaction_started",
         Kind::ContextCompactionCommitted => "context_compaction_committed",
         Kind::ContextCompactionFailed => "context_compaction_failed",
+        Kind::MemoryRecalled => "memory_recalled",
+        Kind::MemoryRecallFailed => "memory_recall_failed",
+        Kind::MemoryCommitted => "memory_committed",
+        Kind::MemoryCommitFailed => "memory_commit_failed",
         Kind::TurnStarted => "turn_started",
         Kind::ModelRequested => "model_requested",
         Kind::ModelOutput => "model_output",
@@ -548,6 +552,10 @@ fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
             ReadSessionResponseEventsItemKind::ContextCompactionCommitted
         }
         "context_compaction_failed" => ReadSessionResponseEventsItemKind::ContextCompactionFailed,
+        "memory_recalled" => ReadSessionResponseEventsItemKind::MemoryRecalled,
+        "memory_recall_failed" => ReadSessionResponseEventsItemKind::MemoryRecallFailed,
+        "memory_committed" => ReadSessionResponseEventsItemKind::MemoryCommitted,
+        "memory_commit_failed" => ReadSessionResponseEventsItemKind::MemoryCommitFailed,
         "turn_started" => ReadSessionResponseEventsItemKind::TurnStarted,
         "model_requested" => ReadSessionResponseEventsItemKind::ModelRequested,
         "model_output" => ReadSessionResponseEventsItemKind::ModelOutput,

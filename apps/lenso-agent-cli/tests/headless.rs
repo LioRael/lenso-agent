@@ -278,8 +278,8 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
     assert_eq!(stored.len(), 1);
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(stored[0].path()).unwrap()).unwrap();
-    assert_eq!(state["revision"], 13);
-    assert_eq!(state["events"].as_array().unwrap().len(), 13);
+    assert_eq!(state["revision"], 17);
+    assert_eq!(state["events"].as_array().unwrap().len(), 17);
     assert_eq!(
         state["events"]
             .as_array()
@@ -822,7 +822,7 @@ fn direct_answer_finishes_without_a_tool_call() {
         .unwrap()
         .path();
     let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
-    assert_eq!(state["revision"], 6);
+    assert_eq!(state["revision"], 8);
     assert!(
         !state["events"]
             .as_array()
@@ -870,6 +870,71 @@ fn direct_answer_finishes_without_a_tool_call() {
         payload["system_instruction_digest"],
         installed_payload["digest"]
     );
+}
+
+#[test]
+fn completed_turns_are_recalled_across_sessions_with_durable_provenance() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+
+    let first = run_derived(
+        temporary.path(),
+        "Answer directly: durable storage uses SQLite WAL.",
+        None,
+    );
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let second = run_derived(
+        temporary.path(),
+        "Answer directly: which durable storage did we discuss?",
+        None,
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(
+        temporary
+            .path()
+            .join(".lenso/memory/memory.sqlite3")
+            .is_file()
+    );
+
+    let sessions = fs::read_dir(temporary.path().join(".lenso/sessions"))
+        .unwrap()
+        .map(|entry| {
+            serde_json::from_slice::<serde_json::Value>(&fs::read(entry.unwrap().path()).unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().any(|session| {
+        session["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["kind"] == "memory_committed")
+    }));
+    let recalled = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .find(|event| {
+            if event["kind"] != "memory_recalled" {
+                return false;
+            }
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .ok()
+                .and_then(|payload| payload["memory_ids"].as_array().map(Vec::len))
+                .is_some_and(|count| count > 0)
+        })
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(recalled["payload_json"].as_str().unwrap()).unwrap();
+    assert!(!payload["memory_ids"].as_array().unwrap().is_empty());
 }
 
 #[test]
@@ -1165,7 +1230,7 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
         .unwrap()
         .path();
     let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
-    assert_eq!(state["revision"], 12);
+    assert_eq!(state["revision"], 14);
     assert_eq!(
         state["events"]
             .as_array()

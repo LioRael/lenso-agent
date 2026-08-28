@@ -1,0 +1,29 @@
+[package]
+name = "lenso-agent-memory-sqlite-plugin"
+version = "0.1.0"
+description = "Durable SQLite and FTS Memory Adapter for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.memory.sqlite"
+root-slot = "memory"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-agent-memory = { path = "../lenso-capability-agent-memory" }
+lenso-kernel.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
