@@ -8,7 +8,7 @@
 ## Context
 
 Runtime revision `25812bcbaf3b488d1a03f1864eb0130b53cadd93` adds an exact
-`NativeModuleFactory::factory_identity` contract. A control-plane
+`NativePluginFactory::factory_identity` contract. A control-plane
 `built_in_factory` selection can therefore close through the generated Plan
 into Native Adapter preparation without confusing factory identity with Cargo
 package version.

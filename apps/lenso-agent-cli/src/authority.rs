@@ -5,7 +5,7 @@ use std::{
 
 use fs2::FileExt;
 
-const LOCK_FILE: &str = "active-set.lock";
+const LOCK_FILE: &str = "generation-authority.lock";
 const GENERATION_GC_LOCK_FILE: &str = "generation-gc.lock";
 
 /// Coordinates one Host's durable Plugin authority across processes.
@@ -196,9 +196,9 @@ mod tests {
         }
 
         let started = Instant::now();
-        let authority = crate::plugins::load_generation_authority(&root).unwrap();
+        let authority = crate::generation_authority::load_generation_authority(&root).unwrap();
         assert!(started.elapsed() >= Duration::from_millis(500));
-        assert!(authority.lock.value().plugins.is_empty());
+        assert!(authority.resolution_authority_digest.starts_with("sha256:"));
         assert!(child.wait().unwrap().success());
     }
 

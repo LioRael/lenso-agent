@@ -1,0 +1,27 @@
+[package]
+name = "lenso-agent-tools-plugin"
+version = "0.2.0"
+description = "Aggregate Tool Runtime Plugin for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.tools"
+root-slot = "root-tools-runtime"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook" }
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-tool-progress = { path = "../lenso-capability-agent-tool-progress" }
+lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
+lenso-kernel.workspace = true
+lenso-native-adapter.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

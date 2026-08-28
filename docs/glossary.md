@@ -1,20 +1,18 @@
-# Control-plane glossary
+# Architecture glossary
 
-| Term | Owner and lifecycle | Stored form |
+| Term | Meaning | Public? |
 | --- | --- | --- |
-| App Definition | App author selects the base Module instances, configuration, and bindings before resolution. | root `lenso.app.json` |
-| Resolved App Plan | The resolver creates the immutable execution graph consumed by the Kernel. It never changes in place. | in-memory value owned by one App Generation; explicit files are accepted only for advanced replay |
-| Plugin Manifest | Plugin publisher declares one exact release, artifacts, capabilities, permissions, and evidence. | `lenso-plugin.json` inside a Bundle |
-| Enabled Plugin intent | A local user selects versioned Host-built Plugin Profiles without changing the reviewed product App. | `plugins.enabled` in the Git-ignored root `lenso.local.toml`; absent when empty |
-| Plugin lock | Host derives exact selected Plugin releases for one candidate resolution. | in-memory authority on the source-backed bundled path |
-| App Generation | Host stages one resolved Plan plus its exact runtime resources, then marks it ready before switching traffic. | in-memory runtime state on the source-backed bundled path |
-| Active Set | Legacy Store workflow pointer to active and rollback-eligible Generations. | absent from the source-backed bundled path |
-| Authority | Host-owned right to perform one transition or serve one active Generation. It is fenced across processes. | Generation authority records and leases |
-| Receipt | Durable evidence that a transition, readiness gate, or compatibility check completed under a specific authority. | Generation-control records |
-| Profile Catalog | Product-owned policy that maps reviewed Plugin identities to executable factories, risk, and evidence requirements. | Rust source in the host product |
-| Catalog | Legacy distribution/control-plane term. It is not the vNext package-manager path and should not be used for new App composition. | Legacy-only services and documents |
+| Host Catalog | Immutable description of linked Plugins, default Instances, root Slots, and Host-private attachments generated for one Host build. | Reference only |
+| Plugin Root | The App owner's `plugins/` directory. One directory per Plugin contains an optional package plus Instance TOML files. | Yes |
+| Plugin | The only removable behavior and distribution unit. A built-in and an external Plugin have the same configuration model. | Yes |
+| Plugin Instance | One configured occurrence of a Plugin, represented by `<instance>.toml`; `default.toml` is the common case. | Yes |
+| Resolved App Plan | Complete immutable execution input derived from one Host Catalog and one Plugin Root snapshot. It is replay evidence, not source configuration. | Diagnostic |
+| App Generation | A ready Plan plus its runtime resources. Existing Turns retain their leased Generation while new work switches atomically. | Operational |
+| Controller | Internal state machine that stages, readies, switches, drains, and recovers Generations. | No |
+| Supervisor | Runtime owner that starts and stops Plugin Instances according to one Plan. | No |
+| Receipt | Internal evidence that a package, candidate, or transition was checked under exact authority. | No |
+| Store | Internal content-addressed artifact storage, when durable external Plugin bytes require it. It is not App configuration. | No |
 
-The dependency direction is: an App Definition resolves to a Plan; admitted
-Plugin Manifests update a Plugin lock; the host stages a new Generation from
-those immutable inputs; authority and receipts govern the switch; the Active
-Set records which Generation may receive new work.
+The dependency direction is `Host Catalog + Plugin Root snapshot -> Resolved
+App Plan -> App Generation -> Kernel`. Users never author a Plan, binding graph,
+Active Set, Receipt, Store entry, Controller state, or Supervisor instruction.

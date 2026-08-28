@@ -86,7 +86,7 @@ it is `invalid_event`.
 
 `read.after_revision` is exclusive. Returned events are ordered by revision and
 the response `revision` is the latest durable revision observed by that read.
-Timestamps are evidence supplied by the Agent Module; event order is defined by
+Timestamps are evidence supplied by the Agent Plugin; event order is defined by
 revision, not wall-clock time.
 
 Supplying `session_id` to `open` means resume-only: an absent Session returns

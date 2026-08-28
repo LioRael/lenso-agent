@@ -5,13 +5,13 @@ use std::{
     process::{Command, ExitCode},
 };
 
-use lenso_agent_approval_hook_module::{ApprovalDecision, decide_approval, list_approvals};
-use lenso_agent_auth_openai_codex_module::{
+use lenso_agent_approval_hook_plugin::{ApprovalDecision, decide_approval, list_approvals};
+use lenso_agent_auth_openai_codex_plugin::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_agent_cli::{generation, plan_bytes, plugins, provenance};
-use lenso_agent_loop_module::RunScope;
+use lenso_agent_cli::{generation, plan_bytes, provenance};
+use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
 
@@ -28,7 +28,6 @@ enum CliCommand {
     Run(Args),
     Help,
     Auth(AuthCommand),
-    Plugins(plugins::PluginCommand),
     Generations(provenance::GenerationCommand),
     Sessions(provenance::SessionCommand),
     Approvals(ApprovalCommand),
@@ -68,12 +67,12 @@ async fn run() -> Result<(), String> {
             return Ok(());
         }
         CliCommand::Auth(command) => return run_auth(&command).await,
-        CliCommand::Plugins(command) => return plugins::run(command).await,
         CliCommand::Generations(command) => return provenance::run_generation(command),
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
     };
-    let bytes = plan_bytes(args.plan.as_deref())?;
+    let bytes = plan_bytes(args.plan.as_deref())
+        .map_err(|error| format!("App resolution failed: {error}"))?;
     let mut app = generation::AgentApp::start(&bytes)
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
@@ -146,7 +145,10 @@ fn parse_args() -> Result<CliCommand, String> {
         return parse_auth(&raw[1..]).map(CliCommand::Auth);
     }
     if raw.first().is_some_and(|value| value == "plugins") {
-        return plugins::parse_command(&raw[1..]).map(CliCommand::Plugins);
+        return Err(
+            "Plugin management moved to `lenso plugins`; the App is derived from `plugins/`"
+                .to_owned(),
+        );
     }
     if raw.first().is_some_and(|value| value == "generations") {
         return provenance::parse_generation_command(&raw[1..]).map(CliCommand::Generations);
@@ -234,7 +236,7 @@ fn parse_args() -> Result<CliCommand, String> {
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <plugins|generations|sessions|approvals|auth> ...\n\nEnable optional capabilities with `plugins enable`; the base App is resolved from lenso.app.json.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host defaults boot with an empty `plugins/` directory. Manage App differences with `lenso plugins`.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {

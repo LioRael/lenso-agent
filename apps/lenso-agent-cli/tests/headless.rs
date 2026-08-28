@@ -20,20 +20,23 @@ fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::pr
     command.output().unwrap()
 }
 
-fn install_text_tools_plugin(root: &Path) -> std::process::Output {
-    let bundle = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/plugins/text-tools");
-    Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(root)
-        .args([
-            "plugins",
-            "install",
-            "--bundle",
-            bundle.to_str().unwrap(),
-            "--evidence",
-            "generation-provenance-test",
-        ])
-        .output()
-        .unwrap()
+fn run_derived(root: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
+    command.current_dir(root).arg(prompt);
+    if let Some(session) = session {
+        command.args(["--session", session]);
+    }
+    command.output().unwrap()
+}
+
+fn configure_plugin(root: &Path, plugin_id: &str) {
+    configure_plugin_with(root, plugin_id, "");
+}
+
+fn configure_plugin_with(root: &Path, plugin_id: &str, configuration: &str) {
+    let directory = root.join("plugins").join(plugin_id);
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(directory.join("default.toml"), configuration).unwrap();
 }
 
 fn stored_session(root: &Path) -> serde_json::Value {
@@ -70,11 +73,11 @@ fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
 fn plan_with_limits(root: &Path, max_steps: u64, max_tool_calls: u64) -> std::path::PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
         .expect("decode canonical Plan");
-    let agent = plan["module_instances"]
+    let agent = plan["plugin_instances"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|module| module["instance_key"] == "agent")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.loop/agent")
         .unwrap();
     let mut configuration =
         serde_json::from_str::<serde_json::Value>(agent["configuration"].as_str().unwrap())
@@ -90,14 +93,14 @@ fn plan_with_limits(root: &Path, max_steps: u64, max_tool_calls: u64) -> std::pa
 fn plan_without_prompt_plugins(root: &Path) -> std::path::PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
         .expect("decode canonical Plan");
-    plan["module_instances"]
+    plan["plugin_instances"]
         .as_array_mut()
         .unwrap()
-        .retain(|module| module["instance_key"] != "summary-skill");
+        .retain(|plugin| plugin["instance_key"] != "lenso.agent.prompt.static/summary-skill");
     plan["capability_bindings"]
         .as_array_mut()
         .unwrap()
-        .retain(|binding| binding["consumer_instance"] != "prompt");
+        .retain(|binding| binding["consumer_instance"] != "lenso.agent.prompt/prompt");
     let path = root.join("plan-without-prompt-plugins.json");
     fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
     path
@@ -106,13 +109,13 @@ fn plan_without_prompt_plugins(root: &Path) -> std::path::PathBuf {
 fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
         .expect("decode canonical Plan");
-    let provider = plan["module_instances"]
+    let provider = plan["plugin_instances"]
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|module| module["instance_key"] == "summary-skill")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.prompt.static/summary-skill")
         .unwrap();
-    provider["instance_key"] = "filesystem-skills".into();
+    provider["instance_key"] = "lenso.agent.prompt.filesystem/filesystem-skills".into();
     provider["package_id"] = "lenso.agent.prompt.filesystem".into();
     provider["package_revision"] = "0.1.0".into();
     provider["configuration"] = serde_json::json!({
@@ -128,9 +131,9 @@ fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::Path
         .as_array_mut()
         .unwrap()
         .iter_mut()
-        .find(|binding| binding["provider_instance"] == "summary-skill")
+        .find(|binding| binding["provider_instance"] == "lenso.agent.prompt.static/summary-skill")
         .unwrap();
-    binding["provider_instance"] = "filesystem-skills".into();
+    binding["provider_instance"] = "lenso.agent.prompt.filesystem/filesystem-skills".into();
     let path = root.join("plan-with-filesystem-skill.json");
     fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
     path
@@ -139,13 +142,13 @@ fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::Path
 fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
         .expect("decode canonical Plan");
-    let modules = plan["module_instances"].as_array_mut().unwrap();
-    let mut provider = modules
+    let plugins = plan["plugin_instances"].as_array_mut().unwrap();
+    let mut provider = plugins
         .iter()
-        .find(|module| module["instance_key"] == "workspace-read")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.workspace-read/workspace-read")
         .unwrap()
         .clone();
-    provider["instance_key"] = "skills".into();
+    provider["instance_key"] = "lenso.agent.skills.filesystem/skills".into();
     provider["package_id"] = "lenso.agent.skills.filesystem".into();
     provider["package_revision"] = "0.2.0".into();
     provider["configuration"] = serde_json::json!({
@@ -163,16 +166,16 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
     })
     .to_string()
     .into();
-    modules.push(provider);
+    plugins.push(provider);
 
-    let prompt_capability = modules
+    let prompt_capability = plugins
         .iter()
-        .find(|module| module["instance_key"] == "summary-skill")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.prompt.static/summary-skill")
         .unwrap()["provided_capabilities"][0]
         .clone();
-    modules
+    plugins
         .iter_mut()
-        .find(|module| module["instance_key"] == "skills")
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.skills.filesystem/skills")
         .unwrap()["provided_capabilities"]
         .as_array_mut()
         .unwrap()
@@ -181,18 +184,18 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
     let bindings = plan["capability_bindings"].as_array_mut().unwrap();
     let mut binding = bindings
         .iter()
-        .find(|binding| binding["provider_instance"] == "workspace-read")
+        .find(|binding| binding["provider_instance"] == "lenso.agent.workspace-read/workspace-read")
         .unwrap()
         .clone();
-    binding["provider_instance"] = "skills".into();
+    binding["provider_instance"] = "lenso.agent.skills.filesystem/skills".into();
     binding["provider_order"] = 1.into();
     bindings.push(binding);
     let mut prompt_binding = bindings
         .iter()
-        .find(|binding| binding["provider_instance"] == "summary-skill")
+        .find(|binding| binding["provider_instance"] == "lenso.agent.prompt.static/summary-skill")
         .unwrap()
         .clone();
-    prompt_binding["provider_instance"] = "skills".into();
+    prompt_binding["provider_instance"] = "lenso.agent.skills.filesystem/skills".into();
     prompt_binding["provider_order"] = 1.into();
     bindings.push(prompt_binding);
 
@@ -295,8 +298,7 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
 fn resumed_session_closes_a_host_interrupted_turn_before_new_work() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Durable Fixture\n").unwrap();
-    let plan = plan_path();
-    let first = run(temporary.path(), &plan, "Answer directly: hello", None);
+    let first = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(first.status.success());
     let first_stderr = String::from_utf8(first.stderr).unwrap();
     let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
@@ -324,9 +326,8 @@ fn resumed_session_closes_a_host_interrupted_turn_before_new_work() {
         }));
     fs::write(&path, serde_json::to_vec(&session).unwrap()).unwrap();
 
-    let second = run(
+    let second = run_derived(
         temporary.path(),
-        &plan,
         "Answer directly: recovered",
         Some(session_id),
     );
@@ -401,18 +402,8 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
     let first_stderr = String::from_utf8(first.stderr).unwrap();
     let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
 
-    let install = install_text_tools_plugin(temporary.path());
-    assert!(
-        install.status.success(),
-        "{}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-    let second = run(
-        temporary.path(),
-        &plan,
-        "What did you answer?",
-        Some(session_id),
-    );
+    configure_plugin(temporary.path(), "lenso.agent.text-tools");
+    let second = run_derived(temporary.path(), "What did you answer?", Some(session_id));
     assert!(
         second.status.success(),
         "{}",
@@ -441,13 +432,13 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
         let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
         assert!(inspect_stdout.contains(&format!("generation: {digest}")));
         assert!(inspect_stdout.contains("app: lenso.agent.harness"));
-        assert!(inspect_stdout.contains("plugin-set: sha256:"));
+        assert!(inspect_stdout.contains("resolution-authority: sha256:"));
     }
     for digest in digests {
         let hash = digest.strip_prefix("sha256:").unwrap();
         let record = temporary
             .path()
-            .join(".lenso/plugins/generations")
+            .join(".lenso/runtime/generations")
             .join(format!("{hash}.json"));
         let bytes = fs::read(record).unwrap();
         assert_eq!(sha256_digest(&bytes), digest);
@@ -464,20 +455,10 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
 fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# GC Fixture\n").unwrap();
-    let first = run(
-        temporary.path(),
-        &plan_path(),
-        "Answer directly: hello",
-        None,
-    );
+    let first = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(first.status.success());
-    assert!(install_text_tools_plugin(temporary.path()).status.success());
-    let second = run(
-        temporary.path(),
-        &plan_path(),
-        "Answer directly: hello",
-        None,
-    );
+    configure_plugin(temporary.path(), "lenso.agent.text-tools");
+    let second = run_derived(temporary.path(), "Answer directly: hello", None);
     assert!(second.status.success());
     let digests = fs::read_dir(temporary.path().join(".lenso/sessions"))
         .unwrap()
@@ -489,12 +470,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
         .collect::<Vec<_>>();
     assert_eq!(digests.len(), 2);
 
-    let remove = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .args(["plugins", "remove", "--plugin", "example.text-tools"])
-        .output()
-        .unwrap();
-    assert!(remove.status.success());
+    fs::remove_dir_all(temporary.path().join("plugins/lenso.agent.text-tools")).unwrap();
     let empty_sessions = temporary.path().join("empty-sessions");
     fs::create_dir(&empty_sessions).unwrap();
     let before_reconcile = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
@@ -510,10 +486,9 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     assert!(before_reconcile.status.success());
     let before_reconcile_stdout = String::from_utf8(before_reconcile.stdout).unwrap();
     assert!(before_reconcile_stdout.contains("reason=controller"));
-    assert!(before_reconcile_stdout.contains("summary: protected=2 candidates=0"));
-    let reconcile = run(
+    assert!(before_reconcile_stdout.contains("summary: protected=1 candidates=1"));
+    let reconcile = run_derived(
         temporary.path(),
-        &plan_path(),
         "Answer directly: reconcile removed Plugin authority",
         None,
     );
@@ -538,7 +513,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
         stdout.contains("summary: protected=1 candidates=1"),
         "{stdout}"
     );
-    let records_before = fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
+    let records_before = fs::read_dir(temporary.path().join(".lenso/runtime/generations"))
         .unwrap()
         .count();
 
@@ -553,16 +528,12 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
             .contains("summary: protected=2 candidates=0")
     );
     assert_eq!(
-        fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
+        fs::read_dir(temporary.path().join(".lenso/runtime/generations"))
             .unwrap()
             .count(),
         records_before
     );
 
-    let recovery_directory = temporary
-        .path()
-        .join(".lenso/plugins/generation-authorities");
-    let authorities_before = fs::read_dir(&recovery_directory).unwrap().count();
     let apply = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
         .args([
@@ -582,12 +553,11 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     let apply_stdout = String::from_utf8(apply.stdout).unwrap();
     assert!(apply_stdout.contains("summary: removed-generations=1"));
     assert_eq!(
-        fs::read_dir(temporary.path().join(".lenso/plugins/generations"))
+        fs::read_dir(temporary.path().join(".lenso/runtime/generations"))
             .unwrap()
             .count(),
         records_before - 1
     );
-    assert!(fs::read_dir(&recovery_directory).unwrap().count() < authorities_before);
 
     let second_apply = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
@@ -622,7 +592,7 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     let digest = turn_generation_digests(&before).pop().unwrap();
     let record = temporary
         .path()
-        .join(".lenso/plugins/generations")
+        .join(".lenso/runtime/generations")
         .join(format!("{}.json", digest.strip_prefix("sha256:").unwrap()));
     fs::write(record, "{}").unwrap();
 
@@ -722,11 +692,9 @@ fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environmen
 fn product_runner_resolves_the_base_app_without_cargo_or_a_plan_path() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    let definition = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lenso.app.json");
 
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
-        .env("LENSO_APP_DEFINITION", definition)
         .env("CARGO", temporary.path().join("missing-cargo"))
         .arg("Answer directly: hello")
         .output()
@@ -739,7 +707,8 @@ fn product_runner_resolves_the_base_app_without_cargo_or_a_plan_path() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
     assert!(!temporary.path().join(".lenso/resolved-plan.json").exists());
-    assert!(!temporary.path().join(".lenso/plugins").exists());
+    assert!(!temporary.path().join("plugins").exists());
+    assert!(temporary.path().join(".lenso/host-catalog.json").is_file());
 }
 
 #[test]
@@ -752,8 +721,8 @@ fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--session <id>]"));
-    assert!(stdout.contains("base App is resolved from lenso.app.json"));
-    assert!(stdout.contains("Advanced: --prompt <text> and --plan <path>"));
+    assert!(stdout.contains("Host defaults boot with an empty `plugins/` directory"));
+    assert!(stdout.contains("Advanced: --prompt <text> and --plan <path> remain available"));
 }
 
 #[test]
@@ -927,26 +896,12 @@ fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
 fn workspace_edit_plugin_creates_edits_then_reads_back_one_file() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    let plan = plan_path();
-    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .args(["plugins", "enable", "workspace-edit", "--evidence"])
-        .arg("reviewed workspace mutation")
-        .arg("--plan")
-        .arg(&plan)
-        .output()
-        .unwrap();
-    assert!(
-        enable.status.success(),
-        "{}",
-        String::from_utf8_lossy(&enable.stderr)
-    );
-    let output = run(
+    configure_plugin_with(
         temporary.path(),
-        &plan,
-        "Create and edit a workspace note.",
-        None,
+        "lenso.agent.workspace-edit",
+        "root = \".\"\nmax_file_bytes = 1048576\nmax_edit_bytes = 131072\n",
     );
+    let output = run_derived(temporary.path(), "Create and edit a workspace note.", None);
     assert!(
         output.status.success(),
         "{}",
@@ -1015,36 +970,23 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
         "pub fn value() -> u32 { 1 }\n",
     )
     .unwrap();
-    let plan = plan_path();
-    let enable_process = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .args(["plugins", "enable", "local-process", "--evidence"])
-        .arg("reviewed local process execution")
-        .arg("--plan")
-        .arg(&plan)
-        .output()
-        .unwrap();
-    assert!(
-        enable_process.status.success(),
-        "{}",
-        String::from_utf8_lossy(&enable_process.stderr)
-    );
-    let enable = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .args(["plugins", "enable", "workspace-edit", "--evidence"])
-        .arg("reviewed local coding mutation")
-        .arg("--plan")
-        .arg(&plan)
-        .output()
-        .unwrap();
-    assert!(
-        enable.status.success(),
-        "{}",
-        String::from_utf8_lossy(&enable.stderr)
-    );
-    let output = run(
+    configure_plugin_with(
         temporary.path(),
-        &plan,
+        "lenso.agent.process.native",
+        "root = \".\"\nallowed_programs = [\"cargo\", \"git\", \"rg\"]\nenvironment_allowlist = [\"PATH\", \"HOME\", \"CARGO_HOME\", \"RUSTUP_HOME\", \"TMPDIR\", \"LANG\", \"LC_ALL\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process-tools",
+        "default_timeout_ms = 120000\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.workspace-edit",
+        "root = \".\"\nmax_file_bytes = 1048576\nmax_edit_bytes = 131072\n",
+    );
+    let output = run_derived(
+        temporary.path(),
         "Edit and validate the workspace project.",
         None,
     );
@@ -1302,5 +1244,5 @@ fn unavailable_durable_store_rejects_startup() {
         None,
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("App startup failed"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("App resolution failed"));
 }

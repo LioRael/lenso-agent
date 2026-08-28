@@ -184,7 +184,7 @@ The repository had 11 model-visible Tools:
 - `skills.list`, `skills.read`, `skills.list_resources`, `skills.read_resource`
 - Demonstration Tool `text.uppercase`
 
-Their definitions can be verified in [`workspace-read`](../../crates/lenso-agent-workspace-read-module/src/lib.rs), [`workspace-edit`](../../crates/lenso-agent-workspace-edit-module/src/lib.rs), [`process-tools`](../../crates/lenso-agent-process-tools-module/src/lib.rs), [`skills-filesystem`](../../crates/lenso-agent-skills-filesystem-module/src/lib.rs), and [`text-tools`](../../crates/lenso-agent-text-tools-module/src/lib.rs).
+Their definitions can be verified in [`workspace-read`](../../crates/lenso-agent-workspace-read-plugin/src/lib.rs), [`workspace-edit`](../../crates/lenso-agent-workspace-edit-plugin/src/lib.rs), [`process-tools`](../../crates/lenso-agent-process-tools-plugin/src/lib.rs), [`skills-filesystem`](../../crates/lenso-agent-skills-filesystem-plugin/src/lib.rs), and [`text-tools`](../../crates/lenso-agent-text-tools-plugin/src/lib.rs).
 
 At the start of the research, the Tool Provider contract was:
 
@@ -194,7 +194,7 @@ At the start of the research, the Tool Provider contract was:
 - Domain failure: `invalid_arguments`, `permission_denied`, `not_found`, `output_limit_exceeded`, or `execution_failed` with `reason_code/message/details_json`.
 - At startup, Tool Runtime aggregates Provider catalogs, sorts by name, and makes Resolved Plan activation fail on duplicate Tool names. Runtime routing uses exact names.
 
-These behaviors are defined by [`lenso.agent.tool-provider@1`](../../crates/lenso-capability-agent-tool-provider/src/contract.rs) and [`Tool Runtime`](../../crates/lenso-agent-tools-module/src/lib.rs).
+These behaviors are defined by [`lenso.agent.tool-provider@1`](../../crates/lenso-capability-agent-tool-provider/src/contract.rs) and [`Tool Runtime`](../../crates/lenso-agent-tools-plugin/src/lib.rs).
 
 ### What Is Already Correct
 

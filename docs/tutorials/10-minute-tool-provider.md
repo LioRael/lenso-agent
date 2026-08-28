@@ -39,22 +39,23 @@ step.
 From the Harness project:
 
 ```sh
-lenso-agent-cli plugins add \
+lenso plugins add \
   path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
-lenso-agent-cli plugins status
+lenso plugins list
 lenso-agent-cli "Use the text Plugin to uppercase Lenso plugin."
 ```
 
-Adding a newer release with the same Plugin ID updates it. The previous active
-release remains selected if validation or readiness fails.
+Adding a newer release with the same Plugin ID replaces the package directory
+only after the received bytes pass validation. The Host derives a candidate App
+from the new Plugin Root and keeps the current Generation if readiness fails.
 
 ## 5. Disable, re-enable, or remove it
 
 ```sh
-lenso-agent-cli plugins disable uppercase
-lenso-agent-cli plugins enable uppercase
-lenso-agent-cli plugins remove uppercase
+lenso plugins disable dev.example.uppercase
+lenso plugins enable dev.example.uppercase
+lenso plugins remove dev.example.uppercase
 ```
 
-Disable keeps the selected release available for re-enabling. Remove forgets
-the Plugin from this App.
+Disable keeps the Plugin package and configuration available for re-enabling.
+Remove deletes that Plugin's entry from this App's `plugins/` directory.

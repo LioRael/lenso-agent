@@ -1,8 +1,8 @@
-//! Typed authoring support for Agent Tool Provider Modules.
+//! Typed authoring support for Agent Tool Provider Plugins.
 
 pub use lenso_agent_tool_sdk_macros::tool_provider;
 
-/// Imports the Tool Provider contract alias required by generated Module glue.
+/// Imports the Tool Provider contract alias required by generated Plugin glue.
 pub mod prelude {
     pub use crate::tool_provider;
     pub use lenso_capability_agent_tool_provider as tool_provider_contract;

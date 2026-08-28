@@ -156,11 +156,11 @@ and no `RunTurnResponseKind` for a thought start/delta/completion. The gap begin
 one layer earlier: source-first Agent Model Capability v1.1 has no reasoning
 message kind (`crates/lenso-capability-agent-model/src/contract.rs` 57–83).
 The Agent Loop can therefore forward only Model text, Tool calls, and usage
-(`crates/lenso-agent-loop-module/src/lib.rs` 673–735).
+(`crates/lenso-agent-loop-plugin/src/lib.rs` 673–735).
 
 The Codex Direct Module already requests `reasoning.summary = "auto"`, but its
 SSE decoder only translates `response.output_text.delta`, function-call
-completion, and terminal usage (`crates/lenso-agent-model-openai-codex-direct-module/src/lib.rs`
+completion, and terminal usage (`crates/lenso-agent-model-openai-codex-direct-plugin/src/lib.rs`
 197–208, 515–575). Thus even a Provider response that contains a displayable
 reasoning summary is not represented in the portable Model Stream and cannot
 reach the Agent or TUI.

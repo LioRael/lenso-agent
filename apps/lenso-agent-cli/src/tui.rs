@@ -20,7 +20,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
-use lenso_agent_loop_module::RunScope;
+use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{
     Agent, RUN_TURN_OPERATION, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
 };
@@ -1927,7 +1927,7 @@ fn handle_stream_event(
 
 fn runtime_failure_message(error: lenso_kernel::RuntimeFailure) -> String {
     match error {
-        lenso_kernel::RuntimeFailure::ModuleFailure { detail } => {
+        lenso_kernel::RuntimeFailure::PluginFailure { detail } => {
             format!("Turn stopped — {detail}")
         }
         error => format!("Turn stopped — {error:?}"),
@@ -4655,7 +4655,7 @@ mod tests {
     fn runtime_failure_stays_inline_and_keeps_the_tui_available() {
         let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
         handle_stream_event(
-            Err(lenso_kernel::RuntimeFailure::ModuleFailure {
+            Err(lenso_kernel::RuntimeFailure::PluginFailure {
                 detail: "fixture failure".to_owned(),
             }),
             &mut state,
