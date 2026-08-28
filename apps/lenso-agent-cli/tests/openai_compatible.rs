@@ -13,13 +13,13 @@ use lenso_agent_cli_plugin as _;
 #[path = "../../../tests/support/mod.rs"]
 mod support;
 
-fn canonical_plan_path() -> PathBuf {
-    support::plan("openai-compatible")
+fn canonical_plan_path(home: &Path) -> PathBuf {
+    support::plan_for_home("openai-compatible", home)
 }
 
 fn test_plan(root: &Path, base_url: &str) -> PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(
-        &fs::read(canonical_plan_path()).expect("read canonical OpenAI Plan"),
+        &fs::read(canonical_plan_path(root)).expect("read canonical OpenAI Plan"),
     )
     .expect("decode canonical OpenAI Plan");
     let model = plan["plugin_instances"]
@@ -49,6 +49,7 @@ fn openai_model_streams_tool_call_and_resumes_through_real_http() {
     let plan = test_plan(temporary.path(), &base_url);
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
         .env("OPENAI_API_KEY", "integration-secret")
         .args(["--plan", plan.to_str().unwrap()])
         .args(["--prompt", "Summarize the README."])
@@ -108,6 +109,7 @@ fn missing_openai_credential_rejects_app_startup() {
     let plan = test_plan(temporary.path(), "http://127.0.0.1:1/v1");
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
         .env_remove("OPENAI_API_KEY")
         .args(["--plan", plan.to_str().unwrap()])
         .args(["--prompt", "Summarize the README."])

@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::Path};
 
 use lenso_app_plan::authoring::{PluginInstanceId, PluginRootInstance, PluginRootSnapshot};
 
@@ -32,13 +32,13 @@ impl SelectedProfile {
     }
 }
 
-pub(crate) fn directory() -> PathBuf {
-    PathBuf::from("profiles")
-}
-
-pub(crate) fn select(name: &str, root: &PluginRootSnapshot) -> Result<SelectedProfile, String> {
+pub(crate) fn select(
+    name: &str,
+    root: &PluginRootSnapshot,
+    profile_directory: &Path,
+) -> Result<SelectedProfile, String> {
     validate_profile_name(name)?;
-    let path = directory().join(format!("{name}.toml"));
+    let path = profile_directory.join(format!("{name}.toml"));
     let metadata = fs::metadata(&path).map_err(|error| {
         format!(
             "failed to inspect Agent Profile {}: {error}",

@@ -19,13 +19,13 @@ struct CapturedRequest {
     body: serde_json::Value,
 }
 
-fn canonical_plan_path() -> PathBuf {
-    support::plan("openai-codex-direct")
+fn canonical_plan_path(home: &Path) -> PathBuf {
+    support::plan_for_home("openai-codex-direct", home)
 }
 
 fn test_plan(root: &Path, base_url: &str, credential_file: &Path) -> PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(
-        &fs::read(canonical_plan_path()).expect("read canonical direct Codex Plan"),
+        &fs::read(canonical_plan_path(root)).expect("read canonical direct Codex Plan"),
     )
     .expect("decode canonical direct Codex Plan");
     let plugins = plan["plugin_instances"]
@@ -92,6 +92,7 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
     let plan = test_plan(temporary.path(), &base_url, &credential);
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
         .args(["--plan", plan.to_str().unwrap()])
         .args(["--prompt", "Summarize the README."])
         .output()
@@ -161,6 +162,7 @@ fn missing_direct_credential_rejects_the_turn_without_starting_http() {
     let plan = test_plan(temporary.path(), "http://127.0.0.1:1", &missing);
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
         .args(["--plan", plan.to_str().unwrap()])
         .args(["--prompt", "Summarize the README."])
         .output()

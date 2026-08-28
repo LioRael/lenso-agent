@@ -3,6 +3,38 @@
 A terminal-first Agent that starts with a small base App and gains optional
 behavior through Plugins.
 
+## Agent Home and Workspace
+
+The installed Agent keeps its configuration and durable state in one global
+Agent Home:
+
+```text
+~/.lenso/agent/
+  plugins/
+  profiles/
+  runtime/
+  sessions.sqlite3
+  memory.sqlite3
+  channels.toml
+  auth.json
+```
+
+Set `LENSO_AGENT_HOME` to an absolute path to use another Home. The process
+current directory remains the Workspace seen by the Agent's Workspace,
+Process, Git, and suggestion Tools. Moving between repositories therefore does
+not change the Agent's Plugin selection, profiles, Session history, or runtime
+lineage.
+
+Generic App-management commands currently operate on their current directory,
+so run them from the Agent Home:
+
+```sh
+mkdir -p ~/.lenso/agent
+cd ~/.lenso/agent
+lenso plugins list
+lenso app show
+```
+
 ## Run it
 
 Authenticate once before the first Turn. The default App uses the direct Codex
@@ -41,7 +73,7 @@ interactive: the same Tool returns
 `interaction_unavailable` immediately unless that surface supplies a User
 Interaction Adapter.
 
-Up to 32 `lenso-agent` TUI processes may run concurrently in the same project.
+Up to 32 `lenso-agent` TUI processes may run concurrently in the same Agent Home.
 Each process atomically claims an independent recoverable Controller slot, so
 different sessions and profiles retain Generation fencing without contending
 for one global TUI lock.
@@ -53,7 +85,7 @@ allowlist:
 LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
   cargo run -p lenso-agent-web -- \
   --listen 127.0.0.1:8788 \
-  --tool-policy .lenso/console-agent-tool-policy.json
+  --tool-policy ~/.lenso/agent/console-agent-tool-policy.json
 ```
 
 The control route accepts only the matching bearer token. Updates validate
@@ -64,23 +96,23 @@ before activation, and affect only Turns admitted after the update.
 
 A Profile selects an exact subset of configured Plugin Instances for one Agent
 Session. It does not contain Plugin configuration or introduce another App
-manifest. Keep every configuration beside its Plugin:
+manifest. Keep every configuration beside its Plugin in the Agent Home:
 
 ```text
-plugins/
+~/.lenso/agent/plugins/
   example.code-tools/
     code.toml
   example.game-loop/
     game.toml
   lenso.agent.model.openai-compatible/
     game.toml
-profiles/
+~/.lenso/agent/profiles/
   code.toml
   game.toml
 ```
 
-For example, `profiles/game.toml` can select a different Agent Loop, Tool set,
-and configured Model Instance:
+For example, `~/.lenso/agent/profiles/game.toml` can select a different Agent
+Loop, Tool set, and configured Model Instance:
 
 ```toml
 description = "Game agent"
@@ -106,14 +138,14 @@ Session-provenance authority. Editing the selected Profile or its Plugin files
 goes through the same online Ready Gate as any other Plugin change.
 
 The default Session Adapter stores transactional local history in
-`.lenso/sessions.sqlite3`.
+`~/.lenso/agent/sessions.sqlite3`.
 
 To use the transparent file Adapter instead, configure it through the same
 Plugin directory:
 
 ```toml
 # plugins/lenso.agent.session.file/local.toml
-directory = ".lenso/sessions"
+directory = "/absolute/path/to/.lenso/agent/sessions"
 ```
 
 Then select it from a Profile; it replaces the default SQLite Session slot:
@@ -126,8 +158,8 @@ instances = ["lenso.agent.session.file/local"]
 
 Inspect its Generation provenance with
 `lenso-agent-cli sessions provenance --session <id>`. Pass
-`--directory .lenso/sessions` when inspecting an explicitly selected file
-store.
+`--directory /absolute/path/to/.lenso/agent/sessions` when inspecting an
+explicitly selected file store.
 
 Long Sessions use the replaceable Context Compaction seam instead of silently
 dropping old history. The bundled offline Adapter stores a bounded extractive
@@ -161,7 +193,7 @@ with FTS5. Configure its Instance under the standard Plugin directory:
 
 ```toml
 # plugins/lenso.agent.memory.sqlite/memory.toml
-database = ".lenso/memory/code.sqlite3"
+database = "/absolute/path/to/.lenso/agent/code-memory.sqlite3"
 scope = "code"
 max_records = 10000
 max_item_characters = 16384
@@ -387,7 +419,7 @@ bindings.
 
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed Session, Turn-start, and terminal Turn events to
-`.lenso/lifecycle/events.jsonl`. A trusted command
+`~/.lenso/agent/lifecycle/events.jsonl`. A trusted command
 Adapter can be added without changing the Agent Loop:
 
 ```toml
@@ -402,10 +434,12 @@ timeout or non-zero exit rejects the transition.
 
 ## Choose Plugins
 
-The Host boots its read-only defaults when `plugins/` is absent or empty. App
-differences use one directory per Plugin and one TOML file per Instance:
+The Host boots its read-only defaults when the Agent Home's `plugins/` is absent
+or empty. App differences use one directory per Plugin and one TOML file per
+Instance. Run the generic management CLI from that Home:
 
 ```sh
+cd ~/.lenso/agent
 lenso plugins list
 lenso plugins configure lenso.agent.workspace-edit
 
@@ -416,7 +450,7 @@ lenso plugins disable lenso.agent.workspace-edit
 lenso plugins enable lenso.agent.workspace-edit
 ```
 
-The visible state is ordinary files:
+The visible state is ordinary files below `~/.lenso/agent/`:
 
 ```text
 plugins/
@@ -501,7 +535,8 @@ Copy the reviewed configuration, select exact chat or channel allowlists, and
 keep tokens in environment variables:
 
 ```sh
-cp lenso.channels.example.toml lenso.channels.toml
+mkdir -p ~/.lenso/agent
+cp lenso.channels.example.toml ~/.lenso/agent/channels.toml
 export TELEGRAM_BOT_TOKEN='<bot-token>'
 export DISCORD_BOT_TOKEN='<bot-token>'
 cargo run -p lenso-agent-channel

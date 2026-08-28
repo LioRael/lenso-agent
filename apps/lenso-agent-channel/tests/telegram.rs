@@ -17,11 +17,12 @@ mod support;
 fn telegram_updates_run_real_agent_turns_and_resume_one_durable_session() {
     let temporary = tempfile::tempdir().unwrap();
     let state = temporary.path().join("telegram-state.json");
-    let plan = support::plan("base");
+    let plan = support::plan_for_home("base", temporary.path());
 
     let (api_base, server) = spawn_telegram_server(11, 7, "Answer directly: hello");
     let first = Command::new(env!("CARGO_BIN_EXE_lenso-agent-telegram"))
         .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
         .env("TELEGRAM_BOT_TOKEN", "integration-secret-token")
         .env("LENSO_TELEGRAM_API_BASE", api_base)
         .args(["--plan", plan.to_str().unwrap()])
@@ -44,6 +45,7 @@ fn telegram_updates_run_real_agent_turns_and_resume_one_durable_session() {
     let (api_base, server) = spawn_telegram_server(12, 8, "Answer directly: again");
     let second = Command::new(env!("CARGO_BIN_EXE_lenso-agent-telegram"))
         .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
         .env("TELEGRAM_BOT_TOKEN", "integration-secret-token")
         .env("LENSO_TELEGRAM_API_BASE", api_base)
         .args(["--plan", plan.to_str().unwrap()])
@@ -73,7 +75,7 @@ fn telegram_updates_run_real_agent_turns_and_resume_one_durable_session() {
             .is_some_and(|session_id| !session_id.is_empty())
     );
     let sessions = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(
-        temporary.path().join(".lenso/sessions.sqlite3"),
+        temporary.path().join("sessions.sqlite3"),
     )
     .inspect_all()
     .unwrap();

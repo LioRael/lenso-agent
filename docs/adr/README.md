@@ -52,3 +52,4 @@
 - [0050 — Compose MCP Tools through a client Plugin](0050-compose-mcp-tools-through-a-client-plugin.md)
 - [0051 — Compose MCP Prompts and Resources as Context Sources](0051-compose-mcp-prompts-and-resources-as-context-sources.md)
 - [0052 — Coordinate MCP request continuations in the client Plugin](0052-coordinate-mcp-request-continuations.md)
+- [0054 — Separate the global Agent Home from the Workspace](0054-separate-global-agent-home-from-workspace.md)

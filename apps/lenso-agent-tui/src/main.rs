@@ -26,7 +26,7 @@ struct Args {
     #[arg(long, value_name = "ID")]
     session: Option<String>,
 
-    /// Select `profiles/<name>.toml` for this Session.
+    /// Select `<agent-home>/profiles/<name>.toml` for this Session.
     #[arg(long, value_name = "NAME", conflicts_with = "plan")]
     profile: Option<String>,
 

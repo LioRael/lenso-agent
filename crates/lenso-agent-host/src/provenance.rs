@@ -14,6 +14,7 @@ use lenso_agent_session_sqlite_plugin::{SqliteSessionImporter, SqliteSessionInsp
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
 
 use crate::{
+    AgentDirectories,
     authority::AuthorityCoordinator,
     generation::live_controller_generation_digests,
     generation_authority::{
@@ -75,9 +76,10 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     let [command, rest @ ..] = arguments else {
         return Err(generation_usage());
     };
-    let mut root = PathBuf::from(".lenso/runtime");
-    let mut sessions = PathBuf::from(".lenso/sessions");
-    let mut session_database = Some(PathBuf::from(".lenso/sessions.sqlite3"));
+    let directories = AgentDirectories::resolve()?;
+    let mut root = directories.runtime();
+    let mut sessions = directories.sessions();
+    let mut session_database = Some(directories.session_database());
     let mut session_database_explicit = false;
     let mut sessions_explicit = false;
     let mut digest = None;
@@ -139,11 +141,12 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
         return parse_session_migration(rest);
     }
     let mut session_id = None;
-    let mut directory = PathBuf::from(".lenso/sessions");
-    let mut database = Some(PathBuf::from(".lenso/sessions.sqlite3"));
+    let directories = AgentDirectories::resolve()?;
+    let mut directory = directories.sessions();
+    let mut database = Some(directories.session_database());
     let mut database_explicit = false;
     let mut directory_explicit = false;
-    let mut runtime_root = PathBuf::from(".lenso/runtime");
+    let mut runtime_root = directories.runtime();
     let mut runtime_root_explicit = false;
     let mut archive = None;
     let mut arguments = rest.iter();

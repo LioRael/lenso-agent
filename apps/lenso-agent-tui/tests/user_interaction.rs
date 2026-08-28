@@ -12,15 +12,21 @@ mod support;
 
 #[tokio::test(flavor = "current_thread")]
 async fn tui_answers_ask_user_through_the_same_generation() {
+    let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
         .run_until(async {
             let host = AgentHost::builder()
+                .agent_home(temporary.path())
+                .unwrap()
                 .plugins(default_plugins::link)
                 .surface(TuiSurface::terminal())
                 .build()
                 .unwrap();
             let mut app = host
-                .run(Profile::resolved_plan(support::plan("base")))
+                .run(Profile::resolved_plan(support::plan_for_home(
+                    "base",
+                    temporary.path(),
+                )))
                 .await
                 .unwrap();
             let lease = app.lease_tui_turn().await.unwrap();

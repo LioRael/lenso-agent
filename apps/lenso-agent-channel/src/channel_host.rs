@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use lenso_agent_host::AgentDirectories;
 use serde::Deserialize;
 
 use crate::{
@@ -36,8 +37,8 @@ struct TelegramConfig {
     allowed_tools: Vec<String>,
     #[serde(default)]
     respond_all_groups: bool,
-    #[serde(default = "default_telegram_state")]
-    state: PathBuf,
+    #[serde(default)]
+    state: Option<PathBuf>,
     #[serde(default = "default_poll_timeout")]
     poll_timeout_seconds: u64,
 }
@@ -54,8 +55,8 @@ struct DiscordConfig {
     respond_all_guilds: bool,
     #[serde(default)]
     message_content_intent: bool,
-    #[serde(default = "default_discord_state")]
-    state: PathBuf,
+    #[serde(default)]
+    state: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -73,6 +74,7 @@ impl ChannelHostConfig {
     }
 
     pub fn resolve(self) -> Result<ChannelOptions, String> {
+        let directories = AgentDirectories::resolve()?;
         if self.schema_version != CONFIG_SCHEMA_VERSION {
             return Err(format!(
                 "unsupported Channel configuration schema version {}; expected {CONFIG_SCHEMA_VERSION}",
@@ -85,21 +87,29 @@ impl ChannelHostConfig {
         let turn_gate = TurnGate::new(self.queue_capacity)?;
         let telegram = self
             .telegram
-            .map(|config| config.resolve(turn_gate.clone()))
+            .map(|config| config.resolve(turn_gate.clone(), &directories))
             .transpose()?;
         let discord = self
             .discord
-            .map(|config| config.resolve(turn_gate))
+            .map(|config| config.resolve(turn_gate, &directories))
             .transpose()?;
         Ok(ChannelOptions { telegram, discord })
     }
 }
 
 impl TelegramConfig {
-    fn resolve(self, turn_gate: TurnGate) -> Result<TelegramOptions, String> {
+    fn resolve(
+        self,
+        turn_gate: TurnGate,
+        directories: &AgentDirectories,
+    ) -> Result<TelegramOptions, String> {
         let token = read_token("Telegram", &self.token_env)?;
         let allowed_chats = ChatAllowlist::parse(&self.allowed_chats)?;
-        let mut options = TelegramOptions::new(token, allowed_chats, self.state);
+        let mut options = TelegramOptions::new(
+            token,
+            allowed_chats,
+            self.state.unwrap_or_else(|| directories.telegram_state()),
+        );
         options.allowed_tools = self.allowed_tools;
         options.respond_all_groups = self.respond_all_groups;
         options.poll_timeout_seconds = self.poll_timeout_seconds;
@@ -109,7 +119,11 @@ impl TelegramConfig {
 }
 
 impl DiscordConfig {
-    fn resolve(self, turn_gate: TurnGate) -> Result<DiscordOptions, String> {
+    fn resolve(
+        self,
+        turn_gate: TurnGate,
+        directories: &AgentDirectories,
+    ) -> Result<DiscordOptions, String> {
         if self.respond_all_guilds && !self.message_content_intent {
             return Err(
                 "Discord `respond_all_guilds` requires `message_content_intent = true`".to_owned(),
@@ -117,7 +131,11 @@ impl DiscordConfig {
         }
         let token = read_token("Discord", &self.token_env)?;
         let allowed_channels = ChannelAllowlist::parse(&self.allowed_channels)?;
-        let mut options = DiscordOptions::new(token, allowed_channels, self.state);
+        let mut options = DiscordOptions::new(
+            token,
+            allowed_channels,
+            self.state.unwrap_or_else(|| directories.discord_state()),
+        );
         options.allowed_tools = self.allowed_tools;
         options.respond_all_guilds = self.respond_all_guilds;
         options.message_content_intent = self.message_content_intent;
@@ -146,14 +164,6 @@ fn default_telegram_token_env() -> String {
 
 fn default_discord_token_env() -> String {
     "DISCORD_BOT_TOKEN".to_owned()
-}
-
-fn default_telegram_state() -> PathBuf {
-    PathBuf::from(".lenso/telegram/state.json")
-}
-
-fn default_discord_state() -> PathBuf {
-    PathBuf::from(".lenso/discord/state.json")
 }
 
 const fn default_poll_timeout() -> u64 {

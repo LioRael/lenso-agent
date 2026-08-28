@@ -19,7 +19,7 @@ mod support;
 fn discord_messages_run_real_agent_turns_and_resume_gateway_and_session() {
     let temporary = tempfile::tempdir().unwrap();
     let state = temporary.path().join("discord-state.json");
-    let plan = support::plan("base");
+    let plan = support::plan_for_home("base", temporary.path());
     let (gateway_url, gateway) = spawn_discord_gateway();
     let (api_base, api) = spawn_discord_api();
 
@@ -84,7 +84,7 @@ fn discord_messages_run_real_agent_turns_and_resume_gateway_and_session() {
         );
     }
     let sessions = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(
-        temporary.path().join(".lenso/sessions.sqlite3"),
+        temporary.path().join("sessions.sqlite3"),
     )
     .inspect_all()
     .unwrap();
@@ -109,6 +109,7 @@ fn run_discord(
 ) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_lenso-agent-discord"))
         .current_dir(directory)
+        .env("LENSO_AGENT_HOME", directory)
         .env("DISCORD_BOT_TOKEN", "integration-secret-token")
         .env("LENSO_DISCORD_GATEWAY_URL", gateway_url)
         .env("LENSO_DISCORD_API_BASE", api_base)
