@@ -40,6 +40,7 @@ async fn streams_lists_and_branches_a_durable_session() {
             .iter()
             .any(|tool| tool["name"] == "read")
     );
+    assert_eq!(bootstrap["trajectory"], "lenso.agent.trajectory@1");
 
     let response = client
         .post(format!("http://{address}/api/console/v1/agent/turns"))
@@ -81,6 +82,30 @@ async fn streams_lists_and_branches_a_durable_session() {
             .iter()
             .any(|event| event["kind"] == "turn_completed")
     );
+    let trajectory = client
+        .get(format!(
+            "http://{address}/api/console/v1/agent/sessions/{session_id}/trajectory"
+        ))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(trajectory["schema"], "lenso.agent.trajectory@1");
+    assert_eq!(trajectory["summary"]["turns"], 1);
+    assert_eq!(trajectory["summary"]["modelCalls"], 1);
+    let model = trajectory["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|record| record["kind"] == "model")
+        .unwrap();
+    assert_eq!(model["status"], "completed");
+    assert!(model["durationMs"].is_number());
+    assert_eq!(model["sourceEventIds"].as_array().unwrap().len(), 2);
     verify_history_and_branch(&client, address, &session_id, &session).await;
 }
 

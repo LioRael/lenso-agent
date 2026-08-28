@@ -17,6 +17,9 @@ use axum::{
 use clap::{ArgAction, Parser};
 use lenso_agent_host::{AgentHost, Profile, WebSurface, generation::AgentApp};
 use lenso_agent_loop_plugin::RunScope;
+use lenso_agent_session_inspection::{
+    InspectedSession, InspectedSessionEvent, Trajectory, project_trajectory,
+};
 use lenso_agent_web_plugin as _;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
 use lenso_capability_agent_session::{
@@ -81,6 +84,10 @@ enum RuntimeCommand {
     },
     ReadSession {
         reply: oneshot::Sender<Result<ReadSessionResponse, String>>,
+        session_id: String,
+    },
+    ReadTrajectory {
+        reply: oneshot::Sender<Result<Trajectory, String>>,
         session_id: String,
     },
     RunTurn {
@@ -311,6 +318,10 @@ fn router(runtime: WebRuntime) -> Router {
             "/api/console/v1/agent/sessions/{session_id}",
             get(read_session),
         )
+        .route(
+            "/api/console/v1/agent/sessions/{session_id}/trajectory",
+            get(read_trajectory),
+        )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(runtime)
 }
@@ -334,7 +345,7 @@ async fn bootstrap(
             allowed: policy.allowed,
             available: runtime.available_tools,
         },
-        trajectory: "summary",
+        trajectory: Trajectory::SCHEMA,
     }))
 }
 
@@ -403,6 +414,26 @@ async fn read_session(
     runtime
         .commands
         .send(RuntimeCommand::ReadSession { reply, session_id })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn read_trajectory(
+    State(runtime): State<WebRuntime>,
+    Path(session_id): Path<String>,
+) -> Result<Json<Trajectory>, ApiProblem> {
+    if !valid_session_id(&session_id) {
+        return Err(ApiProblem::bad_request("Session ID is invalid"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ReadTrajectory { reply, session_id })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -593,6 +624,10 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
         == 0
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the actor keeps every serialized runtime command in one auditable dispatch loop"
+)]
 async fn runtime_actor(
     mut app: AgentApp,
     mut commands: mpsc::Receiver<RuntimeCommand>,
@@ -618,6 +653,12 @@ async fn runtime_actor(
             }
             RuntimeCommand::ReadSession { reply, session_id } => {
                 let result = read_session_from_app(&app, session_id).await;
+                let _ = reply.send(result);
+            }
+            RuntimeCommand::ReadTrajectory { reply, session_id } => {
+                let result = read_session_from_app(&app, session_id)
+                    .await
+                    .and_then(|session| project_web_trajectory(&session));
                 let _ = reply.send(result);
             }
             RuntimeCommand::RunTurn { events, request } => {
@@ -816,6 +857,61 @@ async fn read_session_from_app(
 ) -> Result<ReadSessionResponse, String> {
     let turn = app.lease_web_turn().await?;
     turn.read_session(session_id, 0, 1000).await
+}
+
+fn project_web_trajectory(session: &ReadSessionResponse) -> Result<Trajectory, String> {
+    let revision = session
+        .revision
+        .parse::<u64>()
+        .map_err(|_| "Agent Session revision is invalid".to_owned())?;
+    let inspected = InspectedSession {
+        session_id: session.session_id.clone(),
+        revision,
+        events: session
+            .events
+            .iter()
+            .map(|event| {
+                Ok(InspectedSessionEvent {
+                    revision: event
+                        .revision
+                        .parse::<u64>()
+                        .map_err(|_| "Agent Session event revision is invalid".to_owned())?,
+                    event_id: event.event_id.clone(),
+                    kind: session_event_kind_name(&event.kind).to_owned(),
+                    turn_id: event.turn_id.clone(),
+                    occurred_at: event.occurred_at.clone(),
+                    payload_json: event.payload_json.as_ref().to_owned(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    };
+    project_trajectory(&inspected)
+}
+
+fn session_event_kind_name(kind: &ReadSessionResponseEventsItemKind) -> &'static str {
+    match kind {
+        ReadSessionResponseEventsItemKind::SessionCreated => "session_created",
+        ReadSessionResponseEventsItemKind::SystemInstructionInstalled => {
+            "system_instruction_installed"
+        }
+        ReadSessionResponseEventsItemKind::ContextCompactionStarted => "context_compaction_started",
+        ReadSessionResponseEventsItemKind::ContextCompactionCommitted => {
+            "context_compaction_committed"
+        }
+        ReadSessionResponseEventsItemKind::ContextCompactionFailed => "context_compaction_failed",
+        ReadSessionResponseEventsItemKind::MemoryRecalled => "memory_recalled",
+        ReadSessionResponseEventsItemKind::MemoryRecallFailed => "memory_recall_failed",
+        ReadSessionResponseEventsItemKind::MemoryCommitted => "memory_committed",
+        ReadSessionResponseEventsItemKind::MemoryCommitFailed => "memory_commit_failed",
+        ReadSessionResponseEventsItemKind::TurnStarted => "turn_started",
+        ReadSessionResponseEventsItemKind::ModelRequested => "model_requested",
+        ReadSessionResponseEventsItemKind::ModelOutput => "model_output",
+        ReadSessionResponseEventsItemKind::ToolRequested => "tool_requested",
+        ReadSessionResponseEventsItemKind::ToolResult => "tool_result",
+        ReadSessionResponseEventsItemKind::TurnCompleted => "turn_completed",
+        ReadSessionResponseEventsItemKind::TurnFailed => "turn_failed",
+        ReadSessionResponseEventsItemKind::TurnCancelled => "turn_cancelled",
+    }
 }
 
 async fn list_sessions_from_app(app: &AgentApp) -> Result<WebSessionList, String> {

@@ -2741,6 +2741,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "time",
 ]
 
 [[package]]
@@ -2946,6 +2947,7 @@ dependencies = [
  "lenso-agent-default-plugins",
  "lenso-agent-host",
  "lenso-agent-loop-plugin",
+ "lenso-agent-session-inspection",
  "lenso-agent-web-plugin",
  "lenso-capability-agent",
  "lenso-capability-agent-session",
