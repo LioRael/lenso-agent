@@ -1791,6 +1791,7 @@ dependencies = [
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-code-mode-tools-plugin",
  "lenso-agent-context-compaction-plugin",
+ "lenso-agent-git-tools-plugin",
  "lenso-agent-http-fetch-plugin",
  "lenso-agent-lifecycle-audit-plugin",
  "lenso-agent-lifecycle-command-plugin",
@@ -1824,6 +1825,19 @@ version = "0.1.0"
 dependencies = [
  "lenso",
  "lenso-capability-agent",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-git-tools-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-process",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "serde",
  "serde_json",
 ]
 

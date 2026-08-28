@@ -1,0 +1,25 @@
+[package]
+name = "lenso-agent-git-tools-plugin"
+version = "0.1.0"
+description = "Bounded semantic Git tools for Lenso Agent Harness profiles."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.git-tools"
+root-slot = "tool-providers"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

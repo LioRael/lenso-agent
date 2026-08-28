@@ -140,6 +140,43 @@ per-Profile policy without a central App file. Recalled text is always
 lower-authority request context; it never edits the Session's System
 Instruction.
 
+Git support is an opt-in semantic Tool Plugin rather than unrestricted command
+access. Configure it beside the Process provider that authorizes `git`:
+
+```toml
+# plugins/lenso.agent.process.native/default.toml
+root = "."
+allowed_programs = ["git"]
+environment_allowlist = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]
+max_timeout_ms = 600000
+max_output_bytes = 262144
+max_argument_bytes = 131072
+```
+
+```toml
+# plugins/lenso.agent.git-tools/default.toml
+default_timeout_ms = 30000
+max_log_entries = 50
+max_commit_message_bytes = 4096
+```
+
+Then select both Instances for the coding experience:
+
+```toml
+# profiles/code.toml
+description = "Code agent with bounded Git tools"
+instances = [
+  "lenso.agent.process.native/default",
+  "lenso.agent.git-tools/default",
+]
+```
+
+This adds `git_status`, `git_diff`, `git_log`, `git_stage`, and `git_commit`.
+Staging requires explicit repository-relative paths; commit includes only
+already staged changes and intentionally disables hooks and signing. Destructive
+history operations and network operations are not exposed. Add an Approval Hook
+to the same Profile when `git_stage` and `git_commit` should use approve-then-retry.
+
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed `session_started`, `session_resumed`, and
 `turn_started` events to `.lenso/lifecycle/events.jsonl`. A trusted command

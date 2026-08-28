@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default_timeout_ms", "max_log_entries", "max_commit_message_bytes"],
+  "properties": {
+    "default_timeout_ms": { "type": "integer" },
+    "max_log_entries": { "type": "integer" },
+    "max_commit_message_bytes": { "type": "integer" }
+  }
+}
