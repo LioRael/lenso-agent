@@ -1092,6 +1092,27 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
 }
 
 #[test]
+fn headless_ask_user_fails_immediately_instead_of_waiting_for_a_timeout() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let started = std::time::Instant::now();
+    let output = run(
+        temporary.path(),
+        &plan_path(),
+        "Ask me which mode to use.",
+        None,
+    );
+
+    assert!(!output.status.success());
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("interaction_unavailable"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();

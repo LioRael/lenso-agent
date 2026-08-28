@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["interactions"],
+  "properties": {
+    "interactions": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/PendingInteraction"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "PendingInteraction": {
+      "type": "object",
+      "required": ["interaction_id", "prompt", "options", "allow_freeform"],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string"
+          }
+        },
+        "allow_freeform": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "PendingResponse"
+}

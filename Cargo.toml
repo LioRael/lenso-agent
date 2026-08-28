@@ -20,6 +20,7 @@ members = [
     "crates/lenso-capability-agent-tools",
     "crates/lenso-capability-agent-tool-provider",
     "crates/lenso-capability-agent-tool-progress",
+    "crates/lenso-capability-agent-user-interaction",
     "crates/lenso-capability-agent-session",
     "crates/lenso-capability-agent-tui-contribution",
     "crates/lenso-capability-agent-tui-suggestion",
@@ -58,6 +59,8 @@ members = [
     "crates/lenso-agent-discord-plugin",
     "crates/lenso-agent-tui-command-suggestions-plugin",
     "crates/lenso-agent-tui-workspace-suggestions-plugin",
+    "crates/lenso-agent-user-interaction-local-plugin",
+    "crates/lenso-agent-ask-user-tools-plugin",
 ]
 
 [workspace.package]

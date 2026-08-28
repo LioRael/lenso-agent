@@ -112,6 +112,9 @@ impl FixtureModel {
         if current_user == "Use the text Plugin to uppercase Lenso plugin." {
             return text_plugin_response(request, &tool_results);
         }
+        if current_user == "Ask me which mode to use." {
+            return ask_user_response(request, &tool_results);
+        }
         if current_user == "Use the workspace Plugin to read README.md." {
             return workspace_plugin_response(request, &tool_results);
         }
@@ -148,6 +151,36 @@ impl FixtureModel {
             return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
         }
         Ok(tool_request(1))
+    }
+}
+
+fn ask_user_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "ask_user") {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-ask-user",
+            "ask_user",
+            r#"{"question":"Which mode should I use?","options":["safe","fast"],"allow_freeform":false}"#,
+        )),
+        [result] => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                format!("Selected mode: {}", result.content),
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response("2", CompleteMessageKind::Usage, "", "", "", "{}", "16", "4"),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }
 
@@ -460,7 +493,8 @@ fn readonly_skill_tool_profile(request: &CompleteOpen) -> bool {
     request.tools.iter().all(|tool| {
         matches!(
             tool.name.as_str(),
-            "list"
+            "ask_user"
+                | "list"
                 | "search"
                 | "read"
                 | "skill_list"

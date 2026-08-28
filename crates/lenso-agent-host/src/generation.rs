@@ -11,6 +11,7 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
@@ -37,9 +38,15 @@ use lenso_capability_agent_tui_suggestion::{
     SnapshotRequest as SuggestionSnapshotRequest, Suggestion, TuiSuggestion,
     validate_snapshot_suggestions,
 };
+use lenso_capability_agent_user_interaction::{
+    ANSWER_OPERATION, AnswerRequest, CAPABILITY_ID as USER_INTERACTION_CAPABILITY_ID,
+    InteractiveSurface, PENDING_OPERATION, PendingInteraction, PendingRequest,
+    UserInteractionAnswer, UserInteractionJsonCodec, UserInteractionPending,
+};
 use lenso_capability_agent_workspace_read::WorkspaceReadJsonCodec;
 use lenso_kernel::{
-    CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeStreamHandle,
+    CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeRequestHandle,
+    NativeStreamHandle,
 };
 use lenso_native_adapter::NativePluginRegistry;
 use lenso_plugin_control_plane::{
@@ -446,7 +453,39 @@ impl AgentApp {
                 .stream_handle::<Agent>(consumer_instance)
                 .map_err(|error| format!("leased Generation has no Agent route: {error:?}"))?,
         );
-        Ok(TurnGeneration { route, handle })
+        let interactive = route
+            .target()
+            .dependencies(consumer_instance)
+            .map_err(|error| format!("leased Generation has no Surface route: {error:?}"))?
+            .bindings()
+            .iter()
+            .any(|binding| binding.capability_id() == USER_INTERACTION_CAPABILITY_ID);
+        let interaction = if interactive {
+            let pending = route
+                .target()
+                .handle::<UserInteractionPending>(consumer_instance)
+                .map_err(|error| {
+                    format!("leased Generation has no User Interaction pending route: {error:?}")
+                })?;
+            let answer = route
+                .target()
+                .handle::<UserInteractionAnswer>(consumer_instance)
+                .map_err(|error| {
+                    format!("leased Generation has no User Interaction answer route: {error:?}")
+                })?;
+            Some(UserInteractionSurfaceHandles {
+                pending: Rc::new(pending),
+                answer: Rc::new(answer),
+            })
+        } else {
+            None
+        };
+        Ok(TurnGeneration {
+            route,
+            handle,
+            interaction,
+            interactive,
+        })
     }
 
     /// Snapshots every TUI panel provider in deterministic resolved order.
@@ -998,6 +1037,14 @@ fn validate_tui_suggestions(suggestions: &[Suggestion]) -> Result<(), String> {
 pub struct TurnGeneration {
     route: DurableGenerationRoute<NativeApp>,
     handle: Rc<NativeStreamHandle<Agent>>,
+    interaction: Option<UserInteractionSurfaceHandles>,
+    interactive: bool,
+}
+
+#[derive(Debug)]
+struct UserInteractionSurfaceHandles {
+    pending: Rc<NativeRequestHandle<UserInteractionPending>>,
+    answer: Rc<NativeRequestHandle<UserInteractionAnswer>>,
 }
 
 impl TurnGeneration {
@@ -1021,12 +1068,62 @@ impl TurnGeneration {
                 Err(current) => request_id = current,
             }
         }
-        InvocationContext::new(request_id, None, CancellationToken::new())
+        let context = InvocationContext::new(request_id, None, CancellationToken::new())
             .with_extension(
                 GENERATION_SPEC_DIGEST_EXTENSION,
                 self.generation_spec_digest().as_bytes().to_vec(),
             )
-            .map_err(|error| format!("failed to attach Generation provenance: {error}"))
+            .map_err(|error| format!("failed to attach Generation provenance: {error}"))?;
+        if self.interactive {
+            context
+                .with_typed_extension(&InteractiveSurface)
+                .map_err(|error| format!("failed to attach interactive Surface scope: {error}"))
+        } else {
+            Ok(context)
+        }
+    }
+
+    pub async fn pending_interactions(&self) -> Result<Vec<PendingInteraction>, String> {
+        let interaction = self
+            .interaction
+            .as_ref()
+            .ok_or_else(|| "this Agent surface is not interactive".to_owned())?;
+        interaction
+            .pending
+            .invoke_with_context(
+                PENDING_OPERATION,
+                self.invocation_context()?,
+                PendingRequest {},
+            )
+            .await
+            .map_err(|error| format!("User Interaction snapshot failed: {error:?}"))?
+            .map(|response| response.interactions)
+            .map_err(|error| format!("User Interaction snapshot was rejected: {error:?}"))
+    }
+
+    pub async fn answer_interaction(
+        &self,
+        interaction_id: String,
+        answer: String,
+    ) -> Result<(), String> {
+        let interaction = self
+            .interaction
+            .as_ref()
+            .ok_or_else(|| "this Agent surface is not interactive".to_owned())?;
+        interaction
+            .answer
+            .invoke_with_context(
+                ANSWER_OPERATION,
+                self.invocation_context()?,
+                AnswerRequest {
+                    interaction_id,
+                    answer,
+                },
+            )
+            .await
+            .map_err(|error| format!("User Interaction answer failed: {error:?}"))?
+            .map(|_| ())
+            .map_err(|error| format!("User Interaction answer was rejected: {error:?}"))
     }
 
     fn generation_spec_digest(&self) -> &str {
@@ -1353,6 +1450,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::one("restricted-tools-runtime"),
         HostSlot::many("tui-contributions"),
         HostSlot::many("tui-suggestions"),
+        HostSlot::one("user-interaction").replaceable(),
         HostSlot::one("workspace-import-read"),
     ]
 }
@@ -1398,6 +1496,12 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
         default_skills_plugin(),
         HostDefaultPlugin::new("lenso.agent.telegram", "telegram"),
         HostDefaultPlugin::new("lenso.agent.tools", "tools"),
+        HostDefaultPlugin::new("lenso.agent.ask-user-tools", "ask-user"),
+        default_plugin(
+            "lenso.agent.user-interaction.local",
+            "local-interaction",
+            serde_json::json!({"max_pending": 16, "timeout_ms": 300_000}),
+        ),
         HostDefaultPlugin::new("lenso.agent.tui", "tui"),
         default_plugin(
             "lenso.agent.tui.static",
@@ -1729,6 +1833,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(ToolHookJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
+        .with_wasm_codec(UserInteractionJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
         .with_quickjs_codec(LifecycleJsonCodec)
@@ -1737,6 +1842,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(SessionJsonCodec)
         .with_quickjs_codec(ToolHookJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
+        .with_quickjs_codec(UserInteractionJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
         .with_process_codec(AgentJsonCodec)
         .with_process_codec(HttpFetchJsonCodec)
@@ -1747,6 +1853,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_process_codec(ToolHookJsonCodec)
         .with_process_codec(ToolProviderJsonCodec)
         .with_process_codec(ToolsJsonCodec)
+        .with_process_codec(UserInteractionJsonCodec)
         .with_process_codec(WorkspaceReadJsonCodec)
 }
 

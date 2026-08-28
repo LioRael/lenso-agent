@@ -26,6 +26,7 @@ use lenso_capability_agent::{
 };
 use lenso_capability_agent_tui_contribution::SnapshotResponsePanelsItem;
 use lenso_capability_agent_tui_suggestion::{Suggestion, SuggestionKind};
+use lenso_capability_agent_user_interaction::PendingInteraction;
 use lenso_kernel::{NativeStream, StreamEvent};
 use ratatui::{
     Frame, Terminal,
@@ -105,7 +106,7 @@ struct ActiveTurn {
     // Fields drop in declaration order. Cancel the stream before releasing the
     // App Generation lease that owns its runtime resources.
     stream: NativeStream<Agent>,
-    _lease: TurnGeneration,
+    lease: TurnGeneration,
     started_at: Instant,
 }
 
@@ -134,6 +135,13 @@ enum SuggestionVisibility {
     #[default]
     Auto,
     Dismissed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum InteractionPollStatus {
+    #[default]
+    Ready,
+    ErrorReported,
 }
 
 #[derive(Debug, Default)]
@@ -486,6 +494,10 @@ struct TuiState {
     session_id: Option<String>,
     phase: UiPhase,
     active: Option<ActiveTurn>,
+    pending_interaction: Option<PendingInteraction>,
+    pending_answer: Option<String>,
+    next_interaction_poll: Instant,
+    interaction_poll_status: InteractionPollStatus,
     tool_scope: String,
     scroll: ScrollState,
     workspace: String,
@@ -538,6 +550,10 @@ impl TuiState {
             session_id: options.session_id.clone(),
             phase: UiPhase::Idle,
             active: None,
+            pending_interaction: None,
+            pending_answer: None,
+            next_interaction_poll: Instant::now(),
+            interaction_poll_status: InteractionPollStatus::Ready,
             tool_scope: match (&options.profile, &options.allowed_tools) {
                 (Some(profile), None) => format!("{profile} profile · composed tools"),
                 (Some(profile), Some(tools)) if tools.is_empty() => {
@@ -1296,6 +1312,7 @@ async fn run_loop(
 ) -> Result<(), String> {
     loop {
         present_online_generation_events(app, state).await;
+        sync_user_interaction(state).await;
         if state.active.is_none() {
             if state.phase == UiPhase::SubmitRequested {
                 submit(app, options, state).await?;
@@ -1334,6 +1351,76 @@ async fn run_loop(
                 () = tokio::time::sleep(EVENT_TICK) => {
                     state.animation_tick = state.animation_tick.wrapping_add(1);
                 }
+            }
+        }
+    }
+}
+
+async fn sync_user_interaction(state: &mut TuiState) {
+    if state.active.is_none() {
+        state.pending_interaction = None;
+        state.pending_answer = None;
+        return;
+    }
+
+    if let (Some(interaction), Some(answer)) = (
+        state.pending_interaction.clone(),
+        state.pending_answer.take(),
+    ) {
+        let result = {
+            let active = state.active.as_ref().expect("active Turn checked");
+            active
+                .lease
+                .answer_interaction(interaction.interaction_id.clone(), answer.clone())
+                .await
+        };
+        match result {
+            Ok(()) => {
+                state.transcript.push(TranscriptEntry::User {
+                    text: answer,
+                    created_at: current_timestamp(),
+                });
+                state.pending_interaction = None;
+                state.next_interaction_poll = Instant::now() + ACTIVE_TICK;
+            }
+            Err(error) => {
+                state.transcript.push(TranscriptEntry::Error {
+                    text: format!("Answer was not accepted: {error}"),
+                });
+            }
+        }
+    }
+
+    if state.pending_interaction.is_some() || Instant::now() < state.next_interaction_poll {
+        return;
+    }
+    state.next_interaction_poll = Instant::now() + ACTIVE_TICK;
+    let result = {
+        let active = state.active.as_ref().expect("active Turn checked");
+        active.lease.pending_interactions().await
+    };
+    match result {
+        Ok(interactions) => {
+            state.interaction_poll_status = InteractionPollStatus::Ready;
+            if let Some(interaction) = interactions.into_iter().next() {
+                let mut message = format!("Agent asks: {}", interaction.prompt);
+                if !interaction.options.is_empty() {
+                    message.push_str("\nOptions: ");
+                    message.push_str(&interaction.options.join(" · "));
+                }
+                message.push_str("\nType your answer and press Enter.");
+                state.push_system(message);
+                state.pending_interaction = Some(interaction);
+                state.focus = Focus::Prompt;
+            }
+        }
+        Err(error) => {
+            state.next_interaction_poll = Instant::now() + Duration::from_secs(2);
+            if state.interaction_poll_status == InteractionPollStatus::Ready {
+                state.transcript.push(TranscriptEntry::Error {
+                    text: format!("Could not read pending user questions: {error}"),
+                });
+                state.interaction_poll_status = InteractionPollStatus::ErrorReported;
             }
         }
     }
@@ -1607,6 +1694,8 @@ fn update_hovered_entry(position: ratatui::layout::Position, state: &mut TuiStat
 
 fn cancel_active_turn(state: &mut TuiState) {
     if state.active.take().is_some() {
+        state.pending_interaction = None;
+        state.pending_answer = None;
         state.finish_active_thinking();
         state.push_system("Turn cancelled.");
         state.phase = UiPhase::Idle;
@@ -1616,7 +1705,9 @@ fn cancel_active_turn(state: &mut TuiState) {
 fn handle_shortcut_action(action: ShortcutAction, state: &mut TuiState) {
     match action {
         ShortcutAction::Send if !state.input.trim().is_empty() => {
-            if state.turn_is_running() {
+            if state.pending_interaction.is_some() {
+                queue_interaction_answer(state);
+            } else if state.turn_is_running() {
                 state.queue_input();
             } else {
                 state.phase = UiPhase::SubmitRequested;
@@ -1647,7 +1738,7 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
         }
         return false;
     }
-    if state.suggestion_match().is_some() {
+    if state.pending_interaction.is_none() && state.suggestion_match().is_some() {
         match key.code {
             KeyCode::Esc => {
                 state.suggestion_visibility = SuggestionVisibility::Dismissed;
@@ -1793,7 +1884,9 @@ fn handle_editor_key(key: KeyEvent, state: &mut TuiState) -> Option<bool> {
             state.append_input("\n");
         }
         KeyCode::Enter if !state.input.trim().is_empty() => {
-            if state.turn_is_running() {
+            if state.pending_interaction.is_some() {
+                queue_interaction_answer(state);
+            } else if state.turn_is_running() {
                 state.queue_input();
             } else {
                 state.phase = UiPhase::SubmitRequested;
@@ -1811,6 +1904,13 @@ fn handle_editor_key(key: KeyEvent, state: &mut TuiState) -> Option<bool> {
         _ => return None,
     }
     Some(false)
+}
+
+fn queue_interaction_answer(state: &mut TuiState) {
+    let answer = state.take_input();
+    if !answer.trim().is_empty() {
+        state.pending_answer = Some(answer);
+    }
 }
 
 async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> Result<(), String> {
@@ -1877,7 +1977,7 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         .map_err(|error| format!("failed to half-close Agent input: {error:?}"))?;
     state.active = Some(ActiveTurn {
         stream,
-        _lease: lease,
+        lease,
         started_at,
     });
     Ok(())
@@ -1891,6 +1991,8 @@ fn handle_stream_event(
         Ok(event) => event,
         Err(error) => {
             state.active = None;
+            state.pending_interaction = None;
+            state.pending_answer = None;
             state.finish_active_thinking();
             state.transcript.push(TranscriptEntry::Error {
                 text: runtime_failure_message(error),
@@ -1933,11 +2035,15 @@ fn handle_stream_event(
             state
                 .transcript
                 .push(TranscriptEntry::TurnCompleted { elapsed });
+            state.pending_interaction = None;
+            state.pending_answer = None;
             state.phase = UiPhase::Idle;
         }
         StreamEvent::Terminal(Err(error)) => {
             state.finish_active_thinking();
             state.active = None;
+            state.pending_interaction = None;
+            state.pending_answer = None;
             state.transcript.push(TranscriptEntry::Error {
                 text: format!("Agent turn failed: {error:?}"),
             });
@@ -3625,6 +3731,12 @@ fn render_composer_caption(frame: &mut Frame<'_>, area: Rect, state: &TuiState) 
             caption_style.fg(Palette::QUIET),
         ));
     }
+    if state.pending_interaction.is_some() {
+        spans.push(Span::styled(
+            " · answer required",
+            caption_style.fg(Palette::COMMAND),
+        ));
+    }
     spans.push(Span::styled(" ", caption_style));
     let info = Line::from(spans);
     let width = u16::try_from(info.width())
@@ -3862,6 +3974,29 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
+
+    #[test]
+    fn enter_answers_a_pending_question_instead_of_queueing_another_turn() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.pending_interaction = Some(PendingInteraction {
+            interaction_id: "question-1".to_owned(),
+            prompt: "Choose a mode".to_owned(),
+            options: vec!["safe".to_owned(), "fast".to_owned()],
+            allow_freeform: false,
+        });
+        state.set_input("safe".to_owned());
+
+        assert_eq!(
+            handle_editor_key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+                &mut state,
+            ),
+            Some(false)
+        );
+        assert_eq!(state.pending_answer.as_deref(), Some("safe"));
+        assert!(state.queued_inputs.is_empty());
+        assert!(state.input.is_empty());
+    }
 
     #[test]
     fn renders_composed_panel_and_input() {
