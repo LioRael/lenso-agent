@@ -9,19 +9,19 @@ Authenticate once before the first Turn. The default App uses the direct Codex
 Model with the `default` ChatGPT profile:
 
 ```sh
-cargo run -p lenso-agent-cli --bin lenso-agent-cli -- auth login
+cargo run -p lenso-agent-cli -- auth login
 ```
 
 Start the interactive TUI from the repository root:
 
 ```sh
-cargo run -p lenso-agent-cli --bin lenso-agent
+cargo run -p lenso-agent-tui
 ```
 
 Run one headless Turn:
 
 ```sh
-cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
+cargo run -p lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
@@ -118,8 +118,8 @@ derive the App from the Host Catalog plus this directory.
 
 ## Build a Plugin
 
-Create one Rust/Wasm Tool Plugin without authoring a separate internal unit or
-Manifest template:
+Create one ordinary Rust Tool Plugin. The default project builds portable Wasm
+and trusted Process implementations from the same authored source:
 
 ```sh
 lenso plugin new uppercase
@@ -150,12 +150,17 @@ keep tokens in environment variables:
 cp lenso.channels.example.toml lenso.channels.toml
 export TELEGRAM_BOT_TOKEN='<bot-token>'
 export DISCORD_BOT_TOKEN='<bot-token>'
-cargo run -p lenso-agent-cli --bin lenso-agent-channel
+cargo run -p lenso-agent-channel
 ```
 
 Delete either `[telegram]` or `[discord]` from the file to run only one
 transport. The shared Host runs one Agent Turn at a time and bounds pending
 work across channels.
+
+The distributions are independent. Installing `lenso-agent-cli` does not
+compile or install Ratatui, Telegram, or Discord support; install
+`lenso-agent-tui` or `lenso-agent-channel` only when those surfaces are
+needed. Each executable links only its own surface Plugin Catalog.
 
 ## Documentation
 

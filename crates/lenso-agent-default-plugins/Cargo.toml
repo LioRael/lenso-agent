@@ -1,0 +1,37 @@
+[package]
+name = "lenso-agent-default-plugins"
+version = "0.1.0"
+description = "The standard surface-neutral Plugin set for Lenso Agent Hosts."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin" }
+lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
+lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-plugin" }
+lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
+lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
+lenso-agent-model-fixture-plugin = { path = "../lenso-agent-model-fixture-plugin" }
+lenso-agent-model-openai-compatible-plugin = { path = "../lenso-agent-model-openai-compatible-plugin" }
+lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
+lenso-agent-process-native-plugin = { path = "../lenso-agent-process-native-plugin" }
+lenso-agent-process-tools-plugin = { path = "../lenso-agent-process-tools-plugin" }
+lenso-agent-prompt-filesystem-plugin = { path = "../lenso-agent-prompt-filesystem-plugin" }
+lenso-agent-prompt-plugin = { path = "../lenso-agent-prompt-plugin" }
+lenso-agent-prompt-static-plugin = { path = "../lenso-agent-prompt-static-plugin" }
+lenso-agent-session-file-plugin = { path = "../lenso-agent-session-file-plugin" }
+lenso-agent-skills-filesystem-plugin = { path = "../lenso-agent-skills-filesystem-plugin" }
+lenso-agent-subagent-tools-plugin = { path = "../lenso-agent-subagent-tools-plugin" }
+lenso-agent-text-tools-plugin = { path = "../lenso-agent-text-tools-plugin" }
+lenso-agent-tools-plugin = { path = "../lenso-agent-tools-plugin" }
+lenso-agent-workspace-edit-plugin = { path = "../lenso-agent-workspace-edit-plugin" }
+lenso-agent-workspace-import-read-plugin = { path = "../lenso-agent-workspace-import-read-plugin" }
+lenso-agent-workspace-read-plugin = { path = "../lenso-agent-workspace-read-plugin" }
+lenso-agent-workspace-read-tools-plugin = { path = "../lenso-agent-workspace-read-tools-plugin" }
+lenso-secrets-env-plugin.workspace = true
+
+[lints]
+workspace = true

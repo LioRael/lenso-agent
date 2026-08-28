@@ -2,8 +2,8 @@
 
 ## TUI Shell Plugin
 
-- **Owner:** `lenso-agent-tui-plugin` owns the interactive terminal product
-  surface; `lenso-agent-cli` supplies its native Host integration.
+- **Owner:** `lenso-agent-tui-plugin` owns the interactive terminal consumer
+  identity; the optional `lenso-agent-tui` distribution owns terminal I/O.
 - **Deletion boundary:** removing the Shell and its `tui` Instance removes raw
   terminal mode, layout, input, streamed rendering, cancellation UX, Session
   selection, and panel aggregation. Agent, Model, Tool, Prompt, and Session

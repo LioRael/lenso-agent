@@ -10,7 +10,8 @@ use lenso_agent_auth_openai_codex_plugin::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_agent_cli::{generation, plan_bytes_for_profile, provenance};
+use lenso_agent_cli_plugin as _;
+use lenso_agent_host::{generation, plan_bytes_for_profile, provenance};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
@@ -61,6 +62,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
+    lenso_agent_default_plugins::link();
     let args = match parse_args()? {
         CliCommand::Run(args) => args,
         CliCommand::Help => {

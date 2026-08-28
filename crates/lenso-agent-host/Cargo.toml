@@ -1,0 +1,48 @@
+[package]
+name = "lenso-agent-host"
+version = "0.1.0"
+description = "Surface-neutral Host and Generation runtime for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fs2.workspace = true
+jsonschema.workspace = true
+lenso-app-plan.workspace = true
+lenso-kernel.workspace = true
+lenso-native-adapter.workspace = true
+lenso-plugin-bundle.workspace = true
+lenso-plugin-control-plane.workspace = true
+lenso-runtime-codec.workspace = true
+lenso-capability-agent = { path = "../lenso-capability-agent" }
+lenso-capability-agent-http-fetch = { path = "../lenso-capability-agent-http-fetch" }
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
+lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
+lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook" }
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
+lenso-capability-agent-tui-contribution = { path = "../lenso-capability-agent-tui-contribution" }
+lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
+lenso-capability-agent-workspace-read = { path = "../lenso-capability-agent-workspace-read" }
+lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
+lenso-agent-session-file-plugin = { path = "../lenso-agent-session-file-plugin" }
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+toml.workspace = true
+time.workspace = true
+uuid.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+lenso-agent-cli-plugin = { path = "../lenso-agent-cli-plugin" }
+lenso-agent-default-plugins = { path = "../lenso-agent-default-plugins" }
+tempfile.workspace = true
+
+[lints]
+workspace = true
