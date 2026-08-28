@@ -573,15 +573,16 @@ fn mcp_client_discovers_and_invokes_a_real_stdio_server() {
         &server,
         r#"
 while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
     *\"method\":\"server/discover\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}\n' "$id"
       ;;
     *\"method\":\"tools/list\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}\n' "$id"
       ;;
     *\"method\":\"tools/call\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}\n' "$id"
       ;;
   esac
 done
@@ -592,7 +593,8 @@ done
         temporary.path(),
         "lenso.agent.mcp-client",
         &format!(
-            r#"program = "/bin/sh"
+            r#"transport = "stdio"
+program = "/bin/sh"
 arguments = ["{}"]
 working_directory = "{}"
 environment_allowlist = []

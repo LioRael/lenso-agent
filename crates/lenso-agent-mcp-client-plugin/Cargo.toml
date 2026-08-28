@@ -1,7 +1,7 @@
 [package]
 name = "lenso-agent-mcp-client-plugin"
 version = "0.1.0"
-description = "Profile-scoped MCP stdio client exposed as an Agent Tool Provider Plugin."
+description = "Profile-scoped MCP client exposed as an Agent Tool Provider Plugin."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -13,16 +13,19 @@ plugin-id = "lenso.agent.mcp-client"
 root-slot = "tool-providers"
 
 [dependencies]
+base64.workspace = true
 futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
 tempfile.workspace = true
 
 [lints]

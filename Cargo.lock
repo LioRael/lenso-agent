@@ -2539,11 +2539,14 @@ dependencies = [
 name = "lenso-agent-mcp-client-plugin"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64",
  "futures",
  "lenso",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "lenso-native-adapter",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",
