@@ -85,6 +85,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 const APP_ID: &str = "lenso.agent.harness";
 const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
+const PROCESS_EXECUTION_CLASS: &str = "lenso.process@1";
 const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
 // Wasm component instantiation can legitimately cross ten seconds on a busy developer machine.
 // Keep the gate bounded while avoiding spurious install and rollback failures under local load.
@@ -1218,6 +1219,7 @@ fn resolve_generation_with_authority(
     let execution_classes = [
         (NATIVE_EXECUTION_CLASS, "lenso-native-adapter@0.1.2"),
         (QUICKJS_EXECUTION_CLASS, "lenso-quickjs-adapter@0.1.0"),
+        (PROCESS_EXECUTION_CLASS, "lenso-process-adapter@0.1.0"),
         (WASM_EXECUTION_CLASS, "lenso-wasm-component-adapter@0.1.0"),
     ];
     let adapter_profiles = execution_classes
@@ -1691,6 +1693,15 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(ToolHookJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
+        .with_process_codec(AgentJsonCodec)
+        .with_process_codec(HttpFetchJsonCodec)
+        .with_process_codec(ModelJsonCodec)
+        .with_process_codec(PromptJsonCodec)
+        .with_process_codec(SessionJsonCodec)
+        .with_process_codec(ToolHookJsonCodec)
+        .with_process_codec(ToolProviderJsonCodec)
+        .with_process_codec(ToolsJsonCodec)
+        .with_process_codec(WorkspaceReadJsonCodec)
 }
 
 fn now_unix_nanos() -> Result<u128, String> {
