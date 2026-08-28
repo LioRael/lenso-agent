@@ -1,9 +1,10 @@
 # dev.example.portable-text-tools
 
-This is one ordinary Rust Plugin source with two interchangeable implementations:
-a sandboxed Wasm Component and a trusted native Process. The authored behavior lives in
-`src/lib.rs`; `lenso-plugin-sdk` owns WIT, protocol dispatch, and runtime descriptors at compile
-time, so no target-specific generated source is checked into the Plugin project.
+This is one ordinary Agent Tool Plugin source with two interchangeable implementations:
+a sandboxed Wasm Component and a trusted native Process. `src/lib.rs` uses the same
+`#[lenso::plugin]`, `#[tool_provider]`, and `#[tool]` authoring interface as a statically linked
+Plugin. The Agent Tool SDK owns Tool catalog and dispatch semantics; the Runtime SDK owns WIT,
+protocol framing, and target descriptors. No target-specific business source is checked in.
 
 ```sh
 lenso plugin check
