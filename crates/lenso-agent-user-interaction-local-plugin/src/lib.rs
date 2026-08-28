@@ -10,8 +10,8 @@ use std::{
 use lenso::prelude::*;
 use lenso_capability_agent_user_interaction::{
     self as interaction_contract, AnswerError, AnswerRequest, AnswerResponse, AskError, AskRequest,
-    AskResponse, InteractiveSurface, PendingInteraction, PendingRequest, PendingResponse,
-    UserInteractionProvider,
+    AskResponse, InteractionAnswer, InteractiveSurface, PendingInteraction, PendingRequest,
+    PendingResponse, UserInteractionProvider,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use tokio::sync::oneshot;
@@ -35,7 +35,7 @@ fn validate_config(config: &LocalInteractionConfig) -> Result<(), RuntimeFailure
 #[derive(Debug)]
 struct PendingEntry {
     request: AskRequest,
-    sender: Option<oneshot::Sender<String>>,
+    sender: Option<oneshot::Sender<Vec<InteractionAnswer>>>,
 }
 
 type PendingState = Rc<RefCell<BTreeMap<String, PendingEntry>>>;
@@ -73,9 +73,7 @@ impl UserInteractionProvider for LocalUserInteractionPlugin {
                     .values()
                     .map(|entry| PendingInteraction {
                         interaction_id: entry.request.interaction_id.clone(),
-                        prompt: entry.request.prompt.clone(),
-                        options: entry.request.options.clone(),
-                        allow_freeform: entry.request.allow_freeform,
+                        questions: entry.request.questions.clone(),
                     })
                     .collect(),
             }))
@@ -134,8 +132,8 @@ async fn ask(
     tokio::select! {
         () = cancellation.cancelled() => Err(RuntimeFailure::Cancelled { request_id: context.request_id() }),
         () = tokio::time::sleep(Duration::from_millis(config.timeout_ms)) => Ok(Err(AskError::Timeout)),
-        answer = receiver => match answer {
-            Ok(answer) => Ok(Ok(AskResponse { answer })),
+        answers = receiver => match answers {
+            Ok(answers) => Ok(Ok(AskResponse { answers })),
             Err(_) => Ok(Err(AskError::Unavailable)),
         }
     }
@@ -150,7 +148,7 @@ fn answer(
         let Some(entry) = state.get(&request.interaction_id) else {
             return Ok(Err(AnswerError::NotFound));
         };
-        if !valid_answer(&entry.request, &request.answer) {
+        if !valid_answers(&entry.request, &request.answers) {
             return Ok(Err(AnswerError::InvalidAnswer));
         }
         state.remove(&request.interaction_id)
@@ -159,7 +157,7 @@ fn answer(
         return Ok(Err(AnswerError::NotFound));
     };
     sender
-        .send(request.answer)
+        .send(request.answers)
         .map_err(|_| RuntimeFailure::PluginFailure {
             detail: "User Interaction receiver disappeared".to_owned(),
         })?;
@@ -167,24 +165,74 @@ fn answer(
 }
 
 fn valid_request(request: &AskRequest) -> bool {
-    let options = request.options.iter().collect::<BTreeSet<_>>();
+    let question_ids = request
+        .questions
+        .iter()
+        .map(|question| question.question_id.as_str())
+        .collect::<BTreeSet<_>>();
     !request.interaction_id.is_empty()
         && request.interaction_id.len() <= 128
-        && !request.prompt.trim().is_empty()
-        && request.prompt.len() <= 4096
-        && request.options.len() <= 16
-        && request
-            .options
-            .iter()
-            .all(|option| !option.trim().is_empty() && option.len() <= 256)
-        && options.len() == request.options.len()
-        && (request.allow_freeform || !request.options.is_empty())
+        && !request.questions.is_empty()
+        && request.questions.len() <= 8
+        && question_ids.len() == request.questions.len()
+        && request.questions.iter().all(|question| {
+            let option_ids = question
+                .options
+                .iter()
+                .map(|option| option.option_id.as_str())
+                .collect::<BTreeSet<_>>();
+            !question.question_id.trim().is_empty()
+                && question.question_id.len() <= 128
+                && !question.header.trim().is_empty()
+                && question.header.len() <= 64
+                && !question.prompt.trim().is_empty()
+                && question.prompt.len() <= 4096
+                && question.options.len() <= 16
+                && option_ids.len() == question.options.len()
+                && question.options.iter().all(|option| {
+                    !option.option_id.trim().is_empty()
+                        && option.option_id.len() <= 128
+                        && !option.label.trim().is_empty()
+                        && option.label.len() <= 256
+                        && option.description.len() <= 1024
+                        && option
+                            .preview
+                            .as_ref()
+                            .and_then(Option::as_ref)
+                            .is_none_or(|preview| !question.multi_select && preview.len() <= 16_384)
+                })
+        })
 }
 
-fn valid_answer(request: &AskRequest, answer: &str) -> bool {
-    !answer.trim().is_empty()
-        && answer.len() <= 4096
-        && (request.allow_freeform || request.options.iter().any(|option| option == answer))
+fn valid_answers(request: &AskRequest, answers: &[InteractionAnswer]) -> bool {
+    let by_question = answers
+        .iter()
+        .map(|answer| (answer.question_id.as_str(), answer))
+        .collect::<BTreeMap<_, _>>();
+    answers.len() == request.questions.len()
+        && by_question.len() == answers.len()
+        && request.questions.iter().all(|question| {
+            let Some(answer) = by_question.get(question.question_id.as_str()) else {
+                return false;
+            };
+            let selected = answer.selected_option_ids.iter().collect::<BTreeSet<_>>();
+            let other = answer
+                .other
+                .as_ref()
+                .and_then(Option::as_deref)
+                .filter(|other| !other.trim().is_empty() && other.len() <= 4096);
+            let choice_count = selected.len() + usize::from(other.is_some());
+            selected.len() == answer.selected_option_ids.len()
+                && choice_count > 0
+                && (question.multi_select || choice_count == 1)
+                && answer.selected_option_ids.iter().all(|option_id| {
+                    question
+                        .options
+                        .iter()
+                        .any(|option| option.option_id == *option_id)
+                })
+                && answer.other.as_ref().and_then(Option::as_ref).is_none() == other.is_none()
+        })
 }
 
 struct PendingGuard {
@@ -201,6 +249,7 @@ impl Drop for PendingGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_capability_agent_user_interaction::{InteractionOption, InteractionQuestion};
 
     fn config() -> LocalInteractionConfig {
         LocalInteractionConfig {
@@ -212,9 +261,21 @@ mod tests {
     fn request() -> AskRequest {
         AskRequest {
             interaction_id: "question-1".to_owned(),
-            prompt: "Choose a mode".to_owned(),
-            options: vec!["safe".to_owned(), "fast".to_owned()],
-            allow_freeform: false,
+            questions: vec![InteractionQuestion {
+                question_id: "mode".to_owned(),
+                header: "Mode".to_owned(),
+                prompt: "Choose a mode".to_owned(),
+                options: ["safe", "fast"]
+                    .into_iter()
+                    .map(|label| InteractionOption {
+                        option_id: label.to_owned(),
+                        label: label.to_owned(),
+                        description: String::new(),
+                        preview: Some(None),
+                    })
+                    .collect(),
+                multi_select: false,
+            }],
         }
     }
 
@@ -251,7 +312,10 @@ mod tests {
                 {
                     let snapshot = pending.borrow();
                     assert_eq!(snapshot.len(), 1);
-                    assert_eq!(snapshot["question-1"].request.prompt, "Choose a mode");
+                    assert_eq!(
+                        snapshot["question-1"].request.questions[0].prompt,
+                        "Choose a mode"
+                    );
                 }
 
                 assert_eq!(
@@ -259,7 +323,11 @@ mod tests {
                         &pending,
                         AnswerRequest {
                             interaction_id: "question-1".to_owned(),
-                            answer: "custom".to_owned(),
+                            answers: vec![InteractionAnswer {
+                                question_id: "mode".to_owned(),
+                                selected_option_ids: vec!["missing".to_owned()],
+                                other: Some(None),
+                            }],
                         },
                     )
                     .unwrap(),
@@ -270,7 +338,11 @@ mod tests {
                         &pending,
                         AnswerRequest {
                             interaction_id: "question-1".to_owned(),
-                            answer: "safe".to_owned(),
+                            answers: vec![InteractionAnswer {
+                                question_id: "mode".to_owned(),
+                                selected_option_ids: vec!["safe".to_owned()],
+                                other: Some(None),
+                            }],
                         },
                     )
                     .unwrap(),
@@ -279,7 +351,11 @@ mod tests {
                 assert_eq!(
                     task.await.unwrap().unwrap(),
                     Ok(AskResponse {
-                        answer: "safe".to_owned()
+                        answers: vec![InteractionAnswer {
+                            question_id: "mode".to_owned(),
+                            selected_option_ids: vec!["safe".to_owned()],
+                            other: Some(None),
+                        }]
                     })
                 );
                 assert!(pending.borrow().is_empty());

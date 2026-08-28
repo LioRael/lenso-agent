@@ -50,8 +50,8 @@ mod tests {
                     "cardinality": "many"
                 },
                 {
-                    "capability_id": "lenso.agent.user-interaction@1",
-                    "descriptor_version": "1.0.0",
+                    "capability_id": "lenso.agent.user-interaction@2",
+                    "descriptor_version": "2.0.0",
                     "cardinality": "one"
                 }
             ])

@@ -1,29 +1,80 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["interaction_id", "prompt", "options", "allow_freeform"],
+  "required": ["interaction_id", "questions"],
   "properties": {
     "interaction_id": {
       "type": "string",
       "minLength": 1,
       "maxLength": 128
     },
-    "prompt": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 4096
-    },
-    "options": {
+    "questions": {
       "type": "array",
-      "maxItems": 16,
+      "maxItems": 8,
       "items": {
-        "type": "string"
-      }
-    },
-    "allow_freeform": {
-      "type": "boolean"
+        "$ref": "#/$defs/InteractionQuestion"
+      },
+      "minItems": 1
     }
   },
   "additionalProperties": false,
+  "$defs": {
+    "InteractionOption": {
+      "type": "object",
+      "required": ["option_id", "label", "description"],
+      "properties": {
+        "option_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "preview": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InteractionQuestion": {
+      "type": "object",
+      "required": ["question_id", "header", "prompt", "options", "multi_select"],
+      "properties": {
+        "question_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/InteractionOption"
+          }
+        },
+        "multi_select": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "title": "AskRequest"
 }

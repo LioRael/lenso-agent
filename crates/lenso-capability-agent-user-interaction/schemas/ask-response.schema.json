@@ -1,14 +1,41 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["answer"],
+  "required": ["answers"],
   "properties": {
-    "answer": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 4096
+    "answers": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "$ref": "#/$defs/InteractionAnswer"
+      },
+      "minItems": 1
     }
   },
   "additionalProperties": false,
+  "$defs": {
+    "InteractionAnswer": {
+      "type": "object",
+      "required": ["question_id", "selected_option_ids"],
+      "properties": {
+        "question_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "selected_option_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "string"
+          }
+        },
+        "other": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "title": "AskResponse"
 }

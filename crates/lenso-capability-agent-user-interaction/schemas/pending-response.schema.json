@@ -13,14 +13,43 @@
   },
   "additionalProperties": false,
   "$defs": {
-    "PendingInteraction": {
+    "InteractionOption": {
       "type": "object",
-      "required": ["interaction_id", "prompt", "options", "allow_freeform"],
+      "required": ["option_id", "label", "description"],
       "properties": {
-        "interaction_id": {
+        "option_id": {
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "preview": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "InteractionQuestion": {
+      "type": "object",
+      "required": ["question_id", "header", "prompt", "options", "multi_select"],
+      "properties": {
+        "question_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
         },
         "prompt": {
           "type": "string",
@@ -31,11 +60,31 @@
           "type": "array",
           "maxItems": 16,
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/InteractionOption"
           }
         },
-        "allow_freeform": {
+        "multi_select": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PendingInteraction": {
+      "type": "object",
+      "required": ["interaction_id", "questions"],
+      "properties": {
+        "interaction_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "questions": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/InteractionQuestion"
+          },
+          "minItems": 1
         }
       },
       "additionalProperties": false

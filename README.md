@@ -33,11 +33,18 @@ available below `~/.agents/skills`. Selecting `/skill-name` leaves the composer
 open so the request can follow it on the same line.
 
 The default Tool catalog also includes `ask_user`. In the TUI, an Agent can
-pause a Turn, show one bounded question with optional choices, and resume after
-the answer is entered in the normal composer. Headless and channel surfaces do
-not pretend to be interactive: the same Tool returns
+pause a Turn and present one or more bounded questions. Single-select choices
+can show a focused preview, multi-select choices use Space to toggle, and every
+question includes Other for a free-form answer. The Turn resumes with one
+structured answer batch. Headless and channel surfaces do not pretend to be
+interactive: the same Tool returns
 `interaction_unavailable` immediately unless that surface supplies a User
 Interaction Adapter.
+
+Up to 32 `lenso-agent` TUI processes may run concurrently in the same project.
+Each process atomically claims an independent recoverable Controller slot, so
+different sessions and profiles retain Generation fencing without contending
+for one global TUI lock.
 
 Start the Console Web surface with a durable, administrator-controlled Tool
 allowlist:

@@ -34,6 +34,11 @@ separate durable Controller namespace while sharing the Plugin Store, retained
 exact Plugin authority, and immutable Generation records with the companion
 CLI. Neither surface attempts to recover the other's Controller lineage.
 Each Controller namespace also holds one OS-backed process-lifetime Host lease.
+A bounded pool of 32 TUI Controller namespaces lets independent terminal
+sessions run concurrently in one project, including sessions that select
+different profiles. Startup claims the first free namespace atomically; each
+slot retains its own recoverable Controller lineage, and Generation collection
+inspects every bounded slot. Other product surfaces remain single-instance.
 A replacement Host may retire unrecoverable state left by a crashed process
 only after acquiring that lease, which proves the previous process exited.
 Concurrent replacement still fails closed; normal shutdown commits suspension

@@ -58,7 +58,7 @@ use lenso_capability_agent_tui_suggestion::{
 };
 use lenso_capability_agent_user_interaction::{
     ANSWER_OPERATION, AnswerRequest, CAPABILITY_ID as USER_INTERACTION_CAPABILITY_ID,
-    InteractiveSurface, PENDING_OPERATION, PendingInteraction, PendingRequest,
+    InteractionAnswer, InteractiveSurface, PENDING_OPERATION, PendingInteraction, PendingRequest,
     UserInteractionAnswer, UserInteractionJsonCodec, UserInteractionPending,
 };
 use lenso_capability_agent_workspace_read::WorkspaceReadJsonCodec;
@@ -94,6 +94,7 @@ const ONLINE_ROLLBACK_WINDOW_NANOS: u64 = 1_000_000_000;
 const GENERATION_DIRECTORY: &str = "generations";
 pub(crate) const CONTROL_DIRECTORY: &str = "generation-control";
 pub(crate) const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
+pub(crate) const MAX_TUI_INSTANCES: usize = 32;
 pub(crate) const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
 pub(crate) const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
 pub(crate) const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
@@ -379,16 +380,29 @@ impl AgentApp {
         plan_bytes: &[u8],
         store_root: &Path,
         control_directory: &str,
+        max_instances: usize,
         profile_name: Option<String>,
         host_build: HostBuildIdentity,
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
+        let (control_directory, host_lease) = (0..max_instances)
+            .find_map(|index| {
+                let directory = controller_instance_directory(control_directory, index);
+                match authority.try_host_lease(&directory) {
+                    Ok(Some(lease)) => Some(Ok((directory, lease))),
+                    Ok(None) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .transpose()?
+            .ok_or_else(|| {
+                format!("all {max_instances} `{control_directory}` Host slots are already in use")
+            })?;
         let generation_gc_lease = authority.generation_gc_snapshot()?;
-        let host_lease = authority.host_lease(control_directory)?;
         let _authority_fence = authority.snapshot()?;
         let (generation, _resolution_authority_digest) =
             resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
-        let store = FileControlStateStore::open(store_root.join(control_directory))
+        let store = FileControlStateStore::open(store_root.join(&control_directory))
             .map_err(control_error)?;
         let durable = store.load(APP_ID).map_err(control_error)?;
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
@@ -798,6 +812,14 @@ impl AgentApp {
     }
 }
 
+fn controller_instance_directory(base: &str, index: usize) -> String {
+    if index == 0 {
+        base.to_owned()
+    } else {
+        format!("{base}-{}", index + 1)
+    }
+}
+
 pub(crate) fn live_controller_generation_digests(
     store_root: &Path,
 ) -> Result<BTreeSet<String>, String> {
@@ -811,16 +833,22 @@ pub(crate) fn live_controller_generation_digests(
 
 fn existing_controller_states(
     store_root: &Path,
-) -> Result<Vec<(&'static str, DurableControlState)>, String> {
+) -> Result<Vec<(String, DurableControlState)>, String> {
     let mut states = Vec::new();
-    for (surface, directory) in [
-        ("headless", CONTROL_DIRECTORY),
-        ("tui", TUI_CONTROL_DIRECTORY),
-        ("telegram", TELEGRAM_CONTROL_DIRECTORY),
-        ("discord", DISCORD_CONTROL_DIRECTORY),
-        ("web", WEB_CONTROL_DIRECTORY),
-        ("channels", CHANNEL_CONTROL_DIRECTORY),
-    ] {
+    let mut controllers = vec![
+        ("headless".to_owned(), CONTROL_DIRECTORY.to_owned()),
+        ("telegram".to_owned(), TELEGRAM_CONTROL_DIRECTORY.to_owned()),
+        ("discord".to_owned(), DISCORD_CONTROL_DIRECTORY.to_owned()),
+        ("web".to_owned(), WEB_CONTROL_DIRECTORY.to_owned()),
+        ("channels".to_owned(), CHANNEL_CONTROL_DIRECTORY.to_owned()),
+    ];
+    controllers.extend((0..MAX_TUI_INSTANCES).map(|index| {
+        (
+            format!("tui instance {}", index + 1),
+            controller_instance_directory(TUI_CONTROL_DIRECTORY, index),
+        )
+    }));
+    for (surface, directory) in controllers {
         let path = store_root.join(directory);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
@@ -1341,7 +1369,7 @@ impl TurnGeneration {
     pub async fn answer_interaction(
         &self,
         interaction_id: String,
-        answer: String,
+        answers: Vec<InteractionAnswer>,
     ) -> Result<(), String> {
         let interaction = self
             .interaction
@@ -1354,7 +1382,7 @@ impl TurnGeneration {
                 self.invocation_context()?,
                 AnswerRequest {
                     interaction_id,
-                    answer,
+                    answers,
                 },
             )
             .await
