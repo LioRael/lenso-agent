@@ -103,7 +103,14 @@ plugins/
   example.uppercase/
     plugin.lenso-plugin/    # immutable package, for external Plugins
     default.toml
+    default/                # optional, immutable Instance resources
+      prompts/system.md
 ```
+
+The optional `<instance>/` directory is paired with `<instance>.toml`. The Host
+snapshots its bounded regular files into the same immutable Generation, so a
+Plugin reads stable bytes rather than a live filesystem path. A resource-only
+edit goes through the same Ready Gate and existing Turns retain the old bytes.
 
 There is no `lenso.app.json`, `lenso.app.toml`, `lenso.local.toml`, enabled
 list, or user-authored binding document. `lenso app check` and `lenso app show`

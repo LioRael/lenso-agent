@@ -24,6 +24,8 @@ plugins/
   dev.example.uppercase/
     plugin.lenso-plugin/
     default.toml
+    default/
+      prompts/system.md
 ```
 
 Use `lenso plugins list|add|configure|disable|enable|remove`. Use `lenso app
@@ -40,11 +42,12 @@ Each Host build generates an immutable Host Catalog containing:
 - root Slots that state which capabilities form the product surface; and
 - private attachments needed to distinguish repeated capability providers.
 
-Resolution snapshots the complete Plugin Root, validates strict directory and
-TOML shapes, verifies any external package bytes, merges package defaults, Host
+Resolution snapshots the complete Plugin Root, validates strict directory,
+TOML, and bounded Instance-resource shapes, verifies any external package bytes, merges package defaults, Host
 configuration, and Instance patches, then derives bindings and one complete
 Resolved App Plan. The Kernel sees only that Plan and never discovers packages
-or files.
+or files. Resource bytes are carried beside the Plan in the immutable
+Generation and never exposed as a mutable Host path.
 
 Missing `plugins/` means an empty Plugin Root, not a different mode. Built-in
 and external Plugins follow the same resolver path; the package directory is

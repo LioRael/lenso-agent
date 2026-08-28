@@ -3,7 +3,7 @@
 | Term | Meaning | Public? |
 | --- | --- | --- |
 | Host Catalog | Immutable description of linked Plugins, default Instances, root Slots, and Host-private attachments generated for one Host build. | Reference only |
-| Plugin Root | The App owner's `plugins/` directory. One directory per Plugin contains an optional package plus Instance TOML files. | Yes |
+| Plugin Root | The App owner's `plugins/` directory. One directory per Plugin contains an optional package, Instance TOML files, and optional same-name resource directories. | Yes |
 | Plugin | The only removable behavior and distribution unit. A built-in and an external Plugin have the same configuration model. | Yes |
 | Plugin Instance | One configured occurrence of a Plugin, represented by `<instance>.toml`; `default.toml` is the common case. | Yes |
 | Resolved App Plan | Complete immutable execution input derived from one Host Catalog and one Plugin Root snapshot. It is replay evidence, not source configuration. | Diagnostic |

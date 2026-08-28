@@ -119,10 +119,12 @@ struct HarnessCatalogFactory;
 impl CatalogFactory for HarnessCatalogFactory {
     fn catalog(
         &self,
-        _generation: &ResolvedGeneration,
+        generation: &ResolvedGeneration,
     ) -> Result<ExecutionAdapterCatalog, ControlPlaneError> {
         let (registry, _) = native_host_build();
-        Ok(ExecutionAdapterCatalog::single(registry))
+        Ok(ExecutionAdapterCatalog::single(
+            registry.with_resources(generation.resources.clone()),
+        ))
     }
 }
 
@@ -1053,19 +1055,25 @@ fn resolve_desired_generation(
     } else {
         resolve_host_plan(&root).map_err(rejected)?
     };
-    let plan_bytes = serde_json::to_vec(&plan)
-        .map_err(|error| rejected(format!("failed to encode the derived App: {error}")))?;
+    let resources = crate::plugin_root::plan_resources(plugin_root, &plan).map_err(rejected)?;
+    let resource_identity = resources
+        .iter()
+        .map(|(instance, snapshot)| (instance, snapshot.digest()))
+        .collect::<Vec<_>>();
     let desired_state_digest = sha256_digest(
-        &serde_json::to_vec(&(&authority.resolution_authority_digest, &plan)).map_err(|error| {
-            rejected(format!("failed to identify desired Plugin state: {error}"))
-        })?,
+        &serde_json::to_vec(&(
+            &authority.resolution_authority_digest,
+            &plan,
+            resource_identity,
+        ))
+        .map_err(|error| rejected(format!("failed to identify desired Plugin state: {error}")))?,
     );
     if last_attempted_desired_state_digest.as_deref() == Some(&desired_state_digest) {
         return Ok(None);
     }
     *last_attempted_desired_state_digest = Some(desired_state_digest);
     let candidate =
-        resolve_generation_with_authority(&plan_bytes, &authority, host_build, plugin_root)
+        resolve_generation_from_plan(&plan, &authority, host_build, plugin_root, resources)
             .map_err(rejected)?;
     Ok(Some((authority.resolution_authority_digest, candidate)))
 }
@@ -1301,6 +1309,17 @@ fn resolve_generation_with_authority(
 ) -> Result<ResolvedGeneration, String> {
     let plan = serde_json::from_slice::<ResolvedAppPlan>(plan_bytes)
         .map_err(|error| format!("resolved Plan is invalid JSON: {error}"))?;
+    let resources = crate::plugin_root::plan_resources(plugin_root, &plan)?;
+    resolve_generation_from_plan(&plan, authority, host_build, plugin_root, resources)
+}
+
+fn resolve_generation_from_plan(
+    plan: &ResolvedAppPlan,
+    authority: &crate::generation_authority::GenerationAuthority,
+    host_build: &HostBuildIdentity,
+    plugin_root: &Path,
+    resources: lenso_runtime_codec::InstanceResourceCatalog,
+) -> Result<ResolvedGeneration, String> {
     plan.validate()
         .map_err(|error| format!("resolved Plan is invalid: {error}"))?;
     if plan.execution_lanes().len() != 1 || plan.execution_lanes()[0].id().as_str() != "main" {
@@ -1356,10 +1375,11 @@ fn resolve_generation_with_authority(
     resolve_plan_generation(PlanGenerationInput {
         app_id: APP_ID,
         authority_digest: &authority.resolution_authority_digest,
-        plan: &plan,
+        plan,
         host_build: &host_build,
         policy: &policy,
-        artifacts: crate::plugin_root::plan_artifacts(plugin_root, &plan)?,
+        artifacts: crate::plugin_root::plan_artifacts(plugin_root, plan)?,
+        resources,
     })
     .map_err(control_error)
 }
@@ -2043,6 +2063,61 @@ mod tests {
         .unwrap()
         .unwrap();
         assert_eq!(restored.spec.digest(), base.spec.digest());
+    }
+
+    #[test]
+    fn resource_only_edits_create_a_generation_and_retain_old_bytes() {
+        let directory = tempfile::tempdir().unwrap();
+        let plugin_root = directory.path().join("plugins");
+        let store_root = directory.path().join("state");
+        let text_tools = plugin_root.join("lenso.agent.text-tools");
+        let resource_directory = text_tools.join("default/prompts");
+        fs::create_dir_all(&resource_directory).unwrap();
+        fs::create_dir_all(&store_root).unwrap();
+        fs::write(text_tools.join("default.toml"), "").unwrap();
+        let resource = resource_directory.join("system.md");
+        fs::write(&resource, "generation one").unwrap();
+        let host_build = HostBuildIdentity::current().unwrap();
+        let mut last_attempted = None;
+
+        let (_, first) = resolve_desired_generation(
+            &plugin_root,
+            &store_root,
+            &host_build,
+            None,
+            &mut last_attempted,
+        )
+        .unwrap()
+        .unwrap();
+        let retained_resources = first.resources.clone();
+
+        fs::write(&resource, "generation two").unwrap();
+        let (_, second) = resolve_desired_generation(
+            &plugin_root,
+            &store_root,
+            &host_build,
+            None,
+            &mut last_attempted,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_ne!(second.spec.digest(), first.spec.digest());
+        assert_eq!(
+            retained_resources
+                .for_instance("lenso.agent.text-tools/default")
+                .read_text("prompts/system.md")
+                .unwrap(),
+            "generation one"
+        );
+        assert_eq!(
+            second
+                .resources
+                .for_instance("lenso.agent.text-tools/default")
+                .read_text("prompts/system.md")
+                .unwrap(),
+            "generation two"
+        );
     }
 
     #[test]
