@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["max_input_characters", "max_summary_characters", "retain_recent_turns"],
+  "properties": {
+    "max_input_characters": { "type": "integer", "minimum": 1024, "maximum": 16777216 },
+    "max_summary_characters": { "type": "integer", "minimum": 256, "maximum": 262144 },
+    "retain_recent_turns": { "type": "integer", "minimum": 1, "maximum": 64 }
+  }
+}

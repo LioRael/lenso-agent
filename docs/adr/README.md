@@ -46,3 +46,4 @@
 - [0044 — Keep Session storage replaceable and inspection neutral](0044-keep-session-storage-replaceable.md)
 - [0045 — Compose typed Agent lifecycle observers](0045-compose-typed-agent-lifecycle-observers.md)
 - [0046 — Compose portable user interaction](0046-compose-portable-user-interaction.md)
+- [0047 — Compose provider-first Context Compaction](0047-compose-provider-first-context-compaction.md)

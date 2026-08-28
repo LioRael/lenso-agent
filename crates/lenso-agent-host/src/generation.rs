@@ -21,6 +21,7 @@ use lenso_app_plan::{
     },
 };
 use lenso_capability_agent::{Agent, AgentJsonCodec};
+use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
@@ -1435,6 +1436,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
     vec![
         HostSlot::many("agents"),
         HostSlot::optional("auth"),
+        HostSlot::one("context-compactor").replaceable(),
         HostSlot::many("surfaces"),
         HostSlot::many("tool-providers"),
         HostSlot::many("tool-hooks"),
@@ -1461,6 +1463,7 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
         HostDefaultPlugin::new("lenso.agent.discord", "discord"),
+        default_context_compaction_plugin(),
         default_plugin(
             "lenso.agent.http-fetch",
             "http-fetch",
@@ -1551,6 +1554,18 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
     defaults
 }
 
+fn default_context_compaction_plugin() -> HostDefaultPlugin {
+    default_plugin(
+        "lenso.agent.context-compaction",
+        "context-compactor",
+        serde_json::json!({
+            "max_input_characters": 1_048_576,
+            "max_summary_characters": 8_192,
+            "retain_recent_turns": 8
+        }),
+    )
+}
+
 fn default_interactive_plugins() -> [HostDefaultPlugin; 3] {
     [
         default_plugin(
@@ -1600,7 +1615,8 @@ fn agent_defaults() -> Vec<HostDefaultPlugin> {
                     "max_tool_calls": 4,
                     "max_parallel_tool_calls": 4,
                     "max_output_tokens": 1024,
-                    "max_history_events": 200
+                    "max_history_events": 200,
+                    "max_compaction_summary_characters": 8192
                 }),
             )
         })
@@ -1825,6 +1841,7 @@ pub(crate) fn resolve_host_plan_for_agent(
 fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
     MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
         .with_wasm_codec(AgentJsonCodec)
+        .with_wasm_codec(ContextCompactionJsonCodec)
         .with_wasm_codec(HttpFetchJsonCodec)
         .with_wasm_codec(LifecycleJsonCodec)
         .with_wasm_codec(ModelJsonCodec)
@@ -1836,6 +1853,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(UserInteractionJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
+        .with_quickjs_codec(ContextCompactionJsonCodec)
         .with_quickjs_codec(LifecycleJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)
         .with_quickjs_codec(PromptJsonCodec)
@@ -1845,6 +1863,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(UserInteractionJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
         .with_process_codec(AgentJsonCodec)
+        .with_process_codec(ContextCompactionJsonCodec)
         .with_process_codec(HttpFetchJsonCodec)
         .with_process_codec(LifecycleJsonCodec)
         .with_process_codec(ModelJsonCodec)
@@ -1893,6 +1912,7 @@ mod tests {
     #[test]
     fn empty_plugin_root_selects_direct_codex_with_auth() {
         let plan = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        let plan_json = serde_json::to_value(&plan).unwrap();
         let instances = plan
             .plugin_instances()
             .iter()
@@ -1901,8 +1921,21 @@ mod tests {
 
         assert!(instances.contains("lenso.agent.auth.openai-codex/auth"));
         assert!(instances.contains("lenso.agent.model.openai-codex-direct/model"));
+        assert!(instances.contains("lenso.agent.context-compaction/context-compactor"));
         assert!(instances.contains("lenso.agent.skills.filesystem/skills"));
         assert!(!instances.contains("lenso.agent.model.fixture/model"));
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.loop/agent"
+                        && binding["provider_instance"]
+                            == "lenso.agent.context-compaction/context-compactor"
+                        && binding["capability_id"] == "lenso.agent.context-compaction@1"
+                })
+        );
     }
 
     #[test]
@@ -1917,7 +1950,8 @@ mod tests {
                         "max_tool_calls": 6,
                         "max_parallel_tool_calls": 2,
                         "max_output_tokens": 2048,
-                        "max_history_events": 100
+                        "max_history_events": 100,
+                        "max_compaction_summary_characters": 8192
                     })),
                 lenso_app_plan::authoring::PluginRootInstance::new(
                     "lenso.agent.model.fixture",

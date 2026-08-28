@@ -421,6 +421,9 @@ fn event_kind(kind: &session_contract::AppendSessionRequestEventsItemKind) -> &'
     match kind {
         K::SessionCreated => "session_created",
         K::SystemInstructionInstalled => "system_instruction_installed",
+        K::ContextCompactionStarted => "context_compaction_started",
+        K::ContextCompactionCommitted => "context_compaction_committed",
+        K::ContextCompactionFailed => "context_compaction_failed",
         K::TurnStarted => "turn_started",
         K::ModelRequested => "model_requested",
         K::ModelOutput => "model_output",
@@ -437,6 +440,9 @@ fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
     Some(match kind {
         "session_created" => K::SessionCreated,
         "system_instruction_installed" => K::SystemInstructionInstalled,
+        "context_compaction_started" => K::ContextCompactionStarted,
+        "context_compaction_committed" => K::ContextCompactionCommitted,
+        "context_compaction_failed" => K::ContextCompactionFailed,
         "turn_started" => K::TurnStarted,
         "model_requested" => K::ModelRequested,
         "model_output" => K::ModelOutput,
@@ -693,6 +699,16 @@ mod tests {
         }
     }
 
+    fn compaction_event(id: &str) -> AppendSessionRequestEventsItem {
+        AppendSessionRequestEventsItem {
+            event_id: id.to_owned(),
+            kind: AppendSessionRequestEventsItemKind::ContextCompactionCommitted,
+            turn_id: None,
+            occurred_at: "2026-08-28T00:00:01Z".to_owned(),
+            payload_json: r#"{"compaction_id":"compact-1"}"#.to_owned().try_into().unwrap(),
+        }
+    }
+
     #[test]
     fn session_persists_reopens_and_reads_in_revision_order() {
         let temporary = tempfile::tempdir().unwrap();
@@ -705,7 +721,7 @@ mod tests {
             .append_now(AppendSessionRequest {
                 session_id: opened.session_id.clone(),
                 expected_revision: "0".to_owned(),
-                events: vec![event("event-1"), event("event-2")],
+                events: vec![event("event-1"), compaction_event("event-2")],
             })
             .unwrap();
         assert_eq!(appended.revision, "2");
@@ -727,6 +743,10 @@ mod tests {
             .unwrap();
         assert_eq!(read.events.len(), 2);
         assert_eq!(read.events[0].revision, "1");
+        assert_eq!(
+            read.events[1].kind,
+            ReadSessionResponseEventsItemKind::ContextCompactionCommitted
+        );
         assert_eq!(read.events[1].revision, "2");
     }
 

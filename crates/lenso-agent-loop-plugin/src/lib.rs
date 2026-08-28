@@ -14,6 +14,10 @@ use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
     RunTurnResponseProgressChannel,
 };
+use lenso_capability_agent_context_compaction::{
+    self as compaction_capability, CompactRequest, CompactResponse, ContextMessage,
+    ContextMessageRole,
+};
 use lenso_capability_agent_lifecycle::{
     self as lifecycle_capability, LifecycleEventKind, ObserveRequest,
 };
@@ -81,6 +85,7 @@ impl TypedExtension for RunScope {
 type TurnFailure = PluginError<RunTurnError>;
 const RECOVERY_EVENT_LIMIT: u64 = 512;
 const SESSION_SCAN_PAGE_LIMIT: i64 = 1000;
+const COMPACTION_MESSAGE_LIMIT: usize = 256;
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -150,6 +155,7 @@ struct AgentConfig {
     max_tool_calls: u32,
     max_output_tokens: i64,
     max_history_events: i64,
+    max_compaction_summary_characters: i64,
     max_parallel_tool_calls: u32,
 }
 
@@ -162,6 +168,7 @@ struct AgentLoop {
     prompt: Port<prompt_capability::PromptClient>,
     tools: Port<tools_capability::ToolsClient>,
     session: Port<session_capability::SessionClient>,
+    compaction: Port<compaction_capability::ContextCompactionClient>,
     lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
     #[tasks]
     tasks: ManagedTasks,
@@ -176,6 +183,7 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
         || !(1..=16).contains(&config.max_parallel_tool_calls)
         || config.max_output_tokens <= 0
         || !(1..=1000).contains(&config.max_history_events)
+        || !(256..=262_144).contains(&config.max_compaction_summary_characters)
     {
         return Err(invalid_plan("Agent Loop model or limits are invalid"));
     }
@@ -273,20 +281,22 @@ async fn run_turn(
     } else {
         read_session_tail(clients, context, &session_id, &opened.revision, config).await?
     };
-    let history_event_count = usize::try_from(config.max_history_events).map_err(|_| {
-        PluginError::runtime(RuntimeFailure::Internal {
-            detail: "Agent history limit conversion failed".to_owned(),
-        })
-    })?;
-    let history_start = history.len().saturating_sub(history_event_count);
-    let mut messages = reconstruct_history(&history[history_start..])?;
+    let (mut messages, compacted_revision) = prepare_model_context(
+        clients,
+        config,
+        context,
+        &session_id,
+        &opened.revision,
+        &history,
+    )
+    .await?;
     let (turn_id, mut revision) = start_turn(
         clients,
         context,
         TurnStart {
             opened_created: opened.created,
             session_id: &session_id,
-            revision: opened.revision,
+            revision: compacted_revision,
             history: &history,
             install_system_instruction,
             system_instruction: &system_instruction,
@@ -1362,6 +1372,412 @@ fn invalid_system_instruction(detail: impl Into<String>) -> TurnFailure {
     })
 }
 
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct StoredCompactionCheckpoint {
+    compaction_id: String,
+    compacted_through_revision: String,
+    source_message_count: usize,
+    summary: String,
+    summary_digest: String,
+    retained_messages: Vec<ContextMessage>,
+}
+
+#[derive(Debug, Default)]
+struct ContextProjection {
+    summary: Option<String>,
+    messages: Vec<ContextMessage>,
+    compacted_through_revision: u64,
+}
+
+async fn prepare_model_context(
+    clients: &AgentLoop,
+    config: &AgentConfig,
+    context: &InvocationContext,
+    session_id: &str,
+    current_revision: &str,
+    history: &[ReadSessionResponseEventsItem],
+) -> Result<(Vec<CompleteMessageInput>, String), TurnFailure> {
+    let current_revision_number = current_revision.parse::<u64>().map_err(|_| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session returned an invalid revision".to_owned(),
+        })
+    })?;
+    if current_revision_number == 0 {
+        return Ok((Vec::new(), current_revision.to_owned()));
+    }
+
+    let mut source = history.to_vec();
+    let mut projection = context_projection(&source)?;
+    let history_limit = usize::try_from(config.max_history_events).map_err(|_| {
+        PluginError::runtime(RuntimeFailure::Internal {
+            detail: "Agent history limit conversion failed".to_owned(),
+        })
+    })?;
+    let mut events_since_checkpoint =
+        events_after_revision(&source, projection.compacted_through_revision)?;
+    if projection.compacted_through_revision == 0
+        && current_revision_number > u64::try_from(source.len()).unwrap_or(u64::MAX)
+        && events_since_checkpoint >= history_limit
+    {
+        source = read_session_events(clients, context, session_id, current_revision_number).await?;
+        projection = context_projection(&source)?;
+        events_since_checkpoint =
+            events_after_revision(&source, projection.compacted_through_revision)?;
+    }
+
+    if events_since_checkpoint < history_limit || projection.messages.is_empty() {
+        return Ok((
+            projection_model_messages(&projection),
+            current_revision.to_owned(),
+        ));
+    }
+
+    let (projection, revision) = compact_projection(
+        clients,
+        config,
+        context,
+        session_id,
+        current_revision,
+        current_revision_number,
+        projection,
+    )
+    .await?;
+    Ok((projection_model_messages(&projection), revision))
+}
+
+async fn compact_projection(
+    clients: &AgentLoop,
+    config: &AgentConfig,
+    context: &InvocationContext,
+    session_id: &str,
+    current_revision: &str,
+    current_revision_number: u64,
+    projection: ContextProjection,
+) -> Result<(ContextProjection, String), TurnFailure> {
+    let compaction_id = uuid::Uuid::new_v4().to_string();
+    let mut revision = append_events(
+        clients,
+        context,
+        session_id,
+        current_revision.to_owned(),
+        vec![session_event(
+            AppendSessionRequestEventsItemKind::ContextCompactionStarted,
+            None,
+            &serde_json::json!({
+                "compaction_id": compaction_id,
+                "compacted_through_revision": current_revision,
+                "source_message_count": projection.messages.len()
+            }),
+        )?],
+    )
+    .await?;
+
+    let request_messages = projection.messages.clone();
+    let outcome = compact_all_messages(
+        clients,
+        config,
+        context,
+        session_id,
+        projection.summary,
+        request_messages.clone(),
+    )
+    .await;
+    let response = match outcome {
+        Ok(response) => response,
+        Err(error) => {
+            revision = append_events(
+                clients,
+                context,
+                session_id,
+                revision,
+                vec![session_event(
+                    AppendSessionRequestEventsItemKind::ContextCompactionFailed,
+                    None,
+                    &serde_json::json!({
+                        "compaction_id": compaction_id,
+                        "error": "compaction_failed"
+                    }),
+                )?],
+            )
+            .await?;
+            let _ = revision;
+            return Err(error);
+        }
+    };
+    let checkpoint = StoredCompactionCheckpoint {
+        compaction_id,
+        compacted_through_revision: current_revision.to_owned(),
+        source_message_count: request_messages.len(),
+        summary_digest: system_instruction_digest(&response.summary),
+        summary: response.summary,
+        retained_messages: response.retained_messages,
+    };
+    revision = append_events(
+        clients,
+        context,
+        session_id,
+        revision,
+        vec![session_event(
+            AppendSessionRequestEventsItemKind::ContextCompactionCommitted,
+            None,
+            &serde_json::to_value(&checkpoint).map_err(|error| {
+                PluginError::runtime(RuntimeFailure::Internal {
+                    detail: format!("failed to encode Context Compaction checkpoint: {error}"),
+                })
+            })?,
+        )?],
+    )
+    .await?;
+    Ok((
+        ContextProjection {
+            summary: Some(checkpoint.summary),
+            messages: checkpoint.retained_messages,
+            compacted_through_revision: current_revision_number,
+        },
+        revision,
+    ))
+}
+
+async fn compact_all_messages(
+    clients: &AgentLoop,
+    config: &AgentConfig,
+    context: &InvocationContext,
+    session_id: &str,
+    mut previous_summary: Option<String>,
+    mut messages: Vec<ContextMessage>,
+) -> Result<CompactResponse, TurnFailure> {
+    loop {
+        let batch_length = messages.len().min(COMPACTION_MESSAGE_LIMIT);
+        let batch = messages.drain(..batch_length).collect::<Vec<_>>();
+        let response = clients
+            .compaction
+            .compact_with_context(
+                context.clone(),
+                CompactRequest {
+                    session_id: session_id.to_owned(),
+                    previous_summary: Some(previous_summary),
+                    messages: batch.clone(),
+                    target_summary_characters: config.max_compaction_summary_characters,
+                },
+            )
+            .await
+            .map_err(map_compaction_error)?;
+        validate_compaction_response(config, &batch, &response)?;
+        if messages.is_empty() {
+            return Ok(response);
+        }
+        previous_summary = Some(response.summary);
+        messages.splice(..0, response.retained_messages);
+    }
+}
+
+async fn read_session_events(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    current_revision: u64,
+) -> Result<Vec<ReadSessionResponseEventsItem>, TurnFailure> {
+    let mut cursor = 0_u64;
+    let mut events = Vec::new();
+    while cursor < current_revision {
+        let response = clients
+            .session
+            .read_with_context(
+                context.clone(),
+                ReadSessionRequest {
+                    session_id: session_id.to_owned(),
+                    after_revision: cursor.to_string(),
+                    limit: SESSION_SCAN_PAGE_LIMIT,
+                },
+            )
+            .await
+            .map_err(map_session_read_error)?;
+        if response.events.is_empty() {
+            return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Session scan ended before its advertised revision".to_owned(),
+            }));
+        }
+        for event in response.events {
+            let revision = event_revision(&event)?;
+            if revision <= cursor || revision > current_revision {
+                return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+                    detail: "Session scan returned non-monotonic events".to_owned(),
+                }));
+            }
+            cursor = revision;
+            events.push(event);
+        }
+    }
+    Ok(events)
+}
+
+fn context_projection(
+    events: &[ReadSessionResponseEventsItem],
+) -> Result<ContextProjection, TurnFailure> {
+    let mut checkpoint = None;
+    for event in events {
+        if event.kind != ReadSessionResponseEventsItemKind::ContextCompactionCommitted {
+            continue;
+        }
+        let stored = serde_json::from_str::<StoredCompactionCheckpoint>(&event.payload_json)
+            .map_err(|error| {
+                PluginError::runtime(RuntimeFailure::PluginFailure {
+                    detail: format!("Session Context Compaction checkpoint is invalid: {error}"),
+                })
+            })?;
+        validate_stored_checkpoint(&stored)?;
+        checkpoint = Some(stored);
+    }
+
+    let (summary, mut messages, boundary) = checkpoint.map_or_else(
+        || (None, Vec::new(), 0),
+        |stored| {
+            (
+                Some(stored.summary),
+                stored.retained_messages,
+                stored
+                    .compacted_through_revision
+                    .parse::<u64>()
+                    .unwrap_or(u64::MAX),
+            )
+        },
+    );
+    if boundary == u64::MAX {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session Context Compaction boundary is invalid".to_owned(),
+        }));
+    }
+    let subsequent = events
+        .iter()
+        .filter(|event| event_revision(event).is_ok_and(|revision| revision > boundary))
+        .cloned()
+        .collect::<Vec<_>>();
+    messages.extend(reconstruct_context_messages(&subsequent)?);
+    Ok(ContextProjection {
+        summary,
+        messages,
+        compacted_through_revision: boundary,
+    })
+}
+
+fn reconstruct_context_messages(
+    events: &[ReadSessionResponseEventsItem],
+) -> Result<Vec<ContextMessage>, TurnFailure> {
+    reconstruct_history(events).map(|messages| {
+        messages
+            .into_iter()
+            .filter_map(|message| match message.role {
+                CompleteMessageRole::User => Some(ContextMessage {
+                    role: ContextMessageRole::User,
+                    content: message.content,
+                }),
+                CompleteMessageRole::Assistant => Some(ContextMessage {
+                    role: ContextMessageRole::Assistant,
+                    content: message.content,
+                }),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+fn projection_model_messages(projection: &ContextProjection) -> Vec<CompleteMessageInput> {
+    let mut messages =
+        Vec::with_capacity(projection.messages.len() + usize::from(projection.summary.is_some()));
+    if let Some(summary) = projection.summary.as_deref() {
+        messages.push(CompleteMessageInput {
+            role: CompleteMessageRole::Assistant,
+            content: format!("[Compacted conversation context]\n{summary}"),
+            tool_call_id: None,
+            tool_name: None,
+            arguments_json: None,
+        });
+    }
+    messages.extend(
+        projection
+            .messages
+            .iter()
+            .map(|message| CompleteMessageInput {
+                role: match message.role {
+                    ContextMessageRole::User => CompleteMessageRole::User,
+                    ContextMessageRole::Assistant => CompleteMessageRole::Assistant,
+                },
+                content: message.content.clone(),
+                tool_call_id: None,
+                tool_name: None,
+                arguments_json: None,
+            }),
+    );
+    messages
+}
+
+fn events_after_revision(
+    events: &[ReadSessionResponseEventsItem],
+    boundary: u64,
+) -> Result<usize, TurnFailure> {
+    events.iter().try_fold(0_usize, |count, event| {
+        event_revision(event).map(|revision| count + usize::from(revision > boundary))
+    })
+}
+
+fn event_revision(event: &ReadSessionResponseEventsItem) -> Result<u64, TurnFailure> {
+    event.revision.parse::<u64>().map_err(|_| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session event has an invalid revision".to_owned(),
+        })
+    })
+}
+
+fn validate_compaction_response(
+    config: &AgentConfig,
+    request_messages: &[ContextMessage],
+    response: &CompactResponse,
+) -> Result<(), TurnFailure> {
+    let summary_limit =
+        usize::try_from(config.max_compaction_summary_characters).unwrap_or(usize::MAX);
+    if response.summary.trim().is_empty()
+        || response.summary.chars().count() > summary_limit
+        || !response.retained_messages.len().is_multiple_of(2)
+        || response.retained_messages.len() >= request_messages.len()
+        || !request_messages.ends_with(&response.retained_messages)
+    {
+        return Err(PluginError::runtime(RuntimeFailure::ProtocolViolation {
+            capability: compaction_capability::CAPABILITY_ID,
+        }));
+    }
+    Ok(())
+}
+
+fn validate_stored_checkpoint(checkpoint: &StoredCompactionCheckpoint) -> Result<(), TurnFailure> {
+    if checkpoint.compaction_id.is_empty()
+        || checkpoint.summary.trim().is_empty()
+        || checkpoint.summary_digest != system_instruction_digest(&checkpoint.summary)
+        || !checkpoint.retained_messages.len().is_multiple_of(2)
+        || checkpoint.retained_messages.len() >= checkpoint.source_message_count
+    {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session Context Compaction checkpoint failed validation".to_owned(),
+        }));
+    }
+    Ok(())
+}
+
+fn map_compaction_error(
+    error: compaction_capability::ContextCompactionInvocationError,
+) -> TurnFailure {
+    match error {
+        compaction_capability::ContextCompactionInvocationError::Runtime(error) => {
+            PluginError::runtime(error)
+        }
+        compaction_capability::ContextCompactionInvocationError::Domain(error) => {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: format!("Context Compaction failed: {error:?}"),
+            })
+        }
+    }
+}
+
 async fn send_agent_message(
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
     message: RunTurnResponse,
@@ -1779,7 +2195,7 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 5);
+        assert_eq!(requirements.len(), 6);
         assert!(
             requirements
                 .iter()
@@ -1798,6 +2214,7 @@ mod tests {
                 "max_tool_calls",
                 "max_output_tokens",
                 "max_history_events",
+                "max_compaction_summary_characters",
                 "max_parallel_tool_calls"
             ])
         );
@@ -1838,6 +2255,111 @@ mod tests {
         assert_eq!(messages[0].content, "hello");
         assert_eq!(messages[1].role, CompleteMessageRole::Assistant);
         assert_eq!(messages[1].content, "world");
+    }
+
+    #[test]
+    fn committed_checkpoint_replaces_only_the_compacted_prefix() {
+        let checkpoint = StoredCompactionCheckpoint {
+            compaction_id: "compact-1".to_owned(),
+            compacted_through_revision: "2".to_owned(),
+            source_message_count: 4,
+            summary: "The user selected SQLite.".to_owned(),
+            summary_digest: system_instruction_digest("The user selected SQLite."),
+            retained_messages: vec![
+                ContextMessage {
+                    role: ContextMessageRole::User,
+                    content: "What next?".to_owned(),
+                },
+                ContextMessage {
+                    role: ContextMessageRole::Assistant,
+                    content: "Add compaction.".to_owned(),
+                },
+            ],
+        };
+        let mut checkpoint_event = history_event(
+            "3",
+            ReadSessionResponseEventsItemKind::ContextCompactionCommitted,
+            &serde_json::to_string(&checkpoint).unwrap(),
+        );
+        checkpoint_event.turn_id = None;
+        let projection = context_projection(&[
+            history_event(
+                "1",
+                ReadSessionResponseEventsItemKind::TurnStarted,
+                r#"{"input":"old"}"#,
+            ),
+            history_event(
+                "2",
+                ReadSessionResponseEventsItemKind::TurnCompleted,
+                r#"{"output":"old answer"}"#,
+            ),
+            checkpoint_event,
+            history_event(
+                "4",
+                ReadSessionResponseEventsItemKind::TurnStarted,
+                r#"{"input":"new"}"#,
+            ),
+            history_event(
+                "5",
+                ReadSessionResponseEventsItemKind::TurnCompleted,
+                r#"{"output":"new answer"}"#,
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            projection.summary.as_deref(),
+            Some("The user selected SQLite.")
+        );
+        assert_eq!(projection.messages.len(), 4);
+        assert_eq!(projection.messages[2].content, "new");
+        assert_eq!(projection.messages[3].content, "new answer");
+    }
+
+    #[test]
+    fn third_party_compactor_may_summarize_but_not_fabricate_the_retained_tail() {
+        let config = AgentConfig {
+            model: "fixture".to_owned(),
+            max_steps: 1,
+            max_tool_calls: 0,
+            max_output_tokens: 1,
+            max_history_events: 1,
+            max_compaction_summary_characters: 512,
+            max_parallel_tool_calls: 1,
+        };
+        let source = vec![
+            ContextMessage {
+                role: ContextMessageRole::User,
+                content: "one".to_owned(),
+            },
+            ContextMessage {
+                role: ContextMessageRole::Assistant,
+                content: "two".to_owned(),
+            },
+            ContextMessage {
+                role: ContextMessageRole::User,
+                content: "three".to_owned(),
+            },
+            ContextMessage {
+                role: ContextMessageRole::Assistant,
+                content: "four".to_owned(),
+            },
+        ];
+        let fabricated = CompactResponse {
+            summary: "bounded summary".to_owned(),
+            retained_messages: vec![
+                ContextMessage {
+                    role: ContextMessageRole::User,
+                    content: "invented".to_owned(),
+                },
+                ContextMessage {
+                    role: ContextMessageRole::Assistant,
+                    content: "tail".to_owned(),
+                },
+            ],
+        };
+
+        assert!(validate_compaction_response(&config, &source, &fabricated).is_err());
     }
 
     #[test]

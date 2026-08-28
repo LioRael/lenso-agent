@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.context-compaction@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "compact",
+      "interaction": "request",
+      "request_schema": "schemas/compact-request.schema.json",
+      "response_schema": "schemas/compact-response.schema.json",
+      "domain_error_schema": "schemas/compact-error.schema.json"
+    }
+  ]
+}
