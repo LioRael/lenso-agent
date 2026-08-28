@@ -25,12 +25,16 @@ Capability with three operations:
 
 The default `lenso.agent.user-interaction.local` Adapter uses an in-process,
 bounded broker. It is independent of TUI rendering. The TUI Shell has a typed
-Port to the same Adapter, displays a question in the transcript, and submits
-the ordinary composer input as its answer. Other surfaces can replace or front
-the Adapter without changing the Tool. The TUI presents a modal decision flow:
-single-select options can expose a focused preview, multi-select questions use
-explicit checked state, every question includes an Other path, and a batch
-advances one question at a time.
+Port to the same Adapter and temporarily replaces the composer with a bottom-
+anchored question card. Other surfaces can replace or front the Adapter without
+changing the Tool. Single-select options can expose an inline focused preview,
+multi-select questions use explicit checked state, every question includes a
+sticky Other path, and one request can contain several independently navigable
+questions.
+
+An accepted answer completes the blocked `ask_user` Tool invocation. It is not
+a new conversational prompt and therefore must not create a User transcript
+entry. The resulting Tool completion remains the durable conversation record.
 
 `lenso.agent.ask-user-tools` projects the seam as one exclusive `ask_user`
 Tool. It accepts one to eight identified questions with bounded option labels,
