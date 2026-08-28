@@ -13,6 +13,8 @@ lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin
 lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-plugin" }
 lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
+lenso-agent-lifecycle-audit-plugin = { path = "../lenso-agent-lifecycle-audit-plugin" }
+lenso-agent-lifecycle-command-plugin = { path = "../lenso-agent-lifecycle-command-plugin" }
 lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
 lenso-agent-model-fixture-plugin = { path = "../lenso-agent-model-fixture-plugin" }
 lenso-agent-model-openai-compatible-plugin = { path = "../lenso-agent-model-openai-compatible-plugin" }

@@ -96,6 +96,21 @@ instances = ["lenso.agent.session.sqlite/local"]
 Inspect its Generation provenance with
 `lenso-agent-cli sessions provenance --session <id> --database .lenso/sessions.sqlite3`.
 
+Lifecycle integrations use ordinary Plugin configuration. The default local
+audit Adapter writes typed `session_started`, `session_resumed`, and
+`turn_started` events to `.lenso/lifecycle/events.jsonl`. A trusted command
+Adapter can be added without changing the Agent Loop:
+
+```toml
+# plugins/lenso.agent.lifecycle.command/webhook.toml
+program = "/absolute/path/to/lifecycle-handler"
+arguments = ["--format", "json"]
+timeout_ms = 5000
+```
+
+It receives one event as JSON on stdin. Program output is discarded and a
+timeout or non-zero exit rejects the transition.
+
 ## Choose Plugins
 
 The Host boots its read-only defaults when `plugins/` is absent or empty. App

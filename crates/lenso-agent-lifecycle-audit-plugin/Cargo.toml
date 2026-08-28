@@ -1,0 +1,27 @@
+[package]
+name = "lenso-agent-lifecycle-audit-plugin"
+version = "0.1.0"
+description = "Append-only local audit Adapter for typed Agent lifecycle events."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.lifecycle.audit"
+root-slot = "lifecycle-hooks"
+
+[dependencies]
+fs2.workspace = true
+lenso.workspace = true
+lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle" }
+lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

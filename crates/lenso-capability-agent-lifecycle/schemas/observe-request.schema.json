@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "event_id",
+    "kind",
+    "session_id",
+    "occurred_at",
+    "generation_spec_digest",
+    "payload_json"
+  ],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "kind": {
+      "$ref": "#/$defs/LifecycleEventKind"
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "turn_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "occurred_at": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "generation_spec_digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    },
+    "payload_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "LifecycleEventKind": {
+      "type": "string",
+      "enum": ["session_started", "session_resumed", "turn_started"]
+    }
+  },
+  "title": "ObserveRequest"
+}
