@@ -14,12 +14,12 @@ authority that the App did not explicitly grant to the child.
 
 ## Decision
 
-The Harness admits subagent delegation as an optional Tool Provider Module.
+The Harness admits subagent delegation as an optional Tool Provider Plugin.
 
-- The reviewed `lenso.subagent` Plugin contributes `delegate` to the root Tool
+- The reviewed `lenso.agent.subagent-tools` Plugin contributes `delegate` to the root Tool
   Runtime. Removing the Plugin removes that model-visible surface in the next
   immutable App Generation.
-- The provider requires one explicitly bound `lenso.agent@1` child Instance.
+- The provider requires one explicitly bound `lenso.agent@3` child Instance.
   It does not discover or construct Agents at runtime.
 - The base App composes `subagent-agent` separately from the root `agent` and
   binds it to a narrow `restricted-read-tools` Runtime. That Runtime projects only the
@@ -28,6 +28,12 @@ The Harness admits subagent delegation as an optional Tool Provider Module.
   opens a fresh durable child Session, and returns the child Session ID in Tool
   result metadata. The parent Session durably records that metadata through its
   ordinary Tool result event.
+- Success metadata uses the versioned `lenso.agent.subagent-result@1` shape and
+  records terminal status, fresh-context mode, child Session identity, byte
+  bounds, and observed child message/Tool-call counts. Child Domain Errors and
+  delegated-output overflow retain the same child Session identity in structured
+  failure details whenever the child emitted one. This observable contract is
+  introduced by Plugin release `0.2.0`.
 - Task and output bytes, child Agent steps, Tool calls, history, output tokens,
   binding admission, and root Tool-call admission remain independently bounded.
 - The first profile is `exclusive` and binds one child Agent. Pooling several

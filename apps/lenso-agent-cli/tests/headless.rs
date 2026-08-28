@@ -96,6 +96,16 @@ fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
+    fs::read_dir(root.join(".lenso/sessions"))
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+        })
+        .collect()
+}
+
 fn stored_session_path(root: &Path) -> std::path::PathBuf {
     fs::read_dir(root.join("sessions"))
         .unwrap()
@@ -1624,6 +1634,117 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
             .count(),
         2
     );
+}
+
+#[test]
+fn delegated_child_records_versioned_result_metadata_and_durable_session() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin(temporary.path(), "lenso.agent.subagent-tools");
+
+    let output = run_configured_derived(temporary.path(), "Delegate a README.md summary.", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Delegated result: Child summary: # Plugin Fixture\n"
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    assert_eq!(sessions.len(), 2);
+    let delegate_result = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .find_map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            (payload["name"] == "delegate").then_some(payload)
+        })
+        .expect("parent Session must retain the delegate Tool result");
+    let metadata: serde_json::Value =
+        serde_json::from_str(delegate_result["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["schema"], "lenso.agent.subagent-result@1");
+    assert_eq!(metadata["status"], "completed");
+    assert_eq!(metadata["context_mode"], "fresh");
+    assert_eq!(metadata["task_bytes"], 41);
+    assert_eq!(metadata["output_bytes"], 31);
+    assert_eq!(metadata["text_delta_count"], 1);
+    assert_eq!(metadata["tool_call_count"], 1);
+
+    let child_session_id = metadata["child_session_id"].as_str().unwrap();
+    let child = sessions
+        .iter()
+        .find(|session| session["session_id"] == child_session_id)
+        .expect("metadata must locate the durable child Session");
+    let child_turn = child["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "turn_started")
+        .unwrap();
+    let child_turn_payload: serde_json::Value =
+        serde_json::from_str(child_turn["payload_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        child_turn_payload["input"],
+        "Summarize README.md for the parent Agent."
+    );
+}
+
+#[test]
+fn delegated_output_limit_failure_retains_child_session_provenance() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.subagent-tools",
+        "max_output_bytes = 8\nmax_task_bytes = 262144\n",
+    );
+
+    let output = run_configured_derived(temporary.path(), "Delegate a README.md summary.", None);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("child_output_limit_exceeded"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    assert_eq!(sessions.len(), 2);
+    let failed_result = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .find_map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            (payload["name"] == "delegate").then_some(payload)
+        })
+        .expect("parent Session must retain the failed delegate Tool result");
+    let error = failed_result["error"].as_str().unwrap();
+    assert!(error.contains("child_output_limit_exceeded"));
+    let child_session_id = sessions
+        .iter()
+        .find(|session| {
+            session["events"].as_array().unwrap().iter().any(|event| {
+                event["kind"] == "turn_started"
+                    && serde_json::from_str::<serde_json::Value>(
+                        event["payload_json"].as_str().unwrap(),
+                    )
+                    .is_ok_and(|payload| {
+                        payload["input"] == "Summarize README.md for the parent Agent."
+                    })
+            })
+        })
+        .unwrap()["session_id"]
+        .as_str()
+        .unwrap();
+    assert!(error.contains(child_session_id));
 }
 
 #[test]
