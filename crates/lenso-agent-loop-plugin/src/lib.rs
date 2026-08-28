@@ -343,11 +343,21 @@ async fn run_turn(
         &turn_input,
         messages,
         run_scope.as_ref(),
+        generation_spec_digest,
         channel,
     )
     .await;
     if let Err(error) = &result {
-        record_turn_failure(clients, context, &session_id, &turn_id, revision, error).await;
+        record_turn_failure(
+            clients,
+            context,
+            &session_id,
+            &turn_id,
+            revision,
+            generation_spec_digest,
+            error,
+        )
+        .await;
     }
     result
 }
@@ -636,6 +646,7 @@ async fn execute_steps(
     turn_input: &str,
     mut messages: Vec<CompleteMessageInput>,
     run_scope: Option<&RunScope>,
+    generation_spec_digest: &str,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
     messages.insert(
@@ -765,6 +776,16 @@ async fn execute_steps(
                 ],
             )
             .await?;
+            let _ = observe_lifecycle(
+                clients,
+                context,
+                LifecycleEventKind::TurnCompleted,
+                session_id,
+                Some(turn_id),
+                generation_spec_digest,
+                &serde_json::json!({"output": turn_output}),
+            )
+            .await;
             return Ok(());
         }
         if !completion.text.is_empty() {
@@ -2140,6 +2161,7 @@ async fn record_turn_failure(
     session_id: &str,
     turn_id: &str,
     revision: String,
+    generation_spec_digest: &str,
     error: &TurnFailure,
 ) {
     let cancelled = context.is_cancelled();
@@ -2160,13 +2182,26 @@ async fn record_turn_failure(
         expected_revision: revision,
         events: vec![event],
     };
-    if cancelled {
-        let _ = clients.session.append(request).await;
+    let appended = if cancelled {
+        clients.session.append(request).await.is_ok()
     } else {
-        let _ = clients
+        clients
             .session
             .append_with_context(context.clone(), request)
-            .await;
+            .await
+            .is_ok()
+    };
+    if appended {
+        let _ = observe_lifecycle(
+            clients,
+            context,
+            LifecycleEventKind::TurnFailed,
+            session_id,
+            Some(turn_id),
+            generation_spec_digest,
+            &serde_json::json!({"error": turn_error_code(error, cancelled)}),
+        )
+        .await;
     }
 }
 
@@ -2243,6 +2278,8 @@ async fn observe_lifecycle(
         LifecycleEventKind::SessionStarted => "session-started",
         LifecycleEventKind::SessionResumed => "session-resumed",
         LifecycleEventKind::TurnStarted => "turn-started",
+        LifecycleEventKind::TurnCompleted => "turn-completed",
+        LifecycleEventKind::TurnFailed => "turn-failed",
     };
     let event_id = turn_id.map_or_else(
         || format!("session/{session_id}/{event_name}"),
