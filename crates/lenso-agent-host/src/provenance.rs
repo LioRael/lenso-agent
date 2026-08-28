@@ -1,13 +1,16 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
 use lenso_agent_loop_plugin::inspect_turn_generation_provenance;
-use lenso_agent_session_file_plugin::FileSessionInspector;
-use lenso_agent_session_inspection::{SessionInspector, inspect_turn_started};
-use lenso_agent_session_sqlite_plugin::SqliteSessionInspector;
+use lenso_agent_session_file_plugin::{FileSessionImporter, FileSessionInspector};
+use lenso_agent_session_inspection::{
+    SessionArchive, SessionImporter, SessionInspector, inspect_turn_started,
+};
+use lenso_agent_session_sqlite_plugin::{SqliteSessionImporter, SqliteSessionInspector};
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
 
 use crate::{
@@ -51,6 +54,20 @@ pub enum SessionCommand {
         session_id: String,
         store: SessionStore,
         runtime_root: PathBuf,
+    },
+    Export {
+        session_id: Option<String>,
+        store: SessionStore,
+        archive: PathBuf,
+    },
+    Import {
+        archive: PathBuf,
+        store: SessionStore,
+    },
+    Migrate {
+        session_id: Option<String>,
+        source: SessionStore,
+        destination: SessionStore,
     },
 }
 
@@ -114,14 +131,16 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     let [command, rest @ ..] = arguments else {
         return Err(session_usage());
     };
-    if command != "provenance" {
-        return Err(session_usage());
+    if command == "migrate" {
+        return parse_session_migration(rest);
     }
     let mut session_id = None;
     let mut directory = PathBuf::from(".lenso/sessions");
     let mut database = None;
     let mut directory_explicit = false;
     let mut runtime_root = PathBuf::from(".lenso/runtime");
+    let mut runtime_root_explicit = false;
+    let mut archive = None;
     let mut arguments = rest.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -135,6 +154,10 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
             }
             "--runtime-root" => {
                 runtime_root = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
+                runtime_root_explicit = true;
+            }
+            "--archive" => {
+                archive = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
             }
             _ => return Err(session_usage()),
         }
@@ -142,11 +165,77 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     if directory_explicit && database.is_some() {
         return Err(session_usage());
     }
-    Ok(SessionCommand::Provenance {
-        session_id: session_id.ok_or_else(session_usage)?,
-        store: database.map_or(SessionStore::File(directory), SessionStore::Sqlite),
-        runtime_root,
+    let store = database.map_or(SessionStore::File(directory), SessionStore::Sqlite);
+    match command.as_str() {
+        "provenance" if archive.is_none() => Ok(SessionCommand::Provenance {
+            session_id: session_id.ok_or_else(session_usage)?,
+            store,
+            runtime_root,
+        }),
+        "export" if archive.is_some() && !runtime_root_explicit => Ok(SessionCommand::Export {
+            session_id,
+            store,
+            archive: archive.expect("checked"),
+        }),
+        "import" if archive.is_some() && session_id.is_none() && !runtime_root_explicit => {
+            Ok(SessionCommand::Import {
+                archive: archive.expect("checked"),
+                store,
+            })
+        }
+        _ => Err(session_usage()),
+    }
+}
+
+fn parse_session_migration(arguments: &[String]) -> Result<SessionCommand, String> {
+    let mut session_id = None;
+    let mut source = None;
+    let mut destination = None;
+    let mut arguments = arguments.iter();
+    while let Some(argument) = arguments.next() {
+        let value = arguments.next().ok_or_else(session_usage)?.clone();
+        match argument.as_str() {
+            "--session" => session_id = Some(value),
+            "--from-directory" => {
+                set_store(&mut source, SessionStore::File(PathBuf::from(value)))?;
+            }
+            "--from-database" => {
+                set_store(&mut source, SessionStore::Sqlite(PathBuf::from(value)))?;
+            }
+            "--to-directory" => {
+                set_store(&mut destination, SessionStore::File(PathBuf::from(value)))?;
+            }
+            "--to-database" => {
+                set_store(&mut destination, SessionStore::Sqlite(PathBuf::from(value)))?;
+            }
+            _ => return Err(session_usage()),
+        }
+    }
+    let source = source.ok_or_else(session_usage)?;
+    let destination = destination.ok_or_else(session_usage)?;
+    if same_store(&source, &destination) {
+        return Err("Session migration source and destination must differ".to_owned());
+    }
+    Ok(SessionCommand::Migrate {
+        session_id,
+        source,
+        destination,
     })
+}
+
+fn set_store(target: &mut Option<SessionStore>, value: SessionStore) -> Result<(), String> {
+    if target.replace(value).is_some() {
+        return Err(session_usage());
+    }
+    Ok(())
+}
+
+fn same_store(left: &SessionStore, right: &SessionStore) -> bool {
+    match (left, right) {
+        (SessionStore::File(left), SessionStore::File(right))
+        | (SessionStore::Sqlite(left), SessionStore::Sqlite(right)) => left == right,
+        _ => false,
+    }
 }
 
 pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
@@ -411,6 +500,66 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
             }
             Ok(())
         }
+        SessionCommand::Export {
+            session_id,
+            store,
+            archive,
+        } => {
+            let inspector = session_inspector(&store);
+            let sessions = session_id.map_or_else(
+                || inspector.inspect_all(),
+                |session_id| {
+                    inspector
+                        .inspect_one(&session_id)
+                        .map(|session| vec![session])
+                },
+            )?;
+            let archive_document = SessionArchive::new(sessions)?;
+            let bytes = archive_document.to_pretty_json()?;
+            let mut file = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&archive)
+                .map_err(|error| format!("failed to create Session archive: {error}"))?;
+            file.write_all(&bytes)
+                .and_then(|()| file.sync_all())
+                .map_err(|error| format!("failed to persist Session archive: {error}"))?;
+            println!(
+                "exported: {} sessions to {}",
+                archive_document.sessions.len(),
+                archive.display()
+            );
+            Ok(())
+        }
+        SessionCommand::Import { archive, store } => {
+            let document = read_session_archive(&archive)?;
+            session_importer(&store).import(&document)?;
+            println!(
+                "imported: {} sessions from {}",
+                document.sessions.len(),
+                archive.display()
+            );
+            Ok(())
+        }
+        SessionCommand::Migrate {
+            session_id,
+            source,
+            destination,
+        } => {
+            let inspector = session_inspector(&source);
+            let sessions = session_id.map_or_else(
+                || inspector.inspect_all(),
+                |session_id| {
+                    inspector
+                        .inspect_one(&session_id)
+                        .map(|session| vec![session])
+                },
+            )?;
+            let archive = SessionArchive::new(sessions)?;
+            session_importer(&destination).import(&archive)?;
+            println!("migrated: {} sessions", archive.sessions.len());
+            Ok(())
+        }
     }
 }
 
@@ -419,6 +568,24 @@ fn session_inspector(store: &SessionStore) -> Box<dyn SessionInspector> {
         SessionStore::File(directory) => Box::new(FileSessionInspector::new(directory)),
         SessionStore::Sqlite(database) => Box::new(SqliteSessionInspector::new(database)),
     }
+}
+
+fn session_importer(store: &SessionStore) -> Box<dyn SessionImporter> {
+    match store {
+        SessionStore::File(directory) => Box::new(FileSessionImporter::new(directory)),
+        SessionStore::Sqlite(database) => Box::new(SqliteSessionImporter::new(database)),
+    }
+}
+
+fn read_session_archive(path: &Path) -> Result<SessionArchive, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect Session archive: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("Session archive is not a regular file".to_owned());
+    }
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read Session archive: {error}"))?;
+    SessionArchive::parse(&bytes)
 }
 
 fn load_generation(
@@ -480,5 +647,5 @@ fn generation_usage() -> String {
 }
 
 fn session_usage() -> String {
-    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]".to_owned()
+    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]\n       lenso-agent-cli sessions export --archive <json-path> [--session <id>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions import --archive <json-path> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions migrate [--session <id>] <--from-directory <path>|--from-database <path>> <--to-directory <path>|--to-database <path>>".to_owned()
 }

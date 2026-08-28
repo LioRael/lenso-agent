@@ -11,7 +11,8 @@ use std::{
 use futures::future::ready;
 use lenso::prelude::*;
 use lenso_agent_session_inspection::{
-    InspectedSession, InspectedSessionEvent, SessionInspector, valid_session_id,
+    InspectedSession, InspectedSessionEvent, SessionArchive, SessionImporter, SessionInspector,
+    valid_session_id, validate_session,
 };
 use lenso_capability_agent_session::{
     self as session_contract, AppendError, AppendErrorRevisionConflictPayload,
@@ -103,6 +104,76 @@ impl SessionInspector for FileSessionInspector {
     }
 }
 
+/// Offline importer for the private JSON Session store.
+#[derive(Clone, Debug)]
+pub struct FileSessionImporter {
+    directory: PathBuf,
+}
+
+impl FileSessionImporter {
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+}
+
+impl SessionImporter for FileSessionImporter {
+    fn import(&self, archive: &SessionArchive) -> Result<(), String> {
+        fs::create_dir_all(&self.directory)
+            .map_err(|error| format!("failed to create Session directory: {error}"))?;
+        let metadata = fs::symlink_metadata(&self.directory)
+            .map_err(|error| format!("failed to inspect Session directory: {error}"))?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err("Session directory is not a regular directory".to_owned());
+        }
+        for session in &archive.sessions {
+            validate_session(session)?;
+            if self
+                .directory
+                .join(format!("{}.json", session.session_id))
+                .exists()
+            {
+                return Err(format!("Session `{}` already exists", session.session_id));
+            }
+        }
+        let import_id = uuid::Uuid::new_v4();
+        let mut staged = Vec::new();
+        for session in &archive.sessions {
+            let stored = stored_session(session);
+            let bytes = serde_json::to_vec_pretty(&stored)
+                .map_err(|error| format!("failed to encode Session import: {error}"))?;
+            let temporary = self
+                .directory
+                .join(format!(".{}.{}.tmp", session.session_id, import_id));
+            if let Err(error) = fs::write(&temporary, bytes) {
+                for (temporary, _) in &staged {
+                    let _ = fs::remove_file(temporary);
+                }
+                return Err(format!("failed to stage Session import: {error}"));
+            }
+            staged.push((
+                temporary,
+                self.directory.join(format!("{}.json", session.session_id)),
+            ));
+        }
+        let mut committed = Vec::new();
+        for (temporary, destination) in &staged {
+            if let Err(error) = fs::rename(temporary, destination) {
+                for path in committed {
+                    let _ = fs::remove_file(path);
+                }
+                for (temporary, _) in &staged {
+                    let _ = fs::remove_file(temporary);
+                }
+                return Err(format!("failed to commit Session import: {error}"));
+            }
+            committed.push(destination);
+        }
+        Ok(())
+    }
+}
+
 fn inspected_session(session: StoredSession) -> InspectedSession {
     InspectedSession {
         session_id: session.session_id,
@@ -117,6 +188,26 @@ fn inspected_session(session: StoredSession) -> InspectedSession {
                 turn_id: event.turn_id,
                 occurred_at: event.occurred_at,
                 payload_json: event.payload_json,
+            })
+            .collect(),
+    }
+}
+
+fn stored_session(session: &InspectedSession) -> StoredSession {
+    StoredSession {
+        schema_version: 1,
+        session_id: session.session_id.clone(),
+        revision: session.revision,
+        events: session
+            .events
+            .iter()
+            .map(|event| StoredEvent {
+                revision: event.revision,
+                event_id: event.event_id.clone(),
+                kind: event.kind.clone(),
+                turn_id: event.turn_id.clone(),
+                occurred_at: event.occurred_at.clone(),
+                payload_json: event.payload_json.clone(),
             })
             .collect(),
     }

@@ -36,8 +36,12 @@ The Host selects a file directory or SQLite database without importing either
 private representation.
 
 SQLite is selectable through normal Profile and `plugins/` configuration. The
-existing file Adapter remains the default until an explicit import/export
-workflow can migrate existing stores without silently hiding Sessions.
+existing file Adapter remains the default. Explicit `sessions export`,
+`sessions import`, and `sessions migrate` commands transfer complete validated
+histories through versioned `lenso.agent.session-archive@1` documents. Imports
+reject existing Session IDs instead of silently replacing durable state;
+SQLite imports are transactional and file imports stage every record before
+commit.
 
 ## Consequences
 
@@ -45,7 +49,7 @@ workflow can migrate existing stores without silently hiding Sessions.
   provenance and Generation GC its storage format.
 - SQLite and file stores can be tested against the same externally observable
   Session semantics.
-- Offline inspection is intentionally read-only and validates complete Session
-  histories before projecting provenance.
-- Store migration remains explicit future work rather than an implicit default
-  switch.
+- Offline inspection validates complete Session histories before provenance or
+  archive projection; each Adapter separately owns its offline importer.
+- Store migration is an explicit operator action, never an implicit fallback or
+  default switch.

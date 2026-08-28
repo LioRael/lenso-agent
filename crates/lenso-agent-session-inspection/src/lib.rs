@@ -3,7 +3,8 @@
 use std::collections::BTreeSet;
 
 /// One normalized event read from a durable Session Adapter.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct InspectedSessionEvent {
     pub revision: u64,
     pub event_id: String,
@@ -14,7 +15,8 @@ pub struct InspectedSessionEvent {
 }
 
 /// One normalized durable Session.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct InspectedSession {
     pub session_id: String,
     pub revision: u64,
@@ -25,6 +27,54 @@ pub struct InspectedSession {
 pub trait SessionInspector {
     fn inspect_one(&self, session_id: &str) -> Result<InspectedSession, String>;
     fn inspect_all(&self) -> Result<Vec<InspectedSession>, String>;
+}
+
+/// Versioned backend-neutral Session transfer document.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionArchive {
+    pub format: String,
+    pub sessions: Vec<InspectedSession>,
+}
+
+impl SessionArchive {
+    pub const FORMAT: &'static str = "lenso.agent.session-archive@1";
+
+    pub fn new(mut sessions: Vec<InspectedSession>) -> Result<Self, String> {
+        sessions.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+        let mut ids = BTreeSet::new();
+        if sessions.iter().any(|session| {
+            validate_session(session).is_err() || !ids.insert(session.session_id.as_str())
+        }) {
+            return Err("Session archive contains an invalid or duplicate Session".to_owned());
+        }
+        Ok(Self {
+            format: Self::FORMAT.to_owned(),
+            sessions,
+        })
+    }
+
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let archive = serde_json::from_slice::<Self>(bytes)
+            .map_err(|error| format!("Session archive is invalid: {error}"))?;
+        if archive.format != Self::FORMAT {
+            return Err(format!(
+                "Session archive format `{}` is unsupported",
+                archive.format
+            ));
+        }
+        Self::new(archive.sessions)
+    }
+
+    pub fn to_pretty_json(&self) -> Result<Vec<u8>, String> {
+        serde_json::to_vec_pretty(self)
+            .map_err(|error| format!("failed to encode Session archive: {error}"))
+    }
+}
+
+/// Storage-neutral offline import seam implemented by each Session Adapter.
+pub trait SessionImporter {
+    fn import(&self, archive: &SessionArchive) -> Result<(), String>;
 }
 
 /// One validated `turn_started` fact projected for Generation provenance.
