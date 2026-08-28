@@ -2953,6 +2953,7 @@ dependencies = [
  "lenso-agent-web-plugin",
  "lenso-capability-agent",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-user-interaction",
  "lenso-kernel",
  "reqwest",
  "serde",
@@ -2969,6 +2970,7 @@ dependencies = [
  "lenso",
  "lenso-capability-agent",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-user-interaction",
  "serde_json",
 ]
 

@@ -25,6 +25,9 @@ use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse
 use lenso_capability_agent_session::{
     ListSessionsResponse, ReadSessionResponse, ReadSessionResponseEventsItemKind,
 };
+use lenso_capability_agent_user_interaction::{
+    InteractionAnswer, InteractionOption, InteractionQuestion, PendingInteraction,
+};
 use lenso_kernel::{CancellationToken, StreamEvent};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
@@ -75,12 +78,22 @@ struct WebRuntime {
 
 #[derive(Debug)]
 enum RuntimeCommand {
+    AnswerInteraction {
+        answers: Vec<InteractionAnswer>,
+        interaction_id: String,
+        reply: oneshot::Sender<Result<(), RuntimeInteractionError>>,
+        request_id: String,
+    },
     CancelTurn {
         reply: oneshot::Sender<bool>,
         request_id: String,
     },
     ListSessions {
         reply: oneshot::Sender<Result<WebSessionList, String>>,
+    },
+    PendingInteractions {
+        reply: oneshot::Sender<Result<Vec<PendingInteraction>, RuntimeInteractionError>>,
+        request_id: String,
     },
     ReadSession {
         reply: oneshot::Sender<Result<ReadSessionResponse, String>>,
@@ -99,6 +112,12 @@ enum RuntimeCommand {
     },
 }
 
+#[derive(Debug)]
+enum RuntimeInteractionError {
+    Inactive,
+    Rejected(String),
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
@@ -108,6 +127,102 @@ struct WebTurnRequest {
     request_id: String,
     #[serde(default)]
     session_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WebAnswerInteractionRequest {
+    answers: Vec<WebInteractionAnswer>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WebInteractionAnswer {
+    question_id: String,
+    selected_option_ids: Vec<String>,
+    other: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebPendingInteractionsResponse {
+    interactions: Vec<WebPendingInteraction>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebPendingInteraction {
+    interaction_id: String,
+    questions: Vec<WebInteractionQuestion>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebInteractionQuestion {
+    header: String,
+    multi_select: bool,
+    options: Vec<WebInteractionOption>,
+    prompt: String,
+    question_id: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebInteractionOption {
+    description: String,
+    label: String,
+    option_id: String,
+    preview: Option<String>,
+}
+
+impl From<WebInteractionAnswer> for InteractionAnswer {
+    fn from(answer: WebInteractionAnswer) -> Self {
+        Self {
+            question_id: answer.question_id,
+            selected_option_ids: answer.selected_option_ids,
+            other: Some(answer.other),
+        }
+    }
+}
+
+impl From<PendingInteraction> for WebPendingInteraction {
+    fn from(interaction: PendingInteraction) -> Self {
+        Self {
+            interaction_id: interaction.interaction_id,
+            questions: interaction
+                .questions
+                .into_iter()
+                .map(WebInteractionQuestion::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<InteractionQuestion> for WebInteractionQuestion {
+    fn from(question: InteractionQuestion) -> Self {
+        Self {
+            header: question.header,
+            multi_select: question.multi_select,
+            options: question
+                .options
+                .into_iter()
+                .map(WebInteractionOption::from)
+                .collect(),
+            prompt: question.prompt,
+            question_id: question.question_id,
+        }
+    }
+}
+
+impl From<InteractionOption> for WebInteractionOption {
+    fn from(option: InteractionOption) -> Self {
+        Self {
+            description: option.description,
+            label: option.label,
+            option_id: option.option_id,
+            preview: option.preview.and_then(|preview| preview),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -309,6 +424,14 @@ fn router(runtime: WebRuntime) -> Router {
             "/api/console/v1/agent/turns/{request_id}/cancel",
             post(cancel_turn),
         )
+        .route(
+            "/api/console/v1/agent/turns/{request_id}/interactions",
+            get(pending_interactions),
+        )
+        .route(
+            "/api/console/v1/agent/turns/{request_id}/interactions/{interaction_id}/answer",
+            post(answer_interaction),
+        )
         .route("/api/console/v1/agent/sessions", get(list_sessions))
         .route(
             "/api/console/v1/agent/control/tool-policy",
@@ -336,6 +459,7 @@ async fn bootstrap(
             ("edit", true),
             ("sessionList", true),
             ("sessionRead", true),
+            ("userInteraction", true),
         ]
         .into_iter()
         .collect(),
@@ -400,6 +524,66 @@ async fn cancel_turn(
         Ok(StatusCode::ACCEPTED)
     } else {
         Err(ApiProblem::not_found("Agent Turn is not active"))
+    }
+}
+
+async fn pending_interactions(
+    State(runtime): State<WebRuntime>,
+    Path(request_id): Path<String>,
+) -> Result<Json<WebPendingInteractionsResponse>, ApiProblem> {
+    validate_request_id(&request_id)?;
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::PendingInteractions { reply, request_id })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    let interactions = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(interaction_problem)?;
+    Ok(Json(WebPendingInteractionsResponse {
+        interactions: interactions
+            .into_iter()
+            .map(WebPendingInteraction::from)
+            .collect(),
+    }))
+}
+
+async fn answer_interaction(
+    State(runtime): State<WebRuntime>,
+    Path((request_id, interaction_id)): Path<(String, String)>,
+    Json(request): Json<WebAnswerInteractionRequest>,
+) -> Result<StatusCode, ApiProblem> {
+    validate_request_id(&request_id)?;
+    validate_request_id(&interaction_id)?;
+    let answers = request
+        .answers
+        .into_iter()
+        .map(InteractionAnswer::from)
+        .collect();
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::AnswerInteraction {
+            answers,
+            interaction_id,
+            reply,
+            request_id,
+        })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(interaction_problem)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn interaction_problem(error: RuntimeInteractionError) -> ApiProblem {
+    match error {
+        RuntimeInteractionError::Inactive => ApiProblem::not_found("Agent Turn is not active"),
+        RuntimeInteractionError::Rejected(detail) => ApiProblem::conflict(detail),
     }
 }
 
@@ -497,6 +681,16 @@ fn valid_session_id(session_id: &str) -> bool {
         && session_id
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn validate_request_id(value: &str) -> Result<(), ApiProblem> {
+    if valid_session_id(value) {
+        Ok(())
+    } else {
+        Err(ApiProblem::bad_request(
+            "Agent interaction identity is invalid",
+        ))
+    }
 }
 
 fn normalize_allowed_tools(tools: Vec<String>) -> Result<Vec<String>, String> {
@@ -644,6 +838,12 @@ async fn runtime_actor(
             },
         };
         match command {
+            RuntimeCommand::AnswerInteraction { reply, .. } => {
+                let _ = reply.send(Err(RuntimeInteractionError::Inactive));
+            }
+            RuntimeCommand::PendingInteractions { reply, .. } => {
+                let _ = reply.send(Err(RuntimeInteractionError::Inactive));
+            }
             RuntimeCommand::CancelTurn { reply, .. } => {
                 let _ = reply.send(false);
             }
@@ -682,9 +882,22 @@ async fn runtime_actor(
                 if pre_cancelled.remove(&request_id) {
                     cancellation.cancel();
                 }
+                let turn = match app.lease_web_turn().await {
+                    Ok(turn) => turn,
+                    Err(error) => {
+                        send_stream_event(
+                            &events,
+                            "turn.failed",
+                            None,
+                            &WebStreamEvent::Failed { detail: &error },
+                        )
+                        .await;
+                        continue;
+                    }
+                };
                 let shutdown = {
-                    let running = run_turn_on_app(
-                        &app,
+                    let running = run_turn_on_lease(
+                        &turn,
                         request,
                         &events,
                         cancellation.clone(),
@@ -701,6 +914,31 @@ async fn runtime_actor(
                                     break;
                                 };
                                 match command {
+                                    RuntimeCommand::PendingInteractions { reply, request_id: target_id } => {
+                                        let result = if target_id == request_id {
+                                            turn.pending_interactions()
+                                                .await
+                                                .map_err(RuntimeInteractionError::Rejected)
+                                        } else {
+                                            Err(RuntimeInteractionError::Inactive)
+                                        };
+                                        let _ = reply.send(result);
+                                    }
+                                    RuntimeCommand::AnswerInteraction {
+                                        answers,
+                                        interaction_id,
+                                        reply,
+                                        request_id: target_id,
+                                    } => {
+                                        let result = if target_id == request_id {
+                                            turn.answer_interaction(interaction_id, answers)
+                                                .await
+                                                .map_err(RuntimeInteractionError::Rejected)
+                                        } else {
+                                            Err(RuntimeInteractionError::Inactive)
+                                        };
+                                        let _ = reply.send(result);
+                                    }
                                     RuntimeCommand::CancelTurn { reply, request_id: cancelled_id } => {
                                         let found = cancelled_id == request_id || pending.iter().any(|command| matches!(command, RuntimeCommand::RunTurn { request, .. } if request.request_id == cancelled_id));
                                         if cancelled_id == request_id {
@@ -954,14 +1192,14 @@ async fn project_session_list(
     Ok(WebSessionList { sessions })
 }
 
-async fn run_turn_on_app(
-    app: &AgentApp,
+async fn run_turn_on_lease(
+    turn: &lenso_agent_host::generation::TurnGeneration,
     request: WebTurnRequest,
     events: &mpsc::Sender<Result<Event, Infallible>>,
     cancellation: CancellationToken,
     allowed_tools: &[String],
 ) {
-    if let Err(error) = invoke_turn(app, request, events, cancellation, allowed_tools).await {
+    if let Err(error) = invoke_turn(turn, request, events, cancellation, allowed_tools).await {
         send_stream_event(
             events,
             "turn.failed",
@@ -973,13 +1211,12 @@ async fn run_turn_on_app(
 }
 
 async fn invoke_turn(
-    app: &AgentApp,
+    turn: &lenso_agent_host::generation::TurnGeneration,
     request: WebTurnRequest,
     events: &mpsc::Sender<Result<Event, Infallible>>,
     cancellation: CancellationToken,
     allowed_tools: &[String],
 ) -> Result<(), String> {
-    let turn = app.lease_web_turn().await?;
     let requested_session_id = match (request.session_id, request.edit_turn_id) {
         (Some(session_id), Some(turn_id)) => {
             turn.fork_session_before_turn(session_id, turn_id).await?

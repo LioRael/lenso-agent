@@ -110,6 +110,100 @@ async fn streams_lists_and_branches_a_durable_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn answers_a_pending_web_interaction_and_resumes_the_same_turn() {
+    let root = tempfile::tempdir().unwrap();
+    write_web_fixture(root.path());
+
+    let address = available_address();
+    let mut server = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args([
+                "--listen",
+                &address.to_string(),
+                "--profile",
+                "web",
+                "--allow-tool",
+                "ask_user",
+            ])
+            .current_dir(root.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+
+    let response = client
+        .post(format!("http://{address}/api/console/v1/agent/turns"))
+        .header("accept", "text/event-stream")
+        .json(&serde_json::json!({
+            "input": "Ask me which mode to use.",
+            "request_id": "request-interaction",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let stream = tokio::spawn(async move { response.text().await.unwrap() });
+
+    let interaction = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let response = client
+                .get(format!(
+                    "http://{address}/api/console/v1/agent/turns/request-interaction/interactions"
+                ))
+                .send()
+                .await
+                .unwrap();
+            if response.status().is_success() {
+                let body = response.json::<serde_json::Value>().await.unwrap();
+                if let Some(interaction) = body["interactions"].as_array().unwrap().first() {
+                    break interaction.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("ask_user should become visible to the Web surface");
+    assert_eq!(interaction["questions"][0]["header"], "Mode");
+    assert_eq!(
+        interaction["questions"][0]["options"][0]["preview"],
+        "mode = \"safe\""
+    );
+
+    client
+        .post(format!(
+            "http://{address}/api/console/v1/agent/turns/request-interaction/interactions/{}/answer",
+            interaction["interactionId"].as_str().unwrap()
+        ))
+        .json(&serde_json::json!({
+            "answers": [{
+                "questionId": "mode",
+                "selectedOptionIds": ["safe"],
+                "other": null,
+            }]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let body = tokio::time::timeout(Duration::from_secs(2), stream)
+        .await
+        .expect("the answered Turn should resume")
+        .unwrap();
+    assert!(
+        body.contains("Selected mode: safe"),
+        "unexpected stream: {body}"
+    );
+    assert!(body.contains("turn_completed"), "unexpected stream: {body}");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rejects_an_allowed_tool_outside_the_active_catalog_before_readiness() {
     let root = tempfile::tempdir().unwrap();
     write_web_fixture(root.path());
@@ -262,7 +356,7 @@ fn write_web_fixture(root: &std::path::Path) {
         concat!(
             "model = \"fixture/readme-summary-v1\"\n",
             "max_steps = 2\n",
-            "max_tool_calls = 0\n",
+            "max_tool_calls = 2\n",
             "max_parallel_tool_calls = 1\n",
             "max_output_tokens = 128\n",
             "max_history_events = 100\n",
