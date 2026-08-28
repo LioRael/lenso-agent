@@ -3,7 +3,7 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     rc::Rc,
 };
@@ -27,14 +27,25 @@ use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, Run
 struct OpenAiConfig {
     base_url: String,
     model: String,
+    #[serde(default)]
+    allowed_models: Vec<String>,
     api_key_ref: String,
 }
 
 impl OpenAiConfig {
     fn validate(self) -> Result<Self, RuntimeFailure> {
-        if self.model.trim().is_empty() || self.api_key_ref.trim().is_empty() {
+        if !valid_model_id(&self.model)
+            || self.allowed_models.len() > 16
+            || self
+                .allowed_models
+                .iter()
+                .any(|model| !valid_model_id(model) || model == &self.model)
+            || self.allowed_models.iter().collect::<BTreeSet<_>>().len()
+                != self.allowed_models.len()
+            || self.api_key_ref.trim().is_empty()
+        {
             return Err(invalid_plan(
-                "OpenAI-compatible model and api_key_ref must not be empty",
+                "OpenAI-compatible model allowlist and api_key_ref are invalid",
             ));
         }
         let endpoint = self.endpoint()?;
@@ -67,6 +78,14 @@ impl OpenAiConfig {
         ))
         .map_err(|_| invalid_plan("OpenAI-compatible base_url is invalid"))
     }
+
+    fn admits_model(&self, model: &str) -> bool {
+        model == self.model || self.allowed_models.iter().any(|allowed| allowed == model)
+    }
+}
+
+fn valid_model_id(model: &str) -> bool {
+    model.trim() == model && !model.is_empty() && model.len() <= 256
 }
 
 fn validate_config(config: &OpenAiConfig) -> Result<(), RuntimeFailure> {
@@ -89,7 +108,7 @@ impl ModelProvider for OpenAiCompatibleModel {
         context: InvocationContext,
         request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
-        if request.model != self.config.model {
+        if !self.config.admits_model(&request.model) {
             return Box::pin(ready(Err(ModelInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ))));
@@ -714,6 +733,7 @@ data: [DONE]
         let error = OpenAiConfig {
             base_url: "http://example.com/v1".to_owned(),
             model: "test-model".to_owned(),
+            allowed_models: Vec::new(),
             api_key_ref: "model/api-key".to_owned(),
         }
         .validate()
@@ -726,11 +746,27 @@ data: [DONE]
         let error = OpenAiConfig {
             base_url: "https://secret@example.com/v1".to_owned(),
             model: "test-model".to_owned(),
+            allowed_models: Vec::new(),
             api_key_ref: "model/api-key".to_owned(),
         }
         .validate()
         .unwrap_err();
         assert!(matches!(error, RuntimeFailure::InvalidResolvedPlan { .. }));
+    }
+
+    #[test]
+    fn configured_auxiliary_model_is_admitted_without_changing_the_primary() {
+        let config = OpenAiConfig {
+            base_url: "https://api.openai.com/v1".to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: vec!["presentation-model".to_owned()],
+            api_key_ref: "model/api-key".to_owned(),
+        }
+        .validate()
+        .unwrap();
+        assert!(config.admits_model("main-model"));
+        assert!(config.admits_model("presentation-model"));
+        assert!(!config.admits_model("unreviewed-model"));
     }
 
     #[test]

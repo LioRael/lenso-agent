@@ -28,6 +28,7 @@ lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
+lenso-capability-agent-session-presentation = { path = "../lenso-capability-agent-session-presentation" }
 lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }

@@ -19,8 +19,9 @@ use lenso_capability_agent_session::{
     AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, ListError,
     ListSessionsRequest, ListSessionsResponse, ListSessionsResponseSessionsItem, OpenError,
     OpenSessionRequest, OpenSessionResponse, ReadError, ReadSessionRequest, ReadSessionResponse,
-    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionList,
-    SessionOpen, SessionProvider, SessionRead,
+    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, RenameError,
+    RenameErrorRevisionConflictPayload, RenameSessionRequest, RenameSessionResponse, SessionAppend,
+    SessionList, SessionOpen, SessionProvider, SessionRead, SessionRename,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -41,6 +42,11 @@ CREATE TABLE IF NOT EXISTS events (
     payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
     PRIMARY KEY (session_id, revision),
     UNIQUE (session_id, event_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS session_titles (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    title TEXT NOT NULL CHECK (length(title) > 0),
+    title_revision INTEGER NOT NULL CHECK (title_revision > 0)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS events_turn_started
 ON events(session_id, revision) WHERE kind = 'turn_started';
@@ -295,11 +301,17 @@ impl SqliteSessionProvider {
         let transaction = connection
             .transaction()
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
-        let revision = transaction
+        let (revision, manual_title, title_revision) = transaction
             .query_row(
-                "SELECT revision FROM sessions WHERE session_id = ?1",
+                "SELECT s.revision, t.title, COALESCE(t.title_revision, 0) FROM sessions s LEFT JOIN session_titles t ON t.session_id = s.session_id WHERE s.session_id = ?1",
                 [&request.session_id],
-                |row| row.get::<_, i64>(0),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
             )
             .optional()
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?
@@ -324,12 +336,31 @@ impl SqliteSessionProvider {
             })
             .collect::<Result<Vec<_>, _>>()?
         };
+        let projected_title = if manual_title.is_none() {
+            transaction
+                .query_row(
+                    "SELECT json_extract(payload_json, '$.presentation.title') FROM events WHERE session_id = ?1 AND kind = 'turn_completed' AND json_type(payload_json, '$.presentation.title') = 'text' ORDER BY revision DESC LIMIT 1",
+                    [&request.session_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()
+                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?
+                .flatten()
+        } else {
+            None
+        };
         transaction
             .commit()
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
         Ok(ReadSessionResponse {
             session_id: request.session_id,
             revision: revision.to_string(),
+            title: valid_presentation_text(manual_title.or(projected_title), 256),
+            title_revision: Some(
+                database_revision(title_revision)
+                    .map_err(OperationFailure::Runtime)?
+                    .to_string(),
+            ),
             events,
         })
     }
@@ -345,9 +376,23 @@ impl SqliteSessionProvider {
         let connection = self.connect().map_err(OperationFailure::Runtime)?;
         let mut statement = connection
             .prepare(
-                "SELECT s.session_id, s.revision, e.occurred_at \
+                "SELECT s.session_id, s.revision, e.occurred_at, \
+                    COALESCE(t.title, (SELECT json_extract(p.payload_json, '$.presentation.title') \
+                     FROM events p \
+                     WHERE p.session_id = s.session_id \
+                       AND p.kind = 'turn_completed' \
+                       AND json_type(p.payload_json, '$.presentation.title') = 'text' \
+                     ORDER BY p.revision DESC LIMIT 1)), \
+                    COALESCE(t.title_revision, 0), \
+                    (SELECT json_extract(p.payload_json, '$.presentation.latest_preview') \
+                     FROM events p \
+                     WHERE p.session_id = s.session_id \
+                       AND p.kind = 'turn_completed' \
+                       AND json_type(p.payload_json, '$.presentation.latest_preview') = 'text' \
+                     ORDER BY p.revision DESC LIMIT 1) \
                  FROM sessions s \
                  JOIN events e ON e.session_id = s.session_id AND e.revision = s.revision \
+                 LEFT JOIN session_titles t ON t.session_id = s.session_id \
                  WHERE s.revision > 0 \
                  ORDER BY e.occurred_at DESC, s.session_id DESC \
                  LIMIT ?1",
@@ -359,23 +404,103 @@ impl SqliteSessionProvider {
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
         let sessions = rows
             .map(|row| {
-                let (session_id, revision, updated_at) =
+                let (session_id, revision, updated_at, title, title_revision, latest_preview) =
                     row.map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
                 let revision = database_revision(revision).map_err(OperationFailure::Runtime)?;
                 Ok(ListSessionsResponseSessionsItem {
+                    latest_preview: valid_presentation_text(latest_preview, 1_024),
                     revision: revision.to_string(),
                     session_id,
+                    title: valid_presentation_text(title, 256),
+                    title_revision: Some(
+                        database_revision(title_revision)
+                            .map_err(OperationFailure::Runtime)?
+                            .to_string(),
+                    ),
                     updated_at,
                 })
             })
             .collect::<Result<Vec<_>, OperationFailure<ListError>>>()?;
         Ok(ListSessionsResponse { sessions })
     }
+
+    fn rename_now(
+        &self,
+        request: &RenameSessionRequest,
+    ) -> Result<RenameSessionResponse, OperationFailure<RenameError>> {
+        let _operation = self.operation_lock.borrow_mut();
+        if !valid_session_id(&request.session_id) {
+            return Err(RenameError::InvalidSessionId.into());
+        }
+        let Some(title) = normalize_title(&request.title) else {
+            return Err(RenameError::InvalidTitle.into());
+        };
+        let expected = request
+            .expected_title_revision
+            .parse::<u64>()
+            .map_err(|_| RenameError::InvalidRevision)?;
+        let expected_database =
+            i64::try_from(expected).map_err(|_| RenameError::InvalidRevision)?;
+        let mut connection = self.connect().map_err(OperationFailure::Runtime)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        let current = transaction
+            .query_row(
+                "SELECT COALESCE(t.title_revision, 0) FROM sessions s LEFT JOIN session_titles t ON t.session_id = s.session_id WHERE s.session_id = ?1",
+                [&request.session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?
+            .ok_or(RenameError::NotFound)?;
+        if current != expected_database {
+            return Err(RenameError::RevisionConflict {
+                payload: RenameErrorRevisionConflictPayload {
+                    current_title_revision: database_revision(current)
+                        .map_err(OperationFailure::Runtime)?
+                        .to_string(),
+                },
+            }
+            .into());
+        }
+        let next = expected.checked_add(1).ok_or_else(|| {
+            OperationFailure::Runtime(RuntimeFailure::Internal {
+                detail: "Session title revision space is exhausted".to_owned(),
+            })
+        })?;
+        let next_database = i64::try_from(next).map_err(|_| {
+            OperationFailure::Runtime(RuntimeFailure::Internal {
+                detail: "Session title revision exceeds SQLite range".to_owned(),
+            })
+        })?;
+        transaction
+            .execute(
+                "INSERT INTO session_titles(session_id, title, title_revision) VALUES (?1, ?2, ?3) ON CONFLICT(session_id) DO UPDATE SET title = excluded.title, title_revision = excluded.title_revision",
+                params![request.session_id, title, next_database],
+            )
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        transaction
+            .commit()
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        Ok(RenameSessionResponse {
+            title,
+            title_revision: next.to_string(),
+        })
+    }
+}
+
+fn normalize_title(title: &str) -> Option<String> {
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!title.is_empty() && title.chars().count() <= 256).then_some(title)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -386,6 +511,10 @@ struct StoredEvent {
     turn_id: Option<String>,
     occurred_at: String,
     payload_json: String,
+}
+
+fn valid_presentation_text(value: Option<String>, maximum: usize) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty() && value.chars().count() <= maximum)
 }
 
 fn validate_event(
@@ -537,6 +666,13 @@ impl SessionProvider for SqliteSessionProvider {
     ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
         Box::pin(ready(native_result(self.read_now(request))))
     }
+    fn rename(
+        &self,
+        _: InvocationContext,
+        request: RenameSessionRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionRename> {
+        Box::pin(ready(native_result(self.rename_now(&request))))
+    }
 }
 
 #[lenso::provides(session_contract::Session)]
@@ -599,6 +735,21 @@ impl SessionProvider for SqliteSessionPlugin {
                 capability: session_contract::CAPABILITY_ID,
             })
             .and_then(|provider| native_result(provider.read_now(request)));
+        Box::pin(ready(result))
+    }
+    fn rename(
+        &self,
+        _: InvocationContext,
+        request: RenameSessionRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionRename> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.rename_now(&request)));
         Box::pin(ready(result))
     }
 }
@@ -697,6 +848,16 @@ impl SessionImporter for SqliteSessionImporter {
                     params![session.session_id, revision],
                 )
                 .map_err(|error| format!("failed to import Session: {error}"))?;
+            if let Some(title) = &session.title {
+                let title_revision = i64::try_from(session.title_revision)
+                    .map_err(|_| "Session title revision exceeds SQLite range".to_owned())?;
+                transaction
+                    .execute(
+                        "INSERT INTO session_titles(session_id, title, title_revision) VALUES (?1, ?2, ?3)",
+                        params![session.session_id, title, title_revision],
+                    )
+                    .map_err(|error| format!("failed to import Session title: {error}"))?;
+            }
             for event in &session.events {
                 let event_revision = i64::try_from(event.revision)
                     .map_err(|_| "Session event revision exceeds SQLite range".to_owned())?;
@@ -741,21 +902,37 @@ fn inspect_database(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("failed to start Session inspection: {error}"))?;
-    let mut sessions = {
-        let mut statement = transaction.prepare(
-            "SELECT session_id, revision FROM sessions WHERE (?1 IS NULL OR session_id = ?1) ORDER BY session_id",
+    let has_session_titles = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_titles')",
+            [],
+            |row| row.get::<_, bool>(0),
         )
-        .map_err(|error| format!("failed to inspect Sessions: {error}"))?;
+        .map_err(|error| format!("failed to inspect Session title schema: {error}"))?;
+    let mut sessions = {
+        let query = if has_session_titles {
+            "SELECT s.session_id, s.revision, t.title, COALESCE(t.title_revision, 0) FROM sessions s LEFT JOIN session_titles t ON t.session_id = s.session_id WHERE (?1 IS NULL OR s.session_id = ?1) ORDER BY s.session_id"
+        } else {
+            "SELECT s.session_id, s.revision, NULL, 0 FROM sessions s WHERE (?1 IS NULL OR s.session_id = ?1) ORDER BY s.session_id"
+        };
+        let mut statement = transaction
+            .prepare(query)
+            .map_err(|error| format!("failed to inspect Sessions: {error}"))?;
         statement
             .query_map(params![session_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
             })
             .map_err(|error| format!("failed to inspect Sessions: {error}"))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("failed to inspect Sessions: {error}"))?
     };
     let mut output = Vec::new();
-    for (id, revision) in sessions.drain(..) {
+    for (id, revision, title, title_revision) in sessions.drain(..) {
         let mut events_statement = transaction.prepare("SELECT revision, event_id, kind, turn_id, occurred_at, payload_json FROM events WHERE session_id = ?1 ORDER BY revision").map_err(|error| format!("failed to inspect Session events: {error}"))?;
         let events = events_statement
             .query_map([&id], read_row)
@@ -772,11 +949,16 @@ fn inspect_database(
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| format!("failed to inspect Session events: {error}"))?;
-        output.push(InspectedSession {
+        let inspected = InspectedSession {
+            title,
+            title_revision: database_revision(title_revision)
+                .map_err(|error| format!("{error:?}"))?,
             session_id: id,
             revision: database_revision(revision).map_err(|error| format!("{error:?}"))?,
             events,
-        });
+        };
+        validate_session(&inspected)?;
+        output.push(inspected);
     }
     transaction
         .commit()
@@ -854,6 +1036,118 @@ mod tests {
             occurred_at: "2026-08-28T00:00:01Z".to_owned(),
             payload_json: r#"{"compaction_id":"compact-1"}"#.to_owned().try_into().unwrap(),
         }
+    }
+
+    fn presentation_event(id: &str) -> AppendSessionRequestEventsItem {
+        AppendSessionRequestEventsItem {
+            event_id: id.to_owned(),
+            kind: AppendSessionRequestEventsItemKind::TurnCompleted,
+            turn_id: Some("turn-1".to_owned()),
+            occurred_at: "2026-08-28T00:00:02Z".to_owned(),
+            payload_json: r#"{"output":"done","presentation":{"title":"Session architecture","latest_preview":"Use one presentation projection."}}"#
+                .to_owned()
+                .try_into()
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn list_projects_durable_title_and_preview() {
+        let temporary = tempfile::tempdir().unwrap();
+        let provider = provider(temporary.path().join("sessions.sqlite3"));
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
+        provider
+            .append_now(AppendSessionRequest {
+                session_id: opened.session_id,
+                expected_revision: "0".to_owned(),
+                events: vec![event("event-1"), presentation_event("event-2")],
+            })
+            .unwrap();
+
+        let listed = provider
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(
+            listed.sessions[0].title.as_deref(),
+            Some("Session architecture")
+        );
+        assert_eq!(
+            listed.sessions[0].latest_preview.as_deref(),
+            Some("Use one presentation projection.")
+        );
+        assert_eq!(listed.sessions[0].title_revision.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn manual_rename_is_durable_overrides_projection_and_fences_writers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let database = temporary.path().join("sessions.sqlite3");
+        let first = provider(database.clone());
+        let opened = first
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
+        first
+            .append_now(AppendSessionRequest {
+                session_id: opened.session_id.clone(),
+                expected_revision: "0".to_owned(),
+                events: vec![event("event-1"), presentation_event("event-2")],
+            })
+            .unwrap();
+        let renamed = first
+            .rename_now(&RenameSessionRequest {
+                expected_title_revision: "0".to_owned(),
+                session_id: opened.session_id.clone(),
+                title: "  My   durable session  ".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(renamed.title, "My durable session");
+        assert_eq!(renamed.title_revision, "1");
+        let conflict = first
+            .rename_now(&RenameSessionRequest {
+                expected_title_revision: "0".to_owned(),
+                session_id: opened.session_id.clone(),
+                title: "Stale writer".to_owned(),
+            })
+            .unwrap_err();
+        assert!(matches!(
+            conflict,
+            OperationFailure::Domain(RenameError::RevisionConflict { .. })
+        ));
+
+        let reopened = provider(database.clone());
+        let listed = reopened
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(listed.sessions[0].revision, "2");
+        assert_eq!(
+            listed.sessions[0].title.as_deref(),
+            Some("My durable session")
+        );
+        assert_eq!(listed.sessions[0].title_revision.as_deref(), Some("1"));
+        assert_eq!(
+            listed.sessions[0].latest_preview.as_deref(),
+            Some("Use one presentation projection.")
+        );
+        let inspected = SqliteSessionInspector::new(database)
+            .inspect_one(&opened.session_id)
+            .unwrap();
+        assert_eq!(inspected.title.as_deref(), Some("My durable session"));
+        assert_eq!(inspected.title_revision, 1);
+        let archive = SessionArchive::new(vec![inspected]).unwrap();
+        let imported_database = temporary.path().join("imported.sqlite3");
+        SqliteSessionImporter::new(&imported_database)
+            .import(&archive)
+            .unwrap();
+        let imported = provider(imported_database)
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(
+            imported.sessions[0].title.as_deref(),
+            Some("My durable session")
+        );
+        assert_eq!(imported.sessions[0].title_revision.as_deref(), Some("1"));
     }
 
     #[test]

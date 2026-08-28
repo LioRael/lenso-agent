@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RenameSessionResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "title_revision"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "title_revision": { "type": "string", "format": "uint64" }
+  }
+}

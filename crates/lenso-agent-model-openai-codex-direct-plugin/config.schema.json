@@ -6,6 +6,10 @@
   "properties": {
     "base_url": { "type": "string" },
     "model": { "type": "string" },
+    "allowed_models": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "reasoning_effort": { "type": "string", "enum": ["low", "medium", "high", "xhigh"] },
     "max_event_bytes": { "type": "integer" }
   }

@@ -14,6 +14,9 @@
         "properties": {
           "session_id": { "type": "string" },
           "revision": { "type": "string", "format": "uint64" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "title_revision": { "type": "string", "format": "uint64" },
+          "latest_preview": { "type": "string", "minLength": 1, "maxLength": 1024 },
           "updated_at": { "type": "string", "format": "date-time" }
         }
       }

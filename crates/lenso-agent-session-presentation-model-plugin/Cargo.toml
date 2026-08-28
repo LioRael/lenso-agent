@@ -1,0 +1,24 @@
+[package]
+name = "lenso-agent-session-presentation-model-plugin"
+version = "0.1.0"
+description = "Model-backed Session presentation Adapter for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.session-presentation.model"
+root-slot = "session-presentation"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-session-presentation = { path = "../lenso-capability-agent-session-presentation" }
+lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

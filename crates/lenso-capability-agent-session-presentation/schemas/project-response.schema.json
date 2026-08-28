@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["title", "latest_preview"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "latest_preview": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    }
+  },
+  "additionalProperties": false,
+  "title": "ProjectResponse"
+}

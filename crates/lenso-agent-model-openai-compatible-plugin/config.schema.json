@@ -6,6 +6,10 @@
   "properties": {
     "base_url": { "type": "string" },
     "model": { "type": "string" },
+    "allowed_models": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "api_key_ref": { "type": "string" }
   }
 }

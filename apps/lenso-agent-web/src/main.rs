@@ -15,7 +15,10 @@ use axum::{
     routing::{get, post},
 };
 use clap::{ArgAction, Parser};
-use lenso_agent_host::{AgentHost, Profile, WebSurface, generation::AgentApp};
+use lenso_agent_host::{
+    AgentHost, Profile, WebSurface,
+    generation::{AgentApp, RenameSessionFailure},
+};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_agent_session_inspection::{
     InspectedSession, InspectedSessionEvent, Trajectory, project_trajectory,
@@ -23,7 +26,8 @@ use lenso_agent_session_inspection::{
 use lenso_agent_web_plugin as _;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
 use lenso_capability_agent_session::{
-    ListSessionsResponse, ReadSessionResponse, ReadSessionResponseEventsItemKind,
+    ListSessionsResponse, ReadSessionResponse, ReadSessionResponseEventsItemKind, RenameError,
+    RenameSessionResponse,
 };
 use lenso_capability_agent_user_interaction::{
     InteractionAnswer, InteractionOption, InteractionQuestion, PendingInteraction,
@@ -102,6 +106,12 @@ enum RuntimeCommand {
     ReadTrajectory {
         reply: oneshot::Sender<Result<Trajectory, String>>,
         session_id: String,
+    },
+    RenameSession {
+        expected_title_revision: String,
+        reply: oneshot::Sender<Result<RenameSessionResponse, RenameSessionFailure>>,
+        session_id: String,
+        title: String,
     },
     RunTurn {
         events: mpsc::Sender<Result<Event, Infallible>>,
@@ -244,10 +254,26 @@ struct WebSessionList {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WebSessionSummary {
+    latest_preview: Option<String>,
     revision: String,
     session_id: String,
     title: String,
+    title_revision: String,
     updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct RenameSessionRequest {
+    expected_title_revision: String,
+    title: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameSessionResult {
+    title: String,
+    title_revision: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -439,7 +465,7 @@ fn router(runtime: WebRuntime) -> Router {
         )
         .route(
             "/api/console/v1/agent/sessions/{session_id}",
-            get(read_session),
+            get(read_session).patch(rename_session),
         )
         .route(
             "/api/console/v1/agent/sessions/{session_id}/trajectory",
@@ -460,6 +486,7 @@ async fn bootstrap(
             ("sessionList", true),
             ("sessionRead", true),
             ("userInteraction", true),
+            ("sessionRename", true),
         ]
         .into_iter()
         .collect(),
@@ -641,6 +668,59 @@ async fn list_sessions(
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
         .map(Json)
         .map_err(ApiProblem::unavailable)
+}
+
+async fn rename_session(
+    State(runtime): State<WebRuntime>,
+    Path(session_id): Path<String>,
+    Json(request): Json<RenameSessionRequest>,
+) -> Result<Json<RenameSessionResult>, ApiProblem> {
+    if !valid_session_id(&session_id) {
+        return Err(ApiProblem::bad_request("Session ID is invalid"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::RenameSession {
+            expected_title_revision: request.expected_title_revision,
+            reply,
+            session_id,
+            title: request.title,
+        })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    let renamed = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(rename_problem)?;
+    Ok(Json(RenameSessionResult {
+        title: renamed.title,
+        title_revision: renamed.title_revision,
+    }))
+}
+
+fn rename_problem(error: RenameSessionFailure) -> ApiProblem {
+    match error {
+        RenameSessionFailure::Domain(RenameError::InvalidSessionId) => {
+            ApiProblem::bad_request("Session ID is invalid")
+        }
+        RenameSessionFailure::Domain(RenameError::InvalidTitle) => {
+            ApiProblem::bad_request("Session title is invalid")
+        }
+        RenameSessionFailure::Domain(RenameError::InvalidRevision) => {
+            ApiProblem::bad_request("Session title revision is invalid")
+        }
+        RenameSessionFailure::Domain(RenameError::NotFound) => {
+            ApiProblem::not_found("Session was not found")
+        }
+        RenameSessionFailure::Domain(RenameError::RevisionConflict { .. }) => {
+            ApiProblem::conflict("Session title changed; reload before saving")
+        }
+        RenameSessionFailure::Domain(RenameError::Unknown(_)) => {
+            ApiProblem::unavailable("Session Plugin returned an unsupported rename error")
+        }
+        RenameSessionFailure::Runtime(detail) => ApiProblem::unavailable(detail),
+    }
 }
 
 fn validate_turn_request(request: &WebTurnRequest) -> Result<(), ApiProblem> {
@@ -852,8 +932,16 @@ async fn runtime_actor(
                 let _ = reply.send(result);
             }
             RuntimeCommand::ReadSession { reply, session_id } => {
-                let result = read_session_from_app(&app, session_id).await;
-                let _ = reply.send(result);
+                handle_read_command(&app, session_id, reply).await;
+            }
+            RuntimeCommand::RenameSession {
+                expected_title_revision,
+                reply,
+                session_id,
+                title,
+            } => {
+                handle_rename_command(&app, session_id, title, expected_title_revision, reply)
+                    .await;
             }
             RuntimeCommand::ReadTrajectory { reply, session_id } => {
                 let result = read_session_from_app(&app, session_id)
@@ -971,6 +1059,25 @@ async fn runtime_actor(
         }
     }
     let _ = app.shutdown().await;
+}
+
+async fn handle_read_command(
+    app: &AgentApp,
+    session_id: String,
+    reply: oneshot::Sender<Result<ReadSessionResponse, String>>,
+) {
+    let _ = reply.send(read_session_from_app(app, session_id).await);
+}
+
+async fn handle_rename_command(
+    app: &AgentApp,
+    session_id: String,
+    title: String,
+    expected_title_revision: String,
+    reply: oneshot::Sender<Result<RenameSessionResponse, RenameSessionFailure>>,
+) {
+    let result = rename_session_from_app(app, session_id, title, expected_title_revision).await;
+    let _ = reply.send(result);
 }
 
 fn load_tool_policy(
@@ -1102,7 +1209,21 @@ fn project_web_trajectory(session: &ReadSessionResponse) -> Result<Trajectory, S
         .revision
         .parse::<u64>()
         .map_err(|_| "Agent Session revision is invalid".to_owned())?;
+    let title_revision = session
+        .title_revision
+        .as_ref()
+        .map(|revision| {
+            revision
+                .parse::<u64>()
+                .map_err(|_| "Agent Session title revision is invalid".to_owned())
+        })
+        .transpose()?
+        .unwrap_or_default();
     let inspected = InspectedSession {
+        title: (title_revision > 0)
+            .then(|| session.title.clone())
+            .flatten(),
+        title_revision,
         session_id: session.session_id.clone(),
         revision,
         events: session
@@ -1155,41 +1276,37 @@ fn session_event_kind_name(kind: &ReadSessionResponseEventsItemKind) -> &'static
 async fn list_sessions_from_app(app: &AgentApp) -> Result<WebSessionList, String> {
     let turn = app.lease_web_turn().await?;
     let listed = turn.list_sessions(50).await?;
-    project_session_list(&turn, listed).await
+    Ok(project_session_list(listed))
 }
 
-async fn project_session_list(
-    turn: &lenso_agent_host::generation::TurnGeneration,
-    listed: ListSessionsResponse,
-) -> Result<WebSessionList, String> {
-    let mut sessions = Vec::with_capacity(listed.sessions.len());
-    for summary in listed.sessions {
-        let session = turn
-            .read_session(summary.session_id.clone(), 0, 1000)
-            .await?;
-        let title = session
-            .events
-            .iter()
-            .find(|event| event.kind == ReadSessionResponseEventsItemKind::TurnStarted)
-            .and_then(|event| {
-                serde_json::from_str::<serde_json::Value>(event.payload_json.as_ref()).ok()
-            })
-            .and_then(|payload| {
-                payload
-                    .get("input")
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
-            })
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| "New chat".to_owned());
-        sessions.push(WebSessionSummary {
+async fn rename_session_from_app(
+    app: &AgentApp,
+    session_id: String,
+    title: String,
+    expected_title_revision: String,
+) -> Result<RenameSessionResponse, RenameSessionFailure> {
+    let turn = app
+        .lease_web_turn()
+        .await
+        .map_err(RenameSessionFailure::Runtime)?;
+    turn.rename_session(session_id, title, expected_title_revision)
+        .await
+}
+
+fn project_session_list(listed: ListSessionsResponse) -> WebSessionList {
+    let sessions = listed
+        .sessions
+        .into_iter()
+        .map(|summary| WebSessionSummary {
+            latest_preview: summary.latest_preview,
             revision: summary.revision,
             session_id: summary.session_id,
-            title,
+            title: summary.title.unwrap_or_else(|| "New chat".to_owned()),
+            title_revision: summary.title_revision.unwrap_or_else(|| "0".to_owned()),
             updated_at: summary.updated_at,
-        });
-    }
-    Ok(WebSessionList { sessions })
+        })
+        .collect();
+    WebSessionList { sessions }
 }
 
 async fn run_turn_on_lease(

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["session_id", "turn_id", "user_input", "assistant_output"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "turn_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "user_input": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "assistant_output": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "current_title": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "additionalProperties": false,
+  "title": "ProjectRequest"
+}

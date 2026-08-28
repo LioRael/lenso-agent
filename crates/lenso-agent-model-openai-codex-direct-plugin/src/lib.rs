@@ -3,7 +3,7 @@
 use std::{
     any::Any,
     cell::{Cell, RefCell},
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt,
     rc::Rc,
 };
@@ -32,13 +32,22 @@ const MAX_EVENT_BYTES: usize = 1024 * 1024;
 struct DirectModelConfig {
     base_url: String,
     model: String,
+    #[serde(default)]
+    allowed_models: Vec<String>,
     reasoning_effort: String,
     max_event_bytes: usize,
 }
 
 impl DirectModelConfig {
     fn validate(self) -> Result<Self, RuntimeFailure> {
-        if self.model.trim().is_empty()
+        if !valid_model_id(&self.model)
+            || self.allowed_models.len() > 16
+            || self
+                .allowed_models
+                .iter()
+                .any(|model| !valid_model_id(model) || model == &self.model)
+            || self.allowed_models.iter().collect::<BTreeSet<_>>().len()
+                != self.allowed_models.len()
             || !matches!(
                 self.reasoning_effort.as_str(),
                 "low" | "medium" | "high" | "xhigh"
@@ -76,6 +85,14 @@ impl DirectModelConfig {
         ))
         .map_err(|_| invalid_plan("direct Codex base_url is invalid"))
     }
+
+    fn admits_model(&self, model: &str) -> bool {
+        model == self.model || self.allowed_models.iter().any(|allowed| allowed == model)
+    }
+}
+
+fn valid_model_id(model: &str) -> bool {
+    model.trim() == model && !model.is_empty() && model.len() <= 256
 }
 
 fn validate_config(config: &DirectModelConfig) -> Result<(), RuntimeFailure> {
@@ -98,7 +115,7 @@ impl ModelProvider for DirectModel {
         context: InvocationContext,
         request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
-        if request.model != self.config.model {
+        if !self.config.admits_model(&request.model) {
             return Box::pin(ready(Err(ModelInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ))));
@@ -655,6 +672,22 @@ fn protocol_failure(detail: &str) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_auxiliary_model_is_admitted_without_changing_the_primary() {
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: vec!["presentation-model".to_owned()],
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        }
+        .validate()
+        .unwrap();
+        assert!(config.admits_model("main-model"));
+        assert!(config.admits_model("presentation-model"));
+        assert!(!config.admits_model("unreviewed-model"));
+    }
     use lenso_capability_agent_model::CompleteTool;
 
     #[test]

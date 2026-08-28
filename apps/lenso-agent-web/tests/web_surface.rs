@@ -83,18 +83,27 @@ async fn streams_lists_and_branches_a_durable_session() {
             .iter()
             .any(|event| event["kind"] == "turn_completed")
     );
-    let trajectory = client
+    verify_trajectory_and_presentation(&client, address, &session_id, &session).await;
+    verify_history_and_branch(&client, address, &session_id, &session).await;
+}
+
+async fn verify_trajectory_and_presentation(
+    client: &reqwest::Client,
+    address: SocketAddr,
+    session_id: &str,
+    session: &serde_json::Value,
+) {
+    let response = client
         .get(format!(
             "http://{address}/api/console/v1/agent/sessions/{session_id}/trajectory"
         ))
         .send()
         .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json::<serde_json::Value>()
-        .await
         .unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert!(status.is_success(), "trajectory request failed: {body}");
+    let trajectory: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(trajectory["schema"], "lenso.agent.trajectory@1");
     assert_eq!(trajectory["summary"]["turns"], 1);
     assert_eq!(trajectory["summary"]["modelCalls"], 1);
@@ -107,7 +116,16 @@ async fn streams_lists_and_branches_a_durable_session() {
     assert_eq!(model["status"], "completed");
     assert!(model["durationMs"].is_number());
     assert_eq!(model["sourceEventIds"].as_array().unwrap().len(), 2);
-    verify_history_and_branch(&client, address, &session_id, &session).await;
+    assert!(
+        session["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "turn_completed")
+            .filter_map(|event| event["payload_json"].as_str())
+            .filter_map(|payload| serde_json::from_str::<serde_json::Value>(payload).ok())
+            .any(|payload| payload["presentation"]["title"] == "Answer directly: hello")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -127,6 +145,7 @@ async fn answers_a_pending_web_interaction_and_resumes_the_same_turn() {
                 "ask_user",
             ])
             .current_dir(root.path())
+            .env("LENSO_AGENT_HOME", root.path())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -410,6 +429,10 @@ async fn verify_history_and_branch(
         .unwrap();
     assert_eq!(listed["sessions"][0]["sessionId"], session_id);
     assert_eq!(listed["sessions"][0]["title"], "Answer directly: hello");
+    assert_eq!(listed["sessions"][0]["latestPreview"], "Direct answer.");
+    assert_eq!(listed["sessions"][0]["titleRevision"], "0");
+
+    rename_session_and_assert(client, address, session_id).await;
 
     let edited = client
         .post(format!("http://{address}/api/console/v1/agent/turns"))
@@ -471,6 +494,58 @@ async fn verify_history_and_branch(
         .await
         .unwrap();
     assert_eq!(original["revision"], original_revision);
+}
+
+async fn rename_session_and_assert(
+    client: &reqwest::Client,
+    address: SocketAddr,
+    session_id: &str,
+) {
+    let renamed = client
+        .patch(format!(
+            "http://{address}/api/console/v1/agent/sessions/{session_id}"
+        ))
+        .json(&serde_json::json!({
+            "title": "  My   renamed session  ",
+            "expectedTitleRevision": "0",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(renamed["title"], "My renamed session");
+    assert_eq!(renamed["titleRevision"], "1");
+    assert_eq!(
+        client
+            .patch(format!(
+                "http://{address}/api/console/v1/agent/sessions/{session_id}"
+            ))
+            .json(&serde_json::json!({
+                "title": "Stale title",
+                "expectedTitleRevision": "0",
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let renamed_list = client
+        .get(format!("http://{address}/api/console/v1/agent/sessions"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(renamed_list["sessions"][0]["title"], "My renamed session");
+    assert_eq!(renamed_list["sessions"][0]["titleRevision"], "1");
 }
 
 fn available_address() -> SocketAddr {

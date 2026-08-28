@@ -19,8 +19,9 @@ use lenso_capability_agent_session::{
     AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, ListError,
     ListSessionsRequest, ListSessionsResponse, ListSessionsResponseSessionsItem, OpenError,
     OpenSessionRequest, OpenSessionResponse, ReadError, ReadSessionRequest, ReadSessionResponse,
-    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionList,
-    SessionOpen, SessionProvider, SessionRead,
+    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, RenameError,
+    RenameErrorRevisionConflictPayload, RenameSessionRequest, RenameSessionResponse, SessionAppend,
+    SessionList, SessionOpen, SessionProvider, SessionRead, SessionRename,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -177,6 +178,8 @@ impl SessionImporter for FileSessionImporter {
 
 fn inspected_session(session: StoredSession) -> InspectedSession {
     InspectedSession {
+        title: session.manual_title,
+        title_revision: session.title_revision,
         session_id: session.session_id,
         revision: session.revision,
         events: session
@@ -196,8 +199,10 @@ fn inspected_session(session: StoredSession) -> InspectedSession {
 
 fn stored_session(session: &InspectedSession) -> StoredSession {
     StoredSession {
+        manual_title: session.title.clone(),
         schema_version: 1,
         session_id: session.session_id.clone(),
+        title_revision: session.title_revision,
         revision: session.revision,
         events: session
             .events
@@ -247,8 +252,12 @@ struct FileSessionProvider {
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct StoredSession {
+    #[serde(default)]
+    manual_title: Option<String>,
     schema_version: u32,
     session_id: String,
+    #[serde(default)]
+    title_revision: u64,
     revision: u64,
     events: Vec<StoredEvent>,
 }
@@ -261,6 +270,52 @@ struct StoredEvent {
     turn_id: Option<String>,
     occurred_at: String,
     payload_json: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPresentation {
+    title: String,
+    latest_preview: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StoredTurnCompleted {
+    presentation: Option<StoredPresentation>,
+}
+
+fn session_presentation(events: &[StoredEvent]) -> (Option<String>, Option<String>) {
+    let mut title = None;
+    let mut latest_preview = None;
+    for event in events
+        .iter()
+        .rev()
+        .filter(|event| event.kind == "turn_completed")
+    {
+        let Ok(completed) = serde_json::from_str::<StoredTurnCompleted>(&event.payload_json) else {
+            continue;
+        };
+        let Some(presentation) = completed.presentation else {
+            continue;
+        };
+        if latest_preview.is_none() {
+            latest_preview = valid_presentation_text(Some(presentation.latest_preview), 1_024);
+        }
+        title = title.or_else(|| valid_presentation_text(Some(presentation.title), 256));
+        if title.is_some() && latest_preview.is_some() {
+            break;
+        }
+    }
+    (title, latest_preview)
+}
+
+fn valid_presentation_text(value: Option<String>, maximum: usize) -> Option<String> {
+    value.filter(|value| !value.trim().is_empty() && value.chars().count() <= maximum)
+}
+
+fn normalize_title(title: &str) -> Option<String> {
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!title.is_empty() && title.chars().count() <= 256).then_some(title)
 }
 
 #[derive(Debug)]
@@ -347,8 +402,10 @@ impl FileSessionProvider {
         }
         let session_id = uuid::Uuid::new_v4().to_string();
         let session = StoredSession {
+            manual_title: None,
             schema_version: 1,
             session_id: session_id.clone(),
+            title_revision: 0,
             revision: 0,
             events: Vec::new(),
         };
@@ -460,6 +517,7 @@ impl FileSessionProvider {
         if after > session.revision {
             return Err(ReadError::InvalidCursor.into());
         }
+        let (projected_title, _) = session_presentation(&session.events);
         let limit = usize::try_from(request.limit).map_err(|_| ReadError::InvalidCursor)?;
         let events = session
             .events
@@ -471,6 +529,8 @@ impl FileSessionProvider {
         Ok(ReadSessionResponse {
             session_id: request.session_id,
             revision: session.revision.to_string(),
+            title: session.manual_title.or(projected_title),
+            title_revision: Some(session.title_revision.to_string()),
             events,
         })
     }
@@ -508,9 +568,13 @@ impl FileSessionProvider {
                 else {
                     return Ok(None);
                 };
+                let (projected_title, latest_preview) = session_presentation(&session.events);
                 Ok(Some(ListSessionsResponseSessionsItem {
+                    latest_preview,
                     revision: session.revision.to_string(),
                     session_id,
+                    title: session.manual_title.or(projected_title),
+                    title_revision: Some(session.title_revision.to_string()),
                     updated_at,
                 }))
             })
@@ -526,6 +590,48 @@ impl FileSessionProvider {
         });
         sessions.truncate(usize::try_from(request.limit).map_err(|_| ListError::InvalidLimit)?);
         Ok(ListSessionsResponse { sessions })
+    }
+
+    fn rename_now(
+        &self,
+        request: &RenameSessionRequest,
+    ) -> Result<RenameSessionResponse, OperationFailure<RenameError>> {
+        let _operation = self.operation_lock.borrow_mut();
+        if !valid_session_id(&request.session_id) {
+            return Err(RenameError::InvalidSessionId.into());
+        }
+        let Some(title) = normalize_title(&request.title) else {
+            return Err(RenameError::InvalidTitle.into());
+        };
+        let expected = request
+            .expected_title_revision
+            .parse::<u64>()
+            .map_err(|_| RenameError::InvalidTitle)?;
+        let Some(mut session) = self
+            .load(&request.session_id)
+            .map_err(OperationFailure::Runtime)?
+        else {
+            return Err(RenameError::NotFound.into());
+        };
+        if session.title_revision != expected {
+            return Err(RenameError::RevisionConflict {
+                payload: RenameErrorRevisionConflictPayload {
+                    current_title_revision: session.title_revision.to_string(),
+                },
+            }
+            .into());
+        }
+        session.title_revision = session.title_revision.checked_add(1).ok_or_else(|| {
+            OperationFailure::Runtime(RuntimeFailure::Internal {
+                detail: "Session title revision space is exhausted".to_owned(),
+            })
+        })?;
+        session.manual_title = Some(title.clone());
+        self.persist(&session).map_err(OperationFailure::Runtime)?;
+        Ok(RenameSessionResponse {
+            title,
+            title_revision: session.title_revision.to_string(),
+        })
     }
 }
 
@@ -560,6 +666,14 @@ impl SessionProvider for FileSessionProvider {
         request: ReadSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
         Box::pin(ready(native_result(self.read_now(request))))
+    }
+
+    fn rename(
+        &self,
+        _context: InvocationContext,
+        request: RenameSessionRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionRename> {
+        Box::pin(ready(native_result(self.rename_now(&request))))
     }
 }
 
@@ -626,6 +740,22 @@ impl SessionProvider for FileSessionPlugin {
                 capability: session_contract::CAPABILITY_ID,
             })
             .and_then(|provider| native_result(provider.read_now(request)));
+        Box::pin(ready(result))
+    }
+
+    fn rename(
+        &self,
+        _context: InvocationContext,
+        request: RenameSessionRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionRename> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.rename_now(&request)));
         Box::pin(ready(result))
     }
 }
@@ -738,8 +868,15 @@ fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
 }
 
 fn validate_stored_session(session: &StoredSession) -> Result<(), String> {
-    if session.revision != u64::try_from(session.events.len()).unwrap_or(u64::MAX) {
-        return Err("Session revision does not close its event count".to_owned());
+    if session.revision != u64::try_from(session.events.len()).unwrap_or(u64::MAX)
+        || session.title_revision == 0 && session.manual_title.is_some()
+        || session.title_revision > 0
+            && session
+                .manual_title
+                .as_deref()
+                .is_none_or(|title| normalize_title(title).as_deref() != Some(title))
+    {
+        return Err("Session revision or title metadata is invalid".to_owned());
     }
     let mut event_ids = BTreeSet::new();
     for (offset, event) in session.events.iter().enumerate() {
@@ -809,6 +946,133 @@ mod tests {
             occurred_at: "2026-08-24T00:00:01Z".to_owned(),
             payload_json: r#"{"compaction_id":"compact-1"}"#.to_owned().try_into().unwrap(),
         }
+    }
+
+    fn presentation_event(id: &str) -> AppendSessionRequestEventsItem {
+        AppendSessionRequestEventsItem {
+            event_id: id.to_owned(),
+            kind: AppendSessionRequestEventsItemKind::TurnCompleted,
+            turn_id: Some("turn-1".to_owned()),
+            occurred_at: "2026-08-24T00:00:02Z".to_owned(),
+            payload_json: r#"{"output":"done","presentation":{"title":"Session architecture","latest_preview":"Use one presentation projection."}}"#
+                .to_owned()
+                .try_into()
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn list_projects_durable_title_and_preview() {
+        let temporary = tempfile::tempdir().unwrap();
+        let provider = FileSessionProvider {
+            directory: temporary.path().join("sessions"),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider.prepare_store().unwrap();
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
+        provider
+            .append_now(AppendSessionRequest {
+                session_id: opened.session_id,
+                expected_revision: "0".to_owned(),
+                events: vec![event("event-1"), presentation_event("event-2")],
+            })
+            .unwrap();
+
+        let listed = provider
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(
+            listed.sessions[0].title.as_deref(),
+            Some("Session architecture")
+        );
+        assert_eq!(
+            listed.sessions[0].latest_preview.as_deref(),
+            Some("Use one presentation projection.")
+        );
+        assert_eq!(listed.sessions[0].title_revision.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn manual_rename_is_durable_overrides_projection_and_fences_writers() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("sessions");
+        let provider = FileSessionProvider {
+            directory: directory.clone(),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider.prepare_store().unwrap();
+        let opened = provider
+            .open_now(OpenSessionRequest { session_id: None })
+            .unwrap();
+        provider
+            .append_now(AppendSessionRequest {
+                session_id: opened.session_id.clone(),
+                expected_revision: "0".to_owned(),
+                events: vec![event("event-1"), presentation_event("event-2")],
+            })
+            .unwrap();
+
+        let renamed = provider
+            .rename_now(&RenameSessionRequest {
+                expected_title_revision: "0".to_owned(),
+                session_id: opened.session_id.clone(),
+                title: "  My   durable session  ".to_owned(),
+            })
+            .unwrap();
+        assert_eq!(renamed.title, "My durable session");
+        assert_eq!(renamed.title_revision, "1");
+        let conflict = provider
+            .rename_now(&RenameSessionRequest {
+                expected_title_revision: "0".to_owned(),
+                session_id: opened.session_id.clone(),
+                title: "Stale writer".to_owned(),
+            })
+            .unwrap_err();
+        assert!(matches!(
+            conflict,
+            OperationFailure::Domain(RenameError::RevisionConflict { .. })
+        ));
+
+        let reopened = FileSessionProvider {
+            directory,
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        let listed = reopened
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(listed.sessions[0].revision, "2");
+        assert_eq!(
+            listed.sessions[0].title.as_deref(),
+            Some("My durable session")
+        );
+        assert_eq!(listed.sessions[0].title_revision.as_deref(), Some("1"));
+        assert_eq!(
+            listed.sessions[0].latest_preview.as_deref(),
+            Some("Use one presentation projection.")
+        );
+        let inspected = FileSessionInspector::new(reopened.directory)
+            .inspect_one(&opened.session_id)
+            .unwrap();
+        assert_eq!(inspected.title.as_deref(), Some("My durable session"));
+        assert_eq!(inspected.title_revision, 1);
+        let archive = SessionArchive::new(vec![inspected]).unwrap();
+        let imported_directory = temporary.path().join("imported");
+        FileSessionImporter::new(&imported_directory)
+            .import(&archive)
+            .unwrap();
+        let imported = FileSessionProvider {
+            directory: imported_directory,
+            operation_lock: Rc::new(RefCell::new(())),
+        }
+        .list_now(&ListSessionsRequest { limit: 10 })
+        .unwrap();
+        assert_eq!(
+            imported.sessions[0].title.as_deref(),
+            Some("My durable session")
+        );
+        assert_eq!(imported.sessions[0].title_revision.as_deref(), Some("1"));
     }
 
     #[test]

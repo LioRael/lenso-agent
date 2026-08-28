@@ -4,6 +4,10 @@
   "additionalProperties": false,
   "required": ["model"],
   "properties": {
-    "model": { "const": "fixture/readme-summary-v1" }
+    "model": { "const": "fixture/readme-summary-v1" },
+    "allowed_models": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
   }
 }

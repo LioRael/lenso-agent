@@ -2317,6 +2317,27 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         }
         _ => {}
     }
+    if let Some(title) = rename_command(&input)? {
+        let session_id = state
+            .session_id
+            .clone()
+            .ok_or_else(|| "Start the Session before renaming it".to_owned())?;
+        let lease = app.lease_tui_turn().await?;
+        let current = lease.read_session(session_id.clone(), 0, 1).await?;
+        let renamed = lease
+            .rename_session(
+                session_id,
+                title.to_owned(),
+                current.title_revision.unwrap_or_else(|| "0".to_owned()),
+            )
+            .await
+            .map_err(|error| format!("Session rename failed: {error:?}"))?;
+        state.transcript.push(TranscriptEntry::System {
+            text: format!("Session renamed to ‘{}’", renamed.title),
+        });
+        state.phase = UiPhase::Idle;
+        return Ok(());
+    }
     let model_input = compose_tui_context(app, &input).await?;
     state.transcript.push(TranscriptEntry::User {
         text: input.clone(),
@@ -2357,6 +2378,22 @@ async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> R
         started_at,
     });
     Ok(())
+}
+
+fn rename_command(input: &str) -> Result<Option<&str>, String> {
+    let input = input.trim();
+    if input == "/rename" {
+        return Err("Usage: /rename <title>".to_owned());
+    }
+    let Some(title) = input.strip_prefix("/rename ") else {
+        return Ok(None);
+    };
+    let title = title.trim();
+    if title.is_empty() {
+        Err("Usage: /rename <title>".to_owned())
+    } else {
+        Ok(Some(title))
+    }
 }
 
 async fn compose_tui_context(app: &AgentApp, input: &str) -> Result<String, String> {
@@ -4752,6 +4789,17 @@ mod tests {
     use ratatui::backend::TestBackend;
 
     use super::*;
+
+    #[test]
+    fn rename_command_requires_and_extracts_a_title() {
+        assert_eq!(
+            rename_command("/rename Project Atlas").unwrap(),
+            Some("Project Atlas")
+        );
+        assert!(rename_command("/rename").is_err());
+        assert!(rename_command("/rename   ").is_err());
+        assert_eq!(rename_command("/renamed normally").unwrap(), None);
+    }
 
     fn choice_interaction() -> PendingInteraction {
         PendingInteraction {
