@@ -23,6 +23,7 @@ lenso-agent-session-inspection = { path = "../../crates/lenso-agent-session-insp
 lenso-agent-web-plugin = { path = "../../crates/lenso-agent-web-plugin" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
+lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -3,12 +3,14 @@
 use lenso::{Port, plugin};
 use lenso_capability_agent as agent_capability;
 use lenso_capability_agent_session as session_capability;
+use lenso_capability_agent_user_interaction as interaction_capability;
 
 /// Statically linked binding anchor used only by the Web Host surface.
 #[plugin(consumer)]
 #[derive(Clone, Debug)]
 struct AgentWebAnchor {
     agent: Port<agent_capability::AgentClient>,
+    interaction: Port<interaction_capability::UserInteractionClient>,
     session: Port<session_capability::SessionClient>,
 }
 
@@ -26,6 +28,11 @@ mod tests {
                 {
                     "capability_id": "lenso.agent@3",
                     "descriptor_version": "3.0.0",
+                    "cardinality": "one"
+                },
+                {
+                    "capability_id": "lenso.agent.user-interaction@2",
+                    "descriptor_version": "2.0.0",
                     "cardinality": "one"
                 },
                 {
