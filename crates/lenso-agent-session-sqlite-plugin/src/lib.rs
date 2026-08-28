@@ -15,10 +15,11 @@ use lenso_agent_session_inspection::{
 };
 use lenso_capability_agent_session::{
     self as session_contract, AppendError, AppendErrorRevisionConflictPayload,
-    AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, OpenError,
+    AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, ListError,
+    ListSessionsRequest, ListSessionsResponse, ListSessionsResponseSessionsItem, OpenError,
     OpenSessionRequest, OpenSessionResponse, ReadError, ReadSessionRequest, ReadSessionResponse,
-    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionOpen,
-    SessionProvider, SessionRead,
+    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionList,
+    SessionOpen, SessionProvider, SessionRead,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -331,6 +332,49 @@ impl SqliteSessionProvider {
             events,
         })
     }
+
+    fn list_now(
+        &self,
+        request: &ListSessionsRequest,
+    ) -> Result<ListSessionsResponse, OperationFailure<ListError>> {
+        let _operation = self.operation_lock.borrow();
+        if !(1..=100).contains(&request.limit) {
+            return Err(ListError::InvalidLimit.into());
+        }
+        let connection = self.connect().map_err(OperationFailure::Runtime)?;
+        let mut statement = connection
+            .prepare(
+                "SELECT s.session_id, s.revision, e.occurred_at \
+                 FROM sessions s \
+                 JOIN events e ON e.session_id = s.session_id AND e.revision = s.revision \
+                 WHERE s.revision > 0 \
+                 ORDER BY e.occurred_at DESC, s.session_id DESC \
+                 LIMIT ?1",
+            )
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        let rows = statement
+            .query_map([request.limit], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        let sessions = rows
+            .map(|row| {
+                let (session_id, revision, updated_at) =
+                    row.map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+                let revision = database_revision(revision).map_err(OperationFailure::Runtime)?;
+                Ok(ListSessionsResponseSessionsItem {
+                    revision: revision.to_string(),
+                    session_id,
+                    updated_at,
+                })
+            })
+            .collect::<Result<Vec<_>, OperationFailure<ListError>>>()?;
+        Ok(ListSessionsResponse { sessions })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -478,6 +522,13 @@ impl SessionProvider for SqliteSessionProvider {
     ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
         Box::pin(ready(native_result(self.open_now(request))))
     }
+    fn list(
+        &self,
+        _: InvocationContext,
+        request: ListSessionsRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionList> {
+        Box::pin(ready(native_result(self.list_now(&request))))
+    }
     fn read(
         &self,
         _: InvocationContext,
@@ -517,6 +568,21 @@ impl SessionProvider for SqliteSessionPlugin {
                 capability: session_contract::CAPABILITY_ID,
             })
             .and_then(|provider| native_result(provider.open_now(request)));
+        Box::pin(ready(result))
+    }
+    fn list(
+        &self,
+        _: InvocationContext,
+        request: ListSessionsRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionList> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.list_now(&request)));
         Box::pin(ready(result))
     }
     fn read(
@@ -756,6 +822,12 @@ mod tests {
             ReadSessionResponseEventsItemKind::ContextCompactionCommitted
         );
         assert_eq!(read.events[1].revision, "2");
+        let listed = reopened
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(listed.sessions.len(), 1);
+        assert_eq!(listed.sessions[0].session_id, read.session_id);
+        assert_eq!(listed.sessions[0].updated_at, "2026-08-28T00:00:01Z");
     }
 
     #[test]

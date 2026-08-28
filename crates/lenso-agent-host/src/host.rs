@@ -109,6 +109,22 @@ impl AgentSurface for DiscordSurface {
     }
 }
 
+/// The browser-based Agent surface.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WebSurface;
+
+impl WebSurface {
+    pub const fn browser() -> Self {
+        Self
+    }
+}
+
+impl AgentSurface for WebSurface {
+    fn control_directory(&self) -> &'static str {
+        crate::generation::WEB_CONTROL_DIRECTORY
+    }
+}
+
 /// Entry point for composing an Agent Harness binary.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AgentHost;

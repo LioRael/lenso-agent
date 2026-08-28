@@ -20,17 +20,25 @@ use lenso_app_plan::{
         PluginInstanceId, PluginRootSnapshot, resolve_plugin_root,
     },
 };
-use lenso_capability_agent::{Agent, AgentJsonCodec};
+use lenso_capability_agent::{Agent, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID};
 use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_memory::MemoryJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
-use lenso_capability_agent_session::SessionJsonCodec;
+use lenso_capability_agent_session::{
+    APPEND_OPERATION, AppendSessionRequest, AppendSessionRequestEventsItem,
+    AppendSessionRequestEventsItemKind, LIST_OPERATION, ListSessionsRequest, ListSessionsResponse,
+    OPEN_OPERATION, OpenSessionRequest, READ_OPERATION, ReadSessionRequest, ReadSessionResponse,
+    ReadSessionResponseEventsItemKind, SessionAppend, SessionJsonCodec, SessionList, SessionOpen,
+    SessionRead,
+};
 use lenso_capability_agent_tool_hook::ToolHookJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
-use lenso_capability_agent_tools::ToolsJsonCodec;
+use lenso_capability_agent_tools::{
+    CATALOG_OPERATION, CatalogRequest, CatalogResponseToolsItem, ToolsCatalog, ToolsJsonCodec,
+};
 use lenso_capability_agent_tui_contribution::{
     SNAPSHOT_OPERATION, SnapshotRequest, SnapshotResponsePanelsItem, TuiContribution,
     validate_snapshot_panels,
@@ -81,6 +89,7 @@ pub(crate) const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
 pub(crate) const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
 pub(crate) const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
 pub(crate) const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
+pub(crate) const WEB_CONTROL_DIRECTORY: &str = "web-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const RECONCILE_QUIET_PERIOD: Duration = Duration::from_millis(200);
 const RECONCILE_SETTLE_LIMIT: Duration = Duration::from_secs(2);
@@ -440,6 +449,11 @@ impl AgentApp {
         self.lease_turn_for("discord").await
     }
 
+    /// Pins one browser-submitted Agent Turn to the active App Generation.
+    pub async fn lease_web_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("web").await
+    }
+
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
         let route = self.host.route().await.map_err(control_error)?;
         let consumer_instance = match consumer_instance {
@@ -447,6 +461,7 @@ impl AgentApp {
             "tui" => "lenso.agent.tui/tui",
             "telegram" => "lenso.agent.telegram/telegram",
             "discord" => "lenso.agent.discord/discord",
+            "web" => "lenso.agent.web/web",
             other => return Err(format!("unknown Agent surface `{other}`")),
         };
         let handle = Rc::new(
@@ -455,10 +470,23 @@ impl AgentApp {
                 .stream_handle::<Agent>(consumer_instance)
                 .map_err(|error| format!("leased Generation has no Agent route: {error:?}"))?,
         );
-        let interactive = route
+        let surface_dependencies = route
             .target()
             .dependencies(consumer_instance)
-            .map_err(|error| format!("leased Generation has no Surface route: {error:?}"))?
+            .map_err(|error| format!("leased Generation has no Surface route: {error:?}"))?;
+        let agent_provider = surface_dependencies
+            .bindings()
+            .iter()
+            .find(|binding| binding.capability_id() == AGENT_CAPABILITY_ID)
+            .map(|binding| binding.provider_instance().to_owned())
+            .ok_or_else(|| "leased Generation Surface has no Agent provider binding".to_owned())?;
+        let tools_catalog = route
+            .target()
+            .handle::<ToolsCatalog>(&agent_provider)
+            .map_err(|error| {
+                format!("leased Generation Agent has no Tool catalog route: {error:?}")
+            })?;
+        let interactive = surface_dependencies
             .bindings()
             .iter()
             .any(|binding| binding.capability_id() == USER_INTERACTION_CAPABILITY_ID);
@@ -487,6 +515,7 @@ impl AgentApp {
             handle,
             interaction,
             interactive,
+            tools_catalog: Rc::new(tools_catalog),
         })
     }
 
@@ -608,6 +637,7 @@ fn existing_controller_states(
         ("tui", TUI_CONTROL_DIRECTORY),
         ("telegram", TELEGRAM_CONTROL_DIRECTORY),
         ("discord", DISCORD_CONTROL_DIRECTORY),
+        ("web", WEB_CONTROL_DIRECTORY),
         ("channels", CHANNEL_CONTROL_DIRECTORY),
     ] {
         let path = store_root.join(directory);
@@ -1041,6 +1071,7 @@ pub struct TurnGeneration {
     handle: Rc<NativeStreamHandle<Agent>>,
     interaction: Option<UserInteractionSurfaceHandles>,
     interactive: bool,
+    tools_catalog: Rc<NativeRequestHandle<ToolsCatalog>>,
 }
 
 #[derive(Debug)]
@@ -1055,6 +1086,29 @@ impl TurnGeneration {
     }
 
     pub fn invocation_context(&self) -> Result<InvocationContext, String> {
+        self.invocation_context_with_cancellation(CancellationToken::new())
+    }
+
+    /// Reads the exact Tool catalog bound to this Turn's Agent provider.
+    pub async fn tool_catalog(&self) -> Result<Vec<CatalogResponseToolsItem>, String> {
+        self.tools_catalog
+            .invoke_with_context(
+                CATALOG_OPERATION,
+                self.invocation_context()?,
+                CatalogRequest {},
+            )
+            .await
+            .map_err(|error| format!("Tool catalog snapshot failed: {error:?}"))?
+            .map(|response| response.tools)
+            .map_err(|error| format!("Tool catalog snapshot was rejected: {error:?}"))
+    }
+
+    /// Creates a root invocation context whose lifetime can be controlled by
+    /// the owning Surface.
+    pub fn invocation_context_with_cancellation(
+        &self,
+        cancellation: CancellationToken,
+    ) -> Result<InvocationContext, String> {
         let mut request_id = NEXT_ROOT_REQUEST_ID.load(Ordering::Relaxed);
         loop {
             let next = request_id
@@ -1070,7 +1124,7 @@ impl TurnGeneration {
                 Err(current) => request_id = current,
             }
         }
-        let context = InvocationContext::new(request_id, None, CancellationToken::new())
+        let context = InvocationContext::new(request_id, None, cancellation)
             .with_extension(
                 GENERATION_SPEC_DIGEST_EXTENSION,
                 self.generation_spec_digest().as_bytes().to_vec(),
@@ -1128,8 +1182,216 @@ impl TurnGeneration {
             .map_err(|error| format!("User Interaction answer was rejected: {error:?}"))
     }
 
+    /// Reads durable Session events through the selected Session Plugin.
+    pub async fn read_session(
+        &self,
+        session_id: String,
+        after_revision: u64,
+        limit: i64,
+    ) -> Result<ReadSessionResponse, String> {
+        let handle = self
+            .route
+            .target()
+            .handle::<SessionRead>("lenso.agent.web/web")
+            .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?;
+        handle
+            .invoke_with_context(
+                READ_OPERATION,
+                self.invocation_context()?,
+                ReadSessionRequest {
+                    after_revision: after_revision.to_string(),
+                    limit,
+                    session_id,
+                },
+            )
+            .await
+            .map_err(|error| format!("Session read failed: {error:?}"))?
+            .map_err(|error| format!("Session read was rejected: {error:?}"))
+    }
+
+    /// Lists durable Sessions through the selected Session Plugin.
+    pub async fn list_sessions(&self, limit: i64) -> Result<ListSessionsResponse, String> {
+        let handle = self
+            .route
+            .target()
+            .handle::<SessionList>("lenso.agent.web/web")
+            .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?;
+        handle
+            .invoke_with_context(
+                LIST_OPERATION,
+                self.invocation_context()?,
+                ListSessionsRequest { limit },
+            )
+            .await
+            .map_err(|error| format!("Session list failed: {error:?}"))?
+            .map_err(|error| format!("Session list was rejected: {error:?}"))
+    }
+
+    /// Opens one durable Session through the selected Session Plugin.
+    pub async fn open_session(&self) -> Result<String, String> {
+        self.route
+            .target()
+            .handle::<SessionOpen>("lenso.agent.web/web")
+            .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?
+            .invoke_with_context(
+                OPEN_OPERATION,
+                self.invocation_context()?,
+                OpenSessionRequest { session_id: None },
+            )
+            .await
+            .map_err(|error| format!("Session open failed: {error:?}"))?
+            .map(|response| response.session_id)
+            .map_err(|error| format!("Session open was rejected: {error:?}"))
+    }
+
+    /// Creates an immutable branch containing all events before one selected Turn.
+    pub async fn fork_session_before_turn(
+        &self,
+        source_session_id: String,
+        turn_id: String,
+    ) -> Result<String, String> {
+        let events = self.read_all_session_events(source_session_id).await?;
+        let target = events
+            .iter()
+            .position(|event| {
+                event.turn_id.as_deref() == Some(turn_id.as_str())
+                    && event.kind == ReadSessionResponseEventsItemKind::TurnStarted
+            })
+            .ok_or_else(|| "edited Turn was not found in the Session".to_owned())?;
+        let branch_session_id = self.open_session().await?;
+        let prefix = events
+            .into_iter()
+            .take(target)
+            .map(|event| {
+                let payload_json =
+                    if event.kind == ReadSessionResponseEventsItemKind::SessionCreated {
+                        serde_json::to_string(&serde_json::json!({
+                            "session_id": branch_session_id,
+                        }))
+                        .map_err(|error| format!("failed to encode branch identity: {error}"))?
+                        .try_into()
+                        .map_err(|_| "failed to encode branch identity".to_owned())?
+                    } else {
+                        event.payload_json
+                    };
+                Ok(AppendSessionRequestEventsItem {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    kind: append_event_kind(&event.kind),
+                    occurred_at: event.occurred_at,
+                    payload_json,
+                    turn_id: event.turn_id,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        if !prefix.is_empty() {
+            self.route
+                .target()
+                .handle::<SessionAppend>("lenso.agent.web/web")
+                .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?
+                .invoke_with_context(
+                    APPEND_OPERATION,
+                    self.invocation_context()?,
+                    AppendSessionRequest {
+                        events: prefix,
+                        expected_revision: "0".to_owned(),
+                        session_id: branch_session_id.clone(),
+                    },
+                )
+                .await
+                .map_err(|error| format!("Session branch append failed: {error:?}"))?
+                .map_err(|error| format!("Session branch append was rejected: {error:?}"))?;
+        }
+        Ok(branch_session_id)
+    }
+
+    async fn read_all_session_events(
+        &self,
+        session_id: String,
+    ) -> Result<Vec<lenso_capability_agent_session::ReadSessionResponseEventsItem>, String> {
+        let mut cursor = 0_u64;
+        let mut events = Vec::new();
+        loop {
+            let page = self.read_session(session_id.clone(), cursor, 1000).await?;
+            if page.events.is_empty() {
+                if cursor.to_string() == page.revision {
+                    return Ok(events);
+                }
+                return Err("Session read ended before its advertised revision".to_owned());
+            }
+            cursor = page
+                .events
+                .last()
+                .expect("non-empty page has a last event")
+                .revision
+                .parse::<u64>()
+                .map_err(|_| "Session returned an invalid revision".to_owned())?;
+            events.extend(page.events);
+            if cursor.to_string() == page.revision {
+                return Ok(events);
+            }
+        }
+    }
+
     fn generation_spec_digest(&self) -> &str {
         self.route.generation_spec_digest()
+    }
+}
+
+fn append_event_kind(
+    kind: &ReadSessionResponseEventsItemKind,
+) -> AppendSessionRequestEventsItemKind {
+    match kind {
+        ReadSessionResponseEventsItemKind::SessionCreated => {
+            AppendSessionRequestEventsItemKind::SessionCreated
+        }
+        ReadSessionResponseEventsItemKind::SystemInstructionInstalled => {
+            AppendSessionRequestEventsItemKind::SystemInstructionInstalled
+        }
+        ReadSessionResponseEventsItemKind::ContextCompactionStarted => {
+            AppendSessionRequestEventsItemKind::ContextCompactionStarted
+        }
+        ReadSessionResponseEventsItemKind::ContextCompactionCommitted => {
+            AppendSessionRequestEventsItemKind::ContextCompactionCommitted
+        }
+        ReadSessionResponseEventsItemKind::ContextCompactionFailed => {
+            AppendSessionRequestEventsItemKind::ContextCompactionFailed
+        }
+        ReadSessionResponseEventsItemKind::MemoryRecalled => {
+            AppendSessionRequestEventsItemKind::MemoryRecalled
+        }
+        ReadSessionResponseEventsItemKind::MemoryRecallFailed => {
+            AppendSessionRequestEventsItemKind::MemoryRecallFailed
+        }
+        ReadSessionResponseEventsItemKind::MemoryCommitted => {
+            AppendSessionRequestEventsItemKind::MemoryCommitted
+        }
+        ReadSessionResponseEventsItemKind::MemoryCommitFailed => {
+            AppendSessionRequestEventsItemKind::MemoryCommitFailed
+        }
+        ReadSessionResponseEventsItemKind::TurnStarted => {
+            AppendSessionRequestEventsItemKind::TurnStarted
+        }
+        ReadSessionResponseEventsItemKind::ModelRequested => {
+            AppendSessionRequestEventsItemKind::ModelRequested
+        }
+        ReadSessionResponseEventsItemKind::ModelOutput => {
+            AppendSessionRequestEventsItemKind::ModelOutput
+        }
+        ReadSessionResponseEventsItemKind::ToolRequested => {
+            AppendSessionRequestEventsItemKind::ToolRequested
+        }
+        ReadSessionResponseEventsItemKind::ToolResult => {
+            AppendSessionRequestEventsItemKind::ToolResult
+        }
+        ReadSessionResponseEventsItemKind::TurnCompleted => {
+            AppendSessionRequestEventsItemKind::TurnCompleted
+        }
+        ReadSessionResponseEventsItemKind::TurnFailed => {
+            AppendSessionRequestEventsItemKind::TurnFailed
+        }
+        ReadSessionResponseEventsItemKind::TurnCancelled => {
+            AppendSessionRequestEventsItemKind::TurnCancelled
+        }
     }
 }
 
@@ -1509,6 +1771,7 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
             serde_json::json!({"max_pending": 16, "timeout_ms": 300_000}),
         ),
         HostDefaultPlugin::new("lenso.agent.tui", "tui"),
+        HostDefaultPlugin::new("lenso.agent.web", "web"),
         default_plugin(
             "lenso.agent.tui.static",
             "tui-help",
@@ -1808,6 +2071,7 @@ fn host_catalog_bindings(
         PluginInstanceId::new("lenso.agent.discord", "discord"),
         PluginInstanceId::new("lenso.agent.telegram", "telegram"),
         PluginInstanceId::new("lenso.agent.tui", "tui"),
+        PluginInstanceId::new("lenso.agent.web", "web"),
     ]
     .into_iter()
     .filter(|surface| available.contains(surface.plugin_id()))

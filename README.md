@@ -39,6 +39,20 @@ not pretend to be interactive: the same Tool returns
 `interaction_unavailable` immediately unless that surface supplies a User
 Interaction Adapter.
 
+Start the Console Web surface with a durable, administrator-controlled Tool
+allowlist:
+
+```sh
+LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
+  cargo run -p lenso-agent-web -- \
+  --listen 127.0.0.1:8788 \
+  --tool-policy .lenso/console-agent-tool-policy.json
+```
+
+The control route accepts only the matching bearer token. Updates validate
+against the active Plan-bound Tool catalog, use an expected revision, persist
+before activation, and affect only Turns admitted after the update.
+
 ## Choose a Session Profile
 
 A Profile selects an exact subset of configured Plugin Instances for one Agent

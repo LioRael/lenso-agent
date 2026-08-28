@@ -19,6 +19,13 @@
       "domain_error_schema": "schemas/read-error.schema.json"
     },
     {
+      "name": "list",
+      "interaction": "request",
+      "request_schema": "schemas/list-request.schema.json",
+      "response_schema": "schemas/list-response.schema.json",
+      "domain_error_schema": "schemas/list-error.schema.json"
+    },
+    {
       "name": "append",
       "interaction": "request",
       "request_schema": "schemas/append-request.schema.json",

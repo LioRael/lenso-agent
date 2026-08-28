@@ -15,10 +15,11 @@ use lenso_agent_session_inspection::{
 };
 use lenso_capability_agent_session::{
     self as session_contract, AppendError, AppendErrorRevisionConflictPayload,
-    AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, OpenError,
+    AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, ListError,
+    ListSessionsRequest, ListSessionsResponse, ListSessionsResponseSessionsItem, OpenError,
     OpenSessionRequest, OpenSessionResponse, ReadError, ReadSessionRequest, ReadSessionResponse,
-    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionOpen,
-    SessionProvider, SessionRead,
+    ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind, SessionAppend, SessionList,
+    SessionOpen, SessionProvider, SessionRead,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -382,6 +383,59 @@ impl FileSessionProvider {
             events,
         })
     }
+
+    fn list_now(
+        &self,
+        request: &ListSessionsRequest,
+    ) -> Result<ListSessionsResponse, OperationFailure<ListError>> {
+        let _operation = self.operation_lock.borrow();
+        if !(1..=100).contains(&request.limit) {
+            return Err(ListError::InvalidLimit.into());
+        }
+        self.prepare_store().map_err(OperationFailure::Runtime)?;
+        let entries = fs::read_dir(&self.directory)
+            .map_err(|error| OperationFailure::Runtime(storage_failure("list", &error)))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| OperationFailure::Runtime(storage_failure("list", &error)))?;
+        let mut sessions = entries
+            .into_iter()
+            .filter_map(|entry| {
+                let name = entry.file_name().into_string().ok()?;
+                let session_id = name.strip_suffix(".json")?;
+                valid_session_id(session_id).then(|| session_id.to_owned())
+            })
+            .map(|session_id| {
+                let session = self
+                    .load(&session_id)
+                    .map_err(OperationFailure::Runtime)?
+                    .ok_or_else(|| {
+                        OperationFailure::Runtime(RuntimeFailure::PluginFailure {
+                            detail: "Session disappeared while listing".to_owned(),
+                        })
+                    })?;
+                let Some(updated_at) = session.events.last().map(|event| event.occurred_at.clone())
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(ListSessionsResponseSessionsItem {
+                    revision: session.revision.to_string(),
+                    session_id,
+                    updated_at,
+                }))
+            })
+            .collect::<Result<Vec<_>, OperationFailure<ListError>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            right
+                .updated_at
+                .cmp(&left.updated_at)
+                .then(right.session_id.cmp(&left.session_id))
+        });
+        sessions.truncate(usize::try_from(request.limit).map_err(|_| ListError::InvalidLimit)?);
+        Ok(ListSessionsResponse { sessions })
+    }
 }
 
 impl SessionProvider for FileSessionProvider {
@@ -399,6 +453,14 @@ impl SessionProvider for FileSessionProvider {
         request: OpenSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
         Box::pin(ready(native_result(self.open_now(request))))
+    }
+
+    fn list(
+        &self,
+        _context: InvocationContext,
+        request: ListSessionsRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionList> {
+        Box::pin(ready(native_result(self.list_now(&request))))
     }
 
     fn read(
@@ -441,6 +503,22 @@ impl SessionProvider for FileSessionPlugin {
                 capability: session_contract::CAPABILITY_ID,
             })
             .and_then(|provider| native_result(provider.open_now(request)));
+        Box::pin(ready(result))
+    }
+
+    fn list(
+        &self,
+        _context: InvocationContext,
+        request: ListSessionsRequest,
+    ) -> lenso_kernel::NativeRequestFuture<SessionList> {
+        let result = self
+            .provider
+            .borrow()
+            .as_ref()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID,
+            })
+            .and_then(|provider| native_result(provider.list_now(&request)));
         Box::pin(ready(result))
     }
 
@@ -687,6 +765,12 @@ mod tests {
             ReadSessionResponseEventsItemKind::ContextCompactionCommitted
         );
         assert_eq!(read.events[1].revision, "2");
+        let listed = fresh_generation
+            .list_now(&ListSessionsRequest { limit: 10 })
+            .unwrap();
+        assert_eq!(listed.sessions.len(), 1);
+        assert_eq!(listed.sessions[0].session_id, read.session_id);
+        assert_eq!(listed.sessions[0].updated_at, "2026-08-24T00:00:01Z");
     }
 
     #[test]
