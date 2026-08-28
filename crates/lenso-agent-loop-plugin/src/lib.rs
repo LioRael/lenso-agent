@@ -251,6 +251,7 @@ async fn produce_turn(
     let _ = channel.complete(result).await;
 }
 
+#[allow(clippy::too_many_lines)]
 async fn run_turn(
     clients: &AgentLoop,
     config: &AgentConfig,

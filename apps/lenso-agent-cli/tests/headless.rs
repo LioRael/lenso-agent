@@ -1,6 +1,7 @@
 use std::{fs, path::Path, process::Command};
 
 use lenso_agent_cli_plugin as _;
+use lenso_agent_session_inspection::SessionInspector;
 use lenso_plugin_control_plane::sha256_digest;
 
 #[path = "../../../tests/support/mod.rs"]
@@ -1123,6 +1124,115 @@ instances = [
             .lines()
             .any(|line| line.starts_with("protected:") && line.contains("session"))
     );
+}
+
+#[test]
+fn sessions_export_import_and_migrate_between_file_and_sqlite() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let turn = run_derived(temporary.path(), "Answer directly: portable session", None);
+    assert!(
+        turn.status.success(),
+        "{}",
+        String::from_utf8_lossy(&turn.stderr)
+    );
+    let session_id = String::from_utf8(turn.stderr)
+        .unwrap()
+        .trim()
+        .strip_prefix("session: ")
+        .unwrap()
+        .to_owned();
+    let archive = temporary.path().join("session-archive.json");
+
+    let exported = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "sessions",
+            "export",
+            "--archive",
+            archive.to_str().unwrap(),
+            "--session",
+            &session_id,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        exported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&exported.stderr)
+    );
+    let archive_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(&archive).unwrap()).unwrap();
+    assert_eq!(archive_json["format"], "lenso.agent.session-archive@1");
+
+    let database = temporary.path().join("imported/sessions.sqlite3");
+    let imported = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "sessions",
+            "import",
+            "--archive",
+            archive.to_str().unwrap(),
+            "--database",
+            database.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
+
+    let migrated_directory = temporary.path().join("migrated-sessions");
+    let migrated = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "sessions",
+            "migrate",
+            "--from-database",
+            database.to_str().unwrap(),
+            "--to-directory",
+            migrated_directory.to_str().unwrap(),
+            "--session",
+            &session_id,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        migrated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&migrated.stderr)
+    );
+
+    let original = lenso_agent_session_file_plugin::FileSessionInspector::new(
+        temporary.path().join(".lenso/sessions"),
+    )
+    .inspect_one(&session_id)
+    .unwrap();
+    let sqlite = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(&database)
+        .inspect_one(&session_id)
+        .unwrap();
+    let migrated = lenso_agent_session_file_plugin::FileSessionInspector::new(&migrated_directory)
+        .inspect_one(&session_id)
+        .unwrap();
+    assert_eq!(sqlite, original);
+    assert_eq!(migrated, original);
+
+    let duplicate = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "sessions",
+            "import",
+            "--archive",
+            archive.to_str().unwrap(),
+            "--database",
+            database.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already exists"));
 }
 
 #[test]

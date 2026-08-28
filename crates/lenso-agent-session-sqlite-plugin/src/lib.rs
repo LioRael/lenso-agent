@@ -11,7 +11,8 @@ use std::{
 use futures::future::ready;
 use lenso::prelude::*;
 use lenso_agent_session_inspection::{
-    InspectedSession, InspectedSessionEvent, SessionInspector, valid_session_id,
+    InspectedSession, InspectedSessionEvent, SessionArchive, SessionImporter, SessionInspector,
+    valid_session_id, validate_session,
 };
 use lenso_capability_agent_session::{
     self as session_contract, AppendError, AppendErrorRevisionConflictPayload,
@@ -638,6 +639,78 @@ impl SessionInspector for SqliteSessionInspector {
     }
     fn inspect_all(&self) -> Result<Vec<InspectedSession>, String> {
         inspect_database(&self.database, None)
+    }
+}
+
+/// Offline transactional importer for the SQLite Session store.
+#[derive(Clone, Debug)]
+pub struct SqliteSessionImporter {
+    database: PathBuf,
+}
+
+impl SqliteSessionImporter {
+    pub fn new(database: impl Into<PathBuf>) -> Self {
+        Self {
+            database: database.into(),
+        }
+    }
+}
+
+impl SessionImporter for SqliteSessionImporter {
+    fn import(&self, archive: &SessionArchive) -> Result<(), String> {
+        for session in &archive.sessions {
+            validate_session(session)?;
+        }
+        let provider = SqliteSessionProvider {
+            database: self.database.clone(),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider
+            .prepare_store()
+            .map_err(|error| format!("failed to prepare Session database: {error:?}"))?;
+        let mut connection = provider
+            .connect()
+            .map_err(|error| format!("failed to open Session database: {error:?}"))?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| format!("failed to start Session import: {error}"))?;
+        for session in &archive.sessions {
+            let exists = transaction
+                .query_row(
+                    "SELECT 1 FROM sessions WHERE session_id = ?1",
+                    [&session.session_id],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|error| format!("failed to inspect Session destination: {error}"))?
+                .is_some();
+            if exists {
+                return Err(format!("Session `{}` already exists", session.session_id));
+            }
+        }
+        for session in &archive.sessions {
+            let revision = i64::try_from(session.revision)
+                .map_err(|_| "Session revision exceeds SQLite range".to_owned())?;
+            transaction
+                .execute(
+                    "INSERT INTO sessions(session_id, revision) VALUES (?1, ?2)",
+                    params![session.session_id, revision],
+                )
+                .map_err(|error| format!("failed to import Session: {error}"))?;
+            for event in &session.events {
+                let event_revision = i64::try_from(event.revision)
+                    .map_err(|_| "Session event revision exceeds SQLite range".to_owned())?;
+                transaction
+                    .execute(
+                        "INSERT INTO events(session_id, revision, event_id, kind, turn_id, occurred_at, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        params![session.session_id, event_revision, event.event_id, event.kind, event.turn_id, event.occurred_at, event.payload_json],
+                    )
+                    .map_err(|error| format!("failed to import Session event: {error}"))?;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|error| format!("failed to commit Session import: {error}"))
     }
 }
 

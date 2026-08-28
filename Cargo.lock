@@ -2304,6 +2304,8 @@ dependencies = [
  "lenso-agent-host",
  "lenso-agent-loop-plugin",
  "lenso-agent-session-file-plugin",
+ "lenso-agent-session-inspection",
+ "lenso-agent-session-sqlite-plugin",
  "lenso-capability-agent",
  "lenso-kernel",
  "lenso-plugin-control-plane",
@@ -2698,6 +2700,7 @@ dependencies = [
 name = "lenso-agent-session-inspection"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
 ]
 
