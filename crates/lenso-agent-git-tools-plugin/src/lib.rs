@@ -18,6 +18,13 @@ pub const DIFF_TOOL: &str = "git_diff";
 pub const LOG_TOOL: &str = "git_log";
 pub const STAGE_TOOL: &str = "git_stage";
 pub const COMMIT_TOOL: &str = "git_commit";
+pub const BRANCHES_TOOL: &str = "git_branches";
+pub const BRANCH_CREATE_TOOL: &str = "git_branch_create";
+pub const BRANCH_SWITCH_TOOL: &str = "git_branch_switch";
+pub const MERGE_TOOL: &str = "git_merge";
+pub const REBASE_TOOL: &str = "git_rebase";
+pub const FETCH_TOOL: &str = "git_fetch";
+pub const PUSH_TOOL: &str = "git_push";
 
 const MAX_PATHS: usize = 256;
 const MAX_PATH_BYTES: usize = 4096;
@@ -28,6 +35,12 @@ struct GitToolsConfig {
     default_timeout_ms: u64,
     max_log_entries: u32,
     max_commit_message_bytes: usize,
+    #[serde(default)]
+    enable_branch_management: bool,
+    #[serde(default)]
+    enable_history_integration: bool,
+    #[serde(default)]
+    allowed_network_remotes: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -61,6 +74,38 @@ struct CommitArguments {
     message: String,
 }
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RevisionArguments {
+    revision: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BranchCreateArguments {
+    name: String,
+    start_point: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BranchSwitchArguments {
+    name: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoteArguments {
+    remote: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PushArguments {
+    remote: String,
+    branch: String,
+}
+
 fn validate_config(config: &GitToolsConfig) -> Result<(), RuntimeFailure> {
     if !(1..=600_000).contains(&config.default_timeout_ms) {
         return Err(invalid_plan(
@@ -73,6 +118,16 @@ fn validate_config(config: &GitToolsConfig) -> Result<(), RuntimeFailure> {
     if !(1..=16_384).contains(&config.max_commit_message_bytes) {
         return Err(invalid_plan(
             "max_commit_message_bytes must be between 1 and 16384",
+        ));
+    }
+    if config.allowed_network_remotes.len() > 32
+        || config
+            .allowed_network_remotes
+            .iter()
+            .any(|remote| !valid_remote_name(remote))
+    {
+        return Err(invalid_plan(
+            "allowed_network_remotes must contain at most 32 safe remote names",
         ));
     }
     Ok(())
@@ -118,7 +173,7 @@ impl GitToolsPlugin {
     {
         let _ = self;
         futures::future::ready(Ok(CatalogResponse {
-            tools: tool_definitions(),
+            tools: tool_definitions(&self.config),
         }))
     }
 
@@ -145,7 +200,21 @@ impl GitToolsPlugin {
     }
 }
 
-fn tool_definitions() -> Vec<ToolDefinition> {
+fn tool_definitions(config: &GitToolsConfig) -> Vec<ToolDefinition> {
+    let mut tools = base_tool_definitions();
+    if config.enable_branch_management {
+        tools.extend(branch_tool_definitions());
+    }
+    if config.enable_history_integration {
+        tools.extend(history_tool_definitions());
+    }
+    if !config.allowed_network_remotes.is_empty() {
+        tools.extend(network_tool_definitions(&config.allowed_network_remotes));
+    }
+    tools
+}
+
+fn base_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         tool(
             STATUS_TOOL,
@@ -197,6 +266,95 @@ fn tool_definitions() -> Vec<ToolDefinition> {
             ToolExecutionClass::Exclusive,
         ),
     ]
+}
+
+fn branch_tool_definitions() -> [ToolDefinition; 3] {
+    [
+        tool(
+            BRANCHES_TOOL,
+            "List local branches and their commit and upstream identities.",
+            &object_schema(&serde_json::json!({}), &[]),
+            ToolExecutionClass::ParallelSafe,
+        ),
+        tool(
+            BRANCH_CREATE_TOOL,
+            "Create one local branch at an optional validated revision without switching to it.",
+            &object_schema(
+                &serde_json::json!({
+                    "name": reference_schema(),
+                    "start_point": reference_schema()
+                }),
+                &["name"],
+            ),
+            ToolExecutionClass::Exclusive,
+        ),
+        tool(
+            BRANCH_SWITCH_TOOL,
+            "Switch to one existing local branch. This never discards working-tree changes.",
+            &object_schema(
+                &serde_json::json!({ "name": reference_schema() }),
+                &["name"],
+            ),
+            ToolExecutionClass::Exclusive,
+        ),
+    ]
+}
+
+fn history_tool_definitions() -> [ToolDefinition; 2] {
+    [
+        tool(
+            MERGE_TOOL,
+            "Merge one validated revision into the current branch without opening an editor.",
+            &object_schema(
+                &serde_json::json!({ "revision": reference_schema() }),
+                &["revision"],
+            ),
+            ToolExecutionClass::Exclusive,
+        ),
+        tool(
+            REBASE_TOOL,
+            "Rebase the current branch onto one validated revision without interactive commands.",
+            &object_schema(
+                &serde_json::json!({ "revision": reference_schema() }),
+                &["revision"],
+            ),
+            ToolExecutionClass::Exclusive,
+        ),
+    ]
+}
+
+fn network_tool_definitions(allowed_remotes: &[String]) -> [ToolDefinition; 2] {
+    let remote_schema = serde_json::json!({
+        "type": "string",
+        "enum": allowed_remotes
+    });
+    [
+        tool(
+            FETCH_TOOL,
+            "Fetch refs without tags from one explicitly allowed Git remote.",
+            &object_schema(
+                &serde_json::json!({ "remote": remote_schema.clone() }),
+                &["remote"],
+            ),
+            ToolExecutionClass::Exclusive,
+        ),
+        tool(
+            PUSH_TOOL,
+            "Push the current HEAD without force to one named branch on an explicitly allowed remote.",
+            &object_schema(
+                &serde_json::json!({
+                    "remote": remote_schema,
+                    "branch": reference_schema()
+                }),
+                &["remote", "branch"],
+            ),
+            ToolExecutionClass::Exclusive,
+        ),
+    ]
+}
+
+fn reference_schema() -> serde_json::Value {
+    serde_json::json!({ "type": "string", "minLength": 1, "maxLength": 255 })
 }
 
 fn tool(
@@ -284,6 +442,56 @@ fn command_for(
             command.extend(strings(["commit", "--no-gpg-sign", "--message"]));
             command.push(message.to_owned());
         }
+        BRANCHES_TOOL if config.enable_branch_management => {
+            decode::<EmptyArguments>(request)?;
+            command.extend(strings([
+                "branch",
+                "--list",
+                "--format=%(refname:short)%09%(objectname)%09%(upstream:short)",
+            ]));
+        }
+        BRANCH_CREATE_TOOL if config.enable_branch_management => {
+            let arguments = decode::<BranchCreateArguments>(request)?;
+            validate_reference(&arguments.name)?;
+            command.extend(strings(["branch"]));
+            command.push(arguments.name);
+            if let Some(start_point) = arguments.start_point {
+                validate_reference(&start_point)?;
+                command.push(start_point);
+            }
+        }
+        BRANCH_SWITCH_TOOL if config.enable_branch_management => {
+            let arguments = decode::<BranchSwitchArguments>(request)?;
+            validate_reference(&arguments.name)?;
+            command.extend(strings(["switch"]));
+            command.push(arguments.name);
+        }
+        MERGE_TOOL if config.enable_history_integration => {
+            let arguments = decode::<RevisionArguments>(request)?;
+            validate_reference(&arguments.revision)?;
+            command.extend(strings(["merge", "--no-edit", "--no-verify"]));
+            command.push(arguments.revision);
+        }
+        REBASE_TOOL if config.enable_history_integration => {
+            let arguments = decode::<RevisionArguments>(request)?;
+            validate_reference(&arguments.revision)?;
+            command.extend(strings(["rebase"]));
+            command.push(arguments.revision);
+        }
+        FETCH_TOOL if !config.allowed_network_remotes.is_empty() => {
+            let arguments = decode::<RemoteArguments>(request)?;
+            validate_allowed_remote(config, &arguments.remote)?;
+            command.extend(strings(["fetch", "--no-tags"]));
+            command.push(arguments.remote);
+        }
+        PUSH_TOOL if !config.allowed_network_remotes.is_empty() => {
+            let arguments = decode::<PushArguments>(request)?;
+            validate_allowed_remote(config, &arguments.remote)?;
+            validate_reference(&arguments.branch)?;
+            command.extend(strings(["push", "--porcelain"]));
+            command.push(arguments.remote);
+            command.push(format!("HEAD:refs/heads/{}", arguments.branch));
+        }
         _ => return Err(PluginError::domain(ExecuteError::NotFound)),
     }
     Ok(command)
@@ -301,7 +509,55 @@ fn safe_git_prefix() -> Vec<String> {
         "commit.gpgSign=false",
         "-c",
         "color.ui=false",
+        "-c",
+        "core.editor=true",
+        "-c",
+        "sequence.editor=true",
     ])
+}
+
+fn validate_reference(value: &str) -> PluginResult<(), ExecuteError> {
+    let invalid = value.is_empty()
+        || value.len() > 255
+        || value.starts_with(['-', '/', '.'])
+        || value.ends_with(['/', '.'])
+        || Path::new(value)
+            .extension()
+            .is_some_and(|extension| extension == "lock")
+        || value.contains("..")
+        || value.contains("@{")
+        || value.contains("//")
+        || value.bytes().any(|byte| {
+            byte.is_ascii_control()
+                || byte.is_ascii_whitespace()
+                || matches!(byte, b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b']' | b'\\')
+        });
+    if invalid {
+        return Err(PluginError::domain(ExecuteError::InvalidArguments));
+    }
+    Ok(())
+}
+
+fn valid_remote_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn validate_allowed_remote(
+    config: &GitToolsConfig,
+    remote: &str,
+) -> PluginResult<(), ExecuteError> {
+    if !config
+        .allowed_network_remotes
+        .iter()
+        .any(|allowed| allowed == remote)
+    {
+        return Err(PluginError::domain(ExecuteError::PermissionDenied));
+    }
+    Ok(())
 }
 
 fn decode<T: serde::de::DeserializeOwned>(
@@ -433,6 +689,18 @@ mod tests {
             default_timeout_ms: 30_000,
             max_log_entries: 50,
             max_commit_message_bytes: 4096,
+            enable_branch_management: false,
+            enable_history_integration: false,
+            allowed_network_remotes: Vec::new(),
+        }
+    }
+
+    fn advanced_config() -> GitToolsConfig {
+        GitToolsConfig {
+            enable_branch_management: true,
+            enable_history_integration: true,
+            allowed_network_remotes: vec!["origin".to_owned()],
+            ..config()
         }
     }
 
@@ -459,7 +727,7 @@ mod tests {
 
     #[test]
     fn catalog_has_three_parallel_reads_and_two_exclusive_mutations() {
-        let definitions = tool_definitions();
+        let definitions = tool_definitions(&config());
         assert_eq!(definitions.len(), 5);
         assert!(
             definitions[..3]
@@ -521,5 +789,45 @@ mod tests {
                 "feat: bounded commit"
             ]
         );
+    }
+
+    #[test]
+    fn advanced_tools_are_absent_by_default_and_appear_by_explicit_policy() {
+        assert_eq!(tool_definitions(&config()).len(), 5);
+        let definitions = tool_definitions(&advanced_config());
+        assert_eq!(definitions.len(), 12);
+        assert!(definitions.iter().any(|tool| tool.name == REBASE_TOOL));
+        assert!(definitions.iter().any(|tool| tool.name == PUSH_TOOL));
+    }
+
+    #[test]
+    fn push_has_one_allowed_remote_and_a_non_force_refspec() {
+        let command = command_for(
+            &advanced_config(),
+            &request(PUSH_TOOL, r#"{"remote":"origin","branch":"feat/safe"}"#),
+        )
+        .unwrap();
+        assert_eq!(
+            &command[command.len() - 4..],
+            ["push", "--porcelain", "origin", "HEAD:refs/heads/feat/safe"]
+        );
+        assert!(
+            command_for(
+                &advanced_config(),
+                &request(PUSH_TOOL, r#"{"remote":"upstream","branch":"main"}"#)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn revision_operations_reject_option_and_revision_expression_injection() {
+        for revision in ["--onto", "main..evil", "topic@{upstream}", "bad name"] {
+            let arguments = serde_json::json!({ "revision": revision }).to_string();
+            assert!(
+                command_for(&advanced_config(), &request(REBASE_TOOL, &arguments)).is_err(),
+                "expected `{revision}` to be rejected"
+            );
+        }
     }
 }

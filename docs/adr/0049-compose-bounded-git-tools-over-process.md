@@ -18,7 +18,8 @@ or remove repository authority without changing the Loop or Kernel.
 ## Decision
 
 The bundled `lenso.agent.git-tools` Plugin consumes exactly one
-`lenso.agent.process@1` provider and contributes five semantic Tools:
+`lenso.agent.process@1` provider and contributes five semantic Tools by
+default:
 
 - parallel-safe `git_status`, `git_diff`, and `git_log`;
 - exclusive `git_stage` for explicit literal repository-relative paths; and
@@ -31,17 +32,26 @@ diff commands, and caps history and commit-message inputs. Commit disables Git
 hooks and signing so a semantic Tool call cannot unexpectedly execute repository
 code or an external signer.
 
-The Plugin does not expose reset, clean, restore, checkout, branch mutation,
-merge, rebase, tag mutation, fetch, pull, or push. A future operation must earn
-its own semantic Tool and authorization review. `git_stage` and `git_commit`
-still traverse the ordinary Tool Hook seam, and the provider remains the final
-authority for Git arguments. An approval Hook cannot widen either provider.
+Three independent configuration policies may widen that catalog for a trusted
+coding Profile. `enable_branch_management` adds branch list/create/switch.
+`enable_history_integration` adds non-interactive merge and rebase. An explicit
+`allowed_network_remotes` list adds fetch-without-tags and non-force push of
+HEAD to one validated branch on those exact remote names. These operations have
+structured arguments and remain exclusive. The Plugin still does not expose
+reset, clean, restore, branch deletion, tag mutation, pull, arbitrary refspecs,
+interactive rebase, remote URLs, or force push.
+
+Every mutation traverses the ordinary Tool Hook seam, and the provider remains
+the final authority for Git arguments. An approval Hook cannot widen either
+provider. Ordinary Profiles keep all three advanced policies disabled; trusted
+Profiles should bind an Approval Hook so enabled mutations use
+approve-then-retry.
 
 The Host links and configures the Plugin but does not activate it by default. A
 coding Profile selects configured `lenso.agent.process.native` and
-`lenso.agent.git-tools` Instances. Removing the Git Instance removes all five
-Tools; removing Process makes the candidate App fail before readiness rather
-than silently falling back to direct child execution.
+`lenso.agent.git-tools` Instances. Removing the Git Instance removes its
+complete configured catalog; removing Process makes the candidate App fail
+before readiness rather than silently falling back to direct child execution.
 
 ## Consequences
 

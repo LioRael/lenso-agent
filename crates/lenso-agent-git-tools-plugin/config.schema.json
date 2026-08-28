@@ -6,6 +6,9 @@
   "properties": {
     "default_timeout_ms": { "type": "integer" },
     "max_log_entries": { "type": "integer" },
-    "max_commit_message_bytes": { "type": "integer" }
+    "max_commit_message_bytes": { "type": "integer" },
+    "enable_branch_management": { "type": "boolean" },
+    "enable_history_integration": { "type": "boolean" },
+    "allowed_network_remotes": { "type": "array", "items": { "type": "string" } }
   }
 }
