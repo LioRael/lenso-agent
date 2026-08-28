@@ -154,7 +154,7 @@ enum InteractionPollStatus {
 #[derive(Debug)]
 struct InteractionDraft {
     question_index: usize,
-    option_cursor: usize,
+    option_cursors: Vec<usize>,
     selected: Vec<BTreeSet<String>>,
     other: Vec<Option<String>>,
     editing_other: bool,
@@ -166,11 +166,24 @@ impl InteractionDraft {
         let question_count = interaction.questions.len();
         Self {
             question_index: 0,
-            option_cursor: 0,
+            option_cursors: vec![0; question_count],
             selected: vec![BTreeSet::new(); question_count],
             other: vec![None; question_count],
             editing_other: false,
             other_input: String::new(),
+        }
+    }
+
+    fn option_cursor(&self) -> usize {
+        self.option_cursors
+            .get(self.question_index)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    fn set_option_cursor(&mut self, cursor: usize) {
+        if let Some(slot) = self.option_cursors.get_mut(self.question_index) {
+            *slot = cursor;
         }
     }
 }
@@ -1453,7 +1466,6 @@ async fn sync_user_interaction(state: &mut TuiState) {
         state.pending_interaction.clone(),
         state.pending_answers.take(),
     ) {
-        let summary = interaction_answer_summary(&interaction, &answers);
         let result = {
             let active = state.active.as_ref().expect("active Turn checked");
             active
@@ -1461,22 +1473,7 @@ async fn sync_user_interaction(state: &mut TuiState) {
                 .answer_interaction(interaction.interaction_id.clone(), answers.clone())
                 .await
         };
-        match result {
-            Ok(()) => {
-                state.transcript.push(TranscriptEntry::User {
-                    text: summary,
-                    created_at: current_timestamp(),
-                });
-                state.pending_interaction = None;
-                state.interaction_draft = None;
-                state.next_interaction_poll = Instant::now() + ACTIVE_TICK;
-            }
-            Err(error) => {
-                state.transcript.push(TranscriptEntry::Error {
-                    text: format!("Answer was not accepted: {error}"),
-                });
-            }
-        }
+        finish_interaction_submission(state, result);
     }
 
     if state.pending_interaction.is_some() || Instant::now() < state.next_interaction_poll {
@@ -1505,6 +1502,21 @@ async fn sync_user_interaction(state: &mut TuiState) {
                 state.interaction_poll_status = InteractionPollStatus::ErrorReported;
             }
         }
+    }
+}
+
+fn finish_interaction_submission(state: &mut TuiState, result: Result<(), String>) {
+    match result {
+        Ok(()) => {
+            // This resolves the blocked ask_user Tool call. It is not a new
+            // conversational prompt, so it must not become a User entry.
+            state.pending_interaction = None;
+            state.interaction_draft = None;
+            state.next_interaction_poll = Instant::now() + ACTIVE_TICK;
+        }
+        Err(error) => state.transcript.push(TranscriptEntry::Error {
+            text: format!("Answer was not accepted: {error}"),
+        }),
     }
 }
 
@@ -1829,6 +1841,14 @@ fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
         return false;
     }
     if state.pending_interaction.is_some() {
+        if state.focus == Focus::Scrollback {
+            if key.code == KeyCode::Tab {
+                state.focus = Focus::Prompt;
+            } else {
+                handle_scrollback_key(key, state);
+            }
+            return false;
+        }
         handle_interaction_key(key, state);
         return false;
     }
@@ -2002,66 +2022,65 @@ fn handle_interaction_key(key: KeyEvent, state: &mut TuiState) {
     let Some(interaction) = state.pending_interaction.clone() else {
         return;
     };
+    let Some(question_index) = state
+        .interaction_draft
+        .as_ref()
+        .map(|draft| draft.question_index)
+    else {
+        return;
+    };
+    let Some(question) = interaction.questions.get(question_index) else {
+        return;
+    };
+    if state
+        .interaction_draft
+        .as_ref()
+        .is_some_and(|draft| draft.editing_other)
+    {
+        handle_interaction_other_key(key, state, &interaction, question.multi_select);
+        return;
+    }
     let Some(draft) = state.interaction_draft.as_mut() else {
         return;
     };
-    let Some(question) = interaction.questions.get(draft.question_index) else {
-        return;
-    };
-
-    if draft.editing_other {
-        match key.code {
-            KeyCode::Esc => {
-                draft.editing_other = false;
-                draft.other_input.clear();
-            }
-            KeyCode::Backspace => {
-                draft.other_input.pop();
-            }
-            KeyCode::Enter
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
-            {
-                append_interaction_other(state, "\n");
-            }
-            KeyCode::Enter if !draft.other_input.trim().is_empty() => {
-                draft.other[draft.question_index] = Some(draft.other_input.trim().to_owned());
-                draft.other_input.clear();
-                draft.editing_other = false;
-                if !question.multi_select {
-                    advance_interaction_question(state, &interaction);
-                }
-            }
-            KeyCode::Char(character) => append_interaction_other(state, &character.to_string()),
-            _ => {}
-        }
-        return;
-    }
 
     let item_count = question.options.len() + 1;
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => {
-            draft.option_cursor = draft.option_cursor.checked_sub(1).unwrap_or(item_count - 1);
+        KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => {
+            draft.set_option_cursor(
+                draft
+                    .option_cursor()
+                    .checked_sub(1)
+                    .unwrap_or(item_count - 1),
+            );
         }
-        KeyCode::Down | KeyCode::Char('j') => {
-            draft.option_cursor = (draft.option_cursor + 1) % item_count;
+        KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => {
+            draft.set_option_cursor((draft.option_cursor() + 1) % item_count);
         }
-        KeyCode::Char(' ') if question.multi_select => {
-            if let Some(option) = question.options.get(draft.option_cursor) {
-                let selected = &mut draft.selected[draft.question_index];
-                if !selected.insert(option.option_id.clone()) {
-                    selected.remove(&option.option_id);
-                }
-            } else {
-                draft.other_input = draft.other[draft.question_index]
-                    .clone()
-                    .unwrap_or_default();
-                draft.editing_other = true;
+        KeyCode::Left | KeyCode::Char('h' | '[') => {
+            draft.question_index = draft
+                .question_index
+                .checked_sub(1)
+                .unwrap_or_else(|| interaction.questions.len().saturating_sub(1));
+        }
+        KeyCode::Right | KeyCode::Char('l' | ']') => {
+            draft.question_index = (draft.question_index + 1) % interaction.questions.len();
+        }
+        KeyCode::Char(' ') => toggle_focused_interaction_option(draft, question),
+        KeyCode::Char('z') => {
+            draft.set_option_cursor(question.options.len());
+            draft.other_input = draft.other[draft.question_index]
+                .clone()
+                .unwrap_or_default();
+            draft.editing_other = true;
+        }
+        KeyCode::Char(character) => {
+            if select_interaction_shortcut(draft, question, character) {
+                advance_interaction_question(state, &interaction);
             }
         }
         KeyCode::Enter => {
-            if let Some(option) = question.options.get(draft.option_cursor) {
+            if let Some(option) = question.options.get(draft.option_cursor()) {
                 if question.multi_select {
                     if !draft.selected[draft.question_index].is_empty()
                         || draft.other[draft.question_index].is_some()
@@ -2081,8 +2100,100 @@ fn handle_interaction_key(key: KeyEvent, state: &mut TuiState) {
                 draft.editing_other = true;
             }
         }
-        KeyCode::Esc => cancel_active_turn(state),
+        KeyCode::Esc => state.focus = Focus::Scrollback,
         _ => {}
+    }
+}
+
+fn toggle_focused_interaction_option(draft: &mut InteractionDraft, question: &InteractionQuestion) {
+    if let Some(option) = question.options.get(draft.option_cursor()) {
+        let selected = &mut draft.selected[draft.question_index];
+        if question.multi_select {
+            if !selected.insert(option.option_id.clone()) {
+                selected.remove(&option.option_id);
+            }
+        } else if selected.contains(&option.option_id) {
+            selected.clear();
+        } else {
+            selected.clear();
+            selected.insert(option.option_id.clone());
+        }
+    } else {
+        draft.other_input = draft.other[draft.question_index]
+            .clone()
+            .unwrap_or_default();
+        draft.editing_other = true;
+    }
+}
+
+fn select_interaction_shortcut(
+    draft: &mut InteractionDraft,
+    question: &InteractionQuestion,
+    character: char,
+) -> bool {
+    let Some(index) =
+        interaction_option_index(character).filter(|index| *index < question.options.len())
+    else {
+        return false;
+    };
+    draft.set_option_cursor(index);
+    let option = &question.options[index];
+    if question.multi_select {
+        let selected = &mut draft.selected[draft.question_index];
+        if !selected.insert(option.option_id.clone()) {
+            selected.remove(&option.option_id);
+        }
+        false
+    } else {
+        draft.selected[draft.question_index].clear();
+        draft.selected[draft.question_index].insert(option.option_id.clone());
+        draft.other[draft.question_index] = None;
+        true
+    }
+}
+
+fn handle_interaction_other_key(
+    key: KeyEvent,
+    state: &mut TuiState,
+    interaction: &PendingInteraction,
+    multi_select: bool,
+) {
+    let Some(draft) = state.interaction_draft.as_mut() else {
+        return;
+    };
+    match key.code {
+        KeyCode::Esc => {
+            draft.editing_other = false;
+            draft.other_input.clear();
+        }
+        KeyCode::Backspace => {
+            draft.other_input.pop();
+        }
+        KeyCode::Enter
+            if key
+                .modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+        {
+            append_interaction_other(state, "\n");
+        }
+        KeyCode::Enter if !draft.other_input.trim().is_empty() => {
+            draft.other[draft.question_index] = Some(draft.other_input.trim().to_owned());
+            draft.other_input.clear();
+            draft.editing_other = false;
+            if !multi_select {
+                advance_interaction_question(state, interaction);
+            }
+        }
+        KeyCode::Char(character) => append_interaction_other(state, &character.to_string()),
+        _ => {}
+    }
+}
+
+fn interaction_option_index(character: char) -> Option<usize> {
+    match character {
+        '1'..='9' => Some(usize::from(character as u8 - b'1')),
+        'a'..='y' => Some(9 + usize::from(character as u8 - b'a')),
+        _ => None,
     }
 }
 
@@ -2100,7 +2211,6 @@ fn advance_interaction_question(state: &mut TuiState, interaction: &PendingInter
     };
     if draft.question_index + 1 < interaction.questions.len() {
         draft.question_index += 1;
-        draft.option_cursor = 0;
         return;
     }
     state.pending_answers = Some(
@@ -2115,35 +2225,6 @@ fn advance_interaction_question(state: &mut TuiState, interaction: &PendingInter
             })
             .collect(),
     );
-}
-
-fn interaction_answer_summary(
-    interaction: &PendingInteraction,
-    answers: &[InteractionAnswer],
-) -> String {
-    interaction
-        .questions
-        .iter()
-        .filter_map(|question| {
-            let answer = answers
-                .iter()
-                .find(|answer| answer.question_id == question.question_id)?;
-            let mut values = answer
-                .selected_option_ids
-                .iter()
-                .filter_map(|id| {
-                    question
-                        .options
-                        .iter()
-                        .find(|option| option.option_id == *id)
-                        .map(|option| option.label.clone())
-                })
-                .collect::<Vec<_>>();
-            values.extend(answer.other.clone().flatten());
-            Some(format!("{}: {}", question.header, values.join(", ")))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 async fn submit(app: &AgentApp, options: &TuiOptions, state: &mut TuiState) -> Result<(), String> {
@@ -2378,7 +2459,7 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let compact = area.height <= 16;
     let input_width = area.width.saturating_sub(4).max(1);
     let input_rows = visual_input_rows(&state.input, usize::from(input_width));
-    let composer_height = if compact {
+    let regular_composer_height = if compact {
         3
     } else {
         u16::try_from(input_rows.saturating_add(2))
@@ -2388,12 +2469,22 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     let activity_height = u16::from(state.phase != UiPhase::Idle || !state.scroll.follow_tail);
     let queue_height = u16::try_from(state.queued_inputs.len().min(MAX_VISIBLE_QUEUE_ROWS))
         .unwrap_or(MAX_VISIBLE_QUEUE_HEIGHT);
-    let suggestion_height = state.suggestion_match().map_or(0, |matches| {
-        u16::try_from(matches.indices.len().min(MAX_VISIBLE_SUGGESTIONS) + 2)
-            .unwrap_or(8)
-            .min(if compact { 5 } else { 8 })
-    });
-    let prompt_gap_height = u16::from(suggestion_height == 0);
+    let interaction_open = state.pending_interaction.is_some();
+    let composer_height = if interaction_open {
+        interaction_card_height(state, area.height)
+    } else {
+        regular_composer_height
+    };
+    let suggestion_height = if interaction_open {
+        0
+    } else {
+        state.suggestion_match().map_or(0, |matches| {
+            u16::try_from(matches.indices.len().min(MAX_VISIBLE_SUGGESTIONS) + 2)
+                .unwrap_or(8)
+                .min(if compact { 5 } else { 8 })
+        })
+    };
+    let prompt_gap_height = u16::from(!interaction_open && suggestion_height == 0);
     let [
         header,
         body,
@@ -2437,18 +2528,41 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
 
     render_queue(frame, queue, state);
     render_activity(frame, activity, state);
-    render_suggestions(frame, suggestions, state);
-    render_composer(frame, composer, state);
-    render_status_line(frame, status, state);
-    if state.pending_interaction.is_some() {
-        render_interaction_overlay(frame, area, state);
+    if interaction_open {
+        render_interaction_card(frame, composer, state);
+    } else {
+        render_suggestions(frame, suggestions, state);
+        render_composer(frame, composer, state);
     }
+    render_status_line(frame, status, state);
     if state.show_shortcuts {
         render_shortcuts_overlay(frame, area);
     }
 }
 
-fn render_interaction_overlay(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+fn interaction_card_height(state: &TuiState, screen_height: u16) -> u16 {
+    let Some(question) = state
+        .pending_interaction
+        .as_ref()
+        .zip(state.interaction_draft.as_ref())
+        .and_then(|(interaction, draft)| interaction.questions.get(draft.question_index))
+    else {
+        return 0;
+    };
+    let option_rows = u16::try_from(question.options.len().saturating_add(1)).unwrap_or(u16::MAX);
+    let body_cap = screen_height
+        .saturating_mul(33)
+        .saturating_div(100)
+        .max(8)
+        .min(screen_height.saturating_mul(80).saturating_div(100));
+    option_rows
+        .saturating_add(6)
+        .max(8)
+        .min(body_cap)
+        .saturating_add(2)
+}
+
+fn render_interaction_card(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
     let (Some(interaction), Some(draft)) = (
         state.pending_interaction.as_ref(),
         state.interaction_draft.as_ref(),
@@ -2458,72 +2572,74 @@ fn render_interaction_overlay(frame: &mut Frame<'_>, area: Rect, state: &TuiStat
     let Some(question) = interaction.questions.get(draft.question_index) else {
         return;
     };
-    let Some(overlay) = interaction_overlay_area(area, question.options.len()) else {
+    if area.width < 8 || area.height < 4 {
         return;
-    };
-    frame.render_widget(Clear, overlay);
-    let block = Block::default()
-        .title(format!(
-            " {} · {}/{} ",
-            question.header,
-            draft.question_index + 1,
-            interaction.questions.len()
-        ))
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Palette::ACCENT))
-        .style(Style::default().bg(Palette::SURFACE))
-        .padding(Padding::horizontal(1));
-    let inner = block.inner(overlay);
-    frame.render_widget(block, overlay);
+    }
+    frame.render_widget(
+        Block::default().style(Style::default().bg(Palette::SURFACE)),
+        area,
+    );
+    for row in area.y..area.bottom() {
+        frame.render_widget(
+            Paragraph::new("┃").style(Style::default().fg(Palette::ACCENT).bg(Palette::SURFACE)),
+            Rect::new(area.x, row, 1, 1),
+        );
+    }
+    let content = Rect::new(
+        area.x.saturating_add(3),
+        area.y.saturating_add(1),
+        area.width.saturating_sub(5),
+        area.height.saturating_sub(3),
+    );
 
     let preview = (!question.multi_select)
-        .then(|| question.options.get(draft.option_cursor))
+        .then(|| question.options.get(draft.option_cursor()))
         .flatten()
         .and_then(|option| option.preview.as_ref().and_then(Option::as_deref));
-    let [main, preview_area] = if preview.is_some() && inner.width >= 72 {
-        Layout::horizontal([Constraint::Percentage(52), Constraint::Percentage(48)]).areas(inner)
-    } else {
-        [inner, Rect::default()]
-    };
-    let [prompt_area, options_area, footer_area] = Layout::vertical([
-        Constraint::Length(3.min(main.height)),
-        Constraint::Min(2),
-        Constraint::Length(1),
+    let option_reserve = u16::try_from(question.options.len().saturating_add(1))
+        .unwrap_or(u16::MAX)
+        .min(content.height.saturating_sub(1))
+        .max(1);
+    let chrome_budget = content.height.saturating_sub(option_reserve).max(1);
+    let prompt_height = u16::try_from(visual_input_rows(
+        &question.prompt,
+        usize::from(content.width.max(1)),
+    ))
+    .unwrap_or(u16::MAX)
+    .clamp(1, chrome_budget);
+    let preview_height = preview.map_or(0, |text| {
+        u16::try_from(visual_input_rows(text, usize::from(content.width.max(1))))
+            .unwrap_or(u16::MAX)
+            .min(chrome_budget.saturating_sub(prompt_height))
+    });
+    let [prompt_area, preview_area, options_area] = Layout::vertical([
+        Constraint::Length(prompt_height),
+        Constraint::Length(preview_height),
+        Constraint::Min(1),
     ])
-    .areas(main);
+    .areas(content);
     frame.render_widget(
         Paragraph::new(question.prompt.as_str())
             .style(
                 Style::default()
                     .fg(Palette::SURFACE_TEXT)
-                    .bg(Palette::SURFACE),
+                    .bg(Palette::SURFACE)
+                    .add_modifier(Modifier::BOLD),
             )
             .wrap(Wrap { trim: false }),
         prompt_area,
     );
-    render_interaction_choices(frame, options_area, question, draft);
-    render_interaction_help(frame, footer_area, question, draft);
     if let Some(preview) = preview {
         render_interaction_preview(frame, preview_area, preview);
     }
-}
-
-fn interaction_overlay_area(area: Rect, option_count: usize) -> Option<Rect> {
-    let width = area.width.saturating_sub(2).min(100);
-    if width < 8 || area.height < 6 {
-        return None;
-    }
-    let height = u16::try_from(option_count.saturating_add(9))
-        .unwrap_or(u16::MAX)
-        .max(8)
-        .min(area.height);
-    Some(Rect {
-        x: area.x + area.width.saturating_sub(width) / 2,
-        y: area.y + area.height.saturating_sub(height) / 2,
-        width,
-        height,
-    })
+    render_interaction_choices(frame, options_area, question, draft);
+    let footer = Rect::new(
+        area.x.saturating_add(3),
+        area.bottom().saturating_sub(1),
+        area.width.saturating_sub(5),
+        1,
+    );
+    render_interaction_help(frame, footer, interaction.questions.len(), question, draft);
 }
 
 fn render_interaction_choices(
@@ -2532,25 +2648,44 @@ fn render_interaction_choices(
     question: &InteractionQuestion,
     draft: &InteractionDraft,
 ) {
-    let mut lines = question
+    let lines = question
         .options
         .iter()
         .enumerate()
         .map(|(index, option)| interaction_option_line(question, draft, index, option))
         .collect::<Vec<_>>();
-    let other_focused = draft.option_cursor == question.options.len();
-    let other_value = draft.other[draft.question_index]
-        .as_deref()
-        .unwrap_or("Other…");
-    lines.push(Line::from(vec![
+    let [options, other] = Layout::vertical([
+        Constraint::Min(0),
+        Constraint::Length(u16::from(area.height > 0)),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(Style::default().bg(Palette::SURFACE))
+            .wrap(Wrap { trim: false }),
+        options,
+    );
+    let other_focused = draft.option_cursor() == question.options.len();
+    let other_value = if draft.editing_other {
+        format!("❯ {}", draft.other_input)
+    } else {
+        draft.other[draft.question_index]
+            .as_deref()
+            .map_or_else(|| "Type your answer here".to_owned(), ToOwned::to_owned)
+    };
+    let other_selected = draft.other[draft.question_index].is_some();
+    let other_line = Line::from(vec![
         Span::styled(
             format!(
-                "{} {} ",
-                if other_focused { "❯" } else { " " },
-                if question.multi_select && draft.other[draft.question_index].is_some() {
+                "z {} ",
+                if question.multi_select && other_selected {
                     "[x]"
+                } else if !question.multi_select && other_selected {
+                    "(●)"
+                } else if question.multi_select {
+                    "[ ]"
                 } else {
-                    "( )"
+                    "(○)"
                 }
             ),
             Style::default().fg(if other_focused {
@@ -2559,22 +2694,16 @@ fn render_interaction_choices(
                 Palette::MUTED
             }),
         ),
-        Span::styled(
-            other_value.to_owned(),
-            Style::default().fg(Palette::SURFACE_TEXT),
-        ),
-    ]));
-    if draft.editing_other {
-        lines.push(Line::from(vec![
-            Span::styled("  ❯ ", Style::default().fg(Palette::COMMAND)),
-            Span::raw(draft.other_input.clone()),
-        ]));
-    }
+        Span::styled(other_value, Style::default().fg(Palette::SURFACE_TEXT)),
+    ])
+    .style(Style::default().bg(if other_focused {
+        Palette::VISUAL_SURFACE
+    } else {
+        Palette::SURFACE
+    }));
     frame.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().bg(Palette::SURFACE))
-            .wrap(Wrap { trim: false }),
-        area,
+        Paragraph::new(other_line).style(Style::default().bg(Palette::SURFACE)),
+        other,
     );
 }
 
@@ -2584,21 +2713,18 @@ fn interaction_option_line(
     index: usize,
     option: &lenso_capability_agent_user_interaction::InteractionOption,
 ) -> Line<'static> {
-    let focused = index == draft.option_cursor;
+    let focused = index == draft.option_cursor();
+    let selected = draft.selected[draft.question_index].contains(&option.option_id);
     let marker = if question.multi_select {
-        if draft.selected[draft.question_index].contains(&option.option_id) {
-            "[x]"
-        } else {
-            "[ ]"
-        }
-    } else if focused {
+        if selected { "[x]" } else { "[ ]" }
+    } else if selected {
         "(●)"
     } else {
-        "( )"
+        "(○)"
     };
     Line::from(vec![
         Span::styled(
-            format!("{} {marker} ", if focused { "❯" } else { " " }),
+            format!("{} {marker} ", interaction_shortcut(index)),
             Style::default().fg(if focused {
                 Palette::ACCENT
             } else {
@@ -2624,45 +2750,74 @@ fn interaction_option_line(
             Style::default().fg(Palette::MUTED),
         ),
     ])
+    .style(Style::default().bg(if focused {
+        Palette::VISUAL_SURFACE
+    } else {
+        Palette::SURFACE
+    }))
+}
+
+fn interaction_shortcut(index: usize) -> char {
+    match index {
+        0..=8 => char::from(b'1' + u8::try_from(index).unwrap_or_default()),
+        9..=34 => char::from(b'a' + u8::try_from(index - 9).unwrap_or_default()),
+        _ => ' ',
+    }
 }
 
 fn render_interaction_help(
     frame: &mut Frame<'_>,
     area: Rect,
+    question_count: usize,
     question: &InteractionQuestion,
     draft: &InteractionDraft,
 ) {
     let help = if draft.editing_other {
-        "enter:save  shift+enter:newline  esc:back"
+        "Shift+Enter newline"
     } else if question.multi_select {
-        "↑↓:move  space:toggle  enter:continue  esc:cancel"
+        "↑/↓ navigate · Space toggle"
     } else {
-        "↑↓:move  enter:choose  esc:cancel"
+        "↑/↓ navigate"
     };
+    let counter = if question_count > 1 {
+        format!(
+            "[{}/{}] {help} · ←/→ question",
+            draft.question_index + 1,
+            question_count
+        )
+    } else {
+        help.to_owned()
+    };
+    let action = if draft.editing_other {
+        "Enter:save"
+    } else if draft.question_index + 1 == question_count {
+        "Enter:submit"
+    } else {
+        "Enter:select"
+    };
+    let action_width = u16::try_from(action.len())
+        .unwrap_or(u16::MAX)
+        .min(area.width);
+    let [left, right] =
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(action_width)]).areas(area);
     frame.render_widget(
-        Paragraph::new(help).style(Style::default().fg(Palette::MUTED).bg(Palette::SURFACE)),
-        area,
+        Paragraph::new(counter).style(Style::default().fg(Palette::MUTED).bg(Palette::SURFACE)),
+        left,
+    );
+    frame.render_widget(
+        Paragraph::new(action)
+            .alignment(ratatui::layout::Alignment::Right)
+            .style(Style::default().fg(Palette::ACCENT).bg(Palette::BG_BASE)),
+        right,
     );
 }
 
 fn render_interaction_preview(frame: &mut Frame<'_>, area: Rect, preview: &str) {
-    let block = Block::default()
-        .title(" Preview ")
-        .borders(Borders::LEFT)
-        .border_style(Style::default().fg(Palette::BORDER_ACTIVE))
-        .style(Style::default().bg(Palette::HOVER_SURFACE))
-        .padding(Padding::horizontal(1));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
     frame.render_widget(
         Paragraph::new(preview)
-            .style(
-                Style::default()
-                    .fg(Palette::SECONDARY_TEXT)
-                    .bg(Palette::HOVER_SURFACE),
-            )
+            .style(Style::default().fg(Palette::MUTED).bg(Palette::SURFACE))
             .wrap(Wrap { trim: false }),
-        inner,
+        area,
     );
 }
 
@@ -4568,7 +4723,62 @@ mod tests {
     }
 
     #[test]
-    fn focused_single_select_option_renders_its_preview() {
+    fn question_card_owns_grok_navigation_keys_without_cancelling_the_turn() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        let interaction = choice_interaction();
+        state.interaction_draft = Some(InteractionDraft::new(&interaction));
+        state.pending_interaction = Some(interaction);
+
+        handle_interaction_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut state);
+        assert_eq!(state.interaction_draft.as_ref().unwrap().option_cursor(), 1);
+        handle_interaction_key(
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(state.interaction_draft.as_ref().unwrap().option_cursor(), 0);
+        handle_interaction_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE), &mut state);
+        handle_interaction_key(
+            KeyEvent::new(KeyCode::Right, KeyModifiers::NONE),
+            &mut state,
+        );
+        assert_eq!(state.interaction_draft.as_ref().unwrap().question_index, 1);
+        handle_interaction_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), &mut state);
+        assert_eq!(state.interaction_draft.as_ref().unwrap().question_index, 0);
+        assert_eq!(state.interaction_draft.as_ref().unwrap().option_cursor(), 1);
+
+        handle_interaction_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), &mut state);
+        assert_eq!(state.focus, Focus::Scrollback);
+        assert!(state.pending_interaction.is_some());
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            &mut state,
+        ));
+        assert_eq!(state.focus, Focus::Prompt);
+    }
+
+    #[test]
+    fn question_option_shortcuts_select_without_becoming_prompt_text() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        let interaction = choice_interaction();
+        state.interaction_draft = Some(InteractionDraft::new(&interaction));
+        state.pending_interaction = Some(interaction);
+
+        handle_interaction_key(
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+            &mut state,
+        );
+
+        let draft = state.interaction_draft.as_ref().unwrap();
+        assert_eq!(draft.question_index, 1);
+        assert_eq!(
+            draft.selected[0].iter().next().map(String::as_str),
+            Some("fast")
+        );
+        assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn ask_user_replaces_the_composer_with_a_grok_style_question_card() {
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
@@ -4579,9 +4789,32 @@ mod tests {
         terminal.draw(|frame| render(frame, &mut state)).unwrap();
         let content = terminal.backend().to_string();
         assert!(content.contains("Choose a mode"));
-        assert!(content.contains("Other…"));
-        assert!(content.contains("Preview"));
+        assert!(content.contains("┃"));
+        assert!(content.contains("1 (○) Safe"));
+        assert!(content.contains("z (○) Type your answer here"));
         assert!(content.contains("mode = \"safe\""));
+        assert!(!content.contains("╭ Mode"));
+    }
+
+    #[test]
+    fn accepted_interaction_is_not_recorded_as_a_user_message() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.transcript.push(TranscriptEntry::Agent {
+            text: "Before asking".to_owned(),
+            created_at: "8:19 AM".to_owned(),
+        });
+        state.pending_interaction = Some(choice_interaction());
+        state.interaction_draft = state
+            .pending_interaction
+            .as_ref()
+            .map(InteractionDraft::new);
+
+        finish_interaction_submission(&mut state, Ok(()));
+
+        assert_eq!(state.transcript.len(), 1);
+        assert!(matches!(state.transcript[0], TranscriptEntry::Agent { .. }));
+        assert!(state.pending_interaction.is_none());
+        assert!(state.interaction_draft.is_none());
     }
 
     #[test]
@@ -4590,7 +4823,7 @@ mod tests {
         let mut interaction = choice_interaction();
         interaction.questions.truncate(1);
         let mut draft = InteractionDraft::new(&interaction);
-        draft.option_cursor = interaction.questions[0].options.len();
+        draft.set_option_cursor(interaction.questions[0].options.len());
         state.interaction_draft = Some(draft);
         state.pending_interaction = Some(interaction);
 
