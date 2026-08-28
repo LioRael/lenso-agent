@@ -15,9 +15,12 @@ root-slot = "tool-providers"
 [dependencies]
 base64.workspace = true
 futures.workspace = true
+jsonschema.workspace = true
 lenso.workspace = true
 lenso-capability-agent-context-source = { path = "../lenso-capability-agent-context-source" }
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 reqwest.workspace = true

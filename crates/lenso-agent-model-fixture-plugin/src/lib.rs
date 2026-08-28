@@ -64,8 +64,8 @@ impl FixtureModel {
             .rposition(|message| message.role == CompleteMessageRole::User)
             .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
         let current_user = &request.messages[current_user_index].content;
-        if current_user.starts_with("Answer directly:") {
-            return Ok(direct_fixture_response(request));
+        if let Some(response) = standalone_fixture_response(request, current_user) {
+            return Ok(response);
         }
         if current_user == "What did you summarize?" {
             let previous = request.messages[..current_user_index]
@@ -165,6 +165,32 @@ fn direct_fixture_response(request: &CompleteOpen) -> Vec<CompleteMessage> {
         has_prefix("Prefix direct answers with `Plugin: `."),
         has_prefix("Prefix direct answers with `Filesystem: `."),
     )
+}
+
+fn standalone_fixture_response(
+    request: &CompleteOpen,
+    current_user: &str,
+) -> Option<Vec<CompleteMessage>> {
+    if current_user.starts_with("Answer directly:") {
+        Some(direct_fixture_response(request))
+    } else if current_user == "What is the capital of France?" {
+        Some(sampling_fixture_response())
+    } else {
+        None
+    }
+}
+
+fn sampling_fixture_response() -> Vec<CompleteMessage> {
+    vec![response(
+        "1",
+        CompleteMessageKind::TextDelta,
+        "Paris.",
+        "",
+        "",
+        "{}",
+        "0",
+        "0",
+    )]
 }
 
 fn ask_user_response(

@@ -14,6 +14,11 @@
     "protocol": { "enum": ["auto", "modern", "legacy"] },
     "tool_namespace": { "type": "string" },
     "startup_timeout_ms": { "type": "integer" },
-    "request_timeout_ms": { "type": "integer" }
+    "request_timeout_ms": { "type": "integer" },
+    "allow_elicitation": { "type": "boolean" },
+    "allow_sampling": { "type": "boolean" },
+    "continuation_max_rounds": { "type": "integer" },
+    "sampling_model": { "type": "string" },
+    "max_sampling_tokens": { "type": "integer" }
   }
 }
