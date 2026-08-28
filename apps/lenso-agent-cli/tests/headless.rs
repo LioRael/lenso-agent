@@ -787,6 +787,84 @@ fn direct_answer_finishes_without_a_tool_call() {
 }
 
 #[test]
+fn sqlite_session_adapter_runs_a_real_turn_and_backend_neutral_provenance() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    let sqlite_configuration = temporary
+        .path()
+        .join("plugins/lenso.agent.session.sqlite/local.toml");
+    fs::create_dir_all(sqlite_configuration.parent().unwrap()).unwrap();
+    fs::write(
+        sqlite_configuration,
+        "database = \".lenso/sessions.sqlite3\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(temporary.path().join("profiles")).unwrap();
+    fs::write(
+        temporary.path().join("profiles/sqlite.toml"),
+        r#"description = "SQLite sessions"
+instances = [
+  "lenso.agent.model.fixture/model",
+  "lenso.agent.session.sqlite/local",
+]
+"#,
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args(["--profile", "sqlite", "--prompt", "Answer directly: sqlite"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(temporary.path().join(".lenso/sessions.sqlite3").is_file());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    let session_id = stderr.trim().strip_prefix("session: ").unwrap();
+    let provenance = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "sessions",
+            "provenance",
+            "--session",
+            session_id,
+            "--database",
+            ".lenso/sessions.sqlite3",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        provenance.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provenance.stderr)
+    );
+    assert!(String::from_utf8_lossy(&provenance.stdout).contains("generation=sha256:"));
+    let gc = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .args([
+            "generations",
+            "gc-preview",
+            "--session-database",
+            ".lenso/sessions.sqlite3",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        gc.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gc.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&gc.stdout)
+            .lines()
+            .any(|line| line.starts_with("protected:") && line.contains("session"))
+    );
+}
+
+#[test]
 fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environment() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();

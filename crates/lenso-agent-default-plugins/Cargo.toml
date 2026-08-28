@@ -23,6 +23,7 @@ lenso-agent-prompt-filesystem-plugin = { path = "../lenso-agent-prompt-filesyste
 lenso-agent-prompt-plugin = { path = "../lenso-agent-prompt-plugin" }
 lenso-agent-prompt-static-plugin = { path = "../lenso-agent-prompt-static-plugin" }
 lenso-agent-session-file-plugin = { path = "../lenso-agent-session-file-plugin" }
+lenso-agent-session-sqlite-plugin = { path = "../lenso-agent-session-sqlite-plugin" }
 lenso-agent-skills-filesystem-plugin = { path = "../lenso-agent-skills-filesystem-plugin" }
 lenso-agent-subagent-tools-plugin = { path = "../lenso-agent-subagent-tools-plugin" }
 lenso-agent-text-tools-plugin = { path = "../lenso-agent-text-tools-plugin" }

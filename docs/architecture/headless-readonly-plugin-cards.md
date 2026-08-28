@@ -107,6 +107,21 @@ Status: implementation baseline for the first executable slice.
   a Runtime Failure; there is no in-memory fallback.
 - **First behavior:** survives a fresh Plugin generation and process restart.
 
+## `lenso.agent.session.sqlite`
+
+- **Deletion boundary:** removes the transactional SQLite Session Adapter.
+- **Owned facts:** normalized SQLite schema, WAL setup, transaction isolation,
+  uniqueness constraints, and database-path lifecycle.
+- **Provides:** `lenso.agent.session@1` (`open`, `read`, `append`).
+- **Requires:** none.
+- **Configuration:** one durable SQLite database path.
+- **Transaction boundary:** one immediate SQLite transaction per append batch;
+  revision and event rows commit together.
+- **Failure policy:** schema, constraint, corruption, and I/O failures are
+  Runtime Failures; there is no file or in-memory fallback.
+- **First behavior:** can replace the file Adapter through a Profile without
+  changing the Agent Loop or provenance tooling.
+
 ## `lenso.agent.loop`
 
 - **Deletion boundary:** removes Turn/Step coordination, budgets, sequencing,
