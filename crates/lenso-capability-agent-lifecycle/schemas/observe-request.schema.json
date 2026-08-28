@@ -48,7 +48,7 @@
   "$defs": {
     "LifecycleEventKind": {
       "type": "string",
-      "enum": ["session_started", "session_resumed", "turn_started"]
+      "enum": ["session_started", "session_resumed", "turn_started", "turn_completed", "turn_failed"]
     }
   },
   "title": "ObserveRequest"

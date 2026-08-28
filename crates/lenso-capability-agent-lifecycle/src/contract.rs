@@ -26,6 +26,8 @@ pub enum LifecycleEventKind {
     SessionStarted,
     SessionResumed,
     TurnStarted,
+    TurnCompleted,
+    TurnFailed,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -40,7 +42,7 @@ pub enum ObserveError {
 #[lenso::capability(
     id = "lenso.agent.lifecycle",
     major = 1,
-    version = "1.0.0",
+    version = "1.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

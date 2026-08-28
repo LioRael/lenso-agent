@@ -1002,7 +1002,7 @@ fn completed_turns_are_recalled_across_sessions_with_durable_provenance() {
 }
 
 #[test]
-fn lifecycle_audit_observes_session_start_resume_and_turn_start() {
+fn lifecycle_audit_observes_start_resume_and_terminal_turns() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let first = run_derived(
@@ -1037,11 +1037,13 @@ fn lifecycle_audit_observes_session_start_resume_and_turn_start() {
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(events.len(), 4);
+    assert_eq!(events.len(), 6);
     assert_eq!(events[0]["kind"], "session_started");
     assert_eq!(events[1]["kind"], "turn_started");
-    assert_eq!(events[2]["kind"], "session_resumed");
-    assert_eq!(events[3]["kind"], "turn_started");
+    assert_eq!(events[2]["kind"], "turn_completed");
+    assert_eq!(events[3]["kind"], "session_resumed");
+    assert_eq!(events[4]["kind"], "turn_started");
+    assert_eq!(events[5]["kind"], "turn_completed");
     assert!(events.iter().all(|event| event["session_id"] == session_id));
 }
 

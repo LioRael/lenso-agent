@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.lifecycle@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const LIFECYCLE_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const LIFECYCLE_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_lifecycle { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"observe\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_lifecycle { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"observe\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_lifecycle_client { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_lifecycle_client { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_lifecycle_client { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_lifecycle_client { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
 
 pub const OBSERVE_OPERATION: &str = "observe";
 
@@ -63,6 +63,10 @@ pub enum LifecycleEventKind {
     SessionResumed,
     #[serde(rename = "turn_started")]
     TurnStarted,
+    #[serde(rename = "turn_completed")]
+    TurnCompleted,
+    #[serde(rename = "turn_failed")]
+    TurnFailed,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
