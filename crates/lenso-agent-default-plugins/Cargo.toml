@@ -14,8 +14,10 @@ lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plug
 lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-plugin" }
 lenso-agent-context-compaction-plugin = { path = "../lenso-agent-context-compaction-plugin" }
+lenso-agent-context-compaction-command-plugin = { path = "../lenso-agent-context-compaction-command-plugin" }
 lenso-agent-git-tools-plugin = { path = "../lenso-agent-git-tools-plugin" }
 lenso-agent-memory-sqlite-plugin = { path = "../lenso-agent-memory-sqlite-plugin" }
+lenso-agent-memory-command-plugin = { path = "../lenso-agent-memory-command-plugin" }
 lenso-agent-mcp-client-plugin = { path = "../lenso-agent-mcp-client-plugin" }
 lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
 lenso-agent-lifecycle-audit-plugin = { path = "../lenso-agent-lifecycle-audit-plugin" }
