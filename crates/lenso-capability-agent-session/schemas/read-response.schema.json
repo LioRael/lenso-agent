@@ -36,6 +36,9 @@
             "enum": [
               "session_created",
               "system_instruction_installed",
+              "context_compaction_started",
+              "context_compaction_committed",
+              "context_compaction_failed",
               "turn_started",
               "model_requested",
               "model_output",

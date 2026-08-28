@@ -523,6 +523,9 @@ fn event_kind(
     match kind {
         Kind::SessionCreated => "session_created",
         Kind::SystemInstructionInstalled => "system_instruction_installed",
+        Kind::ContextCompactionStarted => "context_compaction_started",
+        Kind::ContextCompactionCommitted => "context_compaction_committed",
+        Kind::ContextCompactionFailed => "context_compaction_failed",
         Kind::TurnStarted => "turn_started",
         Kind::ModelRequested => "model_requested",
         Kind::ModelOutput => "model_output",
@@ -540,6 +543,11 @@ fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
         "system_instruction_installed" => {
             ReadSessionResponseEventsItemKind::SystemInstructionInstalled
         }
+        "context_compaction_started" => ReadSessionResponseEventsItemKind::ContextCompactionStarted,
+        "context_compaction_committed" => {
+            ReadSessionResponseEventsItemKind::ContextCompactionCommitted
+        }
+        "context_compaction_failed" => ReadSessionResponseEventsItemKind::ContextCompactionFailed,
         "turn_started" => ReadSessionResponseEventsItemKind::TurnStarted,
         "model_requested" => ReadSessionResponseEventsItemKind::ModelRequested,
         "model_output" => ReadSessionResponseEventsItemKind::ModelOutput,
@@ -616,6 +624,16 @@ mod tests {
         }
     }
 
+    fn compaction_event(id: &str) -> AppendSessionRequestEventsItem {
+        AppendSessionRequestEventsItem {
+            event_id: id.to_owned(),
+            kind: AppendSessionRequestEventsItemKind::ContextCompactionCommitted,
+            turn_id: None,
+            occurred_at: "2026-08-24T00:00:01Z".to_owned(),
+            payload_json: r#"{"compaction_id":"compact-1"}"#.to_owned().try_into().unwrap(),
+        }
+    }
+
     #[test]
     fn session_persists_reopens_and_reads_in_revision_order() {
         let temporary = tempfile::tempdir().unwrap();
@@ -631,10 +649,10 @@ mod tests {
             .append_now(AppendSessionRequest {
                 session_id: opened.session_id.clone(),
                 expected_revision: "0".to_owned(),
-                events: vec![event("event-1")],
+                events: vec![event("event-1"), compaction_event("event-2")],
             })
             .unwrap();
-        assert_eq!(appended.revision, "1");
+        assert_eq!(appended.revision, "2");
 
         let fresh_generation = FileSessionProvider {
             directory: provider.directory.clone(),
@@ -646,7 +664,7 @@ mod tests {
             })
             .unwrap();
         assert!(!reopened.created);
-        assert_eq!(reopened.revision, "1");
+        assert_eq!(reopened.revision, "2");
         let read = fresh_generation
             .read_now(ReadSessionRequest {
                 session_id: opened.session_id,
@@ -654,8 +672,13 @@ mod tests {
                 limit: 10,
             })
             .unwrap();
-        assert_eq!(read.events.len(), 1);
+        assert_eq!(read.events.len(), 2);
         assert_eq!(read.events[0].revision, "1");
+        assert_eq!(
+            read.events[1].kind,
+            ReadSessionResponseEventsItemKind::ContextCompactionCommitted
+        );
+        assert_eq!(read.events[1].revision, "2");
     }
 
     #[test]

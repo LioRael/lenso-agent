@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["session_id", "messages", "target_summary_characters"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "previous_summary": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "messages": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/ContextMessage"
+      },
+      "minItems": 1
+    },
+    "target_summary_characters": {
+      "type": "integer",
+      "minimum": 256,
+      "maximum": 262144
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ContextMessage": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ContextMessageRole"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 262144
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextMessageRole": {
+      "type": "string",
+      "enum": ["user", "assistant"]
+    }
+  },
+  "title": "CompactRequest"
+}

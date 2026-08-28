@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_context" },
+    { "const": "context_too_large" },
+    { "const": "compaction_failed" }
+  ]
+}

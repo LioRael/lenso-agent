@@ -32,6 +32,19 @@ fn run_derived(root: &Path, prompt: &str, session: Option<&str>) -> std::process
     command.output().unwrap()
 }
 
+fn run_configured_derived(
+    root: &Path,
+    prompt: &str,
+    session: Option<&str>,
+) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
+    command.current_dir(root).arg(prompt);
+    if let Some(session) = session {
+        command.args(["--session", session]);
+    }
+    command.output().unwrap()
+}
+
 fn configure_fixture_app(root: &Path) {
     for (relative, configuration) in support::fixture_configurations() {
         let path = root.join("plugins").join(relative);
@@ -275,6 +288,79 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
             .filter(|event| event["kind"] == "system_instruction_installed")
             .count(),
         1
+    );
+}
+
+#[test]
+fn automatic_compaction_commits_a_durable_projection_without_rewriting_session_history() {
+    let temporary = tempfile::tempdir().unwrap();
+    configure_fixture_app(temporary.path());
+    fs::write(
+        temporary.path().join("plugins/lenso.agent.loop/agent.toml"),
+        "model = \"fixture/readme-summary-v1\"\nmax_history_events = 1\n",
+    )
+    .unwrap();
+    let compactor = temporary
+        .path()
+        .join("plugins/lenso.agent.context-compaction/context-compactor.toml");
+    fs::create_dir_all(compactor.parent().unwrap()).unwrap();
+    fs::write(
+        compactor,
+        "max_input_characters = 1048576\nmax_summary_characters = 8192\nretain_recent_turns = 1\n",
+    )
+    .unwrap();
+
+    let first = run_configured_derived(temporary.path(), "Answer directly: durable context", None);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let session_id = String::from_utf8(first.stderr)
+        .unwrap()
+        .trim()
+        .strip_prefix("session: ")
+        .unwrap()
+        .to_owned();
+    let before = stored_session(temporary.path());
+    let original_events = before["events"].as_array().unwrap().len();
+
+    let second = run_configured_derived(
+        temporary.path(),
+        "What did you summarize?",
+        Some(&session_id),
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let after = stored_session(temporary.path());
+    let events = after["events"].as_array().unwrap();
+    assert!(events.len() > original_events);
+    assert!(
+        events
+            .iter()
+            .any(|event| event["kind"] == "context_compaction_started")
+    );
+    let committed = events
+        .iter()
+        .find(|event| event["kind"] == "context_compaction_committed")
+        .unwrap();
+    let checkpoint: serde_json::Value =
+        serde_json::from_str(committed["payload_json"].as_str().unwrap()).unwrap();
+    assert!(
+        checkpoint["summary"]
+            .as_str()
+            .unwrap()
+            .contains("durable context")
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["kind"] == "turn_completed")
+            .count(),
+        2
     );
 }
 

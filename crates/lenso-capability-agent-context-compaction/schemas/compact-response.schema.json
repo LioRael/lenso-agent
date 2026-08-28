@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["summary", "retained_messages"],
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "retained_messages": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/ContextMessage"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ContextMessage": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": {
+          "$ref": "#/$defs/ContextMessageRole"
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 262144
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContextMessageRole": {
+      "type": "string",
+      "enum": ["user", "assistant"]
+    }
+  },
+  "title": "CompactResponse"
+}

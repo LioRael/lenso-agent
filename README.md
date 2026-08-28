@@ -103,6 +103,22 @@ instances = ["lenso.agent.session.sqlite/local"]
 Inspect its Generation provenance with
 `lenso-agent-cli sessions provenance --session <id> --database .lenso/sessions.sqlite3`.
 
+Long Sessions use the replaceable Context Compaction seam instead of silently
+dropping old history. The bundled offline Adapter stores a bounded extractive
+summary plus complete recent turns while leaving the canonical Session log
+untouched. Configure its default Instance like any other Plugin:
+
+```toml
+# plugins/lenso.agent.context-compaction/context-compactor.toml
+max_input_characters = 1048576
+max_summary_characters = 8192
+retain_recent_turns = 8
+```
+
+A Profile can select a different native, Wasm, process, or remote Plugin for
+`lenso.agent.context-compaction@1`; the Agent Loop still owns trigger policy,
+checkpoint validation, and durable Session facts.
+
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed `session_started`, `session_resumed`, and
 `turn_started` events to `.lenso/lifecycle/events.jsonl`. A trusted command

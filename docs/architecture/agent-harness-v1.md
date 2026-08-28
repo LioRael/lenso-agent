@@ -18,6 +18,7 @@ Host defaults + plugins/
        |- Model Plugin
        |- Tool Runtime Plugin -> Tool Provider Plugins
        |- Prompt Plugin -> Prompt Provider Plugins
+       |- Context Compaction Plugin
        `- Session Plugin
 ```
 
@@ -30,8 +31,9 @@ running graph.
 
 1. The Host snapshots `plugins/`, derives a Plan, and readies one Generation.
 2. The surface leases that Generation and opens `lenso.agent@3/run_turn`.
-3. Agent opens or resumes a Session and records `turn_started`.
-4. Agent obtains bounded Prompt contributions and the derived Tool catalog.
+3. Agent opens or resumes a Session, restores or refreshes its bounded context
+   projection, and records `turn_started`.
+4. Agent obtains the installed System Instruction and derived Tool catalog.
 5. Model output streams to the surface; complete Tool calls are recorded before
    execution.
 6. Tool Runtime validates and dispatches to the Plan-bound Provider Plugin.
@@ -42,6 +44,8 @@ running graph.
 
 - Session owns durable identity, revision, event order, recovery, and retention.
 - Agent owns volatile Turn orchestration reconstructed from Session events.
+- Context Compaction owns replaceable summary and retained-tail behavior; the
+  Agent owns trigger, validation, and durable checkpoint transactions.
 - Tool Runtime owns catalog aggregation and routing, but no second Plugin list.
 - Tool Providers own definitions, resource policy, execution, and final domain
   authorization.

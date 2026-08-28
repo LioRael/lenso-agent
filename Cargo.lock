@@ -1773,6 +1773,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-context-compaction-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-context-compaction",
+ "lenso-kernel",
+ "serde",
+]
+
+[[package]]
 name = "lenso-agent-default-plugins"
 version = "0.1.0"
 dependencies = [
@@ -1780,6 +1790,7 @@ dependencies = [
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-code-mode-tools-plugin",
+ "lenso-agent-context-compaction-plugin",
  "lenso-agent-http-fetch-plugin",
  "lenso-agent-lifecycle-audit-plugin",
  "lenso-agent-lifecycle-command-plugin",
@@ -1830,6 +1841,7 @@ dependencies = [
  "lenso-agent-session-sqlite-plugin",
  "lenso-app-plan",
  "lenso-capability-agent",
+ "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-http-fetch",
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-model",
@@ -1905,6 +1917,7 @@ dependencies = [
  "futures",
  "lenso",
  "lenso-capability-agent",
+ "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-model",
  "lenso-capability-agent-prompt",
@@ -2354,6 +2367,25 @@ dependencies = [
  "lenso-plugin-authoring",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-context-compaction"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

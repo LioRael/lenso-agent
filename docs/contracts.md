@@ -99,6 +99,12 @@ Generation Spec digest. A resumed Session reuses that event and fails closed on
 malformed or multiple installations. A legacy Session without the event is
 migrated once on first resume. Descriptor `1.2.0` adds this event kind.
 
+Descriptor `1.3.0` adds `context_compaction_started`,
+`context_compaction_committed`, and `context_compaction_failed`. These are
+append-only projection facts; they never replace or delete the source events.
+A committed checkpoint identifies the exact source revision, bounded summary,
+retained complete-turn suffix, and summary digest.
+
 Supplying `session_id` to `open` means resume-only: an absent Session returns
 `not_found`. Omitting it creates a new Session. This additive Domain Error was
 introduced in Descriptor `1.1.0`; `lenso.agent.session@1` consumers preserve
@@ -131,3 +137,12 @@ Agent Tool and an interactive surface. `ask` waits for one bounded answer;
 without exposing its event loop or widget state. A Host-issued typed Invocation
 Context marker is required for `ask`, so a non-interactive surface receives
 `unavailable` before any pending state or timeout is created.
+
+## Context Compaction
+
+`lenso.agent.context-compaction@1` receives a bounded previous summary and
+complete user/assistant message pairs. It returns one non-empty bounded summary
+and zero or more retained complete pairs. The Agent Loop accepts retained
+messages only when they are an exact suffix of the request, writes the Session
+transaction facts, and composes the result below the installed System
+Instruction. Compactors do not read or mutate Session storage directly.
