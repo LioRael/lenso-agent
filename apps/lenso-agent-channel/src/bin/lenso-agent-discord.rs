@@ -1,11 +1,9 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
-use lenso_agent_cli::{
-    discord::{self, ChannelAllowlist, DiscordOptions},
-    generation::AgentApp,
-    plan_bytes,
-};
+use lenso_agent_channel::discord::{self, ChannelAllowlist, DiscordOptions};
+use lenso_agent_discord_plugin as _;
+use lenso_agent_host::{generation::AgentApp, plan_bytes};
 
 /// Run the composed Lenso Agent as a Discord Bot.
 #[derive(Debug, Parser)]
@@ -66,6 +64,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    lenso_agent_default_plugins::link();
     if args.max_messages == Some(0) {
         return Err("--max-messages must be greater than zero".to_owned());
     }

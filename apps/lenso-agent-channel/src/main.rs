@@ -1,9 +1,10 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use lenso_agent_cli::{
-    channel_host::ChannelHostConfig, discord, generation::AgentApp, plan_bytes, telegram,
-};
+use lenso_agent_channel::{channel_host::ChannelHostConfig, discord, telegram};
+use lenso_agent_discord_plugin as _;
+use lenso_agent_host::{generation::AgentApp, plan_bytes};
+use lenso_agent_telegram_plugin as _;
 
 /// Run the composed Lenso Agent through every configured messaging Channel.
 #[derive(Debug, Parser)]
@@ -35,6 +36,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    lenso_agent_default_plugins::link();
     let options = ChannelHostConfig::load(&args.config)?.resolve()?;
     let bytes = plan_bytes(args.plan.as_deref())?;
     let mut app = AgentApp::start_channels(&bytes)
@@ -72,7 +74,7 @@ async fn run(args: Args) -> Result<(), String> {
 
 async fn validate_routes(
     app: &AgentApp,
-    options: &lenso_agent_cli::channel_host::ChannelOptions,
+    options: &lenso_agent_channel::channel_host::ChannelOptions,
 ) -> Result<(), String> {
     if options.telegram.is_some() {
         drop(
@@ -96,6 +98,18 @@ mod tests {
     use clap::CommandFactory;
 
     use super::*;
+
+    #[test]
+    fn channel_distribution_links_only_messaging_surfaces() {
+        lenso_agent_default_plugins::link();
+        let catalog =
+            serde_json::to_value(lenso_agent_host::generation::linked_host_catalog()).unwrap();
+        let catalog = catalog.to_string();
+        assert!(catalog.contains(r#""plugin_id":"lenso.agent.telegram""#));
+        assert!(catalog.contains(r#""plugin_id":"lenso.agent.discord""#));
+        assert!(!catalog.contains(r#""plugin_id":"lenso.agent.cli""#));
+        assert!(!catalog.contains(r#""plugin_id":"lenso.agent.tui""#));
+    }
 
     #[test]
     fn channel_host_has_a_direct_no_subcommand_entrypoint() {

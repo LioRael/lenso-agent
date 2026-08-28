@@ -1,7 +1,9 @@
 use std::{fs, path::Path, process::Command};
 
+use lenso_agent_cli_plugin as _;
 use lenso_plugin_control_plane::sha256_digest;
 
+#[path = "../../../tests/support/mod.rs"]
 mod support;
 
 fn plan_path() -> std::path::PathBuf {

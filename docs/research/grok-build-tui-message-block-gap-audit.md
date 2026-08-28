@@ -19,7 +19,7 @@ official block enum makes that separation explicit
 
 Lenso currently has only `TranscriptEntry::Message { speaker, text }` and
 `TranscriptEntry::Tool`, with `Speaker::{User, Agent, System, Error}`
-(`apps/lenso-agent-cli/src/tui.rs` 97–103, 178–182). User and Agent messages
+(`apps/lenso-agent-tui/src/tui.rs` 97–103, 178–182). User and Agent messages
 are rendered by one hand-written `render_message_entry` branch, while only Tool
 entries participate in selection/folding/hit testing (`tui.rs` 1746–1811).
 That model cannot reproduce Grok's sent-message band, received-message

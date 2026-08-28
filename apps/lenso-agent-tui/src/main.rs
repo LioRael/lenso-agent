@@ -1,11 +1,14 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
-use lenso_agent_cli::{
-    generation::AgentApp,
-    plan_bytes_for_profile,
-    tui::{self, TuiOptions},
-};
+use lenso_agent_host::{generation::AgentApp, plan_bytes_for_profile};
+use lenso_agent_tui_command_suggestions_plugin as _;
+use lenso_agent_tui_plugin as _;
+use lenso_agent_tui_static_plugin as _;
+use lenso_agent_tui_workspace_suggestions_plugin as _;
+
+mod tui;
+use tui::TuiOptions;
 
 /// Interactive Lenso Agent. Running without arguments opens the TUI.
 #[derive(Debug, Parser)]
@@ -49,6 +52,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    lenso_agent_default_plugins::link();
     let bytes = plan_bytes_for_profile(args.plan.as_deref(), args.profile.as_deref())?;
     let mut app = AgentApp::start_tui_with_profile(&bytes, args.profile.clone())
         .await
@@ -78,6 +82,18 @@ mod tests {
     use clap::CommandFactory;
 
     use super::*;
+
+    #[test]
+    fn tui_distribution_links_only_the_tui_surface() {
+        lenso_agent_default_plugins::link();
+        let catalog =
+            serde_json::to_value(lenso_agent_host::generation::linked_host_catalog()).unwrap();
+        let catalog = catalog.to_string();
+        assert!(catalog.contains(r#""plugin_id":"lenso.agent.tui""#));
+        assert!(!catalog.contains(r#""plugin_id":"lenso.agent.cli""#));
+        assert!(!catalog.contains(r#""plugin_id":"lenso.agent.telegram""#));
+        assert!(!catalog.contains(r#""plugin_id":"lenso.agent.discord""#));
+    }
 
     #[test]
     fn product_entrypoint_has_no_subcommands() {

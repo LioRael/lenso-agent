@@ -41,3 +41,4 @@
 - [0039 — Derive the App from the Host Catalog and Plugin Root](0039-derive-app-from-host-catalog-and-plugin-root.md)
 - [0040 — Select Session Profiles before Generation resolution](0040-select-session-profiles-before-generation-resolution.md)
 - [0041 — Snapshot Plugin Instance resources](0041-snapshot-plugin-instance-resources.md)
+- [0042 — Split Agent Host surfaces](0042-split-agent-host-surfaces.md)

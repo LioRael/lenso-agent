@@ -1,0 +1,40 @@
+[package]
+name = "lenso-agent-tui"
+version = "0.1.0"
+description = "Optional terminal UI surface for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "lenso-agent"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+crossterm.workspace = true
+futures.workspace = true
+lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins" }
+lenso-agent-host = { path = "../../crates/lenso-agent-host" }
+lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
+lenso-agent-tui-plugin = { path = "../../crates/lenso-agent-tui-plugin" }
+lenso-agent-tui-static-plugin = { path = "../../crates/lenso-agent-tui-static-plugin" }
+lenso-agent-tui-command-suggestions-plugin = { path = "../../crates/lenso-agent-tui-command-suggestions-plugin" }
+lenso-agent-tui-workspace-suggestions-plugin = { path = "../../crates/lenso-agent-tui-workspace-suggestions-plugin" }
+lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
+lenso-capability-agent-tool-progress = { path = "../../crates/lenso-capability-agent-tool-progress" }
+lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
+lenso-capability-agent-tui-suggestion = { path = "../../crates/lenso-capability-agent-tui-suggestion" }
+lenso-kernel.workspace = true
+ratatui.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

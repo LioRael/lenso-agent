@@ -5,7 +5,7 @@ use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
-use crate::generation::TurnGeneration;
+use lenso_agent_host::generation::TurnGeneration;
 
 const MAX_QUEUED_TURNS: usize = 1_024;
 

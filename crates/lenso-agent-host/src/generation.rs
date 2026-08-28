@@ -11,35 +11,6 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-use lenso_agent_approval_hook_plugin as _;
-use lenso_agent_auth_openai_codex_plugin as _;
-use lenso_agent_cli_plugin as _;
-use lenso_agent_code_mode_tools_plugin as _;
-use lenso_agent_discord_plugin as _;
-use lenso_agent_http_fetch_plugin as _;
-use lenso_agent_loop_plugin::GENERATION_SPEC_DIGEST_EXTENSION;
-use lenso_agent_model_fixture_plugin as _;
-use lenso_agent_model_openai_codex_direct_plugin as _;
-use lenso_agent_model_openai_compatible_plugin as _;
-use lenso_agent_process_native_plugin as _;
-use lenso_agent_process_tools_plugin as _;
-use lenso_agent_prompt_filesystem_plugin as _;
-use lenso_agent_prompt_plugin as _;
-use lenso_agent_prompt_static_plugin as _;
-use lenso_agent_session_file_plugin as _;
-use lenso_agent_skills_filesystem_plugin as _;
-use lenso_agent_subagent_tools_plugin as _;
-use lenso_agent_telegram_plugin as _;
-use lenso_agent_text_tools_plugin as _;
-use lenso_agent_tools_plugin as _;
-use lenso_agent_tui_command_suggestions_plugin as _;
-use lenso_agent_tui_plugin as _;
-use lenso_agent_tui_static_plugin as _;
-use lenso_agent_tui_workspace_suggestions_plugin as _;
-use lenso_agent_workspace_edit_plugin as _;
-use lenso_agent_workspace_import_read_plugin as _;
-use lenso_agent_workspace_read_plugin as _;
-use lenso_agent_workspace_read_tools_plugin as _;
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
     authoring::{
@@ -79,10 +50,10 @@ use lenso_plugin_control_plane::{
     PlanGenerationInput, ReplacementMode, ResolvedGeneration, RolloutPolicy,
     resolve_plan_generation, sha256_digest,
 };
-use lenso_secrets_env_plugin as _;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 const APP_ID: &str = "lenso.agent.harness";
+const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
@@ -1466,16 +1437,30 @@ fn native_host_build() -> (NativePluginRegistry, Vec<EmbeddedPlugin>) {
     (registry, built_in_plugins)
 }
 
-pub(crate) fn linked_host_catalog() -> Result<HostCatalog, String> {
+/// Returns the Host Catalog derived from the Plugin factories linked into this executable.
+pub fn linked_host_catalog() -> Result<HostCatalog, String> {
     linked_host_catalog_for_agent(&PluginInstanceId::new("lenso.agent.loop", "agent"))
 }
 
 fn linked_host_catalog_for_agent(root_agent: &PluginInstanceId) -> Result<HostCatalog, String> {
-    NativePluginRegistry::host_catalog(host_catalog_slots(), host_catalog_defaults())
+    let registry = NativePluginRegistry::new().with_linked_factories();
+    let available = registry
+        .factories()
+        .map(|factory| factory.package_id().to_owned())
+        .collect::<BTreeSet<_>>();
+    let defaults = host_catalog_defaults()
+        .into_iter()
+        .filter(|plugin| available.contains(plugin.id().plugin_id()))
+        .collect::<Vec<_>>();
+    let configurations = host_catalog_configurations()
+        .into_iter()
+        .filter(|configuration| available.contains(configuration.id().plugin_id()))
+        .collect::<Vec<_>>();
+    NativePluginRegistry::host_catalog(host_catalog_slots(), defaults)
         .map(|catalog| {
             catalog
-                .with_configurations(host_catalog_configurations())
-                .with_bindings(host_catalog_bindings(root_agent))
+                .with_configurations(configurations)
+                .with_bindings(host_catalog_bindings(root_agent, &available))
         })
         .map_err(|error| format!("linked Host Catalog is invalid: {error:?}"))
 }
@@ -1771,7 +1756,10 @@ fn host_plugin_configuration(
     HostPluginConfiguration::new(plugin_id, "default", configuration)
 }
 
-fn host_catalog_bindings(selected_agent: &PluginInstanceId) -> Vec<HostBinding> {
+fn host_catalog_bindings(
+    selected_agent: &PluginInstanceId,
+    available: &BTreeSet<String>,
+) -> Vec<HostBinding> {
     let root_tools = PluginInstanceId::new("lenso.agent.tools", "tools");
     let restricted_tools =
         PluginInstanceId::new("lenso.agent.workspace-read-tools", "restricted-read-tools");
@@ -1803,25 +1791,30 @@ fn host_catalog_bindings(selected_agent: &PluginInstanceId) -> Vec<HostBinding> 
         PluginInstanceId::new("lenso.agent.discord", "discord"),
         PluginInstanceId::new("lenso.agent.telegram", "telegram"),
         PluginInstanceId::new("lenso.agent.tui", "tui"),
-    ] {
+    ]
+    .into_iter()
+    .filter(|surface| available.contains(surface.plugin_id()))
+    {
         bindings.push(HostBinding::to_instance(
             surface,
             "lenso.agent@3",
             selected_agent.clone(),
         ));
     }
-    bindings.extend([
-        HostBinding::to_instance(
+    if available.contains("lenso.agent.code-mode-tools") {
+        bindings.push(HostBinding::to_instance(
             PluginInstanceId::new("lenso.agent.code-mode-tools", "default"),
             "lenso.agent.tools@2",
             restricted_tools,
-        ),
-        HostBinding::to_instance(
+        ));
+    }
+    if available.contains("lenso.agent.subagent-tools") {
+        bindings.push(HostBinding::to_instance(
             PluginInstanceId::new("lenso.agent.subagent-tools", "default"),
             "lenso.agent@3",
             child_agent,
-        ),
-    ]);
+        ));
+    }
     bindings
 }
 
@@ -1969,16 +1962,6 @@ mod tests {
                 .iter()
                 .any(|binding| {
                     binding["consumer_instance"] == "lenso.agent.cli/cli"
-                        && binding["provider_instance"] == "lenso.agent.loop/game"
-                })
-        );
-        assert!(
-            plan["capability_bindings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|binding| {
-                    binding["consumer_instance"] == "lenso.agent.tui/tui"
                         && binding["provider_instance"] == "lenso.agent.loop/game"
                 })
         );

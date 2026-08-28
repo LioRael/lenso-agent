@@ -8,10 +8,8 @@ use std::{
 use reqwest::Client;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{
-    channel::{TurnGate, run_agent_turn},
-    generation::AgentApp,
-};
+use crate::channel::{TurnGate, run_agent_turn};
+use lenso_agent_host::generation::AgentApp;
 
 const DEFAULT_API_BASE: &str = "https://api.telegram.org";
 const MAX_MESSAGE_CHARS: usize = 4_000;

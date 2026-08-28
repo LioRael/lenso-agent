@@ -8,8 +8,10 @@ use std::{
 };
 
 use futures::{SinkExt, StreamExt};
+use lenso_agent_discord_plugin as _;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
+#[path = "../../../tests/support/mod.rs"]
 mod support;
 
 #[test]

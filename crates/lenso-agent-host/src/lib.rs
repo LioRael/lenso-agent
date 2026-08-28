@@ -4,18 +4,13 @@ use std::{
 };
 
 mod authority;
-pub mod channel;
-pub mod channel_host;
-pub mod discord;
 pub mod generation;
 mod generation_authority;
 mod plugin_root;
 mod profile;
 pub mod provenance;
-pub mod telegram;
 #[cfg(test)]
 mod test_support;
-pub mod tui;
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.
 pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {

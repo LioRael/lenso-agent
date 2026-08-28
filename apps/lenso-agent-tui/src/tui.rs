@@ -40,11 +40,11 @@ use ratatui::{
 };
 use time::OffsetDateTime;
 
-use crate::generation::{AgentApp, OnlineGenerationEvent, TurnGeneration};
 use blocks::{
     ThinkingCard, ToolCard, ToolStatus, render_grouped_tool_block, render_thinking_block,
     render_tool_block, render_tool_group,
 };
+use lenso_agent_host::generation::{AgentApp, OnlineGenerationEvent, TurnGeneration};
 use markdown::{lines as markdown_lines, lines_with_width as markdown_lines_with_width};
 
 const EVENT_TICK: Duration = Duration::from_millis(250);

@@ -2,6 +2,10 @@
 resolver = "2"
 members = [
     "apps/lenso-agent-cli",
+    "apps/lenso-agent-channel",
+    "apps/lenso-agent-tui",
+    "crates/lenso-agent-host",
+    "crates/lenso-agent-default-plugins",
     "crates/lenso-agent-auth-openai-codex-plugin",
     "crates/lenso-capability-agent",
     "crates/lenso-capability-agent-auth-openai-codex",

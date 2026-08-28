@@ -1,0 +1,29 @@
+[package]
+name = "dev-example-portable-text-tools"
+version = "1.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "dev.example.portable-text-tools"
+root-slot = "tool-providers"
+
+[package.metadata.lenso-cli]
+outputs = ["wasm", "process"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lenso-guest-sdk = "0.2.0"
+lenso-process-sdk = { version = "0.1.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "7f5acd577374157cb57c72c9dd0d4b0e054c53ce" }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wit-bindgen = "0.60"
+
+[[bin]]
+name = "dev-example-portable-text-tools"
+path = "src/main.rs"
+
+[workspace]

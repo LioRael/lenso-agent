@@ -8,6 +8,9 @@ use std::{
     time::Duration,
 };
 
+use lenso_agent_cli_plugin as _;
+
+#[path = "../../../tests/support/mod.rs"]
 mod support;
 
 fn canonical_plan_path() -> PathBuf {

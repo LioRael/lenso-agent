@@ -9,8 +9,8 @@ This document describes the machinery behind that surface.
 The Host starts with its compiled defaults when `plugins/` is absent or empty:
 
 ```sh
-cargo run -p lenso-agent-cli --bin lenso-agent
-cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
+cargo run -p lenso-agent-tui
+cargo run -p lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
@@ -41,6 +41,12 @@ Each Host build generates an immutable Host Catalog containing:
 - default Plugin Instances and complete Host-owned configuration;
 - root Slots that state which capabilities form the product surface; and
 - private attachments needed to distinguish repeated capability providers.
+
+The shared `lenso-agent-host` crate does not link concrete Plugins. The
+headless, TUI, and Channel distributions each link a surface-neutral default
+Plugin set plus only their own consumer Plugins. Therefore a Plugin absent from
+an executable is absent from its Host Catalog rather than merely disabled at
+runtime.
 
 Resolution snapshots the complete Plugin Root, validates strict directory,
 TOML, and bounded Instance-resource shapes, verifies any external package bytes, merges package defaults, Host

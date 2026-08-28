@@ -120,6 +120,7 @@ pub(crate) fn fixture_configurations() -> &'static [(&'static str, &'static str)
 }
 
 fn resolve(app: &str, configurations: &[(&str, &str)]) -> PathBuf {
+    lenso_agent_default_plugins::link();
     let root = env::temp_dir()
         .join(format!(
             "lenso-agent-integration-roots-{}",
@@ -142,7 +143,7 @@ fn resolve(app: &str, configurations: &[(&str, &str)]) -> PathBuf {
         ))
         .join(format!("{app}.json"));
     fs::create_dir_all(output.parent().expect("generated Plan parent")).unwrap();
-    let plan = lenso_agent_cli::derived_plan_bytes(&plugin_root)
+    let plan = lenso_agent_host::derived_plan_bytes(&plugin_root)
         .unwrap_or_else(|error| panic!("failed to derive test App `{app}`: {error}"));
     fs::write(&output, plan).unwrap();
     output

@@ -13,10 +13,8 @@ use serde_json::Value;
 use tokio::time::{Instant, Sleep};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-use crate::{
-    channel::{TurnGate, run_agent_turn},
-    generation::AgentApp,
-};
+use crate::channel::{TurnGate, run_agent_turn};
+use lenso_agent_host::generation::AgentApp;
 
 const DEFAULT_API_BASE: &str = "https://discord.com/api/v10";
 const MAX_MESSAGE_CHARS: usize = 2_000;

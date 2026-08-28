@@ -1,11 +1,9 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
-use lenso_agent_cli::{
-    generation::AgentApp,
-    plan_bytes,
-    telegram::{self, ChatAllowlist, TelegramOptions},
-};
+use lenso_agent_channel::telegram::{self, ChatAllowlist, TelegramOptions};
+use lenso_agent_host::{generation::AgentApp, plan_bytes};
+use lenso_agent_telegram_plugin as _;
 
 /// Run the composed Lenso Agent as a Telegram Bot.
 #[derive(Debug, Parser)]
@@ -71,6 +69,7 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    lenso_agent_default_plugins::link();
     if args.max_updates == Some(0) {
         return Err("--max-updates must be greater than zero".to_owned());
     }

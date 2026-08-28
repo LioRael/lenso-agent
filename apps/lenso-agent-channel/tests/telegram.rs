@@ -7,6 +7,9 @@ use std::{
     time::Duration,
 };
 
+use lenso_agent_telegram_plugin as _;
+
+#[path = "../../../tests/support/mod.rs"]
 mod support;
 
 #[test]
