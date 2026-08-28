@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin" }
+lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plugin" }
 lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-plugin" }
 lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
@@ -30,6 +31,7 @@ lenso-agent-skills-filesystem-plugin = { path = "../lenso-agent-skills-filesyste
 lenso-agent-subagent-tools-plugin = { path = "../lenso-agent-subagent-tools-plugin" }
 lenso-agent-text-tools-plugin = { path = "../lenso-agent-text-tools-plugin" }
 lenso-agent-tools-plugin = { path = "../lenso-agent-tools-plugin" }
+lenso-agent-user-interaction-local-plugin = { path = "../lenso-agent-user-interaction-local-plugin" }
 lenso-agent-workspace-edit-plugin = { path = "../lenso-agent-workspace-edit-plugin" }
 lenso-agent-workspace-import-read-plugin = { path = "../lenso-agent-workspace-import-read-plugin" }
 lenso-agent-workspace-read-plugin = { path = "../lenso-agent-workspace-read-plugin" }

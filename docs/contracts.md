@@ -122,3 +122,12 @@ order. Session start runs only after the required System Instruction is
 durable and before the first user Turn. Delivery is at least once and carries
 a stable event ID; observers must be idempotent. Observer failure rejects the
 pending transition and never widens Agent authority.
+
+## User interaction
+
+`lenso.agent.user-interaction@1` is the portable, replaceable seam between an
+Agent Tool and an interactive surface. `ask` waits for one bounded answer;
+`pending` and `answer` let the selected surface present and complete questions
+without exposing its event loop or widget state. A Host-issued typed Invocation
+Context marker is required for `ask`, so a non-interactive surface receives
+`unavailable` before any pending state or timeout is created.

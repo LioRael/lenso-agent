@@ -76,6 +76,7 @@ fn openai_model_streams_tool_call_and_resumes_through_real_http() {
             .map(|tool| tool["function"]["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
         [
+            "ask_user",
             "list",
             "read",
             "search",

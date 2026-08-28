@@ -1,0 +1,29 @@
+{
+  "id": "lenso.agent.user-interaction@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "ask",
+      "interaction": "request",
+      "request_schema": "schemas/ask-request.schema.json",
+      "response_schema": "schemas/ask-response.schema.json",
+      "domain_error_schema": "schemas/ask-error.schema.json"
+    },
+    {
+      "name": "pending",
+      "interaction": "request",
+      "request_schema": "schemas/pending-request.schema.json",
+      "response_schema": "schemas/pending-response.schema.json",
+      "domain_error_schema": "schemas/pending-error.schema.json"
+    },
+    {
+      "name": "answer",
+      "interaction": "request",
+      "request_schema": "schemas/answer-request.schema.json",
+      "response_schema": "schemas/answer-response.schema.json",
+      "domain_error_schema": "schemas/answer-error.schema.json"
+    }
+  ]
+}

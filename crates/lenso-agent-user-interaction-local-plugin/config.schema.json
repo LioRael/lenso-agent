@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["max_pending", "timeout_ms"],
+  "properties": {
+    "max_pending": { "type": "integer" },
+    "timeout_ms": { "type": "integer" }
+  }
+}

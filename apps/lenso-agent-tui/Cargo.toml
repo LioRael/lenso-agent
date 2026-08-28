@@ -27,6 +27,7 @@ lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-tool-progress = { path = "../../crates/lenso-capability-agent-tool-progress" }
 lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
 lenso-capability-agent-tui-suggestion = { path = "../../crates/lenso-capability-agent-tui-suggestion" }
+lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true

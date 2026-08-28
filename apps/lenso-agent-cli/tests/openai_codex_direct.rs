@@ -134,6 +134,7 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
         [
+            "ask_user",
             "list",
             "read",
             "search",

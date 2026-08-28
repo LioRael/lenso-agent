@@ -1669,6 +1669,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-ask-user-tools-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-user-interaction",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-auth-openai-codex-plugin"
 version = "0.1.0"
 dependencies = [
@@ -1764,6 +1777,7 @@ name = "lenso-agent-default-plugins"
 version = "0.1.0"
 dependencies = [
  "lenso-agent-approval-hook-plugin",
+ "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-code-mode-tools-plugin",
  "lenso-agent-http-fetch-plugin",
@@ -1784,6 +1798,7 @@ dependencies = [
  "lenso-agent-subagent-tools-plugin",
  "lenso-agent-text-tools-plugin",
  "lenso-agent-tools-plugin",
+ "lenso-agent-user-interaction-local-plugin",
  "lenso-agent-workspace-edit-plugin",
  "lenso-agent-workspace-import-read-plugin",
  "lenso-agent-workspace-read-plugin",
@@ -1825,6 +1840,7 @@ dependencies = [
  "lenso-capability-agent-tools",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
+ "lenso-capability-agent-user-interaction",
  "lenso-capability-agent-workspace-read",
  "lenso-kernel",
  "lenso-native-adapter",
@@ -2179,6 +2195,7 @@ dependencies = [
  "lenso-capability-agent-tool-progress",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
+ "lenso-capability-agent-user-interaction",
  "lenso-kernel",
  "ratatui",
  "serde_json",
@@ -2206,6 +2223,7 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
+ "lenso-capability-agent-user-interaction",
  "serde_json",
 ]
 
@@ -2230,6 +2248,17 @@ dependencies = [
  "lenso-kernel",
  "serde",
  "tempfile",
+]
+
+[[package]]
+name = "lenso-agent-user-interaction-local-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-user-interaction",
+ "lenso-kernel",
+ "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -2529,6 +2558,25 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-user-interaction"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
