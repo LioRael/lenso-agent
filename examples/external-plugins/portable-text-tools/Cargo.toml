@@ -15,7 +15,7 @@ outputs = ["wasm", "process"]
 crate-type = ["cdylib"]
 
 [dependencies]
-lenso-plugin-sdk = { version = "0.1.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "7c3cdb5b02e3324df2c24463fe615c90c48dc244" }
+lenso-plugin-sdk = { version = "0.1.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "96d034ad72638b2ada5844cb9766a1fd8672fcf4" }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 
