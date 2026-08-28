@@ -96,6 +96,7 @@ impl Palette {
 #[derive(Clone, Debug, Default)]
 pub struct TuiOptions {
     pub allowed_tools: Option<Vec<String>>,
+    pub profile: Option<String>,
     pub session_id: Option<String>,
 }
 
@@ -537,10 +538,17 @@ impl TuiState {
             session_id: options.session_id.clone(),
             phase: UiPhase::Idle,
             active: None,
-            tool_scope: match &options.allowed_tools {
-                None => "composed tools".to_owned(),
-                Some(tools) if tools.is_empty() => "no tools".to_owned(),
-                Some(tools) => format!("{} scoped tools", tools.len()),
+            tool_scope: match (&options.profile, &options.allowed_tools) {
+                (Some(profile), None) => format!("{profile} profile · composed tools"),
+                (Some(profile), Some(tools)) if tools.is_empty() => {
+                    format!("{profile} profile · no tools")
+                }
+                (Some(profile), Some(tools)) => {
+                    format!("{profile} profile · {} scoped tools", tools.len())
+                }
+                (None, None) => "composed tools".to_owned(),
+                (None, Some(tools)) if tools.is_empty() => "no tools".to_owned(),
+                (None, Some(tools)) => format!("{} scoped tools", tools.len()),
             },
             scroll: ScrollState::default(),
             workspace: current_workspace_label(),
@@ -900,30 +908,40 @@ impl TuiState {
             .collect::<String>();
         let line_start = before.rfind('\n').map_or(0, |index| index + 1);
         let line = &before[line_start..];
-        let (kind, start, query) = if line.starts_with('/') && !line.contains(char::is_whitespace) {
-            (
-                SuggestionKind::Command,
-                self.input_cursor - line.chars().count(),
-                line.to_ascii_lowercase(),
-            )
-        } else {
-            let token = line
-                .rsplit_once(char::is_whitespace)
-                .map_or(line, |(_, token)| token);
-            if !token.starts_with('@') || token[1..].contains('@') {
-                return None;
-            }
-            (
-                SuggestionKind::File,
-                self.input_cursor - token.chars().count(),
-                token[1..].to_ascii_lowercase(),
-            )
-        };
+        let (start, query, matches_kind) =
+            if line.starts_with('/') && !line.contains(char::is_whitespace) {
+                (
+                    self.input_cursor - line.chars().count(),
+                    line.to_ascii_lowercase(),
+                    true,
+                )
+            } else {
+                let token = line
+                    .rsplit_once(char::is_whitespace)
+                    .map_or(line, |(_, token)| token);
+                if !token.starts_with('@') || token[1..].contains('@') {
+                    return None;
+                }
+                (
+                    self.input_cursor - token.chars().count(),
+                    token[1..].to_ascii_lowercase(),
+                    false,
+                )
+            };
         let mut indices = self
             .suggestions
             .iter()
             .enumerate()
-            .filter(|(_, suggestion)| suggestion.kind == kind)
+            .filter(|(_, suggestion)| {
+                if matches_kind {
+                    matches!(
+                        suggestion.kind,
+                        SuggestionKind::Command | SuggestionKind::Skill
+                    )
+                } else {
+                    suggestion.kind == SuggestionKind::File
+                }
+            })
             .filter(|(_, suggestion)| suggestion.label.to_ascii_lowercase().contains(&query))
             .map(|(index, _)| index)
             .collect::<Vec<_>>();
@@ -958,7 +976,10 @@ impl TuiState {
         let suggestion = &self.suggestions[matches.indices[selected]];
         let kind = suggestion.kind.clone();
         let mut replacement = suggestion.insert_text.clone();
-        if suggestion.kind == SuggestionKind::File {
+        if matches!(
+            suggestion.kind,
+            SuggestionKind::File | SuggestionKind::Skill
+        ) {
             replacement.push(' ');
         }
         let start_byte = char_to_byte(&self.input, matches.start);
@@ -3930,6 +3951,13 @@ mod tests {
                 insert_text: "@src/lib.rs".to_owned(),
                 description: "Workspace file".to_owned(),
             },
+            Suggestion {
+                id: "agents.skill.rust-review".to_owned(),
+                kind: SuggestionKind::Skill,
+                label: "/rust-review".to_owned(),
+                insert_text: "/rust-review".to_owned(),
+                description: "Review Rust code".to_owned(),
+            },
         ]
     }
 
@@ -4062,6 +4090,20 @@ mod tests {
         ));
         assert_eq!(state.input, "/clear");
         assert_eq!(state.phase, UiPhase::SubmitRequested);
+    }
+
+    #[test]
+    fn enter_selects_a_skill_and_leaves_the_prompt_open() {
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.suggestions = composer_suggestions();
+        state.append_input("/rust");
+
+        assert!(!handle_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            &mut state,
+        ));
+        assert_eq!(state.input, "/rust-review ");
+        assert_eq!(state.phase, UiPhase::Idle);
     }
 
     #[test]

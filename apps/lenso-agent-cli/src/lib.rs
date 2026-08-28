@@ -10,6 +10,7 @@ pub mod discord;
 pub mod generation;
 mod generation_authority;
 mod plugin_root;
+mod profile;
 pub mod provenance;
 pub mod telegram;
 #[cfg(test)]
@@ -18,13 +19,27 @@ pub mod tui;
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.
 pub fn plan_bytes(explicit_plan: Option<&Path>) -> Result<Vec<u8>, String> {
+    plan_bytes_for_profile(explicit_plan, None)
+}
+
+/// Loads one exact Plan or derives an App through a named Session Profile.
+pub fn plan_bytes_for_profile(
+    explicit_plan: Option<&Path>,
+    profile_name: Option<&str>,
+) -> Result<Vec<u8>, String> {
     ensure_host_catalog()?;
-    explicit_plan
+    let explicit_plan = explicit_plan
         .map(PathBuf::from)
-        .or_else(|| env::var_os("LENSO_RESOLVED_PLAN").map(PathBuf::from))
-        .map_or_else(resolve_base_plan, |plan| {
+        .or_else(|| env::var_os("LENSO_RESOLVED_PLAN").map(PathBuf::from));
+    if explicit_plan.is_some() && profile_name.is_some() {
+        return Err("--profile conflicts with an exact resolved Plan".to_owned());
+    }
+    explicit_plan.map_or_else(
+        || resolve_base_plan(profile_name),
+        |plan| {
             fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))
-        })
+        },
+    )
 }
 
 fn ensure_host_catalog() -> Result<(), String> {
@@ -46,8 +61,16 @@ fn ensure_host_catalog() -> Result<(), String> {
         .map_err(|error| format!("failed to publish {}: {error}", path.display()))
 }
 
-fn resolve_base_plan() -> Result<Vec<u8>, String> {
-    derived_plan_bytes(&plugin_root_path())
+fn resolve_base_plan(profile_name: Option<&str>) -> Result<Vec<u8>, String> {
+    let plugin_root = plugin_root_path();
+    let snapshot = plugin_root::snapshot(&plugin_root)?;
+    let plan = if let Some(profile_name) = profile_name {
+        let profile = profile::select(profile_name, &snapshot)?;
+        generation::resolve_host_plan_for_agent(profile.root(), profile.agent())?
+    } else {
+        generation::resolve_host_plan(&snapshot)?
+    };
+    serde_json::to_vec(&plan).map_err(|error| format!("failed to encode the derived App: {error}"))
 }
 
 /// Derives the immutable runtime Plan from this Host and one Plugin Root.

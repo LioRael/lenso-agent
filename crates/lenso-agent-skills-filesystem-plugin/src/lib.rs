@@ -21,6 +21,12 @@ use lenso_capability_agent_tool_provider::{
     CatalogError, CatalogRequest, CatalogResponse, ContentType, ExecuteError, ExecuteRequest,
     ExecuteResponse, ToolDefinition, ToolExecutionClass,
 };
+use lenso_capability_agent_tui_suggestion as tui_suggestion;
+use lenso_capability_agent_tui_suggestion::{
+    SnapshotError as SuggestionSnapshotError, SnapshotRequest as SuggestionSnapshotRequest,
+    SnapshotResponse as SuggestionSnapshotResponse, Suggestion, SuggestionKind,
+    validate_snapshot_suggestions,
+};
 use sha2::{Digest, Sha256};
 
 /// Lists metadata for the snapshotted Skills.
@@ -204,6 +210,30 @@ impl FilesystemSkillsProvider {
             _ => Err(ExecuteError::NotFound.into()),
         }
     }
+
+    fn suggestions_now(&self) -> Result<Vec<Suggestion>, RuntimeFailure> {
+        let state = self
+            .state
+            .borrow()
+            .clone()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: tui_suggestion::CAPABILITY_ID,
+            })?;
+        let suggestions = state
+            .skills
+            .values()
+            .map(|skill| Suggestion {
+                id: format!("agents.skill.{}", skill.name),
+                kind: SuggestionKind::Skill,
+                label: format!("/{}", skill.name),
+                insert_text: format!("/{}", skill.name),
+                description: skill.description.chars().take(512).collect(),
+            })
+            .collect::<Vec<_>>();
+        validate_snapshot_suggestions(&suggestions)
+            .map_err(|detail| RuntimeFailure::InvalidResolvedPlan { detail })?;
+        Ok(suggestions)
+    }
 }
 
 fn json_metadata(value: &serde_json::Value) -> tool_provider::RawJson {
@@ -246,7 +276,11 @@ impl From<RuntimeFailure> for ProviderFailure {
     }
 }
 
-#[lenso::provides(tool_provider::ToolProvider, prompt_provider::PromptProvider)]
+#[lenso::provides(
+    tool_provider::ToolProvider,
+    prompt_provider::PromptProvider,
+    tui_suggestion::TuiSuggestion
+)]
 impl FilesystemSkillsPlugin {
     #[allow(clippy::unused_self)]
     fn catalog(
@@ -330,6 +364,21 @@ impl FilesystemSkillsPlugin {
             .map_err(PluginError::runtime);
         std::future::ready(result)
     }
+
+    fn snapshot(
+        &self,
+        _context: Ctx,
+        _request: SuggestionSnapshotRequest,
+    ) -> impl std::future::Future<
+        Output = PluginResult<SuggestionSnapshotResponse, SuggestionSnapshotError>,
+    > {
+        let result = self
+            .provider
+            .suggestions_now()
+            .map(|suggestions| SuggestionSnapshotResponse { suggestions })
+            .map_err(PluginError::runtime);
+        std::future::ready(result)
+    }
 }
 
 fn validate_config(config: &SkillsConfig) -> Result<(), RuntimeFailure> {
@@ -356,6 +405,19 @@ fn validate_config(config: &SkillsConfig) -> Result<(), RuntimeFailure> {
 
 fn load_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure> {
     validate_config(config)?;
+    let expanded = expand_home(&config.root)?;
+    match fs::symlink_metadata(&expanded) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return finish_snapshot(BTreeMap::new(), config);
+        }
+        Err(error) => {
+            return Err(plugin_failure(format!(
+                "filesystem Skills root `{}` is unavailable: {error}",
+                expanded.display()
+            )));
+        }
+    }
     let root = canonical_root(&config.root)?;
     let candidates = discover_skills(&root, config.max_skills)?;
     let mut total_bytes = 0_usize;
@@ -377,6 +439,13 @@ fn load_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure
         }
         skills.insert(skill.name.clone(), skill);
     }
+    finish_snapshot(skills, config)
+}
+
+fn finish_snapshot(
+    skills: BTreeMap<String, SkillSnapshot>,
+    config: &SkillsConfig,
+) -> Result<SkillsSnapshot, RuntimeFailure> {
     let catalog_json = catalog_json(&skills, config.max_catalog_bytes)?;
     let catalog_content = prompt_catalog(&skills, config.max_prompt_catalog_bytes)?;
     let catalog_contribution = ContributeResponseContributionsItem {
@@ -699,7 +768,7 @@ fn prompt_catalog(
     skills: &BTreeMap<String, SkillSnapshot>,
     max_bytes: usize,
 ) -> Result<String, RuntimeFailure> {
-    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skill` with its exact name before following it. Use `skill_list` only when this catalog reports omissions or no visible Skill matches.\n\n";
+    const HEADER: &str = "Available Skills (metadata only). When a task matches a Skill, call `skill` with its exact name before following it. A user prompt beginning with `/name` explicitly selects that Skill: call `skill` with `name`, follow it for the remainder of the prompt, and do not treat `/name` as ordinary prose. Use `skill_list` only when this catalog reports omissions or no visible Skill matches.\n\n";
     const EMPTY: &str = "No Skills are available.\n";
 
     if skills.is_empty() {
@@ -929,17 +998,18 @@ mod tests {
     }
 
     #[test]
-    fn generated_descriptor_owns_both_provider_roles() {
+    fn generated_descriptor_owns_tool_prompt_and_tui_roles() {
         let descriptor: serde_json::Value = serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
         let provided = descriptor["provided_capabilities"].as_array().unwrap();
 
         assert_eq!(descriptor["plugin_id"], "lenso.agent.skills.filesystem");
-        assert_eq!(provided.len(), 2);
+        assert_eq!(provided.len(), 3);
         assert_eq!(provided[0]["capability_id"], "lenso.agent.tool-provider@2");
         assert_eq!(
             provided[1]["capability_id"],
             "lenso.agent.prompt-provider@1"
         );
+        assert_eq!(provided[2]["capability_id"], "lenso.agent.tui-suggestion@1");
     }
 
     fn write_skill(root: &Path, name: &str, description: &str, body: &str) {
@@ -984,6 +1054,11 @@ mod tests {
 
         let state = Rc::new(RefCell::new(Some(snapshot)));
         let provider = FilesystemSkillsProvider { state };
+        let suggestions = provider.suggestions_now().unwrap();
+        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].kind, SuggestionKind::Skill);
+        assert_eq!(suggestions[0].label, "/alpha");
+        assert_eq!(suggestions[0].insert_text, "/alpha");
         let listed = provider
             .execute_now(&ExecuteRequest {
                 name: LIST_TOOL.to_owned(),
@@ -1216,9 +1291,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_missing_root_invalid_utf8_and_unknown_skill() {
+    fn accepts_a_missing_root_but_rejects_invalid_utf8_and_unknown_skill() {
         let temporary = tempfile::tempdir().unwrap();
-        assert!(load_snapshot(&config(&temporary.path().join("missing"))).is_err());
+        let missing = load_snapshot(&config(&temporary.path().join("missing"))).unwrap();
+        assert!(missing.skills.is_empty());
+        assert!(missing.catalog_contribution.content.contains("No Skills"));
 
         let root = temporary.path().join("skills");
         fs::create_dir_all(root.join("binary")).unwrap();

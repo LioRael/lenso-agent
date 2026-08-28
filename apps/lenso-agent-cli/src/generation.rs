@@ -371,11 +371,31 @@ pub struct AgentApp {
 
 impl AgentApp {
     pub async fn start(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_with_store(plan_bytes, Path::new(".lenso/runtime")).await
+        Self::start_with_profile(plan_bytes, None).await
+    }
+
+    pub async fn start_with_profile(
+        plan_bytes: &[u8],
+        profile_name: Option<String>,
+    ) -> Result<Self, String> {
+        Self::start_with_store_and_profile(plan_bytes, Path::new(".lenso/runtime"), profile_name)
+            .await
     }
 
     pub async fn start_tui(plan_bytes: &[u8]) -> Result<Self, String> {
-        Self::start_tui_with_store(plan_bytes, Path::new(".lenso/runtime")).await
+        Self::start_tui_with_profile(plan_bytes, None).await
+    }
+
+    pub async fn start_tui_with_profile(
+        plan_bytes: &[u8],
+        profile_name: Option<String>,
+    ) -> Result<Self, String> {
+        Self::start_tui_with_store_and_profile(
+            plan_bytes,
+            Path::new(".lenso/runtime"),
+            profile_name,
+        )
+        .await
     }
 
     /// Starts the Telegram surface with an independent durable Controller lineage.
@@ -408,17 +428,34 @@ impl AgentApp {
         .await
     }
 
-    pub(crate) async fn start_with_store(
+    async fn start_with_store_and_profile(
         plan_bytes: &[u8],
         store_root: &Path,
+        profile_name: Option<String>,
     ) -> Result<Self, String> {
-        Self::start_with_store_and_control_directory(plan_bytes, store_root, CONTROL_DIRECTORY)
-            .await
+        Self::start_with_store_control_directory_profile_and_host_build(
+            plan_bytes,
+            store_root,
+            CONTROL_DIRECTORY,
+            profile_name,
+            HostBuildIdentity::current()?,
+        )
+        .await
     }
 
-    async fn start_tui_with_store(plan_bytes: &[u8], store_root: &Path) -> Result<Self, String> {
-        Self::start_with_store_and_control_directory(plan_bytes, store_root, TUI_CONTROL_DIRECTORY)
-            .await
+    async fn start_tui_with_store_and_profile(
+        plan_bytes: &[u8],
+        store_root: &Path,
+        profile_name: Option<String>,
+    ) -> Result<Self, String> {
+        Self::start_with_store_control_directory_profile_and_host_build(
+            plan_bytes,
+            store_root,
+            TUI_CONTROL_DIRECTORY,
+            profile_name,
+            HostBuildIdentity::current()?,
+        )
+        .await
     }
 
     async fn start_with_store_and_control_directory(
@@ -440,6 +477,23 @@ impl AgentApp {
         plan_bytes: &[u8],
         store_root: &Path,
         control_directory: &str,
+        host_build: HostBuildIdentity,
+    ) -> Result<Self, String> {
+        Self::start_with_store_control_directory_profile_and_host_build(
+            plan_bytes,
+            store_root,
+            control_directory,
+            None,
+            host_build,
+        )
+        .await
+    }
+
+    async fn start_with_store_control_directory_profile_and_host_build(
+        plan_bytes: &[u8],
+        store_root: &Path,
+        control_directory: &str,
+        profile_name: Option<String>,
         host_build: HostBuildIdentity,
     ) -> Result<Self, String> {
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
@@ -486,11 +540,13 @@ impl AgentApp {
             }
         }
         let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
+        let authoring_managed = plan_is_authoring_managed(plan_bytes, profile_name.as_deref());
         let reconciler = start_generation_reconciler(
             client.clone(),
-            plan_bytes.to_vec(),
             store_root.to_path_buf(),
             host_build,
+            profile_name,
+            authoring_managed,
             reconcile_events.clone(),
         );
         Ok(Self {
@@ -714,19 +770,26 @@ fn resolve_and_record_current_generation(
 
 fn start_generation_reconciler(
     client: GenerationControllerClient<NativeApp>,
-    _plan_bytes: Vec<u8>,
     store_root: PathBuf,
     host_build: HostBuildIdentity,
+    profile_name: Option<String>,
+    authoring_managed: bool,
     events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
 ) -> GenerationReconciler {
     let (stop, mut stopped) = oneshot::channel();
     let mut controller_events = client.subscribe();
     let plugin_root = crate::plugin_root_path();
     let plugin_parent = watch_parent(&plugin_root);
-    let (mut watcher, watcher_errors) = FilesystemReconcileWatcher::start(
-        &[store_root.as_path(), plugin_parent.as_path()],
-        Some(plugin_root.clone()),
-    );
+    let profile_directory = crate::profile::directory();
+    let mut watched_paths = vec![store_root.as_path()];
+    if authoring_managed {
+        watched_paths.push(plugin_parent.as_path());
+        if profile_name.is_some() {
+            watched_paths.push(profile_directory.as_path());
+        }
+    }
+    let (mut watcher, watcher_errors) =
+        FilesystemReconcileWatcher::start(&watched_paths, Some(plugin_root.clone()));
     report_watcher_errors(&events, watcher_errors);
     let task = tokio::task::spawn_local(async move {
         let mut interval = tokio::time::interval(RECONCILE_CONSISTENCY_INTERVAL);
@@ -756,11 +819,12 @@ fn start_generation_reconciler(
                     }
                 }
                 _ = interval.tick() => {
-                    if let Some(event) = reconcile_online_generation(
+                    if authoring_managed && let Some(event) = reconcile_online_generation(
                         &client,
                         &store_root,
                         &plugin_root,
                         &host_build,
+                        profile_name.as_deref(),
                         &mut last_attempted_desired_state_digest,
                     ).await {
                         if matches!(event, OnlineGenerationEvent::Switched { .. })
@@ -775,11 +839,12 @@ fn start_generation_reconciler(
                 signal = watcher.changed() => {
                     let errors = watcher.settle_after(signal).await;
                     report_watcher_errors(&events, errors);
-                    if let Some(event) = reconcile_online_generation(
+                    if authoring_managed && let Some(event) = reconcile_online_generation(
                         &client,
                         &store_root,
                         &plugin_root,
                         &host_build,
+                        profile_name.as_deref(),
                         &mut last_attempted_desired_state_digest,
                     ).await {
                         if matches!(event, OnlineGenerationEvent::Switched { .. })
@@ -798,6 +863,24 @@ fn start_generation_reconciler(
         stop: Some(stop),
         task,
     }
+}
+
+fn plan_is_authoring_managed(plan_bytes: &[u8], profile_name: Option<&str>) -> bool {
+    let Ok(root) = crate::plugin_root::snapshot(&crate::plugin_root_path()) else {
+        return false;
+    };
+    let resolved = if let Some(profile_name) = profile_name {
+        crate::profile::select(profile_name, &root)
+            .and_then(|profile| resolve_host_plan_for_agent(profile.root(), profile.agent()))
+    } else {
+        resolve_host_plan(&root)
+    };
+    resolved
+        .and_then(|plan| {
+            serde_json::to_vec(&plan)
+                .map_err(|error| format!("failed to encode the derived App: {error}"))
+        })
+        .is_ok_and(|derived| derived == plan_bytes)
 }
 
 fn watch_parent(path: &Path) -> PathBuf {
@@ -873,6 +956,7 @@ async fn reconcile_online_generation(
     store_root: &Path,
     plugin_root: &Path,
     host_build: &HostBuildIdentity,
+    profile_name: Option<&str>,
     last_attempted_desired_state_digest: &mut Option<String>,
 ) -> Option<OnlineGenerationEvent> {
     let coordinator = match crate::authority::AuthorityCoordinator::prepare(store_root) {
@@ -898,6 +982,7 @@ async fn reconcile_online_generation(
         plugin_root,
         store_root,
         host_build,
+        profile_name,
         last_attempted_desired_state_digest,
     ) {
         Ok(Some(candidate)) => candidate,
@@ -953,6 +1038,7 @@ fn resolve_desired_generation(
     plugin_root: &Path,
     store_root: &Path,
     host_build: &HostBuildIdentity,
+    profile_name: Option<&str>,
     last_attempted_desired_state_digest: &mut Option<String>,
 ) -> Result<Option<(String, ResolvedGeneration)>, OnlineGenerationEvent> {
     let authority = crate::generation_authority::load_generation_authority_unfenced(store_root);
@@ -961,7 +1047,12 @@ fn resolve_desired_generation(
         detail,
     };
     let root = crate::plugin_root::snapshot(plugin_root).map_err(rejected)?;
-    let plan = resolve_host_plan(&root).map_err(rejected)?;
+    let plan = if let Some(profile_name) = profile_name {
+        let profile = crate::profile::select(profile_name, &root).map_err(rejected)?;
+        resolve_host_plan_for_agent(profile.root(), profile.agent()).map_err(rejected)?
+    } else {
+        resolve_host_plan(&root).map_err(rejected)?
+    };
     let plan_bytes = serde_json::to_vec(&plan)
         .map_err(|error| rejected(format!("failed to encode the derived App: {error}")))?;
     let desired_state_digest = sha256_digest(
@@ -1356,11 +1447,15 @@ fn native_host_build() -> (NativePluginRegistry, Vec<EmbeddedPlugin>) {
 }
 
 pub(crate) fn linked_host_catalog() -> Result<HostCatalog, String> {
+    linked_host_catalog_for_agent(&PluginInstanceId::new("lenso.agent.loop", "agent"))
+}
+
+fn linked_host_catalog_for_agent(root_agent: &PluginInstanceId) -> Result<HostCatalog, String> {
     NativePluginRegistry::host_catalog(host_catalog_slots(), host_catalog_defaults())
         .map(|catalog| {
             catalog
                 .with_configurations(host_catalog_configurations())
-                .with_bindings(host_catalog_bindings())
+                .with_bindings(host_catalog_bindings(root_agent))
         })
         .map_err(|error| format!("linked Host Catalog is invalid: {error:?}"))
 }
@@ -1420,6 +1515,7 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
                 "directory": ".lenso/sessions"
             }),
         ),
+        default_skills_plugin(),
         HostDefaultPlugin::new("lenso.agent.telegram", "telegram"),
         HostDefaultPlugin::new("lenso.agent.tools", "tools"),
         HostDefaultPlugin::new("lenso.agent.tui", "tui"),
@@ -1527,6 +1623,26 @@ fn agent_defaults() -> Vec<HostDefaultPlugin> {
         .collect()
 }
 
+fn default_skills_plugin() -> HostDefaultPlugin {
+    default_plugin(
+        "lenso.agent.skills.filesystem",
+        "skills",
+        serde_json::json!({
+            "catalog_contribution_id": "agents.skills.catalog",
+            "max_catalog_bytes": 262_144,
+            "max_file_bytes": 262_144,
+            "max_prompt_catalog_bytes": 8_000,
+            "max_resource_entries": 8_192,
+            "max_resource_file_bytes": 262_144,
+            "max_resource_manifest_bytes": 524_288,
+            "max_resource_total_bytes": 16_777_216,
+            "max_skills": 256,
+            "max_total_bytes": 8_388_608,
+            "root": "~/.agents/skills"
+        }),
+    )
+}
+
 fn host_catalog_configurations() -> Vec<HostPluginConfiguration> {
     let mut configurations = local_tool_configurations();
     configurations.extend(model_and_auth_configurations());
@@ -1611,22 +1727,6 @@ fn local_tool_configurations() -> Vec<HostPluginConfiguration> {
             serde_json::json!({"default_timeout_ms": 120_000}),
         ),
         host_plugin_configuration(
-            "lenso.agent.skills.filesystem",
-            serde_json::json!({
-                "catalog_contribution_id": "agents.skills.catalog",
-                "max_catalog_bytes": 262_144,
-                "max_file_bytes": 262_144,
-                "max_prompt_catalog_bytes": 8_000,
-                "max_resource_entries": 8_192,
-                "max_resource_file_bytes": 262_144,
-                "max_resource_manifest_bytes": 524_288,
-                "max_resource_total_bytes": 16_777_216,
-                "max_skills": 256,
-                "max_total_bytes": 8_388_608,
-                "root": "~/.agents/skills"
-            }),
-        ),
-        host_plugin_configuration(
             "lenso.agent.subagent-tools",
             serde_json::json!({
                 "max_output_bytes": 1_048_576,
@@ -1651,7 +1751,7 @@ fn host_plugin_configuration(
     HostPluginConfiguration::new(plugin_id, "default", configuration)
 }
 
-fn host_catalog_bindings() -> Vec<HostBinding> {
+fn host_catalog_bindings(selected_agent: &PluginInstanceId) -> Vec<HostBinding> {
     let root_tools = PluginInstanceId::new("lenso.agent.tools", "tools");
     let restricted_tools =
         PluginInstanceId::new("lenso.agent.workspace-read-tools", "restricted-read-tools");
@@ -1668,6 +1768,16 @@ fn host_catalog_bindings() -> Vec<HostBinding> {
         )
         .with_admission(tool_admission),
     ];
+    if selected_agent != &root_agent {
+        bindings.push(
+            HostBinding::to_instance(
+                selected_agent.clone(),
+                "lenso.agent.tools@2",
+                PluginInstanceId::new("lenso.agent.tools", "tools"),
+            )
+            .with_admission(tool_admission),
+        );
+    }
     for surface in [
         PluginInstanceId::new("lenso.agent.cli", "cli"),
         PluginInstanceId::new("lenso.agent.discord", "discord"),
@@ -1677,7 +1787,7 @@ fn host_catalog_bindings() -> Vec<HostBinding> {
         bindings.push(HostBinding::to_instance(
             surface,
             "lenso.agent@3",
-            root_agent.clone(),
+            selected_agent.clone(),
         ));
     }
     bindings.extend([
@@ -1708,6 +1818,16 @@ pub(crate) fn resolve_host_plan(root: &PluginRootSnapshot) -> Result<ResolvedApp
     resolve_plugin_root(&host, root)
         .map(|app| app.plan().clone())
         .map_err(|error| format!("failed to resolve Host Plugins: {error}"))
+}
+
+pub(crate) fn resolve_host_plan_for_agent(
+    root: &PluginRootSnapshot,
+    agent: &PluginInstanceId,
+) -> Result<ResolvedAppPlan, String> {
+    let host = linked_host_catalog_for_agent(agent)?;
+    resolve_plugin_root(&host, root)
+        .map(|app| app.plan().clone())
+        .map_err(|error| format!("failed to resolve Host Plugins for Agent `{agent}`: {error}"))
 }
 
 fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
@@ -1783,7 +1903,65 @@ mod tests {
 
         assert!(instances.contains("lenso.agent.auth.openai-codex/auth"));
         assert!(instances.contains("lenso.agent.model.openai-codex-direct/model"));
+        assert!(instances.contains("lenso.agent.skills.filesystem/skills"));
         assert!(!instances.contains("lenso.agent.model.fixture/model"));
+    }
+
+    #[test]
+    fn profile_can_select_a_distinct_agent_loop_and_model_instance() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                lenso_app_plan::authoring::PluginRootInstance::new("lenso.agent.loop", "game")
+                    .with_configuration(serde_json::json!({
+                        "model": "fixture/readme-summary-v1",
+                        "max_steps": 12,
+                        "max_tool_calls": 6,
+                        "max_parallel_tool_calls": 2,
+                        "max_output_tokens": 2048,
+                        "max_history_events": 100
+                    })),
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.model.fixture",
+                    "game-model",
+                )
+                .with_configuration(serde_json::json!({
+                    "model": "fixture/readme-summary-v1"
+                })),
+            ],
+            [],
+        );
+        let selected_agent = PluginInstanceId::new("lenso.agent.loop", "game");
+        let plan = resolve_host_plan_for_agent(&root, &selected_agent).unwrap();
+        let plan = serde_json::to_value(plan).unwrap();
+
+        assert!(
+            plan["plugin_instances"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|plugin| { plugin["instance_key"] == "lenso.agent.model.fixture/game-model" })
+        );
+        assert!(
+            plan["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.cli/cli"
+                        && binding["provider_instance"] == "lenso.agent.loop/game"
+                })
+        );
+        assert!(
+            plan["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.tui/tui"
+                        && binding["provider_instance"] == "lenso.agent.loop/game"
+                })
+        );
     }
 
     #[test]
@@ -1812,18 +1990,28 @@ mod tests {
         let host_build = HostBuildIdentity::current().unwrap();
         let mut last_attempted = None;
 
-        let (_, base) =
-            resolve_desired_generation(&plugin_root, &store_root, &host_build, &mut last_attempted)
-                .unwrap()
-                .unwrap();
+        let (_, base) = resolve_desired_generation(
+            &plugin_root,
+            &store_root,
+            &host_build,
+            None,
+            &mut last_attempted,
+        )
+        .unwrap()
+        .unwrap();
 
         let text_tools = plugin_root.join("lenso.agent.text-tools");
         fs::create_dir_all(&text_tools).unwrap();
         fs::write(text_tools.join("default.toml"), "").unwrap();
-        let (_, configured) =
-            resolve_desired_generation(&plugin_root, &store_root, &host_build, &mut last_attempted)
-                .unwrap()
-                .unwrap();
+        let (_, configured) = resolve_desired_generation(
+            &plugin_root,
+            &store_root,
+            &host_build,
+            None,
+            &mut last_attempted,
+        )
+        .unwrap()
+        .unwrap();
         assert_ne!(configured.spec.digest(), base.spec.digest());
         assert!(
             configured
@@ -1834,16 +2022,26 @@ mod tests {
         );
 
         fs::write(text_tools.join("default.toml"), "not valid = [").unwrap();
-        let rejected =
-            resolve_desired_generation(&plugin_root, &store_root, &host_build, &mut last_attempted)
-                .unwrap_err();
+        let rejected = resolve_desired_generation(
+            &plugin_root,
+            &store_root,
+            &host_build,
+            None,
+            &mut last_attempted,
+        )
+        .unwrap_err();
         assert!(matches!(rejected, OnlineGenerationEvent::Rejected { .. }));
 
         fs::remove_dir_all(text_tools).unwrap();
-        let (_, restored) =
-            resolve_desired_generation(&plugin_root, &store_root, &host_build, &mut last_attempted)
-                .unwrap()
-                .unwrap();
+        let (_, restored) = resolve_desired_generation(
+            &plugin_root,
+            &store_root,
+            &host_build,
+            None,
+            &mut last_attempted,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(restored.spec.digest(), base.spec.digest());
     }
 

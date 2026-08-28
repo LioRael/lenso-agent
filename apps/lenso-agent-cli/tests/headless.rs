@@ -152,14 +152,10 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
     let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
         .expect("decode canonical Plan");
     let plugins = plan["plugin_instances"].as_array_mut().unwrap();
-    let mut provider = plugins
-        .iter()
-        .find(|plugin| plugin["instance_key"] == "lenso.agent.workspace-read/workspace-read")
-        .unwrap()
-        .clone();
-    provider["instance_key"] = "lenso.agent.skills.filesystem/skills".into();
-    provider["package_id"] = "lenso.agent.skills.filesystem".into();
-    provider["package_revision"] = "0.2.0".into();
+    let provider = plugins
+        .iter_mut()
+        .find(|plugin| plugin["instance_key"] == "lenso.agent.skills.filesystem/skills")
+        .unwrap();
     provider["configuration"] = serde_json::json!({
         "max_catalog_bytes": 8192,
         "catalog_contribution_id": "agents.skills.catalog",
@@ -175,38 +171,6 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
     })
     .to_string()
     .into();
-    plugins.push(provider);
-
-    let prompt_capability = plugins
-        .iter()
-        .find(|plugin| plugin["instance_key"] == "lenso.agent.prompt.static/summary-skill")
-        .unwrap()["provided_capabilities"][0]
-        .clone();
-    plugins
-        .iter_mut()
-        .find(|plugin| plugin["instance_key"] == "lenso.agent.skills.filesystem/skills")
-        .unwrap()["provided_capabilities"]
-        .as_array_mut()
-        .unwrap()
-        .push(prompt_capability);
-
-    let bindings = plan["capability_bindings"].as_array_mut().unwrap();
-    let mut binding = bindings
-        .iter()
-        .find(|binding| binding["provider_instance"] == "lenso.agent.workspace-read/workspace-read")
-        .unwrap()
-        .clone();
-    binding["provider_instance"] = "lenso.agent.skills.filesystem/skills".into();
-    binding["provider_order"] = 1.into();
-    bindings.push(binding);
-    let mut prompt_binding = bindings
-        .iter()
-        .find(|binding| binding["provider_instance"] == "lenso.agent.prompt.static/summary-skill")
-        .unwrap()
-        .clone();
-    prompt_binding["provider_instance"] = "lenso.agent.skills.filesystem/skills".into();
-    prompt_binding["provider_order"] = 2.into();
-    bindings.push(prompt_binding);
 
     let path = root.join("plan-with-on-demand-skills.json");
     fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
@@ -673,7 +637,12 @@ fn direct_answer_finishes_without_a_tool_call() {
     let payload: serde_json::Value =
         serde_json::from_str(requested["payload_json"].as_str().unwrap()).unwrap();
     let contributions = payload["prompt_contributions"].as_array().unwrap();
-    assert_eq!(contributions.len(), 2);
+    assert_eq!(contributions.len(), 3);
+    assert!(
+        contributions
+            .iter()
+            .any(|contribution| contribution["id"] == "agents.skills.catalog")
+    );
     let summary = contributions
         .iter()
         .find(|contribution| contribution["id"] == "workspace.summary")
@@ -733,7 +702,7 @@ fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--session <id>]"));
+    assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--profile <name>]"));
     assert!(stdout.contains("Host defaults boot with an empty `plugins/` directory"));
     assert!(stdout.contains("Advanced: --prompt <text> and --plan <path> remain available"));
 }
@@ -1185,16 +1154,18 @@ fn skill_resources_are_listed_then_one_resource_is_read_without_executing_script
 }
 
 #[test]
-fn missing_on_demand_skill_root_rejects_startup() {
+fn missing_on_demand_skill_root_starts_with_an_empty_catalog() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let missing = temporary.path().join("missing-skills");
     let plan = plan_with_on_demand_skills(temporary.path(), &missing);
     let output = run(temporary.path(), &plan, "Answer directly: hello", None);
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("App startup failed"));
-    assert!(stderr.contains("filesystem Skills root"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
 }
 
 #[test]

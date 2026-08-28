@@ -1959,6 +1959,7 @@ dependencies = [
  "lenso",
  "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-tui-suggestion",
  "serde",
  "serde_json",
  "sha2",

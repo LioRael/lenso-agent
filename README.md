@@ -28,6 +28,55 @@ cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
 Use `--session <id>` to resume a Session, `--no-tools` to remove Tool access
 for one Turn, or repeat `--allow-tool <name>` to narrow the selected Tools.
 
+Type `/` in the TUI to search both reviewed commands and the Skills currently
+available below `~/.agents/skills`. Selecting `/skill-name` leaves the composer
+open so the request can follow it on the same line.
+
+## Choose a Session Profile
+
+A Profile selects an exact subset of configured Plugin Instances for one Agent
+Session. It does not contain Plugin configuration or introduce another App
+manifest. Keep every configuration beside its Plugin:
+
+```text
+plugins/
+  example.code-tools/
+    code.toml
+  example.game-loop/
+    game.toml
+  lenso.agent.model.openai-compatible/
+    game.toml
+profiles/
+  code.toml
+  game.toml
+```
+
+For example, `profiles/game.toml` can select a different Agent Loop, Tool set,
+and configured Model Instance:
+
+```toml
+description = "Game agent"
+agent = "example.game-loop/game"
+instances = [
+  "example.game-loop/game",
+  "example.game-tools/default",
+  "lenso.agent.model.openai-compatible/game",
+]
+```
+
+Start or resume a Session through that Profile:
+
+```sh
+lenso-agent --profile game
+lenso-agent --profile game --session <id>
+lenso-agent-cli --profile code "Review this workspace."
+```
+
+The Profile is an authoring-time selector. The resolved immutable Generation,
+including exact Plugin configurations and bindings, remains the execution and
+Session-provenance authority. Editing the selected Profile or its Plugin files
+goes through the same online Ready Gate as any other Plugin change.
+
 ## Choose Plugins
 
 The Host boots its read-only defaults when `plugins/` is absent or empty. App
