@@ -103,6 +103,9 @@ impl FixtureModel {
         if current_user == "Use the text Plugin to uppercase Lenso plugin." {
             return text_plugin_response(request, &tool_results);
         }
+        if current_user == "Use the MCP fixture to ping." {
+            return mcp_plugin_response(request, &tool_results);
+        }
         if current_user == "Ask me which mode to use." {
             return ask_user_response(request, &tool_results);
         }
@@ -305,6 +308,28 @@ fn text_plugin_response(
             r#"{"text":"Lenso plugin"}"#,
         )),
         [result] if !result.content.is_empty() => Ok(text_plugin_result(&result.content)),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn mcp_plugin_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request
+        .tools
+        .iter()
+        .any(|tool| tool.name == "mcp__fixture__ping")
+    {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-mcp-ping",
+            "mcp__fixture__ping",
+            "{}",
+        )),
+        [result] if result.content == "pong" => Ok(mcp_plugin_result()),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }
@@ -951,6 +976,22 @@ fn text_plugin_result(content: &str) -> Vec<CompleteMessage> {
             "1",
             CompleteMessageKind::TextDelta,
             format!("Text Plugin result: {content}"),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
+    ]
+}
+
+fn mcp_plugin_result() -> Vec<CompleteMessage> {
+    vec![
+        response(
+            "1",
+            CompleteMessageKind::TextDelta,
+            "MCP result: pong",
             "",
             "",
             "{}",

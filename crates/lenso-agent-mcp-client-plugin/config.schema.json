@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "program",
+    "arguments",
+    "working_directory",
+    "environment_allowlist",
+    "protocol",
+    "tool_namespace",
+    "startup_timeout_ms",
+    "request_timeout_ms"
+  ],
+  "properties": {
+    "program": { "type": "string" },
+    "arguments": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "working_directory": { "type": "string" },
+    "environment_allowlist": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "protocol": { "enum": ["auto", "modern", "legacy"] },
+    "tool_namespace": { "type": "string" },
+    "startup_timeout_ms": { "type": "integer" },
+    "request_timeout_ms": { "type": "integer" }
+  }
+}

@@ -219,6 +219,41 @@ already staged changes and intentionally disables hooks and signing. Destructive
 history operations and network operations are not exposed. Add an Approval Hook
 to the same Profile when `git_stage` and `git_commit` should use approve-then-retry.
 
+MCP servers are opt-in Plugin Instances too. The bundled MCP Client owns one
+stdio child process, protocol negotiation, Tool discovery, namespacing,
+cancellation, restart, and cleanup. It supports both modern per-request
+metadata and legacy `initialize` servers; `auto` probes a disposable process
+before opening the real session.
+
+```toml
+# plugins/lenso.agent.mcp-client/filesystem.toml
+program = "/absolute/path/to/node"
+arguments = ["/absolute/path/to/mcp-filesystem-server", "/workspace"]
+working_directory = "/workspace"
+environment_allowlist = ["PATH", "HOME"]
+protocol = "auto"
+tool_namespace = "filesystem"
+startup_timeout_ms = 5000
+request_timeout_ms = 30000
+```
+
+Select it only for the Profile that needs those Tools:
+
+```toml
+# profiles/code.toml
+description = "Code agent with filesystem MCP tools"
+instances = ["lenso.agent.mcp-client/filesystem"]
+```
+
+Remote names are normalized to lowercase snake case and exposed as
+`mcp__filesystem__<tool_name>`; normalization collisions fail readiness. They
+are treated as exclusive because MCP does not provide a portable side-effect
+or concurrency classification. The process runs as trusted native code with a cleared
+environment plus the explicit allowlist; it is not a sandbox. Removing the
+Instance removes the process and every projected Tool. This first Adapter maps
+MCP Tools only. Prompts, Resources, Elicitation, and Sampling require their own
+typed Harness capabilities rather than being flattened into Tools.
+
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed `session_started`, `session_resumed`, and
 `turn_started` events to `.lenso/lifecycle/events.jsonl`. A trusted command

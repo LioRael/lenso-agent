@@ -10,6 +10,7 @@ use lenso_agent_http_fetch_plugin as _;
 use lenso_agent_lifecycle_audit_plugin as _;
 use lenso_agent_lifecycle_command_plugin as _;
 use lenso_agent_loop_plugin as _;
+use lenso_agent_mcp_client_plugin as _;
 use lenso_agent_memory_sqlite_plugin as _;
 use lenso_agent_model_fixture_plugin as _;
 use lenso_agent_model_openai_codex_direct_plugin as _;

@@ -564,6 +564,70 @@ fn run_scope_cannot_add_a_tool_outside_the_plan_catalog() {
 }
 
 #[test]
+fn mcp_client_discovers_and_invokes_a_real_stdio_server() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# MCP Fixture\n").unwrap();
+    let server = temporary.path().join("mcp-server.sh");
+    fs::write(
+        &server,
+        r#"
+while IFS= read -r line; do
+  case "$line" in
+    *\"method\":\"server/discover\"*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}'
+      ;;
+    *\"method\":\"tools/list\"*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}'
+      ;;
+    *\"method\":\"tools/call\"*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}'
+      ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.mcp-client",
+        &format!(
+            r#"program = "/bin/sh"
+arguments = ["{}"]
+working_directory = "{}"
+environment_allowlist = []
+protocol = "auto"
+tool_namespace = "fixture"
+startup_timeout_ms = 1000
+request_timeout_ms = 1000
+"#,
+            server.display(),
+            temporary.path().display()
+        ),
+    );
+
+    let output = run_derived(temporary.path(), "Use the MCP fixture to ping.", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "MCP result: pong\n"
+    );
+
+    let session = stored_session(temporary.path());
+    let events = session["events"].as_array().unwrap();
+    assert!(events.iter().any(|event| {
+        event["kind"] == "tool_requested"
+            && event["payload_json"]
+                .as_str()
+                .is_some_and(|payload| payload.contains("mcp__fixture__ping"))
+    }));
+    assert!(events.iter().any(|event| event["kind"] == "turn_completed"));
+}
+
+#[test]
 fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Generation Fixture\n").unwrap();

@@ -2304,6 +2304,7 @@ dependencies = [
  "lenso-agent-lifecycle-audit-plugin",
  "lenso-agent-lifecycle-command-plugin",
  "lenso-agent-loop-plugin",
+ "lenso-agent-mcp-client-plugin",
  "lenso-agent-memory-sqlite-plugin",
  "lenso-agent-model-fixture-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
@@ -2457,6 +2458,21 @@ dependencies = [
  "sha2 0.10.9",
  "time",
  "uuid",
+]
+
+[[package]]
+name = "lenso-agent-mcp-client-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
