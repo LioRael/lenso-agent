@@ -265,8 +265,122 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
     assert_eq!(stored.len(), 1);
     let state: serde_json::Value =
         serde_json::from_slice(&fs::read(stored[0].path()).unwrap()).unwrap();
-    assert_eq!(state["revision"], 12);
-    assert_eq!(state["events"].as_array().unwrap().len(), 12);
+    assert_eq!(state["revision"], 13);
+    assert_eq!(state["events"].as_array().unwrap().len(), 13);
+    assert_eq!(
+        state["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "system_instruction_installed")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn resumed_session_reuses_its_installed_system_instruction() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let first = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: first",
+        None,
+    );
+    assert!(first.status.success());
+    let first_stderr = String::from_utf8(first.stderr).unwrap();
+    let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
+
+    let path = stored_session_path(temporary.path());
+    let mut state = stored_session(temporary.path());
+    let installed = state["events"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|event| event["kind"] == "system_instruction_installed")
+        .unwrap();
+    let mut payload: serde_json::Value =
+        serde_json::from_str(installed["payload_json"].as_str().unwrap()).unwrap();
+    let pinned = "This instruction belongs to the original Session.";
+    payload["content"] = pinned.into();
+    payload["digest"] = sha256_digest(pinned.as_bytes()).into();
+    installed["payload_json"] = payload.to_string().into();
+    fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+    let second = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: second",
+        Some(session_id),
+    );
+    assert!(second.status.success());
+    let resumed = stored_session(temporary.path());
+    assert_eq!(
+        resumed["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "system_instruction_installed")
+            .count(),
+        1
+    );
+    let latest_request = resumed["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|event| event["kind"] == "model_requested")
+        .unwrap();
+    let latest_payload: serde_json::Value =
+        serde_json::from_str(latest_request["payload_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        latest_payload["system_instruction_digest"],
+        sha256_digest(pinned.as_bytes())
+    );
+}
+
+#[test]
+fn legacy_session_installs_one_system_instruction_when_first_resumed() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let first = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: first",
+        None,
+    );
+    assert!(first.status.success());
+    let first_stderr = String::from_utf8(first.stderr).unwrap();
+    let session_id = first_stderr.trim().strip_prefix("session: ").unwrap();
+
+    let path = stored_session_path(temporary.path());
+    let mut state = stored_session(temporary.path());
+    let events = state["events"].as_array_mut().unwrap();
+    events.retain(|event| event["kind"] != "system_instruction_installed");
+    for (index, event) in events.iter_mut().enumerate() {
+        event["revision"] = u64::try_from(index + 1).unwrap().into();
+    }
+    state["revision"] = u64::try_from(events.len()).unwrap().into();
+    fs::write(&path, serde_json::to_vec(&state).unwrap()).unwrap();
+
+    let second = run(
+        temporary.path(),
+        &plan_path(),
+        "Answer directly: second",
+        Some(session_id),
+    );
+    assert!(second.status.success());
+    let resumed = stored_session(temporary.path());
+    assert_eq!(
+        resumed["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "system_instruction_installed")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -622,7 +736,7 @@ fn direct_answer_finishes_without_a_tool_call() {
         .unwrap()
         .path();
     let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
-    assert_eq!(state["revision"], 5);
+    assert_eq!(state["revision"], 6);
     assert!(
         !state["events"]
             .as_array()
@@ -639,7 +753,8 @@ fn direct_answer_finishes_without_a_tool_call() {
     let payload: serde_json::Value =
         serde_json::from_str(requested["payload_json"].as_str().unwrap()).unwrap();
     let contributions = payload["prompt_contributions"].as_array().unwrap();
-    assert_eq!(contributions.len(), 3);
+    assert_eq!(contributions.len(), 4);
+    assert_eq!(contributions[0]["id"], "harness.base");
     assert!(
         contributions
             .iter()
@@ -650,6 +765,25 @@ fn direct_answer_finishes_without_a_tool_call() {
         .find(|contribution| contribution["id"] == "workspace.summary")
         .unwrap();
     assert_eq!(summary["digest"].as_str().unwrap().len(), 64);
+    let installed = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "system_instruction_installed")
+        .unwrap();
+    let installed_payload: serde_json::Value =
+        serde_json::from_str(installed["payload_json"].as_str().unwrap()).unwrap();
+    let installed_content = installed_payload["content"].as_str().unwrap();
+    assert!(!installed_content.trim().is_empty());
+    assert_eq!(
+        installed_payload["digest"],
+        sha256_digest(installed_content.as_bytes())
+    );
+    assert_eq!(installed_payload["contributions"][0]["id"], "harness.base");
+    assert_eq!(
+        payload["system_instruction_digest"],
+        installed_payload["digest"]
+    );
 }
 
 #[test]
@@ -722,7 +856,7 @@ fn product_runner_rejects_the_removed_named_app_interface() {
 }
 
 #[test]
-fn removing_all_prompt_plugins_leaves_the_agent_composition_runnable() {
+fn removing_all_optional_prompt_providers_keeps_the_required_base_instruction() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let plan = plan_without_prompt_plugins(temporary.path());
@@ -733,6 +867,17 @@ fn removing_all_prompt_plugins_leaves_the_agent_composition_runnable() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
+    let session = stored_session(temporary.path());
+    let installed = session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "system_instruction_installed")
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(installed["payload_json"].as_str().unwrap()).unwrap();
+    assert_eq!(payload["contributions"].as_array().unwrap().len(), 1);
+    assert_eq!(payload["contributions"][0]["id"], "harness.base");
 }
 
 #[test]
@@ -812,7 +957,7 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
         .unwrap()
         .path();
     let state: serde_json::Value = serde_json::from_slice(&fs::read(session).unwrap()).unwrap();
-    assert_eq!(state["revision"], 11);
+    assert_eq!(state["revision"], 12);
     assert_eq!(
         state["events"]
             .as_array()

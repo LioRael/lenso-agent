@@ -37,10 +37,9 @@ an edited Profile installs a new snapshot. Dynamic workspace state, recalled
 Memory, tool catalogs, and compaction summaries are request context; they do
 not silently rewrite the Session's base System Instruction.
 
-The current ADR-0003 decision allows an empty aggregate and the current Agent
-Loop assembles Prompt content while executing each Turn. Both are incompatible
-with this direction and require a superseding implementation ADR before the
-runtime changes.
+ADR-0043 supersedes ADR-0003's empty-Prompt behavior. The runtime now installs
+one non-empty, content-addressed System Instruction when a Session is created,
+migrates legacy Sessions once, and reuses the durable snapshot on resume.
 
 ## Real seams and default Adapters
 

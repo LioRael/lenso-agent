@@ -65,16 +65,19 @@ termination are Domain Errors. Caller cancellation remains Kernel
 
 ## Prompt boundary
 
-`lenso.agent.prompt@1` is the Agent-facing aggregate. It fans out to zero or
+`lenso.agent.prompt@1` is the Agent-facing aggregate. The official aggregate
+starts with the required `harness.base` instruction, then fans out to zero or
 more `lenso.agent.prompt-provider@1` providers in the exact order selected by
 App Composition. Provider-local order is also preserved. Duplicate contribution
 IDs or configured size-limit violations prevent the aggregate from activating;
-runtime order never chooses a winner.
+runtime order never chooses a winner. A replacement aggregate must also return
+non-empty content; the Agent Loop enforces this public boundary invariant.
 
 Every contribution declares a stable ID, provider-owned version, `instruction`
 or `skill` kind, and bounded content. The aggregate returns one joined system
-prompt plus an ordered manifest whose SHA-256 digests identify the exact input
-without copying Prompt content into the Session log.
+prompt plus an ordered manifest whose SHA-256 digests identify the exact input.
+The Agent Loop calls this aggregate once when it installs a Session's System
+Instruction, not once per Turn.
 
 ## Session log
 
@@ -88,6 +91,13 @@ it is `invalid_event`.
 the response `revision` is the latest durable revision observed by that read.
 Timestamps are evidence supplied by the Agent Plugin; event order is defined by
 revision, not wall-clock time.
+
+Every new Session installs one non-empty System Instruction before its first
+`turn_started` fact. `system_instruction_installed` stores the complete content,
+its `sha256:` digest, the ordered Prompt manifest, and the installing App
+Generation Spec digest. A resumed Session reuses that event and fails closed on
+malformed or multiple installations. A legacy Session without the event is
+migrated once on first resume. Descriptor `1.2.0` adds this event kind.
 
 Supplying `session_id` to `open` means resume-only: an absent Session returns
 `not_found`. Omitting it creates a new Session. This additive Domain Error was
