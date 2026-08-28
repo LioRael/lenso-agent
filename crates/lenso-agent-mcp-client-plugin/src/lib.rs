@@ -28,7 +28,9 @@ use lenso_capability_agent_tool_provider::{
     self as tool_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
 };
-use lenso_capability_agent_user_interaction::{AskRequest, UserInteractionAskInvocationError};
+use lenso_capability_agent_user_interaction::{
+    AskRequest, InteractionOption, InteractionQuestion, UserInteractionAskInvocationError,
+};
 use lenso_kernel::RuntimeFailure;
 use serde_json::{Value, json};
 use tokio::{
@@ -465,7 +467,7 @@ impl McpClientPlugin {
         }
         let mode = params["mode"].as_str().unwrap_or("form");
         let interaction_id = format!("mcp-{}-{round}-{index}", context.request_id());
-        let (prompt, options, allow_freeform) = match mode {
+        let (prompt, options) = match mode {
             "form" => {
                 let message = bounded_elicitation_message(params)?;
                 let schema = params
@@ -483,7 +485,7 @@ impl McpClientPlugin {
                         "MCP Elicitation prompt exceeded the limit",
                     ));
                 }
-                (prompt, Vec::new(), true)
+                (prompt, Vec::new())
             }
             "url" => {
                 let message = bounded_elicitation_message(params)?;
@@ -499,7 +501,6 @@ impl McpClientPlugin {
                 (
                     format!("{message}\n\nOpen this URL, then choose `open`: {url}"),
                     vec!["open".to_owned(), "decline".to_owned(), "cancel".to_owned()],
-                    false,
                 )
             }
             _ => return Err(protocol_failure("MCP Elicitation mode is unsupported")),
@@ -513,20 +514,43 @@ impl McpClientPlugin {
                 "MCP Elicitation prompt exceeded the limit",
             ));
         }
-        let answer = self
+        let response = self
             .interaction
             .ask_with_context(
                 context.clone(),
                 AskRequest {
                     interaction_id,
-                    prompt,
-                    options,
-                    allow_freeform,
+                    questions: vec![InteractionQuestion {
+                        question_id: "mcp-elicitation".to_owned(),
+                        header: "MCP request".to_owned(),
+                        prompt,
+                        options: options
+                            .into_iter()
+                            .map(|option| InteractionOption {
+                                option_id: option.clone(),
+                                label: option,
+                                description: String::new(),
+                                preview: Some(None),
+                            })
+                            .collect(),
+                        multi_select: false,
+                    }],
                 },
             )
             .await
-            .map_err(map_interaction_failure)?
-            .answer;
+            .map_err(map_interaction_failure)?;
+        let answer = response
+            .answers
+            .into_iter()
+            .next()
+            .filter(|answer| answer.question_id == "mcp-elicitation")
+            .and_then(|answer| {
+                answer
+                    .other
+                    .flatten()
+                    .or_else(|| answer.selected_option_ids.into_iter().next())
+            })
+            .ok_or_else(|| protocol_failure("MCP Elicitation answer was malformed"))?;
         validate_elicitation_answer(params, mode, &answer)
     }
 }
@@ -2643,7 +2667,7 @@ done
         );
         assert_eq!(
             descriptor["required_capabilities"][0]["capability_id"],
-            "lenso.agent.user-interaction@1"
+            "lenso.agent.user-interaction@2"
         );
         assert_eq!(
             descriptor["required_capabilities"][1]["capability_id"],

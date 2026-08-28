@@ -4,21 +4,54 @@ use lenso_contract_authoring as lenso;
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
-pub struct AskRequest {
+pub struct InteractionOption {
     #[schemars(length(min = 1, max = 128))]
-    pub interaction_id: String,
+    pub option_id: String,
+    #[schemars(length(min = 1, max = 256))]
+    pub label: String,
+    #[schemars(length(max = 1_024))]
+    pub description: String,
+    pub preview: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct InteractionQuestion {
+    #[schemars(length(min = 1, max = 128))]
+    pub question_id: String,
+    #[schemars(length(min = 1, max = 64))]
+    pub header: String,
     #[schemars(length(min = 1, max = 4_096))]
     pub prompt: String,
     #[schemars(length(max = 16))]
-    pub options: Vec<String>,
-    pub allow_freeform: bool,
+    pub options: Vec<InteractionOption>,
+    pub multi_select: bool,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct InteractionAnswer {
+    #[schemars(length(min = 1, max = 128))]
+    pub question_id: String,
+    #[schemars(length(max = 16))]
+    pub selected_option_ids: Vec<String>,
+    pub other: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct AskRequest {
+    #[schemars(length(min = 1, max = 128))]
+    pub interaction_id: String,
+    #[schemars(length(min = 1, max = 8))]
+    pub questions: Vec<InteractionQuestion>,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
 pub struct AskResponse {
-    #[schemars(length(min = 1, max = 4_096))]
-    pub answer: String,
+    #[schemars(length(min = 1, max = 8))]
+    pub answers: Vec<InteractionAnswer>,
 }
 
 #[derive(lenso::DomainError)]
@@ -45,11 +78,8 @@ pub struct PendingResponse {
 pub struct PendingInteraction {
     #[schemars(length(min = 1, max = 128))]
     pub interaction_id: String,
-    #[schemars(length(min = 1, max = 4_096))]
-    pub prompt: String,
-    #[schemars(length(max = 16))]
-    pub options: Vec<String>,
-    pub allow_freeform: bool,
+    #[schemars(length(min = 1, max = 8))]
+    pub questions: Vec<InteractionQuestion>,
 }
 
 #[derive(lenso::DomainError)]
@@ -62,8 +92,8 @@ pub enum PendingError {
 pub struct AnswerRequest {
     #[schemars(length(min = 1, max = 128))]
     pub interaction_id: String,
-    #[schemars(length(min = 1, max = 4_096))]
-    pub answer: String,
+    #[schemars(length(min = 1, max = 8))]
+    pub answers: Vec<InteractionAnswer>,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -78,8 +108,8 @@ pub enum AnswerError {
 
 #[lenso::capability(
     id = "lenso.agent.user-interaction",
-    major = 1,
-    version = "1.0.0",
+    major = 2,
+    version = "2.0.0",
     portable = true,
     cross_lane_transfer = false
 )]

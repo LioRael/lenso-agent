@@ -27,6 +27,11 @@ impl Profile {
 /// Describes a process-owned presentation surface and its independent Controller lineage.
 pub trait AgentSurface: Debug {
     fn control_directory(&self) -> &'static str;
+
+    /// Maximum number of independently recoverable Host instances for this surface.
+    fn max_instances(&self) -> usize {
+        1
+    }
 }
 
 /// A one-shot stdin/stdout or programmatic Agent surface.
@@ -58,6 +63,10 @@ impl TuiSurface {
 impl AgentSurface for TuiSurface {
     fn control_directory(&self) -> &'static str {
         crate::generation::TUI_CONTROL_DIRECTORY
+    }
+
+    fn max_instances(&self) -> usize {
+        crate::generation::MAX_TUI_INSTANCES
     }
 }
 
@@ -159,6 +168,9 @@ impl<S: AgentSurface> AgentHostBuilder<S> {
     /// Validates the static Host composition. Runtime Plan resolution happens in `run`.
     pub fn build(self) -> Result<ConfiguredAgentHost<S>, String> {
         validate_control_directory(self.surface.control_directory())?;
+        if self.surface.max_instances() == 0 {
+            return Err("Agent surface must allow at least one Host instance".to_owned());
+        }
         Ok(ConfiguredAgentHost {
             surface: self.surface,
         })
@@ -185,6 +197,7 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
             &bytes,
             std::path::Path::new(".lenso/runtime"),
             self.surface.control_directory(),
+            self.surface.max_instances(),
             profile_name,
             crate::generation::HostBuildIdentity::current()?,
         )

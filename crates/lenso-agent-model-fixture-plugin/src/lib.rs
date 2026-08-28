@@ -204,21 +204,29 @@ fn ask_user_response(
         [] => Ok(named_tool_request(
             "call-ask-user",
             "ask_user",
-            r#"{"question":"Which mode should I use?","options":["safe","fast"],"allow_freeform":false}"#,
+            r#"{"questions":[{"id":"mode","header":"Mode","question":"Which mode should I use?","options":[{"label":"safe","description":"Prefer bounded changes.","preview":"mode = \"safe\""},{"label":"fast","description":"Prefer faster iteration.","preview":"mode = \"fast\""}]}]}"#,
         )),
-        [result] => Ok(vec![
-            response(
-                "1",
-                CompleteMessageKind::TextDelta,
-                format!("Selected mode: {}", result.content),
-                "",
-                "",
-                "{}",
-                "0",
-                "0",
-            ),
-            response("2", CompleteMessageKind::Usage, "", "", "", "{}", "16", "4"),
-        ]),
+        [result] => {
+            let answer: serde_json::Value = serde_json::from_str(&result.content)
+                .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            let selection = answer["answers"][0]["selected_option_ids"][0]
+                .as_str()
+                .or_else(|| answer["answers"][0]["other"].as_str())
+                .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    format!("Selected mode: {selection}"),
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response("2", CompleteMessageKind::Usage, "", "", "", "{}", "16", "4"),
+            ])
+        }
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }

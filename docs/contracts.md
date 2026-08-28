@@ -136,8 +136,10 @@ pending transition and never widens Agent authority.
 
 ## User interaction
 
-`lenso.agent.user-interaction@1` is the portable, replaceable seam between an
-Agent Tool and an interactive surface. `ask` waits for one bounded answer;
+`lenso.agent.user-interaction@2` is the portable, replaceable seam between an
+Agent Tool and an interactive surface. `ask` waits for one to eight structured
+question answers; questions support single-select, multi-select, an automatic
+Other path, and optional previews on single-select choices.
 `pending` and `answer` let the selected surface present and complete questions
 without exposing its event loop or widget state. A Host-issued typed Invocation
 Context marker is required for `ask`, so a non-interactive surface receives

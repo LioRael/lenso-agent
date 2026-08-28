@@ -11,7 +11,8 @@ use lenso_capability_agent_tool_provider::{
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
 };
 use lenso_capability_agent_user_interaction::{
-    self as interaction_contract, AskError, AskRequest, UserInteractionAskInvocationError,
+    self as interaction_contract, AskError, AskRequest, InteractionOption, InteractionQuestion,
+    UserInteractionAskInvocationError,
 };
 
 pub const ASK_USER_TOOL: &str = "ask_user";
@@ -20,15 +21,29 @@ static NEXT_INTERACTION_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AskUserArguments {
-    question: String,
-    #[serde(default)]
-    options: Vec<String>,
-    #[serde(default = "default_allow_freeform")]
-    allow_freeform: bool,
+    questions: Vec<AskUserQuestion>,
 }
 
-fn default_allow_freeform() -> bool {
-    true
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskUserQuestion {
+    id: String,
+    header: String,
+    question: String,
+    #[serde(default)]
+    options: Vec<AskUserOption>,
+    #[serde(default)]
+    multi_select: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AskUserOption {
+    label: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    preview: Option<String>,
 }
 
 #[lenso::plugin]
@@ -50,21 +65,44 @@ impl AskUserToolsPlugin {
             tools: vec![ToolDefinition {
                 name: ASK_USER_TOOL.to_owned(),
                 description:
-                    "Ask the user one blocking question when their input is required to continue."
+                    "Ask the user one or more blocking choice questions when a decision is required. Every question also allows an Other answer."
                         .to_owned(),
                 input_schema_json: serde_json::json!({
                     "type": "object",
                     "additionalProperties": false,
                     "properties": {
-                        "question": { "type": "string", "minLength": 1, "maxLength": 4096 },
-                        "options": {
+                        "questions": {
                             "type": "array",
-                            "maxItems": 16,
-                            "items": { "type": "string", "minLength": 1, "maxLength": 256 }
-                        },
-                        "allow_freeform": { "type": "boolean", "default": true }
+                            "minItems": 1,
+                            "maxItems": 8,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "properties": {
+                                    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                                    "header": { "type": "string", "minLength": 1, "maxLength": 64 },
+                                    "question": { "type": "string", "minLength": 1, "maxLength": 4096 },
+                                    "options": {
+                                        "type": "array",
+                                        "maxItems": 16,
+                                        "items": {
+                                            "type": "object",
+                                            "additionalProperties": false,
+                                            "properties": {
+                                                "label": { "type": "string", "minLength": 1, "maxLength": 256 },
+                                                "description": { "type": "string", "maxLength": 1024 },
+                                                "preview": { "type": "string", "maxLength": 16384 }
+                                            },
+                                            "required": ["label"]
+                                        }
+                                    },
+                                    "multi_select": { "type": "boolean", "default": false }
+                                },
+                                "required": ["id", "header", "question"]
+                            }
+                        }
                     },
-                    "required": ["question"]
+                    "required": ["questions"]
                 })
                 .to_string()
                 .try_into()
@@ -95,15 +133,36 @@ impl AskUserToolsPlugin {
                 context,
                 AskRequest {
                     interaction_id: interaction_id.clone(),
-                    prompt: arguments.question,
-                    options: arguments.options,
-                    allow_freeform: arguments.allow_freeform,
+                    questions: arguments
+                        .questions
+                        .into_iter()
+                        .map(|question| InteractionQuestion {
+                            question_id: question.id,
+                            header: question.header,
+                            prompt: question.question,
+                            multi_select: question.multi_select,
+                            options: question
+                                .options
+                                .into_iter()
+                                .map(|option| InteractionOption {
+                                    option_id: option.label.clone(),
+                                    label: option.label,
+                                    description: option.description,
+                                    preview: Some(option.preview),
+                                })
+                                .collect(),
+                        })
+                        .collect(),
                 },
             )
             .await
         {
             Ok(response) => Ok(ExecuteResponse {
-                content: response.answer,
+                content: serde_json::to_string(&response).map_err(|error| {
+                    PluginError::runtime(lenso_kernel::RuntimeFailure::PluginFailure {
+                        detail: format!("failed to encode ask_user answers: {error}"),
+                    })
+                })?,
                 content_type: ContentType::Text,
                 metadata_json: serde_json::json!({ "interaction_id": interaction_id })
                     .to_string()
@@ -121,16 +180,38 @@ impl AskUserToolsPlugin {
 }
 
 fn valid_arguments(arguments: &AskUserArguments) -> bool {
-    let options = arguments.options.iter().collect::<BTreeSet<_>>();
-    !arguments.question.trim().is_empty()
-        && arguments.question.len() <= 4096
-        && arguments.options.len() <= 16
-        && arguments
-            .options
-            .iter()
-            .all(|option| !option.trim().is_empty() && option.len() <= 256)
-        && options.len() == arguments.options.len()
-        && (arguments.allow_freeform || !arguments.options.is_empty())
+    let question_ids = arguments
+        .questions
+        .iter()
+        .map(|question| question.id.as_str())
+        .collect::<BTreeSet<_>>();
+    !arguments.questions.is_empty()
+        && arguments.questions.len() <= 8
+        && question_ids.len() == arguments.questions.len()
+        && arguments.questions.iter().all(|question| {
+            let labels = question
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<BTreeSet<_>>();
+            !question.id.trim().is_empty()
+                && question.id.len() <= 128
+                && !question.header.trim().is_empty()
+                && question.header.len() <= 64
+                && !question.question.trim().is_empty()
+                && question.question.len() <= 4096
+                && question.options.len() <= 16
+                && labels.len() == question.options.len()
+                && question.options.iter().all(|option| {
+                    !option.label.trim().is_empty()
+                        && option.label.len() <= 256
+                        && option.description.len() <= 1024
+                        && option
+                            .preview
+                            .as_ref()
+                            .is_none_or(|preview| !question.multi_select && preview.len() <= 16_384)
+                })
+        })
 }
 
 fn map_interaction_error(error: &AskError) -> ExecuteError {
@@ -169,7 +250,7 @@ mod tests {
         assert_eq!(descriptor["plugin_id"], "lenso.agent.ask-user-tools");
         assert_eq!(
             descriptor["required_capabilities"][0]["capability_id"],
-            "lenso.agent.user-interaction@1"
+            "lenso.agent.user-interaction@2"
         );
         assert_eq!(
             descriptor["provided_capabilities"][0]["capability_id"],
@@ -188,11 +269,19 @@ mod tests {
     }
 
     #[test]
-    fn closed_choice_requires_at_least_one_option() {
+    fn previews_are_rejected_for_multi_select_questions() {
         assert!(!valid_arguments(&AskUserArguments {
-            question: "Choose".to_owned(),
-            options: Vec::new(),
-            allow_freeform: false,
+            questions: vec![AskUserQuestion {
+                id: "mode".to_owned(),
+                header: "Mode".to_owned(),
+                question: "Choose".to_owned(),
+                multi_select: true,
+                options: vec![AskUserOption {
+                    label: "safe".to_owned(),
+                    description: String::new(),
+                    preview: Some("preview".to_owned()),
+                }],
+            }],
         }));
     }
 }

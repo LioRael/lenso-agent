@@ -15,10 +15,11 @@ surface can answer is misleading and makes headless automation hang.
 
 ## Decision
 
-The Harness defines portable `lenso.agent.user-interaction@1` as a replaceable
+The Harness defines portable `lenso.agent.user-interaction@2` as a replaceable
 Capability with three operations:
 
-- `ask` registers one bounded question and waits for its answer;
+- `ask` registers one bounded interaction containing one or more questions and
+  waits for their structured answers;
 - `pending` lets a surface snapshot unanswered questions;
 - `answer` completes an exact pending question.
 
@@ -26,11 +27,17 @@ The default `lenso.agent.user-interaction.local` Adapter uses an in-process,
 bounded broker. It is independent of TUI rendering. The TUI Shell has a typed
 Port to the same Adapter, displays a question in the transcript, and submits
 the ordinary composer input as its answer. Other surfaces can replace or front
-the Adapter without changing the Tool.
+the Adapter without changing the Tool. The TUI presents a modal decision flow:
+single-select options can expose a focused preview, multi-select questions use
+explicit checked state, every question includes an Other path, and a batch
+advances one question at a time.
 
 `lenso.agent.ask-user-tools` projects the seam as one exclusive `ask_user`
-Tool. It accepts a question, optional unique choices, and an explicit
-free-form policy.
+Tool. It accepts one to eight identified questions with bounded option labels,
+descriptions, optional single-select previews, and an explicit multi-select
+flag. Answers contain stable question and option IDs plus optional Other text.
+This structured contract replaces the v1 single prompt/string answer because
+the answer cardinality and validation semantics are not backward compatible.
 
 Only a Host-created Invocation Context for an interactive surface carries
 `lenso.agent.interactive-surface@1`. The local Adapter rejects `ask` with
@@ -49,5 +56,5 @@ change cannot route an answer into a newer Adapter instance.
 - TUI interaction is usable now, while web, mobile, channel, and remote
   Adapters have a stable protocol to implement later.
 - A non-interactive surface has explicit behavior instead of a hidden timeout.
-- The first version intentionally supports one-at-a-time TUI presentation;
-  the Capability remains bounded and can queue multiple independent requests.
+- One Tool invocation can collect several related decisions without inventing
+  multiple Tool calls, while each pending interaction remains Generation-pinned.

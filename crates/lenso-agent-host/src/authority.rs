@@ -82,8 +82,8 @@ impl AuthorityCoordinator {
         Ok(AuthorityFence { file })
     }
 
-    /// Holds one Controller namespace for the lifetime of a Host process.
-    pub(crate) fn host_lease(&self, namespace: &str) -> Result<AuthorityFence, String> {
+    /// Attempts to own one Controller namespace without blocking another Host.
+    pub(crate) fn try_host_lease(&self, namespace: &str) -> Result<Option<AuthorityFence>, String> {
         if namespace.is_empty()
             || !namespace
                 .bytes()
@@ -93,10 +93,13 @@ impl AuthorityCoordinator {
         }
         let path = self.root.join(format!("{namespace}.host.lock"));
         let file = open_regular_lock(&path, true)?;
-        FileExt::try_lock_exclusive(&file).map_err(|error| {
-            format!("another Host owns the `{namespace}` Controller namespace: {error}")
-        })?;
-        Ok(AuthorityFence { file })
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(AuthorityFence { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(format!(
+                "failed to lease the `{namespace}` Controller namespace: {error}"
+            )),
+        }
     }
 
     fn open_lock(&self, create: bool) -> Result<File, String> {
@@ -326,6 +329,26 @@ mod tests {
         drop(coordinator.generation_gc_transition().unwrap());
         assert!(started.elapsed() >= Duration::from_millis(500));
         assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn controller_slots_are_claimed_independently() {
+        let temporary = tempfile::tempdir().unwrap();
+        let coordinator = AuthorityCoordinator::prepare(temporary.path()).unwrap();
+        let first = coordinator
+            .try_host_lease("tui-generation-control")
+            .unwrap();
+        assert!(first.is_some());
+        assert!(
+            coordinator
+                .try_host_lease("tui-generation-control")
+                .unwrap()
+                .is_none()
+        );
+        let second = coordinator
+            .try_host_lease("tui-generation-control-2")
+            .unwrap();
+        assert!(second.is_some());
     }
 
     #[test]

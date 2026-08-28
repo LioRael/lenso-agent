@@ -4,8 +4,8 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
-pub const CAPABILITY_ID: &str = "lenso.agent.user-interaction@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const CAPABILITY_ID: &str = "lenso.agent.user-interaction@2";
+pub const DESCRIPTOR_VERSION: &str = "2.0.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const USER_INTERACTION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,31 +13,46 @@ pub const USER_INTERACTION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_user_interaction { () => { "{\"capability_id\":\"lenso.agent.user-interaction@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"answer\",\"ask\",\"pending\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_user_interaction { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"operations\":[\"answer\",\"ask\",\"pending\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_user_interaction_client { () => { "{\"capability_id\":\"lenso.agent.user-interaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_user_interaction_client { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_user_interaction_client { () => { "{\"capability_id\":\"lenso.agent.user-interaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_user_interaction_client { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const ANSWER_OPERATION: &str = "answer";
 pub const ASK_OPERATION: &str = "ask";
 pub const PENDING_OPERATION: &str = "pending";
 
-pub use lenso_contract_runtime::{UnknownDomainError};
+pub use lenso_contract_runtime::{OptionalValue, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnswerRequest {
-    #[serde(rename = "answer")]
+    #[serde(rename = "answers")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub answer: String,
+    pub answers: Vec<InteractionAnswer>,
     #[serde(rename = "interaction_id")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub interaction_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InteractionAnswer {
+    #[serde(rename = "other")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub other: OptionalValue<String>,
+    #[serde(rename = "question_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub question_id: String,
+    #[serde(rename = "selected_option_ids")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub selected_option_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -54,25 +69,56 @@ pub enum AnswerError {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AskRequest {
-    #[serde(rename = "allow_freeform")]
-    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub allow_freeform: bool,
     #[serde(rename = "interaction_id")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub interaction_id: String,
+    #[serde(rename = "questions")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub questions: Vec<InteractionQuestion>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InteractionQuestion {
+    #[serde(rename = "header")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub header: String,
+    #[serde(rename = "multi_select")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub multi_select: bool,
     #[serde(rename = "options")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub options: Vec<String>,
+    pub options: Vec<InteractionOption>,
     #[serde(rename = "prompt")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub prompt: String,
+    #[serde(rename = "question_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub question_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InteractionOption {
+    #[serde(rename = "description")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub description: String,
+    #[serde(rename = "label")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub label: String,
+    #[serde(rename = "option_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub option_id: String,
+    #[serde(rename = "preview")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub preview: OptionalValue<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AskResponse {
-    #[serde(rename = "answer")]
+    #[serde(rename = "answers")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub answer: String,
+    pub answers: Vec<InteractionAnswer>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -98,18 +144,12 @@ pub struct PendingResponse {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PendingInteraction {
-    #[serde(rename = "allow_freeform")]
-    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub allow_freeform: bool,
     #[serde(rename = "interaction_id")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub interaction_id: String,
-    #[serde(rename = "options")]
+    #[serde(rename = "questions")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub options: Vec<String>,
-    #[serde(rename = "prompt")]
-    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub prompt: String,
+    pub questions: Vec<InteractionQuestion>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
