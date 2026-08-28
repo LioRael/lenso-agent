@@ -240,6 +240,9 @@ max_argument_bytes = 131072
 default_timeout_ms = 30000
 max_log_entries = 50
 max_commit_message_bytes = 4096
+enable_branch_management = true
+enable_history_integration = false
+allowed_network_remotes = ["origin"]
 ```
 
 Then select both Instances for the coding experience:
@@ -253,11 +256,17 @@ instances = [
 ]
 ```
 
-This adds `git_status`, `git_diff`, `git_log`, `git_stage`, and `git_commit`.
+The minimal configuration adds `git_status`, `git_diff`, `git_log`,
+`git_stage`, and `git_commit`. `enable_branch_management` additionally exposes
+bounded branch list/create/switch operations. `enable_history_integration`
+adds non-interactive merge and rebase. A non-empty `allowed_network_remotes`
+adds fetch and non-force push only for those exact remote names.
 Staging requires explicit repository-relative paths; commit includes only
-already staged changes and intentionally disables hooks and signing. Destructive
-history operations and network operations are not exposed. Add an Approval Hook
-to the same Profile when `git_stage` and `git_commit` should use approve-then-retry.
+already staged changes and intentionally disables hooks and signing. No reset,
+branch deletion, force push, arbitrary refspec, interactive rebase, or remote URL
+is exposed. Keep history integration and network remotes disabled in ordinary
+profiles. Add an Approval Hook to the same Profile so every mutation uses
+approve-then-retry.
 
 MCP servers are opt-in Plugin Instances too. The bundled MCP Client supports
 stdio and MCP 2026-07-28 Streamable HTTP, plus protocol negotiation, Tool
