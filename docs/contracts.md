@@ -105,6 +105,11 @@ append-only projection facts; they never replace or delete the source events.
 A committed checkpoint identifies the exact source revision, bounded summary,
 retained complete-turn suffix, and summary digest.
 
+Descriptor `1.4.0` adds `memory_recalled`, `memory_recall_failed`,
+`memory_committed`, and `memory_commit_failed`. These events record the
+portable Memory interaction outcome and logical IDs, not recalled content or
+private storage details.
+
 Supplying `session_id` to `open` means resume-only: an absent Session returns
 `not_found`. Omitting it creates a new Session. This additive Domain Error was
 introduced in Descriptor `1.1.0`; `lenso.agent.session@1` consumers preserve
@@ -146,3 +151,17 @@ and zero or more retained complete pairs. The Agent Loop accepts retained
 messages only when they are an exact suffix of the request, writes the Session
 transaction facts, and composes the result below the installed System
 Instruction. Compactors do not read or mutate Session storage directly.
+
+## Memory
+
+`lenso.agent.memory@1` is a portable, replaceable curated-knowledge seam.
+`observe` receives one complete successful Turn with source Session/Turn
+provenance. `recall` returns bounded items with stable logical IDs, content,
+source provenance, and confidence in thousandths. `remember` creates explicit
+knowledge and `forget` deletes selected logical IDs. Durable-storage failures,
+deadlines, cancellation, and provider unavailability remain Runtime Failures.
+
+Memory is cross-Session request context, not canonical Session history and not
+a System Instruction. The Agent Loop validates all returned bounds and labels
+recalled text as untrusted context. Providers keep ranking, embeddings, FTS,
+database schemas, consolidation, and transport private.

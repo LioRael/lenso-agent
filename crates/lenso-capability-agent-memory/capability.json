@@ -1,0 +1,36 @@
+{
+  "id": "lenso.agent.memory@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "observe",
+      "interaction": "request",
+      "request_schema": "schemas/observe-request.schema.json",
+      "response_schema": "schemas/observe-response.schema.json",
+      "domain_error_schema": "schemas/observe-error.schema.json"
+    },
+    {
+      "name": "recall",
+      "interaction": "request",
+      "request_schema": "schemas/recall-request.schema.json",
+      "response_schema": "schemas/recall-response.schema.json",
+      "domain_error_schema": "schemas/recall-error.schema.json"
+    },
+    {
+      "name": "remember",
+      "interaction": "request",
+      "request_schema": "schemas/remember-request.schema.json",
+      "response_schema": "schemas/remember-response.schema.json",
+      "domain_error_schema": "schemas/remember-error.schema.json"
+    },
+    {
+      "name": "forget",
+      "interaction": "request",
+      "request_schema": "schemas/forget-request.schema.json",
+      "response_schema": "schemas/forget-response.schema.json",
+      "domain_error_schema": "schemas/forget-error.schema.json"
+    }
+  ]
+}

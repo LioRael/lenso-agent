@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
-pub const DESCRIPTOR_VERSION: &str = "1.3.0";
+pub const DESCRIPTOR_VERSION: &str = "1.4.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const SESSION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.3.0\",\"operations\":[\"append\",\"open\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.4.0\",\"operations\":[\"append\",\"open\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.3.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.4.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.3.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.4.0\",\"cardinality\":\"many\"}" }; }
 
 pub const APPEND_OPERATION: &str = "append";
 pub const OPEN_OPERATION: &str = "open";
@@ -74,6 +74,14 @@ pub enum AppendSessionRequestEventsItemKind {
     ContextCompactionCommitted,
     #[serde(rename = "context_compaction_failed")]
     ContextCompactionFailed,
+    #[serde(rename = "memory_recalled")]
+    MemoryRecalled,
+    #[serde(rename = "memory_recall_failed")]
+    MemoryRecallFailed,
+    #[serde(rename = "memory_committed")]
+    MemoryCommitted,
+    #[serde(rename = "memory_commit_failed")]
+    MemoryCommitFailed,
     #[serde(rename = "turn_started")]
     TurnStarted,
     #[serde(rename = "model_requested")]
@@ -201,6 +209,14 @@ pub enum ReadSessionResponseEventsItemKind {
     ContextCompactionCommitted,
     #[serde(rename = "context_compaction_failed")]
     ContextCompactionFailed,
+    #[serde(rename = "memory_recalled")]
+    MemoryRecalled,
+    #[serde(rename = "memory_recall_failed")]
+    MemoryRecallFailed,
+    #[serde(rename = "memory_committed")]
+    MemoryCommitted,
+    #[serde(rename = "memory_commit_failed")]
+    MemoryCommitFailed,
     #[serde(rename = "turn_started")]
     TurnStarted,
     #[serde(rename = "model_requested")]

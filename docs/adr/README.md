@@ -47,3 +47,4 @@
 - [0045 — Compose typed Agent lifecycle observers](0045-compose-typed-agent-lifecycle-observers.md)
 - [0046 — Compose portable user interaction](0046-compose-portable-user-interaction.md)
 - [0047 — Compose provider-first Context Compaction](0047-compose-provider-first-context-compaction.md)
+- [0048 — Compose provider-first Memory](0048-compose-provider-first-memory.md)

@@ -119,6 +119,27 @@ A Profile can select a different native, Wasm, process, or remote Plugin for
 `lenso.agent.context-compaction@1`; the Agent Loop still owns trigger policy,
 checkpoint validation, and durable Session facts.
 
+Cross-Session Memory uses a separate replaceable seam. The default offline
+Adapter stores bounded, provenance-bearing memories in SQLite and recalls them
+with FTS5. Configure its Instance under the standard Plugin directory:
+
+```toml
+# plugins/lenso.agent.memory.sqlite/memory.toml
+database = ".lenso/memory/code.sqlite3"
+scope = "code"
+max_records = 10000
+max_item_characters = 16384
+max_recall_items = 8
+max_recall_characters = 16384
+```
+
+A `game` Profile may select another `lenso.agent.memory.sqlite` Instance with
+a different database or scope, or replace it with a remote Adapter for
+`lenso.agent.memory@1`. The same Plugin code therefore supports isolated
+per-Profile policy without a central App file. Recalled text is always
+lower-authority request context; it never edits the Session's System
+Instruction.
+
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed `session_started`, `session_resumed`, and
 `turn_started` events to `.lenso/lifecycle/events.jsonl`. A trusted command

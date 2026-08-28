@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "database",
+    "scope",
+    "max_records",
+    "max_item_characters",
+    "max_recall_items",
+    "max_recall_characters"
+  ],
+  "properties": {
+    "database": { "type": "string" },
+    "scope": { "type": "string" },
+    "max_records": { "type": "integer" },
+    "max_item_characters": { "type": "integer" },
+    "max_recall_items": { "type": "integer" },
+    "max_recall_characters": { "type": "integer" }
+  }
+}

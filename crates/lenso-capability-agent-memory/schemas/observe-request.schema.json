@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["source", "user_input", "assistant_output"],
+  "properties": {
+    "source": {
+      "$ref": "#/$defs/MemorySource"
+    },
+    "user_input": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "assistant_output": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "MemorySource": {
+      "type": "object",
+      "required": ["session_id", "turn_id"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "ObserveRequest"
+}
