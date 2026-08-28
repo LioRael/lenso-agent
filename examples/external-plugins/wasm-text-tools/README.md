@@ -1,7 +1,8 @@
 # dev.example.wasm-text-tools
 
 This standalone project was created with `lenso plugin new`. It provides one Tool Plugin without a
-hand-written manifest or Host-specific internal wiring.
+hand-written manifest or Host-specific internal wiring. `src/plugin.rs` is the only authored
+behavior file; the generated lowering owns WIT, Guest exports, schemas, and wire dispatch.
 
 Use the public Plugin workflow from this directory:
 
