@@ -130,7 +130,15 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
             .iter()
             .map(|tool| tool["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["list", "read", "search"]
+        [
+            "list",
+            "read",
+            "search",
+            "skill",
+            "skill_list",
+            "skill_resource",
+            "skill_resources",
+        ]
     );
     assert_eq!(requests[1].body["input"][0]["type"], "message");
     assert_eq!(

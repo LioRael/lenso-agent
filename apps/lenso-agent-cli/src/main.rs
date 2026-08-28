@@ -10,7 +10,7 @@ use lenso_agent_auth_openai_codex_plugin::{
     DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
     complete_device_login, direct_auth_status, direct_logout,
 };
-use lenso_agent_cli::{generation, plan_bytes, provenance};
+use lenso_agent_cli::{generation, plan_bytes_for_profile, provenance};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_kernel::StreamEvent;
@@ -19,6 +19,7 @@ use lenso_kernel::StreamEvent;
 struct Args {
     allowed_tools: Option<Vec<String>>,
     plan: Option<PathBuf>,
+    profile: Option<String>,
     prompt: String,
     session: Option<String>,
 }
@@ -71,9 +72,9 @@ async fn run() -> Result<(), String> {
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
     };
-    let bytes = plan_bytes(args.plan.as_deref())
+    let bytes = plan_bytes_for_profile(args.plan.as_deref(), args.profile.as_deref())
         .map_err(|error| format!("App resolution failed: {error}"))?;
-    let mut app = generation::AgentApp::start(&bytes)
+    let mut app = generation::AgentApp::start_with_profile(&bytes, args.profile.clone())
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
     let turn = app.lease_turn().await?;
@@ -162,6 +163,7 @@ fn parse_args() -> Result<CliCommand, String> {
     let mut plan = None;
     let mut plan_source = None;
     let mut prompt = None;
+    let mut profile = None;
     let mut session = None;
     let mut allowed_tools = None::<Vec<String>>;
     let mut no_tools = false;
@@ -172,36 +174,33 @@ fn parse_args() -> Result<CliCommand, String> {
                 if let Some(source) = plan_source {
                     return Err(format!("--plan conflicts with {source}"));
                 }
-                plan = Some(PathBuf::from(
-                    arguments
-                        .next()
-                        .ok_or_else(|| "--plan requires a path".to_owned())?,
-                ));
+                plan = Some(PathBuf::from(required_value(
+                    &mut arguments,
+                    "--plan",
+                    "a path",
+                )?));
                 plan_source = Some("--plan");
             }
             "--prompt" => {
-                prompt = Some(
-                    arguments
-                        .next()
-                        .ok_or_else(|| "--prompt requires text".to_owned())?,
-                );
+                prompt = Some(required_value(&mut arguments, "--prompt", "text")?);
+            }
+            "--profile" => {
+                profile = Some(required_value(&mut arguments, "--profile", "a name")?);
             }
             "--session" => {
-                session = Some(
-                    arguments
-                        .next()
-                        .ok_or_else(|| "--session requires an ID".to_owned())?,
-                );
+                session = Some(required_value(&mut arguments, "--session", "an ID")?);
             }
             "--allow-tool" => {
                 if no_tools {
                     return Err("--allow-tool conflicts with --no-tools".to_owned());
                 }
-                allowed_tools.get_or_insert_with(Vec::new).push(
-                    arguments
-                        .next()
-                        .ok_or_else(|| "--allow-tool requires a Tool name".to_owned())?,
-                );
+                allowed_tools
+                    .get_or_insert_with(Vec::new)
+                    .push(required_value(
+                        &mut arguments,
+                        "--allow-tool",
+                        "a Tool name",
+                    )?);
             }
             "--no-tools" => {
                 if allowed_tools.is_some() {
@@ -230,13 +229,24 @@ fn parse_args() -> Result<CliCommand, String> {
     Ok(CliCommand::Run(Args {
         allowed_tools,
         plan,
+        profile,
         prompt: prompt.ok_or_else(|| "a prompt is required".to_owned())?,
         session,
     }))
 }
 
+fn required_value(
+    arguments: &mut impl Iterator<Item = String>,
+    option: &str,
+    value: &str,
+) -> Result<String, String> {
+    arguments
+        .next()
+        .ok_or_else(|| format!("{option} requires {value}"))
+}
+
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host defaults boot with an empty `plugins/` directory. Manage App differences with `lenso plugins`.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host defaults boot with an empty `plugins/` directory. Manage App differences with `lenso plugins`; select `profiles/<name>.toml` with `--profile`.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {

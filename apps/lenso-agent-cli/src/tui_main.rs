@@ -3,7 +3,7 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::{ArgAction, Parser};
 use lenso_agent_cli::{
     generation::AgentApp,
-    plan_bytes,
+    plan_bytes_for_profile,
     tui::{self, TuiOptions},
 };
 
@@ -22,6 +22,10 @@ struct Args {
     /// Resume an existing Session.
     #[arg(long, value_name = "ID")]
     session: Option<String>,
+
+    /// Select `profiles/<name>.toml` for this Session.
+    #[arg(long, value_name = "NAME", conflicts_with = "plan")]
+    profile: Option<String>,
 
     /// Narrow the selected App's Tool set for every submitted Turn.
     #[arg(long = "allow-tool", value_name = "NAME", action = ArgAction::Append, conflicts_with = "no_tools")]
@@ -45,8 +49,8 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    let bytes = plan_bytes(args.plan.as_deref())?;
-    let mut app = AgentApp::start_tui(&bytes)
+    let bytes = plan_bytes_for_profile(args.plan.as_deref(), args.profile.as_deref())?;
+    let mut app = AgentApp::start_tui_with_profile(&bytes, args.profile.clone())
         .await
         .map_err(|error| format!("App startup failed: {error}"))?;
     let allowed_tools = if args.no_tools {
@@ -60,6 +64,7 @@ async fn run(args: Args) -> Result<(), String> {
         &app,
         TuiOptions {
             allowed_tools,
+            profile: args.profile,
             session_id: args.session,
         },
     )
@@ -86,6 +91,7 @@ mod tests {
         let args = Args::try_parse_from(["lenso-agent"]).unwrap();
         assert!(args.plan.is_none());
         assert!(args.session.is_none());
+        assert!(args.profile.is_none());
         assert!(args.allowed_tools.is_empty());
         assert!(!args.no_tools);
     }

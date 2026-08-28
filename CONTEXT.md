@@ -28,6 +28,7 @@ App differences are ordinary files:
 ```text
 plugins/<plugin-id>/plugin.lenso-plugin/
 plugins/<plugin-id>/<instance>.toml
+plugins/<plugin-id>/<instance>/**
 plugins/<plugin-id>/<instance>.disabled
 ```
 

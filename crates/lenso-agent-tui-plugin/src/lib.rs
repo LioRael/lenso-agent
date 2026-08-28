@@ -37,7 +37,7 @@ mod tests {
                 },
                 {
                     "capability_id": "lenso.agent.tui-suggestion@1",
-                    "descriptor_version": "1.0.0",
+                    "descriptor_version": "1.1.0",
                     "cardinality": "many"
                 }
             ])

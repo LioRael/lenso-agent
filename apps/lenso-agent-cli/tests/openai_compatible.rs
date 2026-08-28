@@ -72,7 +72,15 @@ fn openai_model_streams_tool_call_and_resumes_through_real_http() {
             .iter()
             .map(|tool| tool["function"]["name"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["list", "read", "search"]
+        [
+            "list",
+            "read",
+            "search",
+            "skill",
+            "skill_list",
+            "skill_resource",
+            "skill_resources",
+        ]
     );
     assert_eq!(
         requests[1]["messages"][2]["tool_calls"][0]["function"]["name"],

@@ -5,6 +5,13 @@ behavior through Plugins.
 
 ## Run it
 
+Authenticate once before the first Turn. The default App uses the direct Codex
+Model with the `default` ChatGPT profile:
+
+```sh
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- auth login
+```
+
 Start the interactive TUI from the repository root:
 
 ```sh
@@ -20,6 +27,55 @@ cargo run -p lenso-agent-cli --bin lenso-agent-cli -- \
 
 Use `--session <id>` to resume a Session, `--no-tools` to remove Tool access
 for one Turn, or repeat `--allow-tool <name>` to narrow the selected Tools.
+
+Type `/` in the TUI to search both reviewed commands and the Skills currently
+available below `~/.agents/skills`. Selecting `/skill-name` leaves the composer
+open so the request can follow it on the same line.
+
+## Choose a Session Profile
+
+A Profile selects an exact subset of configured Plugin Instances for one Agent
+Session. It does not contain Plugin configuration or introduce another App
+manifest. Keep every configuration beside its Plugin:
+
+```text
+plugins/
+  example.code-tools/
+    code.toml
+  example.game-loop/
+    game.toml
+  lenso.agent.model.openai-compatible/
+    game.toml
+profiles/
+  code.toml
+  game.toml
+```
+
+For example, `profiles/game.toml` can select a different Agent Loop, Tool set,
+and configured Model Instance:
+
+```toml
+description = "Game agent"
+agent = "example.game-loop/game"
+instances = [
+  "example.game-loop/game",
+  "example.game-tools/default",
+  "lenso.agent.model.openai-compatible/game",
+]
+```
+
+Start or resume a Session through that Profile:
+
+```sh
+lenso-agent --profile game
+lenso-agent --profile game --session <id>
+lenso-agent-cli --profile code "Review this workspace."
+```
+
+The Profile is an authoring-time selector. The resolved immutable Generation,
+including exact Plugin configurations and bindings, remains the execution and
+Session-provenance authority. Editing the selected Profile or its Plugin files
+goes through the same online Ready Gate as any other Plugin change.
 
 ## Choose Plugins
 
@@ -47,7 +103,14 @@ plugins/
   example.uppercase/
     plugin.lenso-plugin/    # immutable package, for external Plugins
     default.toml
+    default/                # optional, immutable Instance resources
+      prompts/system.md
 ```
+
+The optional `<instance>/` directory is paired with `<instance>.toml`. The Host
+snapshots its bounded regular files into the same immutable Generation, so a
+Plugin reads stable bytes rather than a live filesystem path. A resource-only
+edit goes through the same Ready Gate and existing Turns retain the old bytes.
 
 There is no `lenso.app.json`, `lenso.app.toml`, `lenso.local.toml`, enabled
 list, or user-authored binding document. `lenso app check` and `lenso app show`
@@ -71,6 +134,7 @@ Add the package to the Harness App:
 
 ```sh
 lenso plugins add path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
+lenso plugins configure uppercase default
 ```
 
 `pack` checks the exact bytes it writes and the Harness checks received bytes

@@ -32,6 +32,7 @@ pub struct Suggestion {
 pub enum SuggestionKind {
     Command,
     File,
+    Skill,
 }
 
 #[derive(lenso::DomainError)]
@@ -42,7 +43,7 @@ pub enum SnapshotError {
 #[lenso::capability(
     id = "lenso.agent.tui-suggestion",
     major = 1,
-    version = "1.0.0",
+    version = "1.1.0",
     portable = false,
     cross_lane_transfer = false
 )]

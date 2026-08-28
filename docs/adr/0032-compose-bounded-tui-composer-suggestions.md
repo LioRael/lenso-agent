@@ -14,24 +14,32 @@ press would also make terminal responsiveness depend on workspace size.
 ## Decision
 
 Define native-only request Capability `lenso.agent.tui-suggestion@1`. Its
-`snapshot` Operation returns bounded semantic `command` or `file` items with a
+`snapshot` Operation returns bounded semantic `command`, `skill`, or `file` items with a
 stable ID, label, exact insertion text, and description. The TUI Shell consumes
 explicitly bound providers with `many` cardinality, snapshots them before raw
 terminal mode, rejects duplicate IDs and aggregate limit violations, and then
 filters the immutable in-memory catalog at the active composer token.
 
-The base App selects two independently removable providers. The command
+The base App selects three independently removable providers. The command
 provider owns the reviewed `/help`, `/clear`, and `/new` actions. The workspace
 provider owns one startup filesystem snapshot below its configured root. It
 skips symlinks and hidden entries, supports explicit directory exclusions, and
 bounds both inspected entries and returned files. It does not watch the
 workspace or perform I/O while the user types.
 
+The filesystem Skills Plugin is also a suggestion provider. It projects only
+the already bounded name and description metadata from its prepared Skill
+snapshot. Selecting `/skill-name` inserts the explicit Skill invocation and a
+space without submitting the Turn; the user can then write the task. The same
+Plugin's Prompt contribution tells the Agent to read that exact Skill before
+following it, so the TUI never reads or executes Skill contents itself.
+
 The Shell owns trigger parsing, ranking, keyboard selection, token replacement,
 scrolling, and responsive rendering. `/` is recognized only at the start of the
 current line; `@` completes the active file token. Enter or Tab accepts a
 candidate, arrows select, and Esc dismisses the menu before it can exit the
-TUI.
+TUI. Command selection submits immediately, while Skill and file selection
+leave the composer open.
 
 ## Consequences
 
