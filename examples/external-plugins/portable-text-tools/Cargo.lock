@@ -337,6 +337,8 @@ dependencies = [
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c94cad4370ff9fdefba039a001ea099889db91ac676707330b2f09d3940326df"
 dependencies = [
  "serde",
  "serde_json",
@@ -368,8 +370,10 @@ source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc6
 [[package]]
 name = "lenso-plugin-sdk"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2832aaf9e9e80b8dba0b5a119175e35a67520a309b163690e1a5e43c1065ab88"
 dependencies = [
- "lenso-guest-sdk 0.2.0",
+ "lenso-guest-sdk 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "lenso-plugin-sdk-macros",
  "lenso-process-sdk",
  "serde_json",
@@ -379,6 +383,8 @@ dependencies = [
 [[package]]
 name = "lenso-plugin-sdk-macros"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96386e811e57bdd0a2eaea4fd7ddbce43c9ad16e8927e4a3d6ea7fbf826b2426"
 dependencies = [
  "proc-macro2",
  "syn 2.0.119",
@@ -387,6 +393,8 @@ dependencies = [
 [[package]]
 name = "lenso-process-sdk"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "157bd0d84c8bd829dfe9b999ce644268e4f6d308fa5d5604658c731c9062f631"
 dependencies = [
  "serde",
  "serde_json",
