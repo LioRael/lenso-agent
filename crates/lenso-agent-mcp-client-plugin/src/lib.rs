@@ -20,10 +20,15 @@ use lenso_capability_agent_context_source::{
     SnapshotError as ContextSnapshotError, SnapshotRequest as ContextSnapshotRequest,
     SnapshotResponse as ContextSnapshotResponse,
 };
+use lenso_capability_agent_model::{
+    CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelEvent,
+    ModelInvocationError,
+};
 use lenso_capability_agent_tool_provider::{
     self as tool_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
 };
+use lenso_capability_agent_user_interaction::{AskRequest, UserInteractionAskInvocationError};
 use lenso_kernel::RuntimeFailure;
 use serde_json::{Value, json};
 use tokio::{
@@ -66,6 +71,23 @@ struct McpClientConfig {
     tool_namespace: String,
     startup_timeout_ms: u64,
     request_timeout_ms: u64,
+    #[serde(default)]
+    allow_elicitation: bool,
+    #[serde(default)]
+    allow_sampling: bool,
+    #[serde(default = "default_continuation_rounds")]
+    continuation_max_rounds: u8,
+    sampling_model: Option<String>,
+    #[serde(default = "default_max_sampling_tokens")]
+    max_sampling_tokens: u32,
+}
+
+const fn default_continuation_rounds() -> u8 {
+    4
+}
+
+const fn default_max_sampling_tokens() -> u32 {
+    4_096
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -86,6 +108,7 @@ enum TransportConfig {
 #[derive(Clone, Debug)]
 struct ReadyClient {
     protocol: Protocol,
+    client_capabilities: Value,
     transport: ReadyTransport,
     catalog: Rc<RefCell<CatalogResponse>>,
     exposed_to_remote: Rc<RefCell<BTreeMap<String, String>>>,
@@ -147,6 +170,13 @@ fn validate_config(config: &McpClientConfig) -> Result<(), RuntimeFailure> {
         || !namespace_valid
         || !(1..=60_000).contains(&config.startup_timeout_ms)
         || !(1..=3_600_000).contains(&config.request_timeout_ms)
+        || !(1..=8).contains(&config.continuation_max_rounds)
+        || !(1..=65_536).contains(&config.max_sampling_tokens)
+        || (config.allow_sampling
+            && config
+                .sampling_model
+                .as_ref()
+                .is_none_or(|model| model.trim().is_empty() || model.len() > 256))
     {
         return Err(invalid_plan(
             "MCP configuration requires a safe stdio or Streamable HTTP transport, a Tool namespace, and bounded timeouts",
@@ -177,6 +207,8 @@ struct McpClientPlugin {
     #[config]
     config: McpClientConfig,
     ready: Rc<RefCell<Option<ReadyClient>>>,
+    interaction: Port<lenso_capability_agent_user_interaction::UserInteractionClient>,
+    model: Port<lenso_capability_agent_model::ModelClient>,
 }
 
 #[lenso::provides(tool_contract::ToolProvider, context_contract::ContextSource)]
@@ -238,8 +270,8 @@ impl McpClientPlugin {
             BTreeMap::new()
         };
         let params = json!({"name": remote_name, "arguments": arguments});
-        let response = ready
-            .request_with_context(&self.config, &context, "tools/call", params, &headers)
+        let response = self
+            .request_with_continuations(&ready, &context, "tools/call", params, &headers)
             .await
             .map_err(PluginError::runtime)?;
         map_tool_result(&response).map_err(PluginError::domain)
@@ -292,9 +324,9 @@ impl McpClientPlugin {
             return Err(PluginError::domain(RenderPromptError::InvalidRequest));
         }
         let ready = self.context_ready()?;
-        let response = ready
-            .request_with_context(
-                &self.config,
+        let response = self
+            .request_with_continuations(
+                &ready,
                 &context,
                 "prompts/get",
                 json!({"name": request.name, "arguments": arguments}),
@@ -315,9 +347,9 @@ impl McpClientPlugin {
             return Err(PluginError::domain(ReadResourceError::NotFound));
         }
         let ready = self.context_ready()?;
-        let response = ready
-            .request_with_context(
-                &self.config,
+        let response = self
+            .request_with_continuations(
+                &ready,
                 &context,
                 "resources/read",
                 json!({"uri": request.uri}),
@@ -337,6 +369,350 @@ impl McpClientPlugin {
                 capability: context_contract::CAPABILITY_ID,
             })
         })
+    }
+
+    async fn request_with_continuations(
+        &self,
+        ready: &ReadyClient,
+        context: &Ctx,
+        method: &str,
+        mut params: Value,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Value, RuntimeFailure> {
+        for round in 0..=self.config.continuation_max_rounds {
+            let response = ready
+                .request_with_context(&self.config, context, method, params.clone(), headers)
+                .await?;
+            let Some(result) = response.get("result") else {
+                return Ok(response);
+            };
+            if result["resultType"].as_str() != Some("input_required") {
+                return Ok(response);
+            }
+            if ready.protocol != Protocol::Modern {
+                return Err(protocol_failure(
+                    "MCP request continuations require protocol 2026-07-28",
+                ));
+            }
+            if round == self.config.continuation_max_rounds {
+                return Err(protocol_failure(
+                    "MCP request exceeded the continuation limit",
+                ));
+            }
+            let requests = result
+                .get("inputRequests")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            if requests.len() > 8 {
+                return Err(protocol_failure(
+                    "MCP request asked for more than 8 continuation inputs",
+                ));
+            }
+            let mut responses = serde_json::Map::new();
+            for (index, (key, request)) in requests.into_iter().enumerate() {
+                if key.is_empty() || key.len() > 128 {
+                    return Err(protocol_failure("MCP continuation input key was invalid"));
+                }
+                let response = match request["method"].as_str() {
+                    Some("elicitation/create") => {
+                        self.fulfill_elicitation(context, round, index, &request["params"])
+                            .await?
+                    }
+                    Some("sampling/createMessage") => {
+                        self.fulfill_sampling(context, &request["params"]).await?
+                    }
+                    Some(other) => {
+                        return Err(protocol_failure(format!(
+                            "MCP continuation method `{other}` is unsupported"
+                        )));
+                    }
+                    None => return Err(protocol_failure("MCP continuation omitted its method")),
+                };
+                responses.insert(key, response);
+            }
+            let object = params
+                .as_object_mut()
+                .ok_or_else(|| protocol_failure("MCP request parameters were not an object"))?;
+            object.insert("inputResponses".to_owned(), Value::Object(responses));
+            match result.get("requestState") {
+                Some(Value::String(state)) if state.len() <= MAX_MESSAGE_BYTES => {
+                    object.insert("requestState".to_owned(), Value::String(state.clone()));
+                }
+                Some(Value::String(_)) => {
+                    return Err(protocol_failure("MCP requestState exceeded the byte limit"));
+                }
+                Some(_) => return Err(protocol_failure("MCP requestState was not a string")),
+                None => {
+                    object.remove("requestState");
+                }
+            }
+        }
+        unreachable!("bounded continuation loop returns on every terminal path")
+    }
+
+    async fn fulfill_elicitation(
+        &self,
+        context: &Ctx,
+        round: u8,
+        index: usize,
+        params: &Value,
+    ) -> Result<Value, RuntimeFailure> {
+        if !self.config.allow_elicitation {
+            return Err(protocol_failure(
+                "MCP Elicitation is disabled by Plugin policy",
+            ));
+        }
+        let mode = params["mode"].as_str().unwrap_or("form");
+        let interaction_id = format!("mcp-{}-{round}-{index}", context.request_id());
+        let (prompt, options, allow_freeform) = match mode {
+            "form" => {
+                let message = bounded_elicitation_message(params)?;
+                let schema = params
+                    .get("requestedSchema")
+                    .filter(|schema| schema.is_object())
+                    .ok_or_else(|| protocol_failure("MCP form Elicitation omitted its schema"))?;
+                let schema_text = serde_json::to_string_pretty(schema).map_err(|error| {
+                    protocol_failure(format!("invalid Elicitation schema: {error}"))
+                })?;
+                let prompt = format!(
+                    "{message}\n\nReturn a JSON object matching this schema, or reply `decline`/`cancel`:\n{schema_text}"
+                );
+                if prompt.len() > 4_096 {
+                    return Err(protocol_failure(
+                        "MCP Elicitation prompt exceeded the limit",
+                    ));
+                }
+                (prompt, Vec::new(), true)
+            }
+            "url" => {
+                let message = bounded_elicitation_message(params)?;
+                let url = params["url"]
+                    .as_str()
+                    .filter(|url| url.len() <= 2_048)
+                    .ok_or_else(|| protocol_failure("MCP URL Elicitation omitted its URL"))?;
+                let parsed = reqwest::Url::parse(url)
+                    .map_err(|_| protocol_failure("MCP URL Elicitation URL was invalid"))?;
+                if parsed.scheme() != "https" {
+                    return Err(protocol_failure("MCP URL Elicitation requires HTTPS"));
+                }
+                (
+                    format!("{message}\n\nOpen this URL, then choose `open`: {url}"),
+                    vec!["open".to_owned(), "decline".to_owned(), "cancel".to_owned()],
+                    false,
+                )
+            }
+            _ => return Err(protocol_failure("MCP Elicitation mode is unsupported")),
+        };
+        let prompt = format!(
+            "MCP server `{}` requests interaction:\n\n{prompt}",
+            self.config.tool_namespace
+        );
+        if prompt.len() > 4_096 {
+            return Err(protocol_failure(
+                "MCP Elicitation prompt exceeded the limit",
+            ));
+        }
+        let answer = self
+            .interaction
+            .ask_with_context(
+                context.clone(),
+                AskRequest {
+                    interaction_id,
+                    prompt,
+                    options,
+                    allow_freeform,
+                },
+            )
+            .await
+            .map_err(map_interaction_failure)?
+            .answer;
+        validate_elicitation_answer(params, mode, &answer)
+    }
+}
+
+fn validate_elicitation_answer(
+    params: &Value,
+    mode: &str,
+    answer: &str,
+) -> Result<Value, RuntimeFailure> {
+    match answer.trim() {
+        "decline" => Ok(json!({"action":"decline"})),
+        "cancel" => Ok(json!({"action":"cancel"})),
+        "open" if mode == "url" => Ok(json!({"action":"accept"})),
+        _ if mode == "url" => Err(protocol_failure("MCP URL Elicitation answer was invalid")),
+        _ => {
+            let content = serde_json::from_str::<Value>(answer)
+                .map_err(|_| protocol_failure("MCP Elicitation answer was not JSON"))?;
+            let schema = &params["requestedSchema"];
+            let validator = jsonschema::validator_for(schema).map_err(|error| {
+                protocol_failure(format!("MCP Elicitation schema was invalid: {error}"))
+            })?;
+            if !validator.is_valid(&content) {
+                return Err(protocol_failure(
+                    "MCP Elicitation answer did not match the requested schema",
+                ));
+            }
+            Ok(json!({"action":"accept", "content":content}))
+        }
+    }
+}
+
+impl McpClientPlugin {
+    async fn fulfill_sampling(
+        &self,
+        context: &Ctx,
+        params: &Value,
+    ) -> Result<Value, RuntimeFailure> {
+        if !self.config.allow_sampling {
+            return Err(protocol_failure(
+                "MCP Sampling is disabled by Plugin policy",
+            ));
+        }
+        if params.get("tools").is_some() {
+            return Err(protocol_failure(
+                "MCP Sampling with Tools is not supported by this client",
+            ));
+        }
+        if !matches!(params["includeContext"].as_str(), None | Some("none")) {
+            return Err(protocol_failure(
+                "MCP Sampling context inclusion is not supported by this client",
+            ));
+        }
+        let model = self
+            .config
+            .sampling_model
+            .clone()
+            .ok_or_else(|| protocol_failure("MCP Sampling has no configured model"))?;
+        let messages = sampling_messages(params)?;
+        let requested_tokens = params["maxTokens"]
+            .as_u64()
+            .ok_or_else(|| protocol_failure("MCP Sampling omitted maxTokens"))?;
+        let maximum = u64::from(self.config.max_sampling_tokens);
+        if requested_tokens == 0 || requested_tokens > maximum {
+            return Err(protocol_failure(
+                "MCP Sampling token request exceeded policy",
+            ));
+        }
+        let temperature = params["temperature"].as_f64().unwrap_or(0.0);
+        if !(0.0..=2.0).contains(&temperature) {
+            return Err(protocol_failure("MCP Sampling temperature was invalid"));
+        }
+        let stream = self
+            .model
+            .complete_with_context(
+                context.clone(),
+                CompleteOpen {
+                    model: model.clone(),
+                    messages,
+                    tools: Vec::new(),
+                    temperature,
+                    max_output_tokens: i64::try_from(requested_tokens)
+                        .expect("bounded sampling token count fits i64"),
+                },
+            )
+            .await
+            .map_err(map_model_failure)?;
+        stream.close_send().await?;
+        let mut text = String::new();
+        loop {
+            match stream.receive().await? {
+                ModelEvent::Message(message) => match message.kind {
+                    CompleteMessageKind::TextDelta => {
+                        text.push_str(&message.text);
+                        if text.len() > MAX_OUTPUT_BYTES {
+                            return Err(protocol_failure("MCP Sampling output exceeded the limit"));
+                        }
+                    }
+                    CompleteMessageKind::ToolCall => {
+                        return Err(protocol_failure("MCP Sampling attempted a Tool call"));
+                    }
+                    CompleteMessageKind::ReasoningSummaryDelta | CompleteMessageKind::Usage => {}
+                },
+                ModelEvent::PeerHalfClosed => {}
+                ModelEvent::Terminal(Ok(())) => break,
+                ModelEvent::Terminal(Err(error)) => {
+                    return Err(protocol_failure(format!("MCP Sampling failed: {error:?}")));
+                }
+            }
+        }
+        if text.is_empty() {
+            return Err(protocol_failure("MCP Sampling returned no text"));
+        }
+        Ok(json!({
+            "role":"assistant",
+            "content":{"type":"text", "text":text},
+            "model":model,
+            "stopReason":"endTurn"
+        }))
+    }
+}
+
+fn bounded_elicitation_message(params: &Value) -> Result<&str, RuntimeFailure> {
+    params["message"]
+        .as_str()
+        .filter(|message| !message.is_empty() && message.len() <= 2_048)
+        .ok_or_else(|| protocol_failure("MCP Elicitation message was invalid"))
+}
+
+fn sampling_messages(params: &Value) -> Result<Vec<CompleteMessageInput>, RuntimeFailure> {
+    let input = params["messages"]
+        .as_array()
+        .filter(|messages| !messages.is_empty() && messages.len() <= 64)
+        .ok_or_else(|| protocol_failure("MCP Sampling messages were invalid"))?;
+    let mut messages = Vec::with_capacity(input.len() + 1);
+    if let Some(system) = params["systemPrompt"].as_str() {
+        if system.len() > 65_536 {
+            return Err(protocol_failure(
+                "MCP Sampling system prompt exceeded the limit",
+            ));
+        }
+        messages.push(model_message(CompleteMessageRole::System, system));
+    }
+    for message in input {
+        let role = match message["role"].as_str() {
+            Some("user") => CompleteMessageRole::User,
+            Some("assistant") => CompleteMessageRole::Assistant,
+            _ => return Err(protocol_failure("MCP Sampling message role was invalid")),
+        };
+        let content = &message["content"];
+        if content["type"].as_str() != Some("text") {
+            return Err(protocol_failure("MCP Sampling supports text messages only"));
+        }
+        let text = content["text"]
+            .as_str()
+            .filter(|text| text.len() <= 1_048_576)
+            .ok_or_else(|| protocol_failure("MCP Sampling message text was invalid"))?;
+        messages.push(model_message(role, text));
+    }
+    Ok(messages)
+}
+
+fn model_message(role: CompleteMessageRole, content: &str) -> CompleteMessageInput {
+    CompleteMessageInput {
+        role,
+        content: content.to_owned(),
+        tool_call_id: None,
+        tool_name: None,
+        arguments_json: None,
+    }
+}
+
+fn map_interaction_failure(error: UserInteractionAskInvocationError) -> RuntimeFailure {
+    match error {
+        UserInteractionAskInvocationError::Runtime(error) => error,
+        UserInteractionAskInvocationError::Domain(error) => {
+            protocol_failure(format!("MCP Elicitation failed: {error:?}"))
+        }
+    }
+}
+
+fn map_model_failure(error: ModelInvocationError) -> RuntimeFailure {
+    match error {
+        ModelInvocationError::Runtime(error) => error,
+        ModelInvocationError::Domain(error) => {
+            protocol_failure(format!("MCP Sampling failed: {error:?}"))
+        }
     }
 }
 
@@ -406,6 +782,7 @@ impl Lifecycle for McpClientPlugin {
         let transport = prepare_transport(&self.config)?;
         let seed = ReadyClient {
             protocol: Protocol::Legacy,
+            client_capabilities: client_capabilities(&self.config),
             transport,
             catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
             exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
@@ -565,6 +942,7 @@ struct Session {
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
+    client_capabilities: Value,
 }
 
 impl Session {
@@ -608,6 +986,7 @@ impl Session {
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             next_id: 1,
+            client_capabilities: client_capabilities(config),
         })
     }
 
@@ -637,7 +1016,7 @@ impl Session {
         protocol: Protocol,
         timeout_ms: u64,
     ) -> Result<Value, RuntimeFailure> {
-        add_modern_metadata(&mut params, protocol);
+        add_modern_metadata(&mut params, protocol, &self.client_capabilities);
         self.write(&json!({"jsonrpc":"2.0", "id":id, "method":method, "params":params}))
             .await?;
         let receive = self.receive_response(id);
@@ -660,7 +1039,7 @@ impl Session {
         mut params: Value,
         protocol: Protocol,
     ) -> Result<(), RuntimeFailure> {
-        add_modern_metadata(&mut params, protocol);
+        add_modern_metadata(&mut params, protocol, &self.client_capabilities);
         self.write(&json!({"jsonrpc":"2.0", "method":method, "params":params}))
             .await
     }
@@ -759,7 +1138,18 @@ impl Session {
     }
 }
 
-fn add_modern_metadata(params: &mut Value, protocol: Protocol) {
+fn client_capabilities(config: &McpClientConfig) -> Value {
+    let mut capabilities = serde_json::Map::new();
+    if config.allow_elicitation {
+        capabilities.insert("elicitation".to_owned(), json!({"form": {}, "url": {}}));
+    }
+    if config.allow_sampling {
+        capabilities.insert("sampling".to_owned(), json!({}));
+    }
+    Value::Object(capabilities)
+}
+
+fn add_modern_metadata(params: &mut Value, protocol: Protocol, client_capabilities: &Value) {
     if protocol != Protocol::Modern {
         return;
     }
@@ -771,7 +1161,7 @@ fn add_modern_metadata(params: &mut Value, protocol: Protocol) {
         json!({
             "io.modelcontextprotocol/protocolVersion": MODERN_VERSION,
             "io.modelcontextprotocol/clientInfo": {"name":"lenso-agent", "version":env!("CARGO_PKG_VERSION")},
-            "io.modelcontextprotocol/clientCapabilities": {}
+            "io.modelcontextprotocol/clientCapabilities": client_capabilities
         }),
     );
 }
@@ -1264,7 +1654,7 @@ async fn http_request_raw_with_headers(
     else {
         return Err(protocol_failure("MCP HTTP request used a stdio transport"));
     };
-    add_modern_metadata(&mut params, Protocol::Modern);
+    add_modern_metadata(&mut params, Protocol::Modern, &ready.client_capabilities);
     let request_id = 1_u64;
     let body = json!({"jsonrpc":"2.0", "id":request_id, "method":method, "params":params});
     let mut request = client
@@ -1870,9 +2260,15 @@ done
             tool_namespace: "fixture".to_owned(),
             startup_timeout_ms: 1_000,
             request_timeout_ms: 1_000,
+            allow_elicitation: false,
+            allow_sampling: false,
+            continuation_max_rounds: default_continuation_rounds(),
+            sampling_model: None,
+            max_sampling_tokens: default_max_sampling_tokens(),
         };
         let ready = ReadyClient {
             protocol: Protocol::Modern,
+            client_capabilities: client_capabilities(&config),
             transport: prepare_transport(&config).unwrap(),
             catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
             exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
@@ -1893,6 +2289,11 @@ done
             tool_namespace: "fixture".to_owned(),
             startup_timeout_ms: 1_000,
             request_timeout_ms: 1_000,
+            allow_elicitation: false,
+            allow_sampling: false,
+            continuation_max_rounds: default_continuation_rounds(),
+            sampling_model: None,
+            max_sampling_tokens: default_max_sampling_tokens(),
         }
     }
 
@@ -1907,6 +2308,7 @@ done
         };
         ReadyClient {
             protocol: Protocol::Legacy,
+            client_capabilities: client_capabilities(config),
             transport: ReadyTransport::Stdio {
                 program: fs::canonicalize(program).unwrap(),
                 working_directory: fs::canonicalize(working_directory).unwrap(),
@@ -1997,6 +2399,8 @@ done
         let plugin = McpClientPlugin {
             config,
             ready: Rc::new(RefCell::new(Some(ready))),
+            interaction: Port::new(),
+            model: Port::new(),
         };
         let response = plugin
             .execute(
@@ -2044,6 +2448,8 @@ done
         let plugin = McpClientPlugin {
             config,
             ready: Rc::new(RefCell::new(Some(ready))),
+            interaction: Port::new(),
+            model: Port::new(),
         };
         let cancellation = CancellationToken::new();
         let context = InvocationContext::new(9, None, cancellation.clone());
@@ -2112,6 +2518,8 @@ done
         let plugin = McpClientPlugin {
             config,
             ready: Rc::new(RefCell::new(Some(ready))),
+            interaction: Port::new(),
+            model: Port::new(),
         };
         let result = plugin
             .execute(
@@ -2144,6 +2552,70 @@ done
     }
 
     #[test]
+    fn modern_metadata_advertises_only_profile_enabled_continuations() {
+        let mut config = config("", ProtocolMode::Modern);
+        assert_eq!(client_capabilities(&config), json!({}));
+        config.allow_elicitation = true;
+        assert_eq!(
+            client_capabilities(&config),
+            json!({"elicitation":{"form":{}, "url":{}}})
+        );
+        config.allow_sampling = true;
+        config.sampling_model = Some("fixture/readme-summary-v1".to_owned());
+        assert_eq!(
+            client_capabilities(&config),
+            json!({
+                "elicitation":{"form":{}, "url":{}},
+                "sampling":{}
+            })
+        );
+    }
+
+    #[test]
+    fn elicitation_answers_are_explicit_and_schema_validated() {
+        let params = json!({
+            "message":"Choose a mode",
+            "requestedSchema":{
+                "type":"object",
+                "properties":{"mode":{"type":"string", "enum":["safe", "fast"]}},
+                "required":["mode"],
+                "additionalProperties":false
+            }
+        });
+        assert_eq!(
+            validate_elicitation_answer(&params, "form", r#"{"mode":"safe"}"#).unwrap(),
+            json!({"action":"accept", "content":{"mode":"safe"}})
+        );
+        assert!(validate_elicitation_answer(&params, "form", r#"{"mode":"unsafe"}"#).is_err());
+        assert_eq!(
+            validate_elicitation_answer(&params, "form", "decline").unwrap(),
+            json!({"action":"decline"})
+        );
+        assert_eq!(
+            validate_elicitation_answer(&json!({}), "url", "open").unwrap(),
+            json!({"action":"accept"})
+        );
+    }
+
+    #[test]
+    fn sampling_projection_accepts_only_bounded_text_messages() {
+        assert_eq!(
+            sampling_messages(&json!({
+                "messages":[{"role":"user", "content":{"type":"text", "text":"hello"}}]
+            }))
+            .unwrap()[0]
+                .content,
+            "hello"
+        );
+        assert!(
+            sampling_messages(&json!({
+                "messages":[{"role":"user", "content":{"type":"image", "data":"AA=="}}]
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
     fn descriptor_exposes_tool_and_context_source_contracts() {
         let descriptor: Value = serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
         assert_eq!(descriptor["plugin_id"], "lenso.agent.mcp-client");
@@ -2162,7 +2634,21 @@ done
             descriptor["provided_capabilities"][1]["capability_id"],
             "lenso.agent.context-source@1"
         );
-        assert_eq!(descriptor["required_capabilities"], json!([]));
+        assert_eq!(
+            descriptor["required_capabilities"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            descriptor["required_capabilities"][0]["capability_id"],
+            "lenso.agent.user-interaction@1"
+        );
+        assert_eq!(
+            descriptor["required_capabilities"][1]["capability_id"],
+            "lenso.agent.model@2"
+        );
     }
 
     #[test]

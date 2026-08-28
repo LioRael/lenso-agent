@@ -52,4 +52,5 @@ they must not be represented as Tools or hidden inside a Resource read.
   contract.
 - Text-only v1 fails explicitly for images, audio, blobs, and embedded
   resources instead of dropping information.
-- MCP request continuations remain a separate authority review.
+- MCP request continuations remain a separate authority decision, recorded in
+  ADR 0052.

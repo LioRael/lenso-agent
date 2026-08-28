@@ -285,6 +285,10 @@ protocol = "auto"
 tool_namespace = "filesystem"
 startup_timeout_ms = 5000
 request_timeout_ms = 30000
+allow_elicitation = true
+allow_sampling = false
+continuation_max_rounds = 4
+max_sampling_tokens = 4096
 ```
 
 Remote MCP uses the same Plugin and Slot:
@@ -298,6 +302,10 @@ protocol = "modern"
 tool_namespace = "team"
 startup_timeout_ms = 5000
 request_timeout_ms = 30000
+allow_elicitation = false
+allow_sampling = false
+continuation_max_rounds = 4
+max_sampling_tokens = 4096
 ```
 
 `MCP_AUTHORIZATION` contains the complete Authorization header value and is
@@ -341,8 +349,29 @@ The TUI adds no-argument MCP Prompts and text Resources to `/` completion as
 `/prompt:<source>/<name>` and `/resource:<source>/<name>`. Selecting one leaves
 the composer open for the task. Required-argument Prompts remain available
 through the CLI, where arguments are explicit JSON. Version 1 rejects binary
-MCP content rather than dropping it. Elicitation and Sampling remain request
-continuations over User Interaction and Model—not Context Sources or Tools.
+MCP content rather than dropping it.
+
+MCP 2026 request continuations are also owned by this Plugin rather than the
+Agent Loop. Elicitation is disabled unless `allow_elicitation = true`; when
+enabled, form and HTTPS URL requests are shown through the active User
+Interaction surface and can be accepted, declined, or cancelled. Form answers
+are validated against the server schema. Sampling is disabled by default and
+is retained only as an opt-in compatibility feature because MCP 2026-07-28
+deprecates it. Enabling it additionally requires an exact Profile-owned model:
+
+```toml
+allow_sampling = true
+sampling_model = "openai/gpt-5-mini"
+max_sampling_tokens = 4096
+continuation_max_rounds = 4
+```
+
+Sampling accepts bounded text-only messages, does not expose Tools or MCP
+context inclusion, and ignores advisory model hints in favor of the configured
+model. Each retry echoes the server's opaque `requestState`; no request may
+exceed the configured continuation limit. Removing the MCP Instance removes
+both continuation authorities and their required User Interaction/Model
+bindings.
 
 Lifecycle integrations use ordinary Plugin configuration. The default local
 audit Adapter writes typed Session, Turn-start, and terminal Turn events to

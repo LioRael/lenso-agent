@@ -564,14 +564,7 @@ fn run_scope_cannot_add_a_tool_outside_the_plan_catalog() {
     );
 }
 
-#[test]
-fn mcp_client_discovers_and_invokes_a_real_stdio_server() {
-    let temporary = tempfile::tempdir().unwrap();
-    fs::write(temporary.path().join("README.md"), "# MCP Fixture\n").unwrap();
-    let server = temporary.path().join("mcp-server.sh");
-    fs::write(
-        &server,
-        r#"
+const MCP_CONTINUATION_SERVER: &str = r#"
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
@@ -581,8 +574,18 @@ while IFS= read -r line; do
     *\"method\":\"tools/list\"*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}\n' "$id"
       ;;
+    *\"method\":\"tools/call\"*\"inputResponses\"*)
+      case "$line" in
+        *\"text\":\"Paris.\"*\"requestState\":\"opaque-fixture-state\"*)
+          printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}\n' "$id"
+          ;;
+        *)
+          printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"continuation response was incomplete"}}\n' "$id"
+          ;;
+      esac
+      ;;
     *\"method\":\"tools/call\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"input_required","inputRequests":{"sample":{"method":"sampling/createMessage","params":{"messages":[{"role":"user","content":{"type":"text","text":"What is the capital of France?"}}],"maxTokens":32}}},"requestState":"opaque-fixture-state"}}\n' "$id"
       ;;
     *\"method\":\"prompts/get\"*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","description":"Fixture review","messages":[{"role":"user","content":{"type":"text","text":"Review carefully."}}]}}\n' "$id"
@@ -598,9 +601,14 @@ while IFS= read -r line; do
       ;;
   esac
 done
-"#,
-    )
-    .unwrap();
+"#;
+
+#[test]
+fn mcp_client_discovers_and_invokes_a_real_stdio_server() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# MCP Fixture\n").unwrap();
+    let server = temporary.path().join("mcp-server.sh");
+    fs::write(&server, MCP_CONTINUATION_SERVER).unwrap();
     configure_plugin_with(
         temporary.path(),
         "lenso.agent.mcp-client",
@@ -614,6 +622,11 @@ protocol = "auto"
 tool_namespace = "fixture"
 startup_timeout_ms = 1000
 request_timeout_ms = 1000
+allow_elicitation = false
+allow_sampling = true
+continuation_max_rounds = 2
+sampling_model = "fixture/readme-summary-v1"
+max_sampling_tokens = 64
 "#,
             server.display(),
             temporary.path().display()
