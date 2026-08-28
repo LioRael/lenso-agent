@@ -18,12 +18,9 @@ checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 name = "dev-example-portable-text-tools"
 version = "1.0.0"
 dependencies = [
- "lenso-guest-sdk",
- "lenso-process-sdk",
+ "lenso-plugin-sdk",
  "schemars",
  "serde",
- "serde_json",
- "wit-bindgen",
 ]
 
 [[package]]
@@ -92,17 +89,29 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c94cad4370ff9fdefba039a001ea099889db91ac676707330b2f09d3940326df"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=7c3cdb5b02e3324df2c24463fe615c90c48dc244#7c3cdb5b02e3324df2c24463fe615c90c48dc244"
 dependencies = [
  "serde",
  "serde_json",
 ]
 
 [[package]]
+name = "lenso-plugin-sdk"
+version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=7c3cdb5b02e3324df2c24463fe615c90c48dc244#7c3cdb5b02e3324df2c24463fe615c90c48dc244"
+dependencies = [
+ "lenso-guest-sdk",
+ "lenso-process-sdk",
+ "schemars",
+ "serde",
+ "serde_json",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "lenso-process-sdk"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=7f5acd577374157cb57c72c9dd0d4b0e054c53ce#7f5acd577374157cb57c72c9dd0d4b0e054c53ce"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=7c3cdb5b02e3324df2c24463fe615c90c48dc244#7c3cdb5b02e3324df2c24463fe615c90c48dc244"
 dependencies = [
  "serde",
  "serde_json",

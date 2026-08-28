@@ -1,4 +1,2 @@
-mod plugin;
-
-// Generated execution lowering. Edit `plugin.rs`, not this file.
-include!("lenso.process.generated.rs");
+// Cargo Process entrypoint; the SDK supplies main and protocol lowering.
+include!("lib.rs");

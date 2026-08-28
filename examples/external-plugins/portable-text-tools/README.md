@@ -1,8 +1,9 @@
 # dev.example.portable-text-tools
 
 This is one ordinary Rust Plugin source with two interchangeable implementations:
-a sandboxed Wasm Component and a trusted native Process. The only authored behavior lives in
-`src/plugin.rs`; the generated lowering owns WIT, protocol dispatch, descriptors, and packaging.
+a sandboxed Wasm Component and a trusted native Process. The authored behavior lives in
+`src/lib.rs`; `lenso-plugin-sdk` owns WIT, protocol dispatch, and runtime descriptors at compile
+time, so no target-specific generated source is checked into the Plugin project.
 
 ```sh
 lenso plugin check
