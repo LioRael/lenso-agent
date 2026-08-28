@@ -33,6 +33,7 @@ use lenso_capability_agent_tools::{
     ExecuteStreamRequest, ExecuteStreamResponseKind, ToolsExecuteStreamInvocationError,
 };
 use lenso_kernel::{InvocationContext, StreamEvent};
+use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 /// Host-issued Invocation Context key for the leased App Generation identity.
@@ -76,6 +77,16 @@ impl TypedExtension for RunScope {
 
 type TurnFailure = PluginError<RunTurnError>;
 const RECOVERY_EVENT_LIMIT: u64 = 512;
+const SESSION_SCAN_PAGE_LIMIT: i64 = 1000;
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct InstalledSystemInstruction {
+    content: String,
+    digest: String,
+    contributions: Vec<prompt_capability::AssembleResponseContributionsItem>,
+    generation_spec_digest: String,
+}
 
 /// One validated Turn-to-Generation provenance reference.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -238,6 +249,21 @@ async fn run_turn(
         .await
         .map_err(map_session_open_error)?;
     let session_id = opened.session_id;
+    let (system_instruction, install_system_instruction) = if opened.created {
+        (
+            assemble_system_instruction(clients, context, generation_spec_digest).await?,
+            true,
+        )
+    } else if let Some(installed) =
+        read_installed_system_instruction(clients, context, &session_id, &opened.revision).await?
+    {
+        (installed, false)
+    } else {
+        (
+            assemble_system_instruction(clients, context, generation_spec_digest).await?,
+            true,
+        )
+    };
     let history = if opened.created {
         Vec::new()
     } else {
@@ -260,6 +286,17 @@ async fn run_turn(
             &serde_json::json!({"session_id": session_id}),
         )?);
     }
+    if install_system_instruction {
+        initial_events.push(session_event(
+            AppendSessionRequestEventsItemKind::SystemInstructionInstalled,
+            None,
+            &serde_json::to_value(&system_instruction).map_err(|error| {
+                PluginError::runtime(RuntimeFailure::Internal {
+                    detail: format!("failed to encode installed System Instruction: {error}"),
+                })
+            })?,
+        )?);
+    }
     initial_events.extend(interrupted_turn_events(&history)?);
     initial_events.push(session_event(
         AppendSessionRequestEventsItemKind::TurnStarted,
@@ -280,6 +317,7 @@ async fn run_turn(
         &session_id,
         &turn_id,
         &mut revision,
+        &system_instruction,
         messages,
         run_scope.as_ref(),
         channel,
@@ -327,28 +365,23 @@ async fn execute_steps(
     session_id: &str,
     turn_id: &str,
     revision: &mut String,
+    system_instruction: &InstalledSystemInstruction,
     mut messages: Vec<CompleteMessageInput>,
     run_scope: Option<&RunScope>,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
-    let prompt = clients
-        .prompt
-        .assemble_with_context(context.clone(), AssembleRequest {})
-        .await
-        .map_err(map_prompt_error)?;
-    if !prompt.content.is_empty() {
-        messages.insert(
-            0,
-            CompleteMessageInput {
-                role: CompleteMessageRole::System,
-                content: prompt.content,
-                tool_call_id: None,
-                tool_name: None,
-                arguments_json: None,
-            },
-        );
-    }
-    let prompt_contributions = prompt.contributions;
+    messages.insert(
+        0,
+        CompleteMessageInput {
+            role: CompleteMessageRole::System,
+            content: system_instruction.content.clone(),
+            tool_call_id: None,
+            tool_name: None,
+            arguments_json: None,
+        },
+    );
+    let prompt_contributions = system_instruction.contributions.clone();
+    let system_instruction_digest = system_instruction.digest.clone();
     let catalog = clients
         .tools
         .catalog_with_context(context.clone(), CatalogRequest {})
@@ -402,7 +435,8 @@ async fn execute_steps(
                 Some(turn_id),
                 &serde_json::json!({
                     "step": step,
-                    "prompt_contributions": prompt_contributions
+                    "prompt_contributions": prompt_contributions,
+                    "system_instruction_digest": system_instruction_digest
                 }),
             )?],
         )
@@ -1107,6 +1141,147 @@ fn bounded_tool_stream_error(error: &ToolsExecuteStreamInvocationError) -> Strin
     } else {
         error.chars().take(MAX_ERROR_CHARACTERS).collect()
     }
+}
+
+async fn assemble_system_instruction(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    generation_spec_digest: &str,
+) -> Result<InstalledSystemInstruction, TurnFailure> {
+    let prompt = clients
+        .prompt
+        .assemble_with_context(context.clone(), AssembleRequest {})
+        .await
+        .map_err(map_prompt_error)?;
+    let instruction = InstalledSystemInstruction {
+        digest: system_instruction_digest(&prompt.content),
+        content: prompt.content,
+        contributions: prompt.contributions,
+        generation_spec_digest: generation_spec_digest.to_owned(),
+    };
+    validate_system_instruction(&instruction)?;
+    Ok(instruction)
+}
+
+async fn read_installed_system_instruction(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    current_revision: &str,
+) -> Result<Option<InstalledSystemInstruction>, TurnFailure> {
+    let current_revision = current_revision.parse::<u64>().map_err(|_| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session returned an invalid revision".to_owned(),
+        })
+    })?;
+    let mut cursor = 0_u64;
+    let mut installed = None;
+    while cursor < current_revision {
+        let response = clients
+            .session
+            .read_with_context(
+                context.clone(),
+                ReadSessionRequest {
+                    session_id: session_id.to_owned(),
+                    after_revision: cursor.to_string(),
+                    limit: SESSION_SCAN_PAGE_LIMIT,
+                },
+            )
+            .await
+            .map_err(map_session_read_error)?;
+        if response.events.is_empty() {
+            return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Session scan ended before its advertised revision".to_owned(),
+            }));
+        }
+        for event in response.events {
+            let revision = event.revision.parse::<u64>().map_err(|_| {
+                PluginError::runtime(RuntimeFailure::PluginFailure {
+                    detail: "Session event has an invalid revision".to_owned(),
+                })
+            })?;
+            if revision <= cursor || revision > current_revision {
+                return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+                    detail: "Session scan returned non-monotonic events".to_owned(),
+                }));
+            }
+            cursor = revision;
+            if event.kind == ReadSessionResponseEventsItemKind::SystemInstructionInstalled {
+                if installed.is_some() {
+                    return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+                        detail: "Session contains multiple installed System Instructions"
+                            .to_owned(),
+                    }));
+                }
+                let instruction =
+                    serde_json::from_str::<InstalledSystemInstruction>(event.payload_json.as_ref())
+                        .map_err(|error| {
+                            PluginError::runtime(RuntimeFailure::PluginFailure {
+                                detail: format!(
+                                    "Session installed System Instruction is invalid: {error}"
+                                ),
+                            })
+                        })?;
+                validate_system_instruction(&instruction)?;
+                installed = Some(instruction);
+            }
+        }
+    }
+    Ok(installed)
+}
+
+fn validate_system_instruction(
+    instruction: &InstalledSystemInstruction,
+) -> Result<(), TurnFailure> {
+    if instruction.content.trim().is_empty() || instruction.content.len() > 262_144 {
+        return Err(invalid_system_instruction(
+            "installed System Instruction content is empty or too large",
+        ));
+    }
+    if instruction.digest != system_instruction_digest(&instruction.content) {
+        return Err(invalid_system_instruction(
+            "installed System Instruction digest does not match its content",
+        ));
+    }
+    if !canonical_generation_digest(&instruction.generation_spec_digest) {
+        return Err(invalid_system_instruction(
+            "installed System Instruction has invalid Generation provenance",
+        ));
+    }
+    if instruction.contributions.len() > 256 {
+        return Err(invalid_system_instruction(
+            "installed System Instruction has too many contributions",
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    for contribution in &instruction.contributions {
+        if contribution.id.is_empty()
+            || contribution.id.len() > 128
+            || contribution.version.is_empty()
+            || contribution.version.len() > 64
+            || !ids.insert(contribution.id.as_str())
+            || contribution.digest.len() != 64
+            || !contribution
+                .digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(invalid_system_instruction(
+                "installed System Instruction contribution manifest is invalid",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn system_instruction_digest(content: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
+}
+
+fn invalid_system_instruction(detail: impl Into<String>) -> TurnFailure {
+    PluginError::runtime(RuntimeFailure::PluginFailure {
+        detail: detail.into(),
+    })
 }
 
 async fn send_agent_message(

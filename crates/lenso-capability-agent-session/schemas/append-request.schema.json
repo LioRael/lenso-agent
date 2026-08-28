@@ -32,6 +32,7 @@
             "type": "string",
             "enum": [
               "session_created",
+              "system_instruction_installed",
               "turn_started",
               "model_requested",
               "model_output",

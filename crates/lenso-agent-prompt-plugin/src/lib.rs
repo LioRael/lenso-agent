@@ -11,6 +11,10 @@ use lenso_capability_agent_prompt_provider as provider_contract;
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
 
+const BASE_INSTRUCTION_ID: &str = "harness.base";
+const BASE_INSTRUCTION_VERSION: &str = "1.0.0";
+const BASE_INSTRUCTION: &str = "You are an agent running in the Lenso Agent Harness. Follow explicit user instructions and use only the capabilities supplied by the current App Profile.";
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PromptConfig {
@@ -91,9 +95,20 @@ fn assemble_contributions(
     config: &PromptConfig,
 ) -> Result<AssembleResponse, RuntimeFailure> {
     let mut ids = BTreeSet::new();
-    let mut contents = Vec::new();
-    let mut manifest = Vec::new();
-    let mut total_bytes = 0_usize;
+    ids.insert(BASE_INSTRUCTION_ID.to_owned());
+    let mut contents = vec![BASE_INSTRUCTION.to_owned()];
+    let mut manifest = vec![AssembleResponseContributionsItem {
+        id: BASE_INSTRUCTION_ID.to_owned(),
+        version: BASE_INSTRUCTION_VERSION.to_owned(),
+        kind: AssembleResponseContributionsItemKind::Instruction,
+        digest: format!("{:x}", Sha256::digest(BASE_INSTRUCTION.as_bytes())),
+    }];
+    let mut total_bytes = BASE_INSTRUCTION.len();
+    if manifest.len() > config.max_contributions || total_bytes > config.max_total_bytes {
+        return Err(invalid_plan(
+            "Prompt aggregate limits do not admit the required base instruction",
+        ));
+    }
     for contribution in providers.into_iter().flatten() {
         if manifest.len() == config.max_contributions {
             return Err(invalid_plan("Prompt contribution count limit exceeded"));
@@ -164,13 +179,17 @@ mod tests {
             ],
             &PromptConfig {
                 max_contributions: 4,
-                max_total_bytes: 64,
+                max_total_bytes: 512,
             },
         )
         .unwrap();
-        assert_eq!(response.content, "First\n\nSecond");
-        assert_eq!(response.contributions[0].id, "first");
-        assert_eq!(response.contributions[1].id, "second");
+        assert_eq!(
+            response.content,
+            format!("{BASE_INSTRUCTION}\n\nFirst\n\nSecond")
+        );
+        assert_eq!(response.contributions[0].id, BASE_INSTRUCTION_ID);
+        assert_eq!(response.contributions[1].id, "first");
+        assert_eq!(response.contributions[2].id, "second");
         assert_eq!(response.contributions[0].digest.len(), 64);
     }
 
@@ -183,7 +202,20 @@ mod tests {
             ],
             &PromptConfig {
                 max_contributions: 4,
-                max_total_bytes: 64,
+                max_total_bytes: 512,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(error, RuntimeFailure::InvalidResolvedPlan { .. }));
+    }
+
+    #[test]
+    fn rejects_provider_collision_with_required_base_instruction() {
+        let error = assemble_contributions(
+            vec![vec![contribution(BASE_INSTRUCTION_ID, "Override")]],
+            &PromptConfig {
+                max_contributions: 4,
+                max_total_bytes: 512,
             },
         )
         .unwrap_err();
@@ -199,7 +231,7 @@ mod tests {
             ],
             &PromptConfig {
                 max_contributions: 4,
-                max_total_bytes: 10,
+                max_total_bytes: BASE_INSTRUCTION.len() + 10,
             },
         )
         .unwrap_err();

@@ -519,6 +519,7 @@ fn event_kind(
     use lenso_capability_agent_session::AppendSessionRequestEventsItemKind as Kind;
     match kind {
         Kind::SessionCreated => "session_created",
+        Kind::SystemInstructionInstalled => "system_instruction_installed",
         Kind::TurnStarted => "turn_started",
         Kind::ModelRequested => "model_requested",
         Kind::ModelOutput => "model_output",
@@ -533,6 +534,9 @@ fn event_kind(
 fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
     Some(match kind {
         "session_created" => ReadSessionResponseEventsItemKind::SessionCreated,
+        "system_instruction_installed" => {
+            ReadSessionResponseEventsItemKind::SystemInstructionInstalled
+        }
         "turn_started" => ReadSessionResponseEventsItemKind::TurnStarted,
         "model_requested" => ReadSessionResponseEventsItemKind::ModelRequested,
         "model_output" => ReadSessionResponseEventsItemKind::ModelOutput,

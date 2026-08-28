@@ -1844,6 +1844,7 @@ dependencies = [
  "lenso-kernel",
  "serde",
  "serde_json",
+ "sha2",
  "time",
  "uuid",
 ]

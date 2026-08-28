@@ -23,6 +23,7 @@ lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
 lenso-kernel.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 time.workspace = true
 uuid.workspace = true
 

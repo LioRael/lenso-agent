@@ -1,6 +1,6 @@
 # ADR-0003: Compose Prompt and Skill contributions as ordinary Modules
 
-Status: Accepted
+Status: Superseded by [ADR-0043](0043-install-system-instruction-at-session-start.md)
 
 The progressive, model-selected filesystem catalog originally deferred by this
 decision is specified by ADR-0004. The explicitly selected full-document
