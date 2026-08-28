@@ -7,7 +7,7 @@ static OPENAI_PLAN: OnceLock<PathBuf> = OnceLock::new();
 pub(crate) fn plan(app: &str) -> PathBuf {
     match app {
         "base" => HEADLESS_PLAN
-            .get_or_init(|| resolve("lenso-agent", &[]))
+            .get_or_init(|| resolve("lenso-agent", fixture_configurations()))
             .clone(),
         "openai-codex-direct" => CODEX_PLAN
             .get_or_init(|| {
@@ -100,6 +100,23 @@ content = "Be concise, follow explicit user instructions, and use only the Tools
             .clone(),
         _ => panic!("unsupported test App `{app}`"),
     }
+}
+
+pub(crate) fn fixture_configurations() -> &'static [(&'static str, &'static str)] {
+    &[
+        (
+            "lenso.agent.loop/agent.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+        (
+            "lenso.agent.loop/subagent-agent.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+        (
+            "lenso.agent.model.fixture/model.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+    ]
 }
 
 fn resolve(app: &str, configurations: &[(&str, &str)]) -> PathBuf {

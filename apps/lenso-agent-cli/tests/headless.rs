@@ -21,12 +21,21 @@ fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::pr
 }
 
 fn run_derived(root: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
+    configure_fixture_app(root);
     let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
     command.current_dir(root).arg(prompt);
     if let Some(session) = session {
         command.args(["--session", session]);
     }
     command.output().unwrap()
+}
+
+fn configure_fixture_app(root: &Path) {
+    for (relative, configuration) in support::fixture_configurations() {
+        let path = root.join("plugins").join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, configuration).unwrap();
+    }
 }
 
 fn configure_plugin(root: &Path, plugin_id: &str) {
@@ -196,7 +205,7 @@ fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::Path
         .unwrap()
         .clone();
     prompt_binding["provider_instance"] = "lenso.agent.skills.filesystem/skills".into();
-    prompt_binding["provider_order"] = 1.into();
+    prompt_binding["provider_order"] = 2.into();
     bindings.push(prompt_binding);
 
     let path = root.join("plan-with-on-demand-skills.json");
@@ -664,9 +673,12 @@ fn direct_answer_finishes_without_a_tool_call() {
     let payload: serde_json::Value =
         serde_json::from_str(requested["payload_json"].as_str().unwrap()).unwrap();
     let contributions = payload["prompt_contributions"].as_array().unwrap();
-    assert_eq!(contributions.len(), 1);
-    assert_eq!(contributions[0]["id"], "workspace.summary");
-    assert_eq!(contributions[0]["digest"].as_str().unwrap().len(), 64);
+    assert_eq!(contributions.len(), 2);
+    let summary = contributions
+        .iter()
+        .find(|contribution| contribution["id"] == "workspace.summary")
+        .unwrap();
+    assert_eq!(summary["digest"].as_str().unwrap().len(), 64);
 }
 
 #[test]
@@ -689,9 +701,10 @@ fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environmen
 }
 
 #[test]
-fn product_runner_resolves_the_base_app_without_cargo_or_a_plan_path() {
+fn product_runner_resolves_a_configured_app_without_cargo_or_a_plan_path() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
 
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .current_dir(temporary.path())
@@ -707,7 +720,7 @@ fn product_runner_resolves_the_base_app_without_cargo_or_a_plan_path() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
     assert!(!temporary.path().join(".lenso/resolved-plan.json").exists());
-    assert!(!temporary.path().join("plugins").exists());
+    assert!(temporary.path().join("plugins").is_dir());
     assert!(temporary.path().join(".lenso/host-catalog.json").is_file());
 }
 

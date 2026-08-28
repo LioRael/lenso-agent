@@ -35,6 +35,11 @@ pub(crate) fn snapshot(path: &Path) -> Result<PluginRootSnapshot, String> {
     let mut entries = read_entries(path)?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for entry in entries {
+        let entry_path = entry.path();
+        let name = utf8_name(&entry_path, &entry.file_name())?;
+        if is_ignored_os_metadata(&name) {
+            continue;
+        }
         let file_type = entry
             .file_type()
             .map_err(|error| format!("failed to inspect {}: {error}", entry.path().display()))?;
@@ -44,7 +49,7 @@ pub(crate) fn snapshot(path: &Path) -> Result<PluginRootSnapshot, String> {
                 entry.path().display()
             ));
         }
-        let plugin_id = utf8_name(&entry.path(), &entry.file_name())?;
+        let plugin_id = name;
         validate_identity(&plugin_id, "Plugin ID")?;
         reject_case_collision(&mut normalized, &plugin_id, "Plugin ID")?;
         scan_plugin(
@@ -137,6 +142,9 @@ fn scan_plugin(
     for entry in entries {
         let entry_path = entry.path();
         let name = utf8_name(&entry_path, &entry.file_name())?;
+        if is_ignored_os_metadata(&name) {
+            continue;
+        }
         reject_case_collision(&mut normalized, &name, "Plugin filename")?;
         let file_type = entry
             .file_type()
@@ -243,6 +251,10 @@ fn read_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
         .map_err(|error| format!("failed to read {}: {error}", path.display()))
 }
 
+fn is_ignored_os_metadata(name: &str) -> bool {
+    name == ".DS_Store"
+}
+
 fn utf8_name(path: &Path, name: &std::ffi::OsStr) -> Result<String, String> {
     name.to_str()
         .map(str::to_owned)
@@ -287,9 +299,7 @@ fn reject_case_collision(
 
 #[cfg(test)]
 mod tests {
-    use lenso_app_plan::{
-        CapabilityEndpointPlan, ExecutionClassId, authoring::PluginContract,
-    };
+    use lenso_app_plan::{CapabilityEndpointPlan, ExecutionClassId, authoring::PluginContract};
     use lenso_plugin_bundle::{
         SourcePluginImplementation, SourcePluginReleaseBuild, build_source_plugin_release_bundle,
     };
@@ -301,6 +311,30 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("plugins");
         assert!(snapshot(&root).unwrap().instances().is_empty());
+    }
+
+    #[test]
+    fn macos_metadata_at_plugin_root_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("plugins");
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join(".DS_Store"), b"Finder metadata").unwrap();
+
+        let snapshot = snapshot(&root).unwrap();
+
+        assert!(snapshot.instances().is_empty());
+    }
+
+    #[test]
+    fn macos_metadata_inside_plugin_directory_is_ignored() {
+        let directory = tempfile::tempdir().unwrap();
+        let plugin = directory.path().join("plugins/example.plugin");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join(".DS_Store"), b"Finder metadata").unwrap();
+
+        let snapshot = snapshot(&directory.path().join("plugins")).unwrap();
+
+        assert!(snapshot.instances().is_empty());
     }
 
     #[test]
@@ -342,12 +376,10 @@ mod tests {
         let artifact = directory.path().join("plugin.js");
         std::fs::write(&artifact, "export function invoke() {}\n").unwrap();
         let bundle = directory.path().join("plugin.lenso-plugin");
-        let contract = PluginContract::new("example.multi", "1.0.0", "tool-providers")
-            .with_capability(CapabilityEndpointPlan::new(
-                "example.echo@1",
-                "1.0.0",
-                ["echo"],
-            ));
+        let contract =
+            PluginContract::new("example.multi", "1.0.0", "tool-providers").with_capability(
+                CapabilityEndpointPlan::new("example.echo@1", "1.0.0", ["echo"]),
+            );
         build_source_plugin_release_bundle(&SourcePluginReleaseBuild {
             contract,
             implementations: vec![SourcePluginImplementation {

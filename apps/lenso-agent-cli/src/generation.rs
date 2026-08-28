@@ -83,6 +83,7 @@ use lenso_secrets_env_plugin as _;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 const APP_ID: &str = "lenso.agent.harness";
+const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 const PROCESS_EXECUTION_CLASS: &str = "lenso.process@1";
@@ -721,10 +722,7 @@ fn start_generation_reconciler(
     let (stop, mut stopped) = oneshot::channel();
     let mut controller_events = client.subscribe();
     let plugin_root = crate::plugin_root_path();
-    let plugin_parent = plugin_root
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
+    let plugin_parent = watch_parent(&plugin_root);
     let (mut watcher, watcher_errors) = FilesystemReconcileWatcher::start(
         &[store_root.as_path(), plugin_parent.as_path()],
         Some(plugin_root.clone()),
@@ -800,6 +798,13 @@ fn start_generation_reconciler(
         stop: Some(stop),
         task,
     }
+}
+
+fn watch_parent(path: &Path) -> PathBuf {
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf()
 }
 
 fn online_event_from_controller_event(
@@ -1384,6 +1389,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
 
 fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
     let mut defaults = agent_defaults();
+    defaults.extend(default_interactive_plugins());
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
         HostDefaultPlugin::new("lenso.agent.discord", "discord"),
@@ -1392,13 +1398,6 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
             "http-fetch",
             serde_json::json!({
                 "allowed_origins": [], "timeout_ms": 30000
-            }),
-        ),
-        default_plugin(
-            "lenso.agent.model.fixture",
-            "model",
-            serde_json::json!({
-                "model": "fixture/readme-summary-v1"
             }),
         ),
         HostDefaultPlugin::new("lenso.agent.prompt", "prompt"),
@@ -1472,6 +1471,42 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
     defaults
 }
 
+fn default_interactive_plugins() -> [HostDefaultPlugin; 3] {
+    [
+        default_plugin(
+            "lenso.agent.auth.openai-codex",
+            "auth",
+            serde_json::json!({
+                "issuer": "https://auth.openai.com",
+                "profile": "default",
+                "refresh_margin_seconds": 60
+            }),
+        ),
+        default_plugin(
+            "lenso.agent.model.openai-codex-direct",
+            "model",
+            serde_json::json!({
+                "base_url": "https://chatgpt.com/backend-api",
+                "max_event_bytes": 1_048_576,
+                "model": DEFAULT_MODEL,
+                "reasoning_effort": "medium"
+            }),
+        ),
+        default_plugin(
+            "lenso.agent.prompt.static",
+            "default-instructions",
+            serde_json::json!({
+                "contributions": [{
+                    "id": "harness.default",
+                    "version": "1.0.0",
+                    "kind": "instruction",
+                    "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App."
+                }]
+            }),
+        ),
+    ]
+}
+
 fn agent_defaults() -> Vec<HostDefaultPlugin> {
     ["agent", "subagent-agent"]
         .into_iter()
@@ -1480,7 +1515,7 @@ fn agent_defaults() -> Vec<HostDefaultPlugin> {
                 "lenso.agent.loop",
                 instance_key,
                 serde_json::json!({
-                    "model": "fixture/readme-summary-v1",
+                    "model": DEFAULT_MODEL,
                     "max_steps": 8,
                     "max_tool_calls": 4,
                     "max_parallel_tool_calls": 4,
@@ -1730,6 +1765,25 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(validate_tui_panels(&panels).is_err());
+    }
+
+    #[test]
+    fn relative_plugin_root_watches_the_current_directory() {
+        assert_eq!(watch_parent(Path::new("plugins")), Path::new("."));
+    }
+
+    #[test]
+    fn empty_plugin_root_selects_direct_codex_with_auth() {
+        let plan = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        let instances = plan
+            .plugin_instances()
+            .iter()
+            .map(lenso_app_plan::PluginInstancePlan::instance_key)
+            .collect::<BTreeSet<_>>();
+
+        assert!(instances.contains("lenso.agent.auth.openai-codex/auth"));
+        assert!(instances.contains("lenso.agent.model.openai-codex-direct/model"));
+        assert!(!instances.contains("lenso.agent.model.fixture/model"));
     }
 
     #[test]

@@ -5,6 +5,13 @@ behavior through Plugins.
 
 ## Run it
 
+Authenticate once before the first Turn. The default App uses the direct Codex
+Model with the `default` ChatGPT profile:
+
+```sh
+cargo run -p lenso-agent-cli --bin lenso-agent-cli -- auth login
+```
+
 Start the interactive TUI from the repository root:
 
 ```sh
@@ -71,6 +78,7 @@ Add the package to the Harness App:
 
 ```sh
 lenso plugins add path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
+lenso plugins configure uppercase default
 ```
 
 `pack` checks the exact bytes it writes and the Harness checks received bytes
