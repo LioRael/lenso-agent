@@ -1696,12 +1696,6 @@ fn model_and_auth_configurations() -> Vec<HostPluginConfiguration> {
                 "model": "gpt-4o-mini"
             }),
         ),
-        host_plugin_configuration(
-            "lenso.secrets.env",
-            serde_json::json!({
-                "references": {"model/openai-api-key": "OPENAI_API_KEY"}
-            }),
-        ),
     ]
 }
 
@@ -2224,6 +2218,68 @@ mod tests {
             plugin.configuration(),
             r#"{"max_edit_bytes":131072,"max_file_bytes":1048576,"root":"."}"#
         );
+    }
+
+    #[test]
+    fn linked_secret_providers_use_only_the_selected_instance_configuration() {
+        let providers = [
+            (
+                "lenso.secrets.env",
+                serde_json::json!({
+                    "references": {"model/openai-api-key": "OPENAI_API_KEY"}
+                }),
+            ),
+            (
+                "lenso.secrets.keychain",
+                serde_json::json!({
+                    "service": "com.lenso.agent.code",
+                    "references": {"model/openai-api-key": "openai-api-key"}
+                }),
+            ),
+            (
+                "lenso.secrets.encrypted-file",
+                serde_json::json!({
+                    "path": ".lenso/secrets.age",
+                    "key_environment_variable": "LENSO_SECRETS_FILE_PASSPHRASE",
+                    "references": {"model/openai-api-key": "openai"},
+                    "max_file_bytes": 1_048_576,
+                    "max_plaintext_bytes": 1_048_576,
+                    "max_records": 100
+                }),
+            ),
+            (
+                "lenso.secrets.command",
+                serde_json::json!({
+                    "program": "/opt/homebrew/bin/op",
+                    "arguments": ["read", "--no-newline", "{source}"],
+                    "environment_allowlist": ["OP_SERVICE_ACCOUNT_TOKEN", "HOME"],
+                    "references": {"model/openai-api-key": "op://agent/openai/password"},
+                    "timeout_ms": 30_000,
+                    "max_output_bytes": 65_536
+                }),
+            ),
+        ];
+
+        for (plugin_id, configuration) in providers {
+            let root = PluginRootSnapshot::new(
+                [],
+                [
+                    lenso_app_plan::authoring::PluginRootInstance::new(plugin_id, "code")
+                        .with_configuration(configuration.clone()),
+                ],
+                [],
+            );
+            let plan = resolve_host_plan(&root).unwrap();
+            let selected = plan
+                .plugin_instances()
+                .iter()
+                .find(|plugin| plugin.instance_key() == format!("{plugin_id}/code"))
+                .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(selected.configuration()).unwrap(),
+                configuration
+            );
+        }
     }
 
     #[test]
