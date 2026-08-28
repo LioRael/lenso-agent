@@ -1,8 +1,11 @@
 # Lenso Agent Harness context
 
-The Harness is a Host with compiled defaults and a visible `plugins/` Plugin
-Root. A user adds or configures behavior as a Plugin. There is no separate
-Module authoring model and no central App Definition.
+The Harness is a Host with compiled defaults and a visible global Agent Home.
+Its Plugin Root is `~/.lenso/agent/plugins/` by default, or
+`$LENSO_AGENT_HOME/plugins/` when explicitly overridden. A user adds or
+configures behavior as a Plugin. The process current directory is the
+Workspace, not App configuration or runtime state. There is no separate Module
+authoring model and no central App Definition.
 
 ## Public workflow
 
@@ -23,7 +26,7 @@ lenso run
 `pack` verifies the bytes it writes and the Host verifies received packages;
 there is no separate `plugin verify` command.
 
-App differences are ordinary files:
+App differences are ordinary files below the Agent Home:
 
 ```text
 plugins/<plugin-id>/plugin.lenso-plugin/
@@ -70,6 +73,7 @@ activation; the resolved Plan selects exact Plugin Instances.
 
 ## Authority rules
 
+- `LENSO_AGENT_HOME` must be an absolute UTF-8 path and is resolved before boot.
 - Plugin configuration is non-secret and Schema validated before boot.
 - Secrets remain in environment or provider-owned credential storage.
 - Tool providers retain final authorization for filesystem, process, and

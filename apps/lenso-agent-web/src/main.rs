@@ -53,7 +53,7 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     plan: Option<PathBuf>,
 
-    /// Select `profiles/<name>.toml` for this Web process.
+    /// Select `<agent-home>/profiles/<name>.toml` for this Web process.
     #[arg(long, value_name = "NAME", conflicts_with = "plan")]
     profile: Option<String>,
 

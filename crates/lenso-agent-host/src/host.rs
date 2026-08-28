@@ -1,6 +1,6 @@
 use std::{fmt::Debug, path::PathBuf};
 
-use crate::{generation::AgentApp, plan_bytes_for_profile};
+use crate::{AgentDirectories, generation::AgentApp, plan_bytes_for_profile_in};
 
 /// Selects the product configuration for one Agent Host session.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -140,17 +140,27 @@ pub struct AgentHost;
 
 impl AgentHost {
     pub const fn builder() -> AgentHostBuilder<()> {
-        AgentHostBuilder { surface: () }
+        AgentHostBuilder {
+            directories: None,
+            surface: (),
+        }
     }
 }
 
 /// Compile-time composition of linked Plugins and one process-owned surface.
 #[derive(Debug)]
 pub struct AgentHostBuilder<S> {
+    directories: Option<AgentDirectories>,
     surface: S,
 }
 
 impl<S> AgentHostBuilder<S> {
+    /// Uses one explicit Agent Home instead of `LENSO_AGENT_HOME` or `~/.lenso/agent`.
+    pub fn agent_home(mut self, home: impl Into<PathBuf>) -> Result<Self, String> {
+        self.directories = Some(AgentDirectories::from_home(home)?);
+        Ok(self)
+    }
+
     /// Links one Plugin set into this Host Build.
     #[must_use]
     pub fn plugins(self, link: fn()) -> Self {
@@ -160,7 +170,10 @@ impl<S> AgentHostBuilder<S> {
 
     /// Selects the process-owned surface without turning it into a Plugin.
     pub fn surface<T: AgentSurface>(self, surface: T) -> AgentHostBuilder<T> {
-        AgentHostBuilder { surface }
+        AgentHostBuilder {
+            directories: self.directories,
+            surface,
+        }
     }
 }
 
@@ -172,6 +185,9 @@ impl<S: AgentSurface> AgentHostBuilder<S> {
             return Err("Agent surface must allow at least one Host instance".to_owned());
         }
         Ok(ConfiguredAgentHost {
+            directories: self
+                .directories
+                .map_or_else(AgentDirectories::resolve, Ok)?,
             surface: self.surface,
         })
     }
@@ -180,6 +196,7 @@ impl<S: AgentSurface> AgentHostBuilder<S> {
 /// A validated Agent Host Build ready to run one Profile.
 #[derive(Debug)]
 pub struct ConfiguredAgentHost<S> {
+    directories: AgentDirectories,
     surface: S,
 }
 
@@ -191,11 +208,12 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
             Profile::Named(name) => (None, Some(name)),
             Profile::ResolvedPlan(path) => (Some(path), None),
         };
-        let bytes = plan_bytes_for_profile(plan.as_deref(), profile_name.as_deref())
-            .map_err(|error| format!("App resolution failed: {error}"))?;
+        let bytes =
+            plan_bytes_for_profile_in(&self.directories, plan.as_deref(), profile_name.as_deref())
+                .map_err(|error| format!("App resolution failed: {error}"))?;
         AgentApp::start_with_store_control_directory_profile_and_host_build(
             &bytes,
-            std::path::Path::new(".lenso/runtime"),
+            &self.directories.runtime(),
             self.surface.control_directory(),
             self.surface.max_instances(),
             profile_name,

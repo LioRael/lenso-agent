@@ -4,6 +4,7 @@ use std::{
 };
 
 mod authority;
+mod directories;
 pub mod generation;
 mod generation_authority;
 mod host;
@@ -13,6 +14,7 @@ pub mod provenance;
 #[cfg(test)]
 mod test_support;
 
+pub use directories::{AGENT_HOME_ENV, AgentDirectories};
 pub use host::{
     AgentHost, AgentHostBuilder, AgentSurface, ChannelSurface, ConfiguredAgentHost, DiscordSurface,
     HeadlessSurface, Profile, TelegramSurface, TuiSurface, WebSurface,
@@ -28,7 +30,16 @@ pub fn plan_bytes_for_profile(
     explicit_plan: Option<&Path>,
     profile_name: Option<&str>,
 ) -> Result<Vec<u8>, String> {
-    ensure_host_catalog()?;
+    let directories = AgentDirectories::resolve()?;
+    plan_bytes_for_profile_in(&directories, explicit_plan, profile_name)
+}
+
+pub(crate) fn plan_bytes_for_profile_in(
+    directories: &AgentDirectories,
+    explicit_plan: Option<&Path>,
+    profile_name: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    ensure_host_catalog(directories)?;
     let explicit_plan = explicit_plan
         .map(PathBuf::from)
         .or_else(|| env::var_os("LENSO_RESOLVED_PLAN").map(PathBuf::from));
@@ -36,20 +47,20 @@ pub fn plan_bytes_for_profile(
         return Err("--profile conflicts with an exact resolved Plan".to_owned());
     }
     explicit_plan.map_or_else(
-        || resolve_base_plan(profile_name),
+        || resolve_base_plan(directories, profile_name),
         |plan| {
             fs::read(&plan).map_err(|error| format!("failed to read {}: {error}", plan.display()))
         },
     )
 }
 
-fn ensure_host_catalog() -> Result<(), String> {
-    let path = Path::new(".lenso/host-catalog.json");
-    let catalog = generation::linked_host_catalog()?;
+fn ensure_host_catalog(directories: &AgentDirectories) -> Result<(), String> {
+    let path = directories.host_catalog();
+    let catalog = generation::linked_host_catalog_in(directories)?;
     let mut bytes = serde_json::to_vec_pretty(&catalog)
         .map_err(|error| format!("failed to encode the Host Catalog: {error}"))?;
     bytes.push(b'\n');
-    if fs::read(path).is_ok_and(|current| current == bytes) {
+    if fs::read(&path).is_ok_and(|current| current == bytes) {
         return Ok(());
     }
     let parent = path.parent().expect("Host Catalog has a parent");
@@ -58,18 +69,21 @@ fn ensure_host_catalog() -> Result<(), String> {
     let temporary = parent.join("host-catalog.json.tmp");
     fs::write(&temporary, &bytes)
         .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
-    fs::rename(&temporary, path)
+    fs::rename(&temporary, &path)
         .map_err(|error| format!("failed to publish {}: {error}", path.display()))
 }
 
-fn resolve_base_plan(profile_name: Option<&str>) -> Result<Vec<u8>, String> {
-    let plugin_root = plugin_root_path();
+fn resolve_base_plan(
+    directories: &AgentDirectories,
+    profile_name: Option<&str>,
+) -> Result<Vec<u8>, String> {
+    let plugin_root = directories.plugins();
     let snapshot = plugin_root::snapshot(&plugin_root)?;
     let plan = if let Some(profile_name) = profile_name {
-        let profile = profile::select(profile_name, &snapshot)?;
-        generation::resolve_host_plan_for_agent(profile.root(), profile.agent())?
+        let profile = profile::select(profile_name, &snapshot, &directories.profiles())?;
+        generation::resolve_host_plan_for_agent_in(directories, profile.root(), profile.agent())?
     } else {
-        generation::resolve_host_plan(&snapshot)?
+        generation::resolve_host_plan_in(directories, &snapshot)?
     };
     serde_json::to_vec(&plan).map_err(|error| format!("failed to encode the derived App: {error}"))
 }
@@ -78,11 +92,21 @@ fn resolve_base_plan(profile_name: Option<&str>) -> Result<Vec<u8>, String> {
 ///
 /// The returned bytes are execution evidence, never authoring input.
 pub fn derived_plan_bytes(plugin_root: &Path) -> Result<Vec<u8>, String> {
-    let snapshot = plugin_root::snapshot(plugin_root)?;
-    let plan = generation::resolve_host_plan(&snapshot)?;
-    serde_json::to_vec(&plan).map_err(|error| format!("failed to encode the derived App: {error}"))
+    let directories = AgentDirectories::resolve()?;
+    derived_plan_bytes_in(&directories, plugin_root)
 }
 
-pub(crate) fn plugin_root_path() -> PathBuf {
-    env::var_os("LENSO_PLUGIN_ROOT").map_or_else(|| PathBuf::from("plugins"), PathBuf::from)
+/// Derives a Plan against one explicit Agent Home.
+pub fn derived_plan_bytes_for_home(home: &Path, plugin_root: &Path) -> Result<Vec<u8>, String> {
+    let directories = AgentDirectories::from_home(home)?;
+    derived_plan_bytes_in(&directories, plugin_root)
+}
+
+fn derived_plan_bytes_in(
+    directories: &AgentDirectories,
+    plugin_root: &Path,
+) -> Result<Vec<u8>, String> {
+    let snapshot = plugin_root::snapshot(plugin_root)?;
+    let plan = generation::resolve_host_plan_in(directories, &snapshot)?;
+    serde_json::to_vec(&plan).map_err(|error| format!("failed to encode the derived App: {error}"))
 }

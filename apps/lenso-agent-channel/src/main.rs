@@ -3,7 +3,9 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::Parser;
 use lenso_agent_channel::{channel_host::ChannelHostConfig, discord, telegram};
 use lenso_agent_discord_plugin as _;
-use lenso_agent_host::{AgentHost, ChannelSurface, Profile, generation::AgentApp};
+use lenso_agent_host::{
+    AgentDirectories, AgentHost, ChannelSurface, Profile, generation::AgentApp,
+};
 use lenso_agent_telegram_plugin as _;
 
 /// Run the composed Lenso Agent through every configured messaging Channel.
@@ -14,9 +16,9 @@ use lenso_agent_telegram_plugin as _;
     about = "Run Telegram and Discord through one Lenso Agent Host"
 )]
 struct Args {
-    /// Human-authored Channel configuration. Tokens remain in environment variables.
-    #[arg(long, default_value = "lenso.channels.toml", value_name = "PATH")]
-    config: PathBuf,
+    /// Human-authored Channel configuration. Defaults to `<agent-home>/channels.toml`.
+    #[arg(long, value_name = "PATH")]
+    config: Option<PathBuf>,
 
     /// Exact immutable Resolved App Plan. This is an advanced Host override.
     #[arg(long, value_name = "PATH", hide = true)]
@@ -36,7 +38,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    let options = ChannelHostConfig::load(&args.config)?.resolve()?;
+    let config = args
+        .config
+        .unwrap_or(AgentDirectories::resolve()?.channels());
+    let options = ChannelHostConfig::load(&config)?.resolve()?;
     let profile = args.plan.map_or(Profile::Default, Profile::resolved_plan);
     let host = AgentHost::builder()
         .plugins(lenso_agent_default_plugins::link)
@@ -117,7 +122,7 @@ mod tests {
         let command = Args::command();
         command.clone().debug_assert();
         let args = Args::try_parse_from(["lenso-agent-channel"]).unwrap();
-        assert_eq!(args.config, PathBuf::from("lenso.channels.toml"));
+        assert!(args.config.is_none());
         assert!(args.plan.is_none());
     }
 }

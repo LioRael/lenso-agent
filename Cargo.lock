@@ -2436,6 +2436,7 @@ dependencies = [
 name = "lenso-agent-host"
 version = "0.1.0"
 dependencies = [
+ "directories",
  "fs2",
  "jsonschema",
  "lenso",

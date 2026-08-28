@@ -72,7 +72,7 @@
   The Host surface reads the Bot token from `TELEGRAM_BOT_TOKEN` or an
   explicitly named environment variable, requires an explicit chat allowlist,
   and never writes the token into Plan, state, Session, or diagnostics.
-- **Durable facts:** `.lenso/telegram/state.json` contains the next Telegram
+- **Durable facts:** `<agent-home>/telegram/state.json` contains the next Telegram
   update ID and a bounded `bot + chat + topic -> Session ID` mapping. The
   Telegram surface owns the mapping; the Session Plugin creates and owns each
   Session and its events. Missing or corrupt state never falls back silently to
@@ -98,7 +98,7 @@
 - **Owner:** `lenso-agent-channel` is a Host entrypoint over the independently
   removable Telegram and Discord consumer Plugins. It does not introduce a
   generic Channel Capability, Plugin type, Kernel registry, or mutable graph.
-- **Authoring input:** `lenso.channels.toml` selects external transports,
+- **Authoring input:** `<agent-home>/channels.toml` selects external transports,
   allowlists, Tool scopes, state paths, and token environment-variable names.
   It is not App composition authority. The Host Catalog and current Plugin Root
   remain the reviewed App source; the resolved Plan is generated Host input.
@@ -127,7 +127,7 @@
   Host reads `DISCORD_BOT_TOKEN` or an explicitly named environment variable,
   requires a channel allowlist, and keeps the token out of Plan, state,
   Session, and diagnostics.
-- **Durable facts:** `.lenso/discord/state.json` contains Gateway resume data
+- **Durable facts:** `<agent-home>/discord/state.json` contains Gateway resume data
   and a bounded `bot + channel -> Session ID` mapping. The Discord surface owns
   that mapping; the Session Plugin creates and owns Session IDs and events.
 - **Lifecycle:** after App readiness the Host connects to Gateway v10,

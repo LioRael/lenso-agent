@@ -11,7 +11,9 @@ use lenso_agent_auth_openai_codex_plugin::{
     complete_device_login, direct_auth_status, direct_logout,
 };
 use lenso_agent_cli_plugin as _;
-use lenso_agent_host::{AgentHost, HeadlessSurface, Profile, generation, provenance};
+use lenso_agent_host::{
+    AgentDirectories, AgentHost, HeadlessSurface, Profile, generation, provenance,
+};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_capability_agent_context_source::{
@@ -264,8 +266,7 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
     }
     if raw.first().is_some_and(|value| value == "plugins") {
         return Err(
-            "Plugin management moved to `lenso plugins`; the App is derived from `plugins/`"
-                .to_owned(),
+            "Plugin management moved to `lenso plugins`; run it from the Agent Home".to_owned(),
         );
     }
     if raw.first().is_some_and(|value| value == "generations") {
@@ -442,11 +443,11 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host defaults boot with an empty `plugins/` directory. Manage App differences with `lenso plugins`; select `profiles/<name>.toml` with `--profile`.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
-    let mut root = PathBuf::from(".");
+    let mut root = AgentDirectories::resolve()?.home().to_path_buf();
     let mut positional = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
@@ -482,7 +483,7 @@ fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
 fn run_approval(command: ApprovalCommand) -> Result<(), String> {
     let (root, action) = match command {
         ApprovalCommand::List { root } => {
-            let records = list_approvals(&root.join(".lenso/approvals"))?;
+            let records = list_approvals(&root.join("approvals"))?;
             println!(
                 "{}",
                 serde_json::to_string_pretty(&records)
@@ -497,7 +498,7 @@ fn run_approval(command: ApprovalCommand) -> Result<(), String> {
             (root, (approval_id, ApprovalDecision::Reject))
         }
     };
-    let record = decide_approval(&root.join(".lenso/approvals"), &action.0, action.1)?;
+    let record = decide_approval(&root.join("approvals"), &action.0, action.1)?;
     println!("{}: {:?}", record.approval_id, record.status);
     Ok(())
 }
@@ -515,9 +516,9 @@ fn parse_auth(arguments: &[String]) -> Result<AuthCommand, String> {
 }
 
 async fn run_auth(command: &AuthCommand) -> Result<(), String> {
+    let options = direct_auth_options()?;
     match command {
         AuthCommand::Login { device_auth: true } => {
-            let options = DirectAuthOptions::default();
             let pending = begin_device_login(options.clone()).await?;
             eprintln!("Open this URL in a browser: {}", pending.verification_url);
             eprintln!("Enter this one-time code: {}", pending.user_code);
@@ -529,7 +530,6 @@ async fn run_auth(command: &AuthCommand) -> Result<(), String> {
             Ok(())
         }
         AuthCommand::Login { device_auth: false } => {
-            let options = DirectAuthOptions::default();
             let pending = begin_browser_login(options.clone()).await?;
             eprintln!("Open this URL in a browser: {}", pending.authorization_url);
             if let Err(error) = open_browser(&pending.authorization_url) {
@@ -543,7 +543,7 @@ async fn run_auth(command: &AuthCommand) -> Result<(), String> {
             Ok(())
         }
         AuthCommand::Status => {
-            let status = direct_auth_status(DirectAuthOptions::default())?;
+            let status = direct_auth_status(options)?;
             if status.authenticated {
                 println!(
                     "Direct ChatGPT authentication is active; token expires at {}.",
@@ -555,11 +555,17 @@ async fn run_auth(command: &AuthCommand) -> Result<(), String> {
             }
         }
         AuthCommand::Logout => {
-            direct_logout(DirectAuthOptions::default())?;
+            direct_logout(options)?;
             println!("Direct ChatGPT credentials were removed.");
             Ok(())
         }
     }
+}
+
+fn direct_auth_options() -> Result<DirectAuthOptions, String> {
+    let mut options = DirectAuthOptions::default();
+    options.credential_file = Some(AgentDirectories::resolve()?.auth());
+    Ok(options)
 }
 
 fn open_browser(url: &str) -> Result<(), String> {

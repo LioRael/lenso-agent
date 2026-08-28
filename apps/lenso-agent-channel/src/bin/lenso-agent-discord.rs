@@ -3,7 +3,7 @@ use std::{path::PathBuf, process::ExitCode};
 use clap::{ArgAction, Parser};
 use lenso_agent_channel::discord::{self, ChannelAllowlist, DiscordOptions};
 use lenso_agent_discord_plugin as _;
-use lenso_agent_host::{AgentHost, DiscordSurface, Profile};
+use lenso_agent_host::{AgentDirectories, AgentHost, DiscordSurface, Profile};
 
 /// Run the composed Lenso Agent as a Discord Bot.
 #[derive(Debug, Parser)]
@@ -42,9 +42,9 @@ struct Args {
     #[arg(long)]
     message_content_intent: bool,
 
-    /// Durable Discord Gateway resume and conversation-to-Session state.
-    #[arg(long, default_value = ".lenso/discord/state.json", value_name = "PATH")]
-    state: PathBuf,
+    /// Durable Discord Gateway state. Defaults below the Agent Home.
+    #[arg(long, value_name = "PATH")]
+    state: Option<PathBuf>,
 
     /// Stop after observing this many Message Create events. Useful for supervised smoke runs.
     #[arg(long, value_name = "COUNT")]
@@ -80,7 +80,10 @@ async fn run(args: Args) -> Result<(), String> {
         .surface(DiscordSurface::messaging())
         .build()?;
     let mut app = host.run(profile).await?;
-    let mut options = DiscordOptions::new(token, allowed_channels, args.state);
+    let state = args
+        .state
+        .unwrap_or(AgentDirectories::resolve()?.discord_state());
+    let mut options = DiscordOptions::new(token, allowed_channels, state);
     options.allowed_tools = args.allowed_tools;
     options.respond_all_guilds = args.respond_all_guilds;
     options.message_content_intent = args.message_content_intent;

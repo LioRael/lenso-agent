@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+directories.workspace = true
 fs2.workspace = true
 jsonschema.workspace = true
 lenso = { workspace = true, features = ["host"] }

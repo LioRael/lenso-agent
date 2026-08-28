@@ -7,14 +7,23 @@ use lenso_plugin_control_plane::sha256_digest;
 #[path = "../../../tests/support/mod.rs"]
 mod support;
 
-fn plan_path() -> std::path::PathBuf {
-    support::plan("base")
+fn plan_path(root: &Path) -> std::path::PathBuf {
+    support::plan_for_home("base", root)
+}
+
+fn command(root: &Path) -> Command {
+    command_with_home(root, root)
+}
+
+fn command_with_home(workspace: &Path, home: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
+    command.current_dir(workspace).env("LENSO_AGENT_HOME", home);
+    command
 }
 
 fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
+    let mut command = command(root);
     command
-        .current_dir(root)
         .args(["--plan", plan.to_str().unwrap()])
         .args(["--prompt", prompt]);
     if let Some(session) = session {
@@ -25,8 +34,8 @@ fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::pr
 
 fn run_derived(root: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
     configure_fixture_app(root);
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
-    command.current_dir(root).arg(prompt);
+    let mut command = command(root);
+    command.arg(prompt);
     if let Some(session) = session {
         command.args(["--session", session]);
     }
@@ -38,8 +47,8 @@ fn run_configured_derived(
     prompt: &str,
     session: Option<&str>,
 ) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
-    command.current_dir(root).arg(prompt);
+    let mut command = command(root);
+    command.arg(prompt);
     if let Some(session) = session {
         command.args(["--session", session]);
     }
@@ -71,13 +80,13 @@ fn stored_session(root: &Path) -> serde_json::Value {
 }
 
 fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
-    let database = root.join(".lenso/sessions.sqlite3");
+    let database = root.join("sessions.sqlite3");
     let sessions = if database.is_file() {
         lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(database)
             .inspect_all()
             .unwrap()
     } else {
-        lenso_agent_session_file_plugin::FileSessionInspector::new(root.join(".lenso/sessions"))
+        lenso_agent_session_file_plugin::FileSessionInspector::new(root.join("sessions"))
             .inspect_all()
             .unwrap()
     };
@@ -88,7 +97,7 @@ fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
 }
 
 fn stored_session_path(root: &Path) -> std::path::PathBuf {
-    fs::read_dir(root.join(".lenso/sessions"))
+    fs::read_dir(root.join("sessions"))
         .unwrap()
         .next()
         .unwrap()
@@ -104,7 +113,7 @@ fn configure_file_sessions(root: &Path) {
     configure_plugin_with(
         root,
         "lenso.agent.session.file",
-        "directory = \".lenso/sessions\"\n",
+        "directory = \"sessions\"\n",
     );
 }
 
@@ -126,7 +135,7 @@ fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
 }
 
 fn plan_with_limits(root: &Path, max_steps: u64, max_tool_calls: u64) -> std::path::PathBuf {
-    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
+    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path(root)).unwrap())
         .expect("decode canonical Plan");
     let agent = plan["plugin_instances"]
         .as_array_mut()
@@ -146,7 +155,7 @@ fn plan_with_limits(root: &Path, max_steps: u64, max_tool_calls: u64) -> std::pa
 }
 
 fn plan_without_prompt_plugins(root: &Path) -> std::path::PathBuf {
-    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
+    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path(root)).unwrap())
         .expect("decode canonical Plan");
     plan["plugin_instances"]
         .as_array_mut()
@@ -162,7 +171,7 @@ fn plan_without_prompt_plugins(root: &Path) -> std::path::PathBuf {
 }
 
 fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::PathBuf {
-    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
+    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path(root)).unwrap())
         .expect("decode canonical Plan");
     let provider = plan["plugin_instances"]
         .as_array_mut()
@@ -195,7 +204,7 @@ fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::Path
 }
 
 fn plan_with_on_demand_skills(root: &Path, skill_root: &Path) -> std::path::PathBuf {
-    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path()).unwrap())
+    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path(root)).unwrap())
         .expect("decode canonical Plan");
     let plugins = plan["plugin_instances"].as_array_mut().unwrap();
     let provider = plugins
@@ -273,7 +282,7 @@ fn write_on_demand_skills(root: &Path) {
 fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Durable Fixture\n").unwrap();
-    let plan = plan_path();
+    let plan = plan_path(temporary.path());
     let first = run(temporary.path(), &plan, "Summarize the README.", None);
     assert!(
         first.status.success(),
@@ -314,6 +323,34 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
             .count(),
         1
     );
+}
+
+#[test]
+fn global_agent_home_keeps_configuration_and_state_outside_the_workspace() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    configure_fixture_app(home.path());
+    fs::write(workspace.path().join("README.md"), "# Separate Workspace\n").unwrap();
+
+    let output = command_with_home(workspace.path(), home.path())
+        .arg("Summarize the README.")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "README summary: # Separate Workspace\n"
+    );
+    assert!(home.path().join("host-catalog.json").is_file());
+    assert!(home.path().join("runtime").is_dir());
+    assert!(home.path().join("sessions.sqlite3").is_file());
+    assert!(!workspace.path().join("plugins").exists());
+    assert!(!workspace.path().join(".lenso").exists());
 }
 
 #[test]
@@ -551,9 +588,8 @@ fn resumed_session_closes_a_host_interrupted_turn_before_new_work() {
 fn run_scope_cannot_add_a_tool_outside_the_plan_catalog() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Scope Fixture\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .args(["--plan", plan_path().to_str().unwrap()])
+    let output = command(temporary.path())
+        .args(["--plan", plan_path(temporary.path()).to_str().unwrap()])
         .args(["--prompt", "Answer directly: hello"])
         .args(["--allow-tool", "ambient.superpower"])
         .output()
@@ -669,18 +705,13 @@ max_sampling_tokens = 64
     }));
     assert!(events.iter().any(|event| event["kind"] == "turn_completed"));
 
-    let catalog_output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .arg("contexts")
-        .output()
-        .unwrap();
+    let catalog_output = command(temporary.path()).arg("contexts").output().unwrap();
     assert!(catalog_output.status.success());
     let catalog: serde_json::Value = serde_json::from_slice(&catalog_output.stdout).unwrap();
     assert_eq!(catalog["prompts"][0]["name"], "review");
     assert_eq!(catalog["resources"][0]["uri"], "fixture://guide");
 
-    let context_output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let context_output = command(temporary.path())
         .arg("Use the selected context.")
         .args(["--context-prompt", "fixture/review"])
         .args(["--context-resource", "fixture=fixture://guide"])
@@ -722,8 +753,7 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
     let digests = turn_generation_digests(&session);
     assert_eq!(digests.len(), 2);
     assert_ne!(digests[0], digests[1]);
-    let provenance = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let provenance = command(temporary.path())
         .args(["sessions", "provenance", "--session", session_id])
         .output()
         .unwrap();
@@ -731,8 +761,7 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
     let provenance_stdout = String::from_utf8(provenance.stdout).unwrap();
     for digest in &digests {
         assert!(provenance_stdout.contains(&format!("generation={digest} spec=available")));
-        let inspect = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-            .current_dir(temporary.path())
+        let inspect = command(temporary.path())
             .args(["generations", "inspect", "--digest", digest])
             .output()
             .unwrap();
@@ -746,7 +775,7 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
         let hash = digest.strip_prefix("sha256:").unwrap();
         let record = temporary
             .path()
-            .join(".lenso/runtime/generations")
+            .join("runtime/generations")
             .join(format!("{hash}.json"));
         let bytes = fs::read(record).unwrap();
         assert_eq!(sha256_digest(&bytes), digest);
@@ -777,8 +806,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     fs::remove_dir_all(temporary.path().join("plugins/lenso.agent.text-tools")).unwrap();
     let empty_sessions = temporary.path().join("empty-sessions");
     fs::create_dir(&empty_sessions).unwrap();
-    let before_reconcile = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let before_reconcile = command(temporary.path())
         .args([
             "generations",
             "gc-preview",
@@ -797,8 +825,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
         None,
     );
     assert!(reconcile.status.success());
-    let preview = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let preview = command(temporary.path())
         .args([
             "generations",
             "gc-preview",
@@ -817,12 +844,11 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
         stdout.contains("summary: protected=1 candidates=1"),
         "{stdout}"
     );
-    let records_before = fs::read_dir(temporary.path().join(".lenso/runtime/generations"))
+    let records_before = fs::read_dir(temporary.path().join("runtime/generations"))
         .unwrap()
         .count();
 
-    let preview_with_sessions = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let preview_with_sessions = command(temporary.path())
         .args(["generations", "gc-preview"])
         .output()
         .unwrap();
@@ -832,14 +858,13 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
             .contains("summary: protected=2 candidates=0")
     );
     assert_eq!(
-        fs::read_dir(temporary.path().join(".lenso/runtime/generations"))
+        fs::read_dir(temporary.path().join("runtime/generations"))
             .unwrap()
             .count(),
         records_before
     );
 
-    let apply = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let apply = command(temporary.path())
         .args([
             "generations",
             "gc",
@@ -857,14 +882,13 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     let apply_stdout = String::from_utf8(apply.stdout).unwrap();
     assert!(apply_stdout.contains("summary: removed-generations=1"));
     assert_eq!(
-        fs::read_dir(temporary.path().join(".lenso/runtime/generations"))
+        fs::read_dir(temporary.path().join("runtime/generations"))
             .unwrap()
             .count(),
         records_before - 1
     );
 
-    let second_apply = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let second_apply = command(temporary.path())
         .args([
             "generations",
             "gc",
@@ -891,21 +915,19 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     let digest = turn_generation_digests(&before).pop().unwrap();
     let record = temporary
         .path()
-        .join(".lenso/runtime/generations")
+        .join("runtime/generations")
         .join(format!("{}.json", digest.strip_prefix("sha256:").unwrap()));
     fs::write(record, "{}").unwrap();
 
     let session_id = before["session_id"].as_str().unwrap_or_default();
-    let inspect = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let inspect = command(temporary.path())
         .args(["sessions", "provenance", "--session", session_id])
         .output()
         .unwrap();
     assert!(inspect.status.success());
     assert!(String::from_utf8_lossy(&inspect.stdout).contains("spec=invalid"));
 
-    let gc_preview = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let gc_preview = command(temporary.path())
         .args(["generations", "gc-preview"])
         .output()
         .unwrap();
@@ -928,7 +950,7 @@ fn direct_answer_finishes_without_a_tool_call() {
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let output = run(
         temporary.path(),
-        &plan_path(),
+        &plan_path(temporary.path()),
         "Answer directly: hello",
         None,
     );
@@ -1010,12 +1032,7 @@ fn completed_turns_are_recalled_across_sessions_with_durable_provenance() {
         "{}",
         String::from_utf8_lossy(&second.stderr)
     );
-    assert!(
-        temporary
-            .path()
-            .join(".lenso/memory/memory.sqlite3")
-            .is_file()
-    );
+    assert!(temporary.path().join("memory.sqlite3").is_file());
 
     let sessions = stored_sessions(temporary.path());
     assert_eq!(sessions.len(), 2);
@@ -1075,7 +1092,7 @@ fn lifecycle_audit_observes_start_resume_and_terminal_turns() {
         String::from_utf8_lossy(&second.stderr)
     );
 
-    let audit = fs::read_to_string(temporary.path().join(".lenso/lifecycle/events.jsonl")).unwrap();
+    let audit = fs::read_to_string(temporary.path().join("lifecycle/events.jsonl")).unwrap();
     let events = audit
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
@@ -1099,11 +1116,7 @@ fn sqlite_session_adapter_runs_a_real_turn_and_backend_neutral_provenance() {
         .path()
         .join("plugins/lenso.agent.session.sqlite/local.toml");
     fs::create_dir_all(sqlite_configuration.parent().unwrap()).unwrap();
-    fs::write(
-        sqlite_configuration,
-        "database = \".lenso/sessions.sqlite3\"\n",
-    )
-    .unwrap();
+    fs::write(sqlite_configuration, "database = \"sessions.sqlite3\"\n").unwrap();
     fs::create_dir_all(temporary.path().join("profiles")).unwrap();
     fs::write(
         temporary.path().join("profiles/sqlite.toml"),
@@ -1115,8 +1128,7 @@ instances = [
 "#,
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let output = command(temporary.path())
         .args(["--profile", "sqlite", "--prompt", "Answer directly: sqlite"])
         .output()
         .unwrap();
@@ -1125,18 +1137,17 @@ instances = [
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(temporary.path().join(".lenso/sessions.sqlite3").is_file());
+    assert!(temporary.path().join("sessions.sqlite3").is_file());
     let stderr = String::from_utf8(output.stderr).unwrap();
     let session_id = stderr.trim().strip_prefix("session: ").unwrap();
-    let provenance = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let provenance = command(temporary.path())
         .args([
             "sessions",
             "provenance",
             "--session",
             session_id,
             "--database",
-            ".lenso/sessions.sqlite3",
+            "sessions.sqlite3",
         ])
         .output()
         .unwrap();
@@ -1146,13 +1157,12 @@ instances = [
         String::from_utf8_lossy(&provenance.stderr)
     );
     assert!(String::from_utf8_lossy(&provenance.stdout).contains("generation=sha256:"));
-    let gc = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let gc = command(temporary.path())
         .args([
             "generations",
             "gc-preview",
             "--session-database",
-            ".lenso/sessions.sqlite3",
+            "sessions.sqlite3",
         ])
         .output()
         .unwrap();
@@ -1186,8 +1196,7 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
         .to_owned();
     let archive = temporary.path().join("session-archive.json");
 
-    let exported = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let exported = command(temporary.path())
         .args([
             "sessions",
             "export",
@@ -1208,8 +1217,7 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
     assert_eq!(archive_json["format"], "lenso.agent.session-archive@1");
 
     let database = temporary.path().join("imported/sessions.sqlite3");
-    let imported = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let imported = command(temporary.path())
         .args([
             "sessions",
             "import",
@@ -1227,8 +1235,7 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
     );
 
     let migrated_directory = temporary.path().join("migrated-sessions");
-    let migrated = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let migrated = command(temporary.path())
         .args([
             "sessions",
             "migrate",
@@ -1248,7 +1255,7 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
     );
 
     let original = lenso_agent_session_sqlite_plugin::SqliteSessionInspector::new(
-        temporary.path().join(".lenso/sessions.sqlite3"),
+        temporary.path().join("sessions.sqlite3"),
     )
     .inspect_one(&session_id)
     .unwrap();
@@ -1261,8 +1268,7 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
     assert_eq!(sqlite, original);
     assert_eq!(migrated, original);
 
-    let duplicate = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let duplicate = command(temporary.path())
         .args([
             "sessions",
             "import",
@@ -1281,9 +1287,8 @@ fn sessions_export_import_and_migrate_between_file_and_sqlite() {
 fn product_runner_accepts_a_positional_prompt_with_the_authoring_plan_environment() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
-        .env("LENSO_RESOLVED_PLAN", plan_path())
+    let output = command(temporary.path())
+        .env("LENSO_RESOLVED_PLAN", plan_path(temporary.path()))
         .arg("Answer directly: hello")
         .output()
         .unwrap();
@@ -1302,8 +1307,7 @@ fn product_runner_resolves_a_configured_app_without_cargo_or_a_plan_path() {
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     configure_fixture_app(temporary.path());
 
-    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
-        .current_dir(temporary.path())
+    let output = command(temporary.path())
         .env("CARGO", temporary.path().join("missing-cargo"))
         .arg("Answer directly: hello")
         .output()
@@ -1315,9 +1319,9 @@ fn product_runner_resolves_a_configured_app_without_cargo_or_a_plan_path() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
-    assert!(!temporary.path().join(".lenso/resolved-plan.json").exists());
+    assert!(!temporary.path().join("resolved-plan.json").exists());
     assert!(temporary.path().join("plugins").is_dir());
-    assert!(temporary.path().join(".lenso/host-catalog.json").is_file());
+    assert!(temporary.path().join("host-catalog.json").is_file());
 }
 
 #[test]
@@ -1330,7 +1334,7 @@ fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--profile <name>]"));
-    assert!(stdout.contains("Host defaults boot with an empty `plugins/` directory"));
+    assert!(stdout.contains("current directory remains the Workspace"));
     assert!(stdout.contains("Advanced: --prompt <text> and --plan <path> remain available"));
 }
 
@@ -1455,7 +1459,7 @@ fn headless_ask_user_fails_immediately_instead_of_waiting_for_a_timeout() {
     let started = std::time::Instant::now();
     let output = run(
         temporary.path(),
-        &plan_path(),
+        &plan_path(temporary.path()),
         "Ask me which mode to use.",
         None,
     );
@@ -1481,7 +1485,7 @@ fn readonly_navigation_lists_searches_then_reads_the_selected_file() {
     .unwrap();
     let output = run(
         temporary.path(),
-        &plan_path(),
+        &plan_path(temporary.path()),
         "Navigate the workspace to find the navigation target.",
         None,
     );
@@ -1935,7 +1939,7 @@ fn missing_session_is_a_domain_rejection() {
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let output = run(
         temporary.path(),
-        &plan_path(),
+        &plan_path(temporary.path()),
         "Summarize the README.",
         Some("missing-session"),
     );
@@ -1947,13 +1951,18 @@ fn missing_session_is_a_domain_rejection() {
 fn unavailable_durable_store_rejects_startup() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
-    fs::write(temporary.path().join(".lenso"), "not a directory").unwrap();
+    fs::create_dir(temporary.path().join("sessions.sqlite3")).unwrap();
     let output = run(
         temporary.path(),
-        &plan_path(),
+        &plan_path(temporary.path()),
         "Summarize the README.",
         None,
     );
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("App resolution failed"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("App startup failed"), "{stderr}");
+    assert!(
+        stderr.contains("Session database is not a regular file"),
+        "{stderr}"
+    );
 }

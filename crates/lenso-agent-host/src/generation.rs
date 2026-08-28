@@ -78,6 +78,8 @@ use lenso_plugin_control_plane::{
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
+use crate::AgentDirectories;
+
 const APP_ID: &str = "lenso.agent.harness";
 const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 const DEFAULT_MODEL: &str = "gpt-5.6-luna";
@@ -435,7 +437,8 @@ impl AgentApp {
         }
         let client = host.controller();
         let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
-        let authoring_managed = plan_is_authoring_managed(plan_bytes, profile_name.as_deref());
+        let authoring_managed =
+            plan_is_authoring_managed(plan_bytes, store_root, profile_name.as_deref());
         let reconciler = start_generation_reconciler(
             client.clone(),
             store_root.to_path_buf(),
@@ -876,12 +879,13 @@ fn resolve_and_record_current_generation(
     store_root: &Path,
     host_build: &HostBuildIdentity,
 ) -> Result<(ResolvedGeneration, String), String> {
+    let directories = directories_for_store_root(store_root)?;
     let authority = crate::generation_authority::load_generation_authority_unfenced(store_root);
     let generation = resolve_generation_with_authority(
         plan_bytes,
         &authority,
         host_build,
-        &crate::plugin_root_path(),
+        &directories.plugins(),
     )?;
     record_generation_spec(store_root, &generation.spec)?;
     crate::generation_authority::record_resolved_generation_authority_unfenced(
@@ -900,9 +904,11 @@ fn start_generation_reconciler(
 ) -> GenerationReconciler {
     let (stop, mut stopped) = oneshot::channel();
     let mut controller_events = client.subscribe();
-    let plugin_root = crate::plugin_root_path();
+    let directories = directories_for_store_root(&store_root)
+        .expect("validated Agent runtime root must have an Agent Home parent");
+    let plugin_root = directories.plugins();
     let plugin_parent = watch_parent(&plugin_root);
-    let profile_directory = crate::profile::directory();
+    let profile_directory = directories.profiles();
     let mut watched_paths = vec![store_root.as_path()];
     if authoring_managed {
         watched_paths.push(plugin_parent.as_path());
@@ -987,15 +993,23 @@ fn start_generation_reconciler(
     }
 }
 
-fn plan_is_authoring_managed(plan_bytes: &[u8], profile_name: Option<&str>) -> bool {
-    let Ok(root) = crate::plugin_root::snapshot(&crate::plugin_root_path()) else {
+fn plan_is_authoring_managed(
+    plan_bytes: &[u8],
+    store_root: &Path,
+    profile_name: Option<&str>,
+) -> bool {
+    let Ok(directories) = directories_for_store_root(store_root) else {
+        return false;
+    };
+    let Ok(root) = crate::plugin_root::snapshot(&directories.plugins()) else {
         return false;
     };
     let resolved = if let Some(profile_name) = profile_name {
-        crate::profile::select(profile_name, &root)
-            .and_then(|profile| resolve_host_plan_for_agent(profile.root(), profile.agent()))
+        crate::profile::select(profile_name, &root, &directories.profiles()).and_then(|profile| {
+            resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())
+        })
     } else {
-        resolve_host_plan(&root)
+        resolve_host_plan_in(&directories, &root)
     };
     resolved
         .and_then(|plan| {
@@ -1163,6 +1177,12 @@ fn resolve_desired_generation(
     profile_name: Option<&str>,
     last_attempted_desired_state_digest: &mut Option<String>,
 ) -> Result<Option<(String, ResolvedGeneration)>, OnlineGenerationEvent> {
+    let directories = directories_for_store_root(store_root).map_err(|detail| {
+        OnlineGenerationEvent::Rejected {
+            resolution_authority_digest: None,
+            detail,
+        }
+    })?;
     let authority = crate::generation_authority::load_generation_authority_unfenced(store_root);
     let rejected = |detail| OnlineGenerationEvent::Rejected {
         resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
@@ -1170,10 +1190,12 @@ fn resolve_desired_generation(
     };
     let root = crate::plugin_root::snapshot(plugin_root).map_err(rejected)?;
     let plan = if let Some(profile_name) = profile_name {
-        let profile = crate::profile::select(profile_name, &root).map_err(rejected)?;
-        resolve_host_plan_for_agent(profile.root(), profile.agent()).map_err(rejected)?
+        let profile = crate::profile::select(profile_name, &root, &directories.profiles())
+            .map_err(rejected)?;
+        resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())
+            .map_err(rejected)?
     } else {
-        resolve_host_plan(&root).map_err(rejected)?
+        resolve_host_plan_in(&directories, &root).map_err(rejected)?
     };
     let resources = crate::plugin_root::plan_resources(plugin_root, &plan).map_err(rejected)?;
     let resource_identity = resources
@@ -1683,13 +1705,9 @@ fn resolve_initial_generation_for_host(
     store_root: &Path,
     host_build: &HostBuildIdentity,
 ) -> Result<ResolvedGeneration, String> {
+    let directories = directories_for_store_root(store_root)?;
     let authority = crate::generation_authority::load_generation_authority(store_root)?;
-    resolve_generation_with_authority(
-        plan_bytes,
-        &authority,
-        host_build,
-        &crate::plugin_root_path(),
-    )
+    resolve_generation_with_authority(plan_bytes, &authority, host_build, &directories.plugins())
 }
 
 fn resolve_retained_generations(
@@ -1697,6 +1715,7 @@ fn resolve_retained_generations(
     store_root: &Path,
     host_build: &HostBuildIdentity,
 ) -> Result<BTreeMap<String, ResolvedGeneration>, String> {
+    let directories = directories_for_store_root(store_root)?;
     crate::generation_authority::recovery_generation_authorities(store_root)
         .into_iter()
         .map(|authority| {
@@ -1704,11 +1723,21 @@ fn resolve_retained_generations(
                 plan_bytes,
                 &authority,
                 host_build,
-                &crate::plugin_root_path(),
+                &directories.plugins(),
             )?;
             Ok((generation.spec.digest().to_owned(), generation))
         })
         .collect()
+}
+
+fn directories_for_store_root(store_root: &Path) -> Result<AgentDirectories, String> {
+    let home = store_root.parent().ok_or_else(|| {
+        format!(
+            "Agent runtime root must have an Agent Home parent: {}",
+            store_root.display()
+        )
+    })?;
+    AgentDirectories::from_home(home)
 }
 
 fn resolve_generation_with_authority(
@@ -1878,20 +1907,33 @@ fn native_host_build() -> (NativePluginRegistry, Vec<EmbeddedPlugin>) {
 
 /// Returns the Host Catalog derived from the Plugin factories linked into this executable.
 pub fn linked_host_catalog() -> Result<HostCatalog, String> {
-    linked_host_catalog_for_agent(&PluginInstanceId::new("lenso.agent.loop", "agent"))
+    let directories = AgentDirectories::resolve()?;
+    linked_host_catalog_in(&directories)
 }
 
-fn linked_host_catalog_for_agent(root_agent: &PluginInstanceId) -> Result<HostCatalog, String> {
+pub(crate) fn linked_host_catalog_in(
+    directories: &AgentDirectories,
+) -> Result<HostCatalog, String> {
+    linked_host_catalog_for_agent_in(
+        directories,
+        &PluginInstanceId::new("lenso.agent.loop", "agent"),
+    )
+}
+
+fn linked_host_catalog_for_agent_in(
+    directories: &AgentDirectories,
+    root_agent: &PluginInstanceId,
+) -> Result<HostCatalog, String> {
     let registry = NativePluginRegistry::new().with_linked_factories();
     let available = registry
         .factories()
         .map(|factory| factory.package_id().to_owned())
         .collect::<BTreeSet<_>>();
-    let defaults = host_catalog_defaults()
+    let defaults = host_catalog_defaults(directories)
         .into_iter()
         .filter(|plugin| available.contains(plugin.id().plugin_id()))
         .collect::<Vec<_>>();
-    let configurations = host_catalog_configurations()
+    let configurations = host_catalog_configurations(directories)
         .into_iter()
         .filter(|configuration| available.contains(configuration.id().plugin_id()))
         .collect::<Vec<_>>();
@@ -1930,14 +1972,14 @@ fn host_catalog_slots() -> Vec<HostSlot> {
     ]
 }
 
-fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
+fn host_catalog_defaults(directories: &AgentDirectories) -> Vec<HostDefaultPlugin> {
     let mut defaults = agent_defaults();
     defaults.extend(default_interactive_plugins());
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
         HostDefaultPlugin::new("lenso.agent.discord", "discord"),
         default_context_compaction_plugin(),
-        default_memory_plugin(),
+        default_memory_plugin(directories),
         default_plugin(
             "lenso.agent.http-fetch",
             "http-fetch",
@@ -1948,7 +1990,7 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
         default_plugin(
             "lenso.agent.lifecycle.audit",
             "local-audit",
-            serde_json::json!({"path": ".lenso/lifecycle/events.jsonl"}),
+            serde_json::json!({"path": directories.lifecycle_events()}),
         ),
         HostDefaultPlugin::new("lenso.agent.prompt", "prompt"),
         default_plugin(
@@ -1967,7 +2009,7 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
             "lenso.agent.session.sqlite",
             "sessions",
             serde_json::json!({
-                "database": ".lenso/sessions.sqlite3"
+                "database": directories.session_database()
             }),
         ),
         default_skills_plugin(),
@@ -2041,12 +2083,12 @@ fn default_context_compaction_plugin() -> HostDefaultPlugin {
     )
 }
 
-fn default_memory_plugin() -> HostDefaultPlugin {
+fn default_memory_plugin(directories: &AgentDirectories) -> HostDefaultPlugin {
     default_plugin(
         "lenso.agent.memory.sqlite",
         "memory",
         serde_json::json!({
-            "database": ".lenso/memory/memory.sqlite3",
+            "database": directories.memory_database(),
             "scope": "default",
             "max_records": 10_000,
             "max_item_characters": 16_384,
@@ -2135,19 +2177,20 @@ fn default_skills_plugin() -> HostDefaultPlugin {
     )
 }
 
-fn host_catalog_configurations() -> Vec<HostPluginConfiguration> {
-    let mut configurations = local_tool_configurations();
-    configurations.extend(model_and_auth_configurations());
+fn host_catalog_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
+    let mut configurations = local_tool_configurations(directories);
+    configurations.extend(model_and_auth_configurations(directories));
     configurations
 }
 
-fn model_and_auth_configurations() -> Vec<HostPluginConfiguration> {
+fn model_and_auth_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
     vec![
         host_plugin_configuration(
             "lenso.agent.auth.openai-codex",
             serde_json::json!({
                 "issuer": "https://auth.openai.com",
                 "profile": "default",
+                "credential_file": directories.auth(),
                 "refresh_margin_seconds": 60
             }),
         ),
@@ -2171,7 +2214,7 @@ fn model_and_auth_configurations() -> Vec<HostPluginConfiguration> {
     ]
 }
 
-fn local_tool_configurations() -> Vec<HostPluginConfiguration> {
+fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
     vec![
         host_plugin_configuration(
             "lenso.agent.approval-hook",
@@ -2180,7 +2223,7 @@ fn local_tool_configurations() -> Vec<HostPluginConfiguration> {
                 "ask_tools": [],
                 "default_decision": "ask",
                 "deny_tools": [],
-                "directory": ".lenso/approvals",
+                "directory": directories.approvals(),
                 "max_records": 10_000
             }),
         ),
@@ -2316,18 +2359,37 @@ fn default_plugin(
     HostDefaultPlugin::new(plugin_id, instance_key).with_configuration(configuration)
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_host_plan(root: &PluginRootSnapshot) -> Result<ResolvedAppPlan, String> {
-    let host = linked_host_catalog()?;
+    let directories = AgentDirectories::resolve()?;
+    resolve_host_plan_in(&directories, root)
+}
+
+pub(crate) fn resolve_host_plan_in(
+    directories: &AgentDirectories,
+    root: &PluginRootSnapshot,
+) -> Result<ResolvedAppPlan, String> {
+    let host = linked_host_catalog_in(directories)?;
     resolve_plugin_root(&host, root)
         .map(|app| app.plan().clone())
         .map_err(|error| format!("failed to resolve Host Plugins: {error}"))
 }
 
+#[cfg(test)]
 pub(crate) fn resolve_host_plan_for_agent(
     root: &PluginRootSnapshot,
     agent: &PluginInstanceId,
 ) -> Result<ResolvedAppPlan, String> {
-    let host = linked_host_catalog_for_agent(agent)?;
+    let directories = AgentDirectories::resolve()?;
+    resolve_host_plan_for_agent_in(&directories, root, agent)
+}
+
+pub(crate) fn resolve_host_plan_for_agent_in(
+    directories: &AgentDirectories,
+    root: &PluginRootSnapshot,
+    agent: &PluginInstanceId,
+) -> Result<ResolvedAppPlan, String> {
+    let host = linked_host_catalog_for_agent_in(directories, agent)?;
     resolve_plugin_root(&host, root)
         .map(|app| app.plan().clone())
         .map_err(|error| format!("failed to resolve Host Plugins for Agent `{agent}`: {error}"))

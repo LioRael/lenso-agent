@@ -1,12 +1,14 @@
 # Agent Harness Host internals
 
 The normal product surface is deliberately small: run the Harness, place Plugin
-configuration under `plugins/`, and use `lenso plugins` to manage that directory.
-This document describes the machinery behind that surface.
+configuration under the global Agent Home's `plugins/`, and use `lenso plugins`
+from that Home to manage the directory. The current directory remains the
+Workspace. This document describes the machinery behind that surface.
 
 ## Public workflow
 
-The Host starts with its compiled defaults when `plugins/` is absent or empty:
+The Host starts with its compiled defaults when
+`~/.lenso/agent/plugins/` is absent or empty:
 
 ```sh
 cargo run -p lenso-agent-tui
@@ -14,7 +16,7 @@ cargo run -p lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
-App differences are visible files:
+App differences are visible files below `~/.lenso/agent/`:
 
 ```text
 plugins/
@@ -28,10 +30,11 @@ plugins/
       prompts/system.md
 ```
 
-Use `lenso plugins list|add|configure|disable|enable|remove`. Use `lenso app
-check|show|resolve` to inspect the App derived from the current Host and Plugin
-Root. There is no App Definition, enabled-list file, binding document, Module
-authoring layer, or separate package verification command.
+Use `lenso plugins list|add|configure|disable|enable|remove` from the Agent Home.
+Use `lenso app check|show|resolve` there to inspect the App derived from the
+current Host and Plugin Root. There is no App Definition, enabled-list file,
+binding document, Module authoring layer, or separate package verification
+command.
 
 ## Resolution boundary
 
@@ -55,9 +58,21 @@ Resolved App Plan. The Kernel sees only that Plan and never discovers packages
 or files. Resource bytes are carried beside the Plan in the immutable
 Generation and never exposed as a mutable Host path.
 
-Missing `plugins/` means an empty Plugin Root, not a different mode. Built-in
+Missing Agent Home `plugins/` means an empty Plugin Root, not a different mode. Built-in
 and external Plugins follow the same resolver path; the package directory is
 omitted only when the Host already supplies the implementation.
+
+## Agent Home and Workspace
+
+The Host resolves `LENSO_AGENT_HOME`, or defaults it to `~/.lenso/agent`, before
+it snapshots authoring input. The Home owns Plugin configuration, Profiles,
+Host Catalog output, Generation control, Sessions, Memory, lifecycle events,
+approvals, channel state, and authentication. Host-owned Plugin defaults are
+lowered to absolute paths in the immutable Plan.
+
+The current directory is deliberately independent: it remains the Workspace
+used by Workspace, Process, Git, and suggestion Plugins. Kernel and Plugins do
+not read the Agent Home environment variable as ambient execution authority.
 
 ## Runtime generations
 
@@ -111,7 +126,7 @@ but those records never become a second App-authoring authority.
 ## Invariants
 
 - Plugin is the only public removable behavior unit.
-- `plugins/` is the only App-owned composition/configuration surface.
+- The Agent Home's `plugins/` is the only App-owned composition/configuration surface.
 - Host Catalog is immutable and tied to one Host build.
 - Resolution is deterministic and fail-closed over a complete snapshot.
 - Kernel remains free of discovery, storage, package, and product policy.
