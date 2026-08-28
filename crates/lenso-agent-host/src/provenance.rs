@@ -5,9 +5,9 @@ use std::{
 };
 
 use lenso_agent_loop_plugin::inspect_turn_generation_provenance;
-use lenso_agent_session_file_plugin::{
-    inspect_all_turn_started_events, inspect_turn_started_events,
-};
+use lenso_agent_session_file_plugin::FileSessionInspector;
+use lenso_agent_session_inspection::{SessionInspector, inspect_turn_started};
+use lenso_agent_session_sqlite_plugin::SqliteSessionInspector;
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
 
 use crate::{
@@ -25,16 +25,31 @@ const APP_ID: &str = "lenso.agent.harness";
 
 #[derive(Debug)]
 pub enum GenerationCommand {
-    Inspect { digest: String, root: PathBuf },
-    GcPreview { root: PathBuf, sessions: PathBuf },
-    GcApply { root: PathBuf, sessions: PathBuf },
+    Inspect {
+        digest: String,
+        root: PathBuf,
+    },
+    GcPreview {
+        root: PathBuf,
+        sessions: SessionStore,
+    },
+    GcApply {
+        root: PathBuf,
+        sessions: SessionStore,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub enum SessionStore {
+    File(PathBuf),
+    Sqlite(PathBuf),
 }
 
 #[derive(Debug)]
 pub enum SessionCommand {
     Provenance {
         session_id: String,
-        directory: PathBuf,
+        store: SessionStore,
         runtime_root: PathBuf,
     },
 }
@@ -45,6 +60,8 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     };
     let mut root = PathBuf::from(".lenso/runtime");
     let mut sessions = PathBuf::from(".lenso/sessions");
+    let mut session_database = None;
+    let mut sessions_explicit = false;
     let mut digest = None;
     let mut apply = false;
     let mut arguments = rest.iter();
@@ -56,21 +73,39 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
             "--root" => root = PathBuf::from(arguments.next().ok_or_else(generation_usage)?),
             "--sessions" if command == "gc-preview" || command == "gc-plan" => {
                 sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
+                sessions_explicit = true;
             }
             "--sessions" if command == "gc" => {
                 sessions = PathBuf::from(arguments.next().ok_or_else(generation_usage)?);
+                sessions_explicit = true;
+            }
+            "--session-database"
+                if command == "gc-preview" || command == "gc-plan" || command == "gc" =>
+            {
+                session_database = Some(PathBuf::from(
+                    arguments.next().ok_or_else(generation_usage)?,
+                ));
             }
             "--apply" if command == "gc" => apply = true,
             _ => return Err(generation_usage()),
         }
+    }
+    if sessions_explicit && session_database.is_some() {
+        return Err(generation_usage());
     }
     match command.as_str() {
         "inspect" => Ok(GenerationCommand::Inspect {
             digest: digest.ok_or_else(generation_usage)?,
             root,
         }),
-        "gc-preview" | "gc-plan" => Ok(GenerationCommand::GcPreview { root, sessions }),
-        "gc" if apply => Ok(GenerationCommand::GcApply { root, sessions }),
+        "gc-preview" | "gc-plan" => Ok(GenerationCommand::GcPreview {
+            root,
+            sessions: session_database.map_or(SessionStore::File(sessions), SessionStore::Sqlite),
+        }),
+        "gc" if apply => Ok(GenerationCommand::GcApply {
+            root,
+            sessions: session_database.map_or(SessionStore::File(sessions), SessionStore::Sqlite),
+        }),
         _ => Err(generation_usage()),
     }
 }
@@ -84,21 +119,32 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     }
     let mut session_id = None;
     let mut directory = PathBuf::from(".lenso/sessions");
+    let mut database = None;
+    let mut directory_explicit = false;
     let mut runtime_root = PathBuf::from(".lenso/runtime");
     let mut arguments = rest.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--session" => session_id = Some(arguments.next().ok_or_else(session_usage)?.clone()),
-            "--directory" => directory = PathBuf::from(arguments.next().ok_or_else(session_usage)?),
+            "--directory" => {
+                directory = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
+                directory_explicit = true;
+            }
+            "--database" => {
+                database = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
+            }
             "--runtime-root" => {
                 runtime_root = PathBuf::from(arguments.next().ok_or_else(session_usage)?);
             }
             _ => return Err(session_usage()),
         }
     }
+    if directory_explicit && database.is_some() {
+        return Err(session_usage());
+    }
     Ok(SessionCommand::Provenance {
         session_id: session_id.ok_or_else(session_usage)?,
-        directory,
+        store: database.map_or(SessionStore::File(directory), SessionStore::Sqlite),
         runtime_root,
     })
 }
@@ -137,7 +183,7 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
     }
 }
 
-fn print_gc_preview(root: &Path, sessions: &Path) -> Result<(), String> {
+fn print_gc_preview(root: &Path, sessions: &SessionStore) -> Result<(), String> {
     let resolution_authorities = retained_resolution_authority_roots(root, false);
     print_gc_plan(&build_gc_plan(root, sessions, &resolution_authorities)?)
 }
@@ -167,16 +213,17 @@ impl GenerationGcPlan {
 
 fn build_gc_plan(
     root: &Path,
-    sessions: &Path,
+    sessions: &SessionStore,
     resolution_authorities: &BTreeSet<String>,
 ) -> Result<GenerationGcPlan, String> {
-    let session_generations = inspect_all_turn_started_events(sessions)?
+    let inspector = session_inspector(sessions);
+    let session_generations = inspect_turn_started(inspector.as_ref(), None)?
         .into_iter()
         .map(|stored| {
             inspect_turn_generation_provenance(
-                stored.event.revision,
-                stored.event.turn_id.as_deref(),
-                &stored.event.payload_json,
+                stored.revision,
+                stored.turn_id.as_deref(),
+                &stored.payload_json,
             )
             .map(|turn| turn.generation_spec_digest)
             .map_err(|error| {
@@ -244,7 +291,7 @@ fn print_gc_plan(plan: &GenerationGcPlan) -> Result<(), String> {
     Ok(())
 }
 
-fn apply_gc(root: &Path, sessions: &Path) -> Result<(), String> {
+fn apply_gc(root: &Path, sessions: &SessionStore) -> Result<(), String> {
     let coordinator = AuthorityCoordinator::open_existing(root)?;
     let _gc_fence = coordinator.generation_gc_transition()?;
     let _authority_fence = coordinator.transition()?;
@@ -336,10 +383,11 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
     match command {
         SessionCommand::Provenance {
             session_id,
-            directory,
+            store,
             runtime_root,
         } => {
-            let events = inspect_turn_started_events(&directory, &session_id)?;
+            let inspector = session_inspector(&store);
+            let events = inspect_turn_started(inspector.as_ref(), Some(&session_id))?;
             let provenance = events
                 .iter()
                 .map(|event| {
@@ -363,6 +411,13 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
             }
             Ok(())
         }
+    }
+}
+
+fn session_inspector(store: &SessionStore) -> Box<dyn SessionInspector> {
+    match store {
+        SessionStore::File(directory) => Box::new(FileSessionInspector::new(directory)),
+        SessionStore::Sqlite(database) => Box::new(SqliteSessionInspector::new(database)),
     }
 }
 
@@ -421,9 +476,9 @@ fn canonical_digest_hash(digest: &str) -> Result<&str, String> {
 }
 
 fn generation_usage() -> String {
-    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-preview [--root <plugin-root>] [--sessions <session-directory>]|gc --apply [--root <plugin-root>] [--sessions <session-directory>]>".to_owned()
+    "usage: lenso-agent-cli generations <inspect --digest <sha256:digest> [--root <plugin-root>]|gc-preview [--root <plugin-root>] [--sessions <session-directory>|--session-database <sqlite-path>]|gc --apply [--root <plugin-root>] [--sessions <session-directory>|--session-database <sqlite-path>]>".to_owned()
 }
 
 fn session_usage() -> String {
-    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>] [--runtime-root <plugin-root>]".to_owned()
+    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]".to_owned()
 }

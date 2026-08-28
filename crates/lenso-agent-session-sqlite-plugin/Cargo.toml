@@ -1,7 +1,7 @@
 [package]
-name = "lenso-agent-session-file-plugin"
+name = "lenso-agent-session-sqlite-plugin"
 version = "0.1.0"
-description = "Durable file-backed Session Plugin for the Lenso Agent Harness."
+description = "Durable SQLite Session Plugin for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -9,7 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [package.metadata.lenso]
-plugin-id = "lenso.agent.session.file"
+plugin-id = "lenso.agent.session.sqlite"
 root-slot = "session"
 
 [dependencies]
@@ -19,6 +19,7 @@ lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-agent-session-inspection = { path = "../lenso-agent-session-inspection" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true

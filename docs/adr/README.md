@@ -43,3 +43,4 @@
 - [0041 — Snapshot Plugin Instance resources](0041-snapshot-plugin-instance-resources.md)
 - [0042 — Split Agent Host surfaces](0042-split-agent-host-surfaces.md)
 - [0043 — Install the System Instruction at Session start](0043-install-system-instruction-at-session-start.md)
+- [0044 — Keep Session storage replaceable and inspection neutral](0044-keep-session-storage-replaceable.md)

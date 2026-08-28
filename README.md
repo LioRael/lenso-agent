@@ -77,6 +77,25 @@ including exact Plugin configurations and bindings, remains the execution and
 Session-provenance authority. Editing the selected Profile or its Plugin files
 goes through the same online Ready Gate as any other Plugin change.
 
+For a transactional local Session store, configure the SQLite Adapter through
+the same Plugin directory:
+
+```toml
+# plugins/lenso.agent.session.sqlite/local.toml
+database = ".lenso/sessions.sqlite3"
+```
+
+Then select it from a Profile; it replaces the default file Session slot:
+
+```toml
+# profiles/sqlite.toml
+description = "SQLite-backed sessions"
+instances = ["lenso.agent.session.sqlite/local"]
+```
+
+Inspect its Generation provenance with
+`lenso-agent-cli sessions provenance --session <id> --database .lenso/sessions.sqlite3`.
+
 ## Choose Plugins
 
 The Host boots its read-only defaults when `plugins/` is absent or empty. App

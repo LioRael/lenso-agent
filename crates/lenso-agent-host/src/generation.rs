@@ -1347,7 +1347,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::one("prompt-runtime"),
         HostSlot::one("root-tools-runtime"),
         HostSlot::optional("secrets"),
-        HostSlot::one("session"),
+        HostSlot::one("session").replaceable(),
         HostSlot::one("restricted-tools-runtime"),
         HostSlot::many("tui-contributions"),
         HostSlot::many("tui-suggestions"),

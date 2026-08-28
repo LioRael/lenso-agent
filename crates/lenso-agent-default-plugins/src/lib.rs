@@ -14,6 +14,7 @@ use lenso_agent_prompt_filesystem_plugin as _;
 use lenso_agent_prompt_plugin as _;
 use lenso_agent_prompt_static_plugin as _;
 use lenso_agent_session_file_plugin as _;
+use lenso_agent_session_sqlite_plugin as _;
 use lenso_agent_skills_filesystem_plugin as _;
 use lenso_agent_subagent_tools_plugin as _;
 use lenso_agent_text_tools_plugin as _;

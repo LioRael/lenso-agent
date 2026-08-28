@@ -33,6 +33,8 @@ members = [
     "crates/lenso-agent-process-native-plugin",
     "crates/lenso-agent-process-tools-plugin",
     "crates/lenso-agent-session-file-plugin",
+    "crates/lenso-agent-session-inspection",
+    "crates/lenso-agent-session-sqlite-plugin",
     "crates/lenso-agent-skills-filesystem-plugin",
     "crates/lenso-agent-subagent-tools-plugin",
     "crates/lenso-agent-tools-plugin",
@@ -72,6 +74,7 @@ fs2 = "0.4"
 futures = "0.3"
 proc-macro2 = "1"
 quote = "1"
+rusqlite = { version = "0.39", features = ["bundled"] }
 lenso-capability-secrets = { version = "0.1.1", git = "https://github.com/LioRael/lenso-secrets-plugin", rev = "3a5462340c45440b260c7eab4958e2a4a91363c6" }
 lenso-app-plan = { version = "0.3.0", git = "https://github.com/LioRael/lenso", rev = "b8c7d3bfd7b900965f7782016b92f6c891fa98e5" }
 lenso = { version = "0.5.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "6bd5b88f3c6610581fcc4306c6cf356f71f7c611" }
