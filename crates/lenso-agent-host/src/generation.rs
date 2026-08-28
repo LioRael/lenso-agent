@@ -2610,6 +2610,7 @@ mod tests {
         );
 
         let configuration = serde_json::json!({
+            "transport": "stdio",
             "program": "/usr/bin/env",
             "arguments": ["node", "/opt/mcp/filesystem.js", "/workspace"],
             "working_directory": "/workspace",

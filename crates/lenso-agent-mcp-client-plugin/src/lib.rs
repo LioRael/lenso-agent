@@ -1,4 +1,4 @@
-//! Bounded, profile-scoped MCP stdio client projected as Agent Tools.
+//! Bounded, profile-scoped MCP client projected as Agent Tools.
 
 use std::{
     cell::RefCell,
@@ -10,6 +10,8 @@ use std::{
     time::Duration,
 };
 
+use base64::Engine as _;
+use futures::StreamExt;
 use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
     self as tool_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
@@ -48,64 +50,112 @@ enum Protocol {
 }
 
 #[derive(Clone, Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
 struct McpClientConfig {
-    program: PathBuf,
-    arguments: Vec<String>,
-    working_directory: PathBuf,
-    environment_allowlist: Vec<String>,
+    #[serde(flatten)]
+    transport: TransportConfig,
     protocol: ProtocolMode,
     tool_namespace: String,
     startup_timeout_ms: u64,
     request_timeout_ms: u64,
 }
 
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(tag = "transport", rename_all = "snake_case")]
+enum TransportConfig {
+    Stdio {
+        program: PathBuf,
+        arguments: Vec<String>,
+        working_directory: PathBuf,
+        environment_allowlist: Vec<String>,
+    },
+    StreamableHttp {
+        endpoint: String,
+        authorization_environment: Option<String>,
+    },
+}
+
 #[derive(Clone, Debug)]
 struct ReadyClient {
     protocol: Protocol,
-    program: PathBuf,
-    working_directory: PathBuf,
-    environment: BTreeMap<String, String>,
-    catalog: CatalogResponse,
-    exposed_to_remote: BTreeMap<String, String>,
+    transport: ReadyTransport,
+    catalog: Rc<RefCell<CatalogResponse>>,
+    exposed_to_remote: Rc<RefCell<BTreeMap<String, String>>>,
     session: Rc<Mutex<Option<Session>>>,
 }
 
+#[derive(Clone, Debug)]
+enum ReadyTransport {
+    Stdio {
+        program: PathBuf,
+        working_directory: PathBuf,
+        environment: BTreeMap<String, String>,
+    },
+    StreamableHttp {
+        endpoint: reqwest::Url,
+        authorization: Option<String>,
+        client: reqwest::Client,
+    },
+}
+
 fn validate_config(config: &McpClientConfig) -> Result<(), RuntimeFailure> {
-    let arguments_bytes = config.arguments.iter().map(String::len).sum::<usize>();
     let namespace_bytes = config.tool_namespace.as_bytes();
     let namespace_valid = matches!(namespace_bytes.first(), Some(b'a'..=b'z'))
         && namespace_bytes.len() <= 32
         && namespace_bytes[1..]
             .iter()
             .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'));
-    let environment_valid = config.environment_allowlist.len() <= 64
-        && config.environment_allowlist.iter().all(|name| {
+    let transport_valid = match &config.transport {
+        TransportConfig::Stdio {
+            program,
+            arguments,
+            working_directory,
+            environment_allowlist,
+        } => {
+            let arguments_bytes = arguments.iter().map(String::len).sum::<usize>();
+            program.is_absolute()
+                && !working_directory.as_os_str().is_empty()
+                && arguments.len() <= 64
+                && arguments_bytes <= 131_072
+                && arguments.iter().all(|argument| argument.len() <= 16_384)
+                && valid_environment_names(environment_allowlist)
+        }
+        TransportConfig::StreamableHttp {
+            endpoint,
+            authorization_environment,
+        } => {
+            matches!(config.protocol, ProtocolMode::Auto | ProtocolMode::Modern)
+                && reqwest::Url::parse(endpoint).is_ok_and(|url| {
+                    url.scheme() == "https"
+                        || (url.scheme() == "http"
+                            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")))
+                })
+                && authorization_environment
+                    .as_ref()
+                    .is_none_or(|name| valid_environment_names(std::slice::from_ref(name)))
+        }
+    };
+    if !transport_valid
+        || !namespace_valid
+        || !(1..=60_000).contains(&config.startup_timeout_ms)
+        || !(1..=3_600_000).contains(&config.request_timeout_ms)
+    {
+        return Err(invalid_plan(
+            "MCP configuration requires a safe stdio or Streamable HTTP transport, a Tool namespace, and bounded timeouts",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_environment_names(names: &[String]) -> bool {
+    names.len() <= 64
+        && names.iter().all(|name| {
             let mut bytes = name.bytes();
             name.len() <= 128
                 && bytes
                     .next()
                     .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
                 && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-        });
-    if !config.program.is_absolute()
-        || config.working_directory.as_os_str().is_empty()
-        || config.arguments.len() > 64
-        || arguments_bytes > 131_072
-        || config
-            .arguments
-            .iter()
-            .any(|argument| argument.len() > 16_384)
-        || !namespace_valid
-        || !environment_valid
-        || !(1..=60_000).contains(&config.startup_timeout_ms)
-        || !(1..=3_600_000).contains(&config.request_timeout_ms)
-    {
-        return Err(invalid_plan(
-            "MCP stdio configuration requires an absolute program, bounded arguments, a safe Tool namespace, an environment allowlist, and bounded timeouts",
-        ));
-    }
-    Ok(())
+        })
 }
 
 #[lenso::plugin(
@@ -122,21 +172,24 @@ struct McpClientPlugin {
 
 #[lenso::provides(tool_contract::ToolProvider)]
 impl McpClientPlugin {
-    fn catalog(
+    async fn catalog(
         &self,
         _context: Ctx,
         _request: CatalogRequest,
-    ) -> impl std::future::Future<Output = PluginResult<CatalogResponse, tool_contract::CatalogError>>
-    {
-        let result = self
+    ) -> PluginResult<CatalogResponse, tool_contract::CatalogError> {
+        let ready = self
             .ready
             .borrow()
             .as_ref()
-            .map(|ready| ready.catalog.clone())
+            .cloned()
             .ok_or(RuntimeFailure::Unavailable {
                 capability: tool_contract::CAPABILITY_ID,
-            });
-        futures::future::ready(result.map_err(PluginError::runtime))
+            })
+            .map_err(PluginError::runtime)?;
+        refresh_catalog(&self.config, &ready)
+            .await
+            .map_err(PluginError::runtime)?;
+        Ok(ready.catalog.borrow().clone())
     }
 
     async fn execute(
@@ -149,7 +202,7 @@ impl McpClientPlugin {
                 capability: tool_contract::CAPABILITY_ID,
             })
         })?;
-        let Some(remote_name) = ready.exposed_to_remote.get(&request.name).cloned() else {
+        let Some(remote_name) = ready.exposed_to_remote.borrow().get(&request.name).cloned() else {
             return Err(PluginError::domain(ExecuteError::NotFound));
         };
         let arguments: Value = serde_json::from_str(request.arguments_json.as_str())
@@ -157,94 +210,144 @@ impl McpClientPlugin {
         if !arguments.is_object() {
             return Err(PluginError::domain(ExecuteError::InvalidArguments));
         }
-        ensure_program_identity(&self.config.program, &ready.program)
-            .map_err(PluginError::runtime)?;
-        ensure_working_directory_identity(&self.config.working_directory, &ready.working_directory)
-            .map_err(PluginError::runtime)?;
-        let mut session_slot = ready.session.lock().await;
-        if session_slot.is_none() {
-            *session_slot = Some(
-                connect(&self.config, &ready)
-                    .await
-                    .map_err(PluginError::runtime)?,
-            );
-        }
-        let session = session_slot.as_mut().expect("session was connected");
-        let request_id = session.next_request_id();
-        let params = json!({"name": remote_name, "arguments": arguments});
-        let cancellation = context.cancellation();
-        let outcome = tokio::select! {
-            () = cancellation.cancelled() => {
-                let _ = session.cancel(request_id, ready.protocol).await;
-                Err(RuntimeFailure::Cancelled { request_id: context.request_id() })
-            }
-            result = session.request_with_id(request_id, "tools/call", params, ready.protocol, self.config.request_timeout_ms) => {
-                result
-            }
+        let headers = if matches!(ready.transport, ReadyTransport::StreamableHttp { .. }) {
+            let schema_json = ready
+                .catalog
+                .borrow()
+                .tools
+                .iter()
+                .find(|tool| tool.name == request.name)
+                .map(|tool| tool.input_schema_json.as_str().to_owned())
+                .ok_or_else(|| PluginError::domain(ExecuteError::NotFound))?;
+            let schema = serde_json::from_str::<Value>(&schema_json).map_err(|error| {
+                PluginError::runtime(protocol_failure(format!(
+                    "projected MCP Tool schema became invalid: {error}"
+                )))
+            })?;
+            parameter_headers(&schema, &arguments).map_err(PluginError::runtime)?
+        } else {
+            BTreeMap::new()
         };
-        let response = match outcome {
-            Ok(response) => response,
-            Err(error) => {
-                if let Some(session) = session_slot.take() {
+        let params = json!({"name": remote_name, "arguments": arguments});
+        let response = ready
+            .request_with_context(&self.config, &context, "tools/call", params, &headers)
+            .await
+            .map_err(PluginError::runtime)?;
+        map_tool_result(&response).map_err(PluginError::domain)
+    }
+}
+
+impl ReadyClient {
+    async fn request_with_context(
+        &self,
+        config: &McpClientConfig,
+        context: &Ctx,
+        method: &str,
+        params: Value,
+        headers: &BTreeMap<String, String>,
+    ) -> Result<Value, RuntimeFailure> {
+        match &self.transport {
+            ReadyTransport::Stdio {
+                program,
+                working_directory,
+                ..
+            } => {
+                let TransportConfig::Stdio {
+                    program: configured_program,
+                    working_directory: configured_directory,
+                    ..
+                } = &config.transport
+                else {
+                    return Err(protocol_failure("MCP transport changed after activation"));
+                };
+                ensure_program_identity(configured_program, program)?;
+                ensure_working_directory_identity(configured_directory, working_directory)?;
+                let mut session_slot = self.session.lock().await;
+                if session_slot.is_none() {
+                    *session_slot = Some(connect(config, self).await?);
+                }
+                let session = session_slot.as_mut().expect("session was connected");
+                let request_id = session.next_request_id();
+                let cancellation = context.cancellation();
+                let outcome = tokio::select! {
+                    () = cancellation.cancelled() => {
+                        let _ = session.cancel(request_id, self.protocol).await;
+                        Err(RuntimeFailure::Cancelled { request_id: context.request_id() })
+                    }
+                    result = session.request_with_id(request_id, method, params, self.protocol, config.request_timeout_ms) => result,
+                };
+                if outcome.is_err()
+                    && let Some(session) = session_slot.take()
+                {
                     session.shutdown().await;
                 }
-                return Err(PluginError::runtime(error));
+                outcome
             }
-        };
-        map_tool_result(&response).map_err(PluginError::domain)
+            ReadyTransport::StreamableHttp { .. } => {
+                http_request(
+                    self,
+                    context,
+                    method,
+                    params,
+                    headers,
+                    config.request_timeout_ms,
+                )
+                .await
+            }
+        }
     }
 }
 
 impl Lifecycle for McpClientPlugin {
     async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
-        let program = canonical_regular_file(&self.config.program, "MCP program")?;
-        let working_directory =
-            fs::canonicalize(&self.config.working_directory).map_err(|error| {
-                invalid_plan(format!("MCP working directory is unavailable: {error}"))
-            })?;
-        if !working_directory.is_dir() {
-            return Err(invalid_plan("MCP working directory is not a directory"));
-        }
-        let environment = self
-            .config
-            .environment_allowlist
-            .iter()
-            .filter_map(|name| env::var(name).ok().map(|value| (name.clone(), value)))
-            .collect::<BTreeMap<_, _>>();
+        let transport = prepare_transport(&self.config)?;
         let seed = ReadyClient {
             protocol: Protocol::Legacy,
-            program,
-            working_directory,
-            environment,
-            catalog: CatalogResponse { tools: Vec::new() },
-            exposed_to_remote: BTreeMap::new(),
+            transport,
+            catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
+            exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
             session: Rc::new(Mutex::new(None)),
         };
         let protocol = select_protocol(&self.config, &seed).await?;
         let mut selected = seed.clone();
         selected.protocol = protocol;
-        let mut session = connect(&self.config, &selected).await?;
-        let remote_tools =
-            match list_tools(&mut session, protocol, self.config.startup_timeout_ms).await {
-                Ok(tools) => tools,
-                Err(error) => {
-                    session.shutdown().await;
-                    return Err(error);
+        let (remote_tools, session) = match &selected.transport {
+            ReadyTransport::Stdio { .. } => {
+                let mut session = connect(&self.config, &selected).await?;
+                match list_tools_stdio(&mut session, protocol, self.config.startup_timeout_ms).await
+                {
+                    Ok(tools) => (tools, Some(session)),
+                    Err(error) => {
+                        session.shutdown().await;
+                        return Err(error);
+                    }
                 }
-            };
-        let (catalog, exposed_to_remote) =
-            match project_catalog(&self.config.tool_namespace, remote_tools) {
-                Ok(projected) => projected,
-                Err(error) => {
+            }
+            ReadyTransport::StreamableHttp { .. } => {
+                let tools = list_tools_http(&selected, self.config.startup_timeout_ms).await?;
+                (tools, None)
+            }
+        };
+        let enforce_http_headers =
+            matches!(selected.transport, ReadyTransport::StreamableHttp { .. });
+        let (catalog, exposed_to_remote) = match project_catalog(
+            &self.config.tool_namespace,
+            remote_tools,
+            enforce_http_headers,
+        ) {
+            Ok(projected) => projected,
+            Err(error) => {
+                if let Some(session) = session {
                     session.shutdown().await;
-                    return Err(error);
                 }
-            };
-        let session = Rc::new(Mutex::new(Some(session)));
+                return Err(error);
+            }
+        };
+        let session = Rc::new(Mutex::new(session));
         self.ready.replace(Some(ReadyClient {
             protocol,
-            catalog,
-            exposed_to_remote,
+            catalog: Rc::new(RefCell::new(catalog)),
+            exposed_to_remote: Rc::new(RefCell::new(exposed_to_remote)),
             session,
             ..seed
         }));
@@ -262,6 +365,97 @@ impl Lifecycle for McpClientPlugin {
     }
 }
 
+async fn refresh_catalog(
+    config: &McpClientConfig,
+    ready: &ReadyClient,
+) -> Result<(), RuntimeFailure> {
+    let remote_tools = match &ready.transport {
+        ReadyTransport::Stdio { .. } => {
+            let mut session_slot = ready.session.lock().await;
+            if session_slot.is_none() {
+                *session_slot = Some(connect(config, ready).await?);
+            }
+            let result = list_tools_stdio(
+                session_slot.as_mut().expect("session was connected"),
+                ready.protocol,
+                config.request_timeout_ms,
+            )
+            .await;
+            if result.is_err()
+                && let Some(session) = session_slot.take()
+            {
+                session.shutdown().await;
+            }
+            result?
+        }
+        ReadyTransport::StreamableHttp { .. } => {
+            list_tools_http(ready, config.request_timeout_ms).await?
+        }
+    };
+    let (catalog, exposed_to_remote) = project_catalog(
+        &config.tool_namespace,
+        remote_tools,
+        matches!(ready.transport, ReadyTransport::StreamableHttp { .. }),
+    )?;
+    ready.catalog.replace(catalog);
+    ready.exposed_to_remote.replace(exposed_to_remote);
+    Ok(())
+}
+
+fn prepare_transport(config: &McpClientConfig) -> Result<ReadyTransport, RuntimeFailure> {
+    match &config.transport {
+        TransportConfig::Stdio {
+            program,
+            working_directory,
+            environment_allowlist,
+            ..
+        } => {
+            let program = canonical_regular_file(program, "MCP program")?;
+            let working_directory = fs::canonicalize(working_directory).map_err(|error| {
+                invalid_plan(format!("MCP working directory is unavailable: {error}"))
+            })?;
+            if !working_directory.is_dir() {
+                return Err(invalid_plan("MCP working directory is not a directory"));
+            }
+            let environment = environment_allowlist
+                .iter()
+                .filter_map(|name| env::var(name).ok().map(|value| (name.clone(), value)))
+                .collect::<BTreeMap<_, _>>();
+            Ok(ReadyTransport::Stdio {
+                program,
+                working_directory,
+                environment,
+            })
+        }
+        TransportConfig::StreamableHttp {
+            endpoint,
+            authorization_environment,
+        } => {
+            let endpoint = reqwest::Url::parse(endpoint)
+                .map_err(|error| invalid_plan(format!("MCP endpoint is invalid: {error}")))?;
+            let authorization = authorization_environment
+                .as_ref()
+                .map(|name| {
+                    env::var(name).map_err(|_| {
+                        invalid_plan(format!("MCP authorization environment `{name}` is missing"))
+                    })
+                })
+                .transpose()?;
+            let client = reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|error| {
+                    invalid_plan(format!("failed to build MCP HTTP client: {error}"))
+                })?;
+            Ok(ReadyTransport::StreamableHttp {
+                endpoint,
+                authorization,
+                client,
+            })
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Session {
     child: Child,
@@ -272,12 +466,27 @@ struct Session {
 
 impl Session {
     fn spawn(config: &McpClientConfig, ready: &ReadyClient) -> Result<Self, RuntimeFailure> {
-        let mut command = Command::new(&ready.program);
+        let TransportConfig::Stdio { arguments, .. } = &config.transport else {
+            return Err(protocol_failure(
+                "cannot spawn stdio for an HTTP MCP transport",
+            ));
+        };
+        let ReadyTransport::Stdio {
+            program,
+            working_directory,
+            environment,
+        } = &ready.transport
+        else {
+            return Err(protocol_failure(
+                "cannot spawn stdio for an HTTP MCP transport",
+            ));
+        };
+        let mut command = Command::new(program);
         command
-            .args(&config.arguments)
-            .current_dir(&ready.working_directory)
+            .args(arguments)
+            .current_dir(working_directory)
             .env_clear()
-            .envs(&ready.environment)
+            .envs(environment)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -468,6 +677,17 @@ async fn select_protocol(
     config: &McpClientConfig,
     ready: &ReadyClient,
 ) -> Result<Protocol, RuntimeFailure> {
+    if matches!(ready.transport, ReadyTransport::StreamableHttp { .. }) {
+        let response = http_request_raw(
+            ready,
+            "server/discover",
+            json!({}),
+            config.startup_timeout_ms,
+        )
+        .await?;
+        validate_modern_discovery(&response)?;
+        return Ok(Protocol::Modern);
+    }
     match config.protocol {
         ProtocolMode::Modern => Ok(Protocol::Modern),
         ProtocolMode::Legacy => Ok(Protocol::Legacy),
@@ -484,26 +704,7 @@ async fn select_protocol(
             probe.shutdown().await;
             match response {
                 Ok(message) if message.get("result").is_some() => {
-                    if !message["result"]["capabilities"]["tools"].is_object() {
-                        return Err(protocol_failure(
-                            "MCP server does not declare the Tools capability",
-                        ));
-                    }
-                    let versions = message["result"]["supportedVersions"]
-                        .as_array()
-                        .ok_or_else(|| {
-                            protocol_failure("MCP discovery omitted supportedVersions")
-                        })?;
-                    if versions
-                        .iter()
-                        .any(|version| version.as_str() == Some(MODERN_VERSION))
-                    {
-                        Ok(Protocol::Modern)
-                    } else {
-                        Err(protocol_failure(
-                            "MCP server has no mutually supported modern protocol version",
-                        ))
-                    }
+                    validate_modern_discovery(&message).map(|()| Protocol::Modern)
                 }
                 Ok(message) if message["error"]["code"].as_i64() == Some(-32022) => {
                     let supported = message["error"]["data"]["supported"]
@@ -525,6 +726,28 @@ async fn select_protocol(
                 Ok(_) | Err(_) => Ok(Protocol::Legacy),
             }
         }
+    }
+}
+
+fn validate_modern_discovery(message: &Value) -> Result<(), RuntimeFailure> {
+    let result = rpc_result(message)?;
+    if !result["capabilities"]["tools"].is_object() {
+        return Err(protocol_failure(
+            "MCP server does not declare the Tools capability",
+        ));
+    }
+    let versions = result["supportedVersions"]
+        .as_array()
+        .ok_or_else(|| protocol_failure("MCP discovery omitted supportedVersions"))?;
+    if versions
+        .iter()
+        .any(|version| version.as_str() == Some(MODERN_VERSION))
+    {
+        Ok(())
+    } else {
+        Err(protocol_failure(
+            "MCP server has no mutually supported modern protocol version",
+        ))
     }
 }
 
@@ -576,7 +799,7 @@ async fn connect(config: &McpClientConfig, ready: &ReadyClient) -> Result<Sessio
     Ok(session)
 }
 
-async fn list_tools(
+async fn list_tools_stdio(
     session: &mut Session,
     protocol: Protocol,
     timeout_ms: u64,
@@ -615,9 +838,225 @@ async fn list_tools(
     Err(protocol_failure("MCP tools/list exceeded the page limit"))
 }
 
+async fn list_tools_http(
+    ready: &ReadyClient,
+    timeout_ms: u64,
+) -> Result<Vec<Value>, RuntimeFailure> {
+    let mut tools = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = BTreeSet::new();
+    for _ in 0..MAX_PAGES {
+        let params = cursor
+            .as_ref()
+            .map_or_else(|| json!({}), |cursor| json!({"cursor": cursor}));
+        let response = http_request_raw(ready, "tools/list", params, timeout_ms).await?;
+        let result = rpc_result(&response)?;
+        let page = result["tools"]
+            .as_array()
+            .ok_or_else(|| protocol_failure("MCP tools/list omitted tools"))?;
+        if tools.len().saturating_add(page.len()) > MAX_TOOLS {
+            return Err(protocol_failure("MCP server exposed more than 256 tools"));
+        }
+        tools.extend(page.iter().cloned());
+        cursor = result
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let Some(next) = cursor.as_ref() else {
+            return Ok(tools);
+        };
+        if next.is_empty() || !seen_cursors.insert(next.clone()) {
+            return Err(protocol_failure(
+                "MCP tools/list returned an invalid pagination cursor",
+            ));
+        }
+    }
+    Err(protocol_failure("MCP tools/list exceeded the page limit"))
+}
+
+async fn http_request(
+    ready: &ReadyClient,
+    context: &Ctx,
+    method: &str,
+    params: Value,
+    headers: &BTreeMap<String, String>,
+    timeout_ms: u64,
+) -> Result<Value, RuntimeFailure> {
+    let cancellation = context.cancellation();
+    tokio::select! {
+        () = cancellation.cancelled() => Err(RuntimeFailure::Cancelled { request_id: context.request_id() }),
+        result = http_request_raw_with_headers(ready, method, params, headers, timeout_ms) => result,
+    }
+}
+
+async fn http_request_raw(
+    ready: &ReadyClient,
+    method: &str,
+    params: Value,
+    timeout_ms: u64,
+) -> Result<Value, RuntimeFailure> {
+    http_request_raw_with_headers(ready, method, params, &BTreeMap::new(), timeout_ms).await
+}
+
+async fn http_request_raw_with_headers(
+    ready: &ReadyClient,
+    method: &str,
+    mut params: Value,
+    parameter_headers: &BTreeMap<String, String>,
+    timeout_ms: u64,
+) -> Result<Value, RuntimeFailure> {
+    let ReadyTransport::StreamableHttp {
+        endpoint,
+        authorization,
+        client,
+    } = &ready.transport
+    else {
+        return Err(protocol_failure("MCP HTTP request used a stdio transport"));
+    };
+    add_modern_metadata(&mut params, Protocol::Modern);
+    let request_id = 1_u64;
+    let body = json!({"jsonrpc":"2.0", "id":request_id, "method":method, "params":params});
+    let mut request = client
+        .post(endpoint.clone())
+        .header(
+            reqwest::header::ACCEPT,
+            "application/json, text/event-stream",
+        )
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header("MCP-Protocol-Version", MODERN_VERSION)
+        .header("Mcp-Method", method)
+        .timeout(Duration::from_millis(timeout_ms));
+    if matches!(method, "tools/call" | "resources/read" | "prompts/get")
+        && let Some(name) = body["params"]
+            .get(if method == "resources/read" {
+                "uri"
+            } else {
+                "name"
+            })
+            .and_then(Value::as_str)
+    {
+        request = request.header("Mcp-Name", encode_header_value(name));
+    }
+    if let Some(authorization) = authorization {
+        request = request.header(reqwest::header::AUTHORIZATION, authorization);
+    }
+    for (name, value) in parameter_headers {
+        request = request.header(name, value);
+    }
+    let response = request.json(&body).send().await.map_err(http_failure)?;
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let bytes = read_http_body(response).await?;
+    if !status.is_success() {
+        return Err(protocol_failure(format!(
+            "MCP HTTP request `{method}` failed with {status}: {}",
+            String::from_utf8_lossy(&bytes)
+        )));
+    }
+    match content_type.as_str() {
+        "application/json" => parse_http_json(&bytes, request_id),
+        "text/event-stream" => parse_sse_response(&bytes, request_id),
+        _ => Err(protocol_failure(format!(
+            "MCP HTTP response used unsupported Content-Type `{content_type}`"
+        ))),
+    }
+}
+
+async fn read_http_body(response: reqwest::Response) -> Result<Vec<u8>, RuntimeFailure> {
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(http_failure)?;
+        if body.len().saturating_add(chunk.len()) > MAX_MESSAGE_BYTES {
+            return Err(protocol_failure(
+                "MCP HTTP response exceeded the byte limit",
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+fn parse_http_json(bytes: &[u8], expected_id: u64) -> Result<Value, RuntimeFailure> {
+    let message = serde_json::from_slice::<Value>(bytes).map_err(|error| {
+        protocol_failure(format!("MCP HTTP response was invalid JSON: {error}"))
+    })?;
+    validate_response_id(message, expected_id)
+}
+
+fn parse_sse_response(bytes: &[u8], expected_id: u64) -> Result<Value, RuntimeFailure> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| protocol_failure("MCP SSE response was not UTF-8"))?;
+    let normalized = text.replace("\r\n", "\n");
+    for event in normalized.split("\n\n") {
+        let data = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim_start)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if data.is_empty() {
+            continue;
+        }
+        let message = serde_json::from_str::<Value>(&data)
+            .map_err(|error| protocol_failure(format!("MCP SSE data was invalid JSON: {error}")))?;
+        if message.get("id").and_then(Value::as_u64) == Some(expected_id) {
+            return validate_response_id(message, expected_id);
+        }
+    }
+    Err(protocol_failure(
+        "MCP SSE stream ended without a final response",
+    ))
+}
+
+fn validate_response_id(message: Value, expected_id: u64) -> Result<Value, RuntimeFailure> {
+    if message["jsonrpc"].as_str() != Some("2.0")
+        || message.get("id").and_then(Value::as_u64) != Some(expected_id)
+    {
+        return Err(protocol_failure(
+            "MCP HTTP response ID did not match the request",
+        ));
+    }
+    Ok(message)
+}
+
+fn encode_header_value(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let safe = !value.starts_with("=?base64?")
+        && !value.ends_with("?=")
+        && value.trim() == value
+        && bytes
+            .iter()
+            .all(|byte| matches!(byte, 0x20..=0x7e) || *byte == b'\t');
+    if safe {
+        value.to_owned()
+    } else {
+        format!(
+            "=?base64?{}?=",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        )
+    }
+}
+
+fn http_failure(error: impl std::fmt::Display) -> RuntimeFailure {
+    RuntimeFailure::PluginFailure {
+        detail: format!("MCP Streamable HTTP failed: {error}"),
+    }
+}
+
 fn project_catalog(
     namespace: &str,
     remote_tools: Vec<Value>,
+    enforce_http_headers: bool,
 ) -> Result<(CatalogResponse, BTreeMap<String, String>), RuntimeFailure> {
     let mut tools = Vec::with_capacity(remote_tools.len());
     let mut mapping = BTreeMap::new();
@@ -656,6 +1095,9 @@ fn project_catalog(
                 "MCP Tool inputSchema is not a JSON object",
             ));
         }
+        if enforce_http_headers {
+            collect_header_bindings(&schema)?;
+        }
         let input_schema_json =
             serde_json::to_string(&schema).map_err(|error| protocol_failure(error.to_string()))?;
         if !(2..=MAX_SCHEMA_BYTES).contains(&input_schema_json.len()) {
@@ -671,6 +1113,141 @@ fn project_catalog(
         });
     }
     Ok((CatalogResponse { tools }, mapping))
+}
+
+#[derive(Clone, Debug)]
+struct HeaderBinding {
+    header: String,
+    path: Vec<String>,
+    value_type: String,
+}
+
+fn collect_header_bindings(schema: &Value) -> Result<Vec<HeaderBinding>, RuntimeFailure> {
+    let mut bindings = Vec::new();
+    collect_header_bindings_at(schema, &mut Vec::new(), false, &mut bindings)?;
+    let mut names = BTreeSet::new();
+    if bindings
+        .iter()
+        .any(|binding| !names.insert(binding.header.to_ascii_lowercase()))
+    {
+        return Err(protocol_failure(
+            "MCP Tool inputSchema contains duplicate x-mcp-header names",
+        ));
+    }
+    Ok(bindings)
+}
+
+fn collect_header_bindings_at(
+    schema: &Value,
+    path: &mut Vec<String>,
+    is_property: bool,
+    bindings: &mut Vec<HeaderBinding>,
+) -> Result<(), RuntimeFailure> {
+    let Some(object) = schema.as_object() else {
+        return Ok(());
+    };
+    if let Some(annotation) = object.get("x-mcp-header") {
+        let name = annotation.as_str().filter(|name| valid_header_token(name));
+        let value_type = object.get("type").and_then(Value::as_str);
+        if !is_property
+            || name.is_none()
+            || !matches!(value_type, Some("string" | "integer" | "boolean"))
+        {
+            return Err(protocol_failure(
+                "MCP Tool inputSchema contains an invalid x-mcp-header annotation",
+            ));
+        }
+        bindings.push(HeaderBinding {
+            header: format!("Mcp-Param-{}", name.expect("validated")),
+            path: path.clone(),
+            value_type: value_type.expect("validated").to_owned(),
+        });
+    }
+    for (key, value) in object {
+        if key == "properties" {
+            let properties = value.as_object().ok_or_else(|| {
+                protocol_failure("MCP Tool inputSchema properties is not an object")
+            })?;
+            for (name, property) in properties {
+                path.push(name.clone());
+                collect_header_bindings_at(property, path, true, bindings)?;
+                path.pop();
+            }
+        } else if key != "x-mcp-header" && contains_header_annotation(value) {
+            return Err(protocol_failure(
+                "MCP Tool inputSchema places x-mcp-header outside a reachable property",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn contains_header_annotation(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            object.contains_key("x-mcp-header") || object.values().any(contains_header_annotation)
+        }
+        Value::Array(values) => values.iter().any(contains_header_annotation),
+        _ => false,
+    }
+}
+
+fn valid_header_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+fn parameter_headers(
+    schema: &Value,
+    arguments: &Value,
+) -> Result<BTreeMap<String, String>, RuntimeFailure> {
+    let mut headers = BTreeMap::new();
+    for binding in collect_header_bindings(schema)? {
+        let value = binding
+            .path
+            .iter()
+            .try_fold(arguments, |value, segment| value.get(segment));
+        let Some(value) = value.filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let encoded = match binding.value_type.as_str() {
+            "string" => value.as_str().map(encode_header_value),
+            "integer" => safe_json_integer(value).map(|value| value.to_string()),
+            "boolean" => value.as_bool().map(|value| value.to_string()),
+            _ => None,
+        }
+        .ok_or_else(|| {
+            protocol_failure("MCP Tool argument for x-mcp-header has the wrong primitive type")
+        })?;
+        headers.insert(binding.header, encoded);
+    }
+    Ok(headers)
+}
+
+fn safe_json_integer(value: &Value) -> Option<i64> {
+    const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+    value
+        .as_i64()
+        .filter(|value| (-MAX_SAFE_INTEGER..=MAX_SAFE_INTEGER).contains(value))
 }
 
 fn normalize_remote_tool_name(name: &str) -> Option<String> {
@@ -831,20 +1408,28 @@ fn process_failure(error: impl std::fmt::Display) -> RuntimeFailure {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use axum::{
+        Json, Router,
+        body::Body,
+        http::{HeaderMap, StatusCode},
+        response::{IntoResponse, Response},
+        routing::post,
+    };
     use lenso_kernel::{CancellationToken, InvocationContext};
     use std::process::Command as StdCommand;
 
     const MODERN_SERVER: &str = r#"
 while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
     *\"method\":\"server/discover\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","supportedVersions":["2026-07-28"],"capabilities":{"tools":{}}}}\n' "$id"
       ;;
     *\"method\":\"tools/list\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","additionalProperties":false}}]}}\n' "$id"
       ;;
     *\"method\":\"tools/call\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"resultType":"complete","content":[{"type":"text","text":"pong"}],"isError":false}}\n' "$id"
       ;;
   esac
 done
@@ -852,29 +1437,107 @@ done
 
     const LEGACY_SERVER: &str = r#"
 while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
     *\"method\":\"server/discover\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}'
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"Method not found"}}\n' "$id"
       ;;
     *\"method\":\"initialize\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fixture","version":"1"}}}\n' "$id"
       ;;
     *\"method\":\"tools/list\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object"}}]}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object"}}]}}\n' "$id"
       ;;
     *\"method\":\"tools/call\"*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"legacy pong"}],"isError":false}}'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"legacy pong"}],"isError":false}}\n' "$id"
       ;;
   esac
 done
 "#;
 
+    async fn http_fixture(headers: HeaderMap, Json(body): Json<Value>) -> Response {
+        let method = body["method"].as_str().unwrap_or("");
+        if headers
+            .get("mcp-protocol-version")
+            .and_then(|value| value.to_str().ok())
+            != Some(MODERN_VERSION)
+            || headers
+                .get("mcp-method")
+                .and_then(|value| value.to_str().ok())
+                != Some(method)
+        {
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+        match method {
+            "server/discover" => Json(json!({
+                "jsonrpc":"2.0", "id":1,
+                "result":{"resultType":"complete","supportedVersions":[MODERN_VERSION],"capabilities":{"tools":{}}}
+            }))
+            .into_response(),
+            "tools/list" => Json(json!({
+                "jsonrpc":"2.0", "id":1,
+                "result":{"resultType":"complete","tools":[{"name":"ping","description":"Return pong.","inputSchema":{"type":"object","properties":{"region":{"type":"string","x-mcp-header":"Region"}},"required":["region"],"additionalProperties":false}}]}
+            }))
+            .into_response(),
+            "tools/call" => {
+                if headers
+                    .get("mcp-name")
+                    .and_then(|value| value.to_str().ok())
+                    != Some("ping")
+                    || headers
+                        .get("mcp-param-region")
+                        .and_then(|value| value.to_str().ok())
+                        != Some("us-west1")
+                {
+                    return StatusCode::BAD_REQUEST.into_response();
+                }
+                Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(
+                        "event: message\r\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{}}\r\n\r\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"resultType\":\"complete\",\"content\":[{\"type\":\"text\",\"text\":\"http pong\"}],\"isError\":false}}\r\n\r\n",
+                    ))
+                    .unwrap()
+            }
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
+    }
+
+    async fn http_ready() -> (McpClientConfig, ReadyClient, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, Router::new().route("/mcp", post(http_fixture)))
+                .await
+                .unwrap();
+        });
+        let config = McpClientConfig {
+            transport: TransportConfig::StreamableHttp {
+                endpoint: format!("http://{address}/mcp"),
+                authorization_environment: None,
+            },
+            protocol: ProtocolMode::Modern,
+            tool_namespace: "fixture".to_owned(),
+            startup_timeout_ms: 1_000,
+            request_timeout_ms: 1_000,
+        };
+        let ready = ReadyClient {
+            protocol: Protocol::Modern,
+            transport: prepare_transport(&config).unwrap(),
+            catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
+            exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
+            session: Rc::new(Mutex::new(None)),
+        };
+        (config, ready, server)
+    }
+
     fn config(script: &str, protocol: ProtocolMode) -> McpClientConfig {
         McpClientConfig {
-            program: PathBuf::from("/bin/sh"),
-            arguments: vec!["-c".to_owned(), script.to_owned()],
-            working_directory: env::current_dir().unwrap(),
-            environment_allowlist: Vec::new(),
+            transport: TransportConfig::Stdio {
+                program: PathBuf::from("/bin/sh"),
+                arguments: vec!["-c".to_owned(), script.to_owned()],
+                working_directory: env::current_dir().unwrap(),
+                environment_allowlist: Vec::new(),
+            },
             protocol,
             tool_namespace: "fixture".to_owned(),
             startup_timeout_ms: 1_000,
@@ -883,13 +1546,23 @@ done
     }
 
     fn seed(config: &McpClientConfig) -> ReadyClient {
+        let TransportConfig::Stdio {
+            program,
+            working_directory,
+            ..
+        } = &config.transport
+        else {
+            unreachable!()
+        };
         ReadyClient {
             protocol: Protocol::Legacy,
-            program: fs::canonicalize(&config.program).unwrap(),
-            working_directory: fs::canonicalize(&config.working_directory).unwrap(),
-            environment: BTreeMap::new(),
-            catalog: CatalogResponse { tools: Vec::new() },
-            exposed_to_remote: BTreeMap::new(),
+            transport: ReadyTransport::Stdio {
+                program: fs::canonicalize(program).unwrap(),
+                working_directory: fs::canonicalize(working_directory).unwrap(),
+                environment: BTreeMap::new(),
+            },
+            catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
+            exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
             session: Rc::new(Mutex::new(None)),
         }
     }
@@ -901,13 +1574,48 @@ done
         initialize(&mut session, ready.protocol, config.startup_timeout_ms)
             .await
             .unwrap();
-        let remote = list_tools(&mut session, ready.protocol, config.startup_timeout_ms)
+        let remote = list_tools_stdio(&mut session, ready.protocol, config.startup_timeout_ms)
             .await
             .unwrap();
-        (ready.catalog, ready.exposed_to_remote) =
-            project_catalog(&config.tool_namespace, remote).unwrap();
+        let (catalog, mapping) = project_catalog(&config.tool_namespace, remote, false).unwrap();
+        ready.catalog.replace(catalog);
+        ready.exposed_to_remote.replace(mapping);
         ready.session = Rc::new(Mutex::new(Some(session)));
         ready
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn streamable_http_sends_required_headers_and_accepts_sse() {
+        let (config, ready, server) = http_ready().await;
+        assert_eq!(
+            select_protocol(&config, &ready).await.unwrap(),
+            Protocol::Modern
+        );
+        let remote = list_tools_http(&ready, config.startup_timeout_ms)
+            .await
+            .unwrap();
+        let (catalog, mapping) = project_catalog(&config.tool_namespace, remote, true).unwrap();
+        assert_eq!(catalog.tools[0].name, "mcp__fixture__ping");
+        assert_eq!(mapping["mcp__fixture__ping"], "ping");
+        let schema =
+            serde_json::from_str::<Value>(catalog.tools[0].input_schema_json.as_str()).unwrap();
+        let arguments = json!({"region":"us-west1"});
+        let headers = parameter_headers(&schema, &arguments).unwrap();
+        let response = http_request_raw_with_headers(
+            &ready,
+            "tools/call",
+            json!({"name":"ping","arguments":arguments}),
+            &headers,
+            config.request_timeout_ms,
+        )
+        .await
+        .unwrap();
+        assert_eq!(map_tool_result(&response).unwrap().content, "http pong");
+        assert_eq!(
+            encode_header_value("Hello, 世界"),
+            "=?base64?SGVsbG8sIOS4lueVjA==?="
+        );
+        server.abort();
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -915,10 +1623,10 @@ done
         let config = config(MODERN_SERVER, ProtocolMode::Auto);
         let ready = discover(&config).await;
         assert_eq!(ready.protocol, Protocol::Modern);
-        assert_eq!(ready.catalog.tools.len(), 1);
-        assert_eq!(ready.catalog.tools[0].name, "mcp__fixture__ping");
+        assert_eq!(ready.catalog.borrow().tools.len(), 1);
+        assert_eq!(ready.catalog.borrow().tools[0].name, "mcp__fixture__ping");
         assert!(matches!(
-            ready.catalog.tools[0].execution,
+            ready.catalog.borrow().tools[0].execution,
             ToolExecutionClass::Exclusive
         ));
     }
@@ -928,7 +1636,7 @@ done
         let config = config(LEGACY_SERVER, ProtocolMode::Auto);
         let ready = discover(&config).await;
         assert_eq!(ready.protocol, Protocol::Legacy);
-        assert_eq!(ready.catalog.tools[0].name, "mcp__fixture__ping");
+        assert_eq!(ready.catalog.borrow().tools[0].name, "mcp__fixture__ping");
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -970,16 +1678,17 @@ done
         let config = config(&script, ProtocolMode::Modern);
         let mut ready = seed(&config);
         ready.protocol = Protocol::Modern;
-        ready.catalog = CatalogResponse {
+        ready.catalog.replace(CatalogResponse {
             tools: vec![ToolDefinition {
                 name: "mcp__fixture__wait".to_owned(),
                 description: String::new(),
                 input_schema_json: "{\"type\":\"object\"}".to_owned().try_into().unwrap(),
                 execution: ToolExecutionClass::Exclusive,
             }],
-        };
+        });
         ready
             .exposed_to_remote
+            .borrow_mut()
             .insert("mcp__fixture__wait".to_owned(), "wait".to_owned());
         let plugin = McpClientPlugin {
             config,
@@ -1037,16 +1746,17 @@ done
         config.request_timeout_ms = 50;
         let mut ready = seed(&config);
         ready.protocol = Protocol::Modern;
-        ready.catalog = CatalogResponse {
+        ready.catalog.replace(CatalogResponse {
             tools: vec![ToolDefinition {
                 name: "mcp__fixture__wait".to_owned(),
                 description: String::new(),
                 input_schema_json: "{\"type\":\"object\"}".to_owned().try_into().unwrap(),
                 execution: ToolExecutionClass::Exclusive,
             }],
-        };
+        });
         ready
             .exposed_to_remote
+            .borrow_mut()
             .insert("mcp__fixture__wait".to_owned(), "wait".to_owned());
         let plugin = McpClientPlugin {
             config,
@@ -1071,7 +1781,7 @@ done
             json!({"name":"same-tool","inputSchema":{"type":"object"}}),
             json!({"name":"same.tool","inputSchema":{"type":"object"}}),
         ];
-        assert!(project_catalog("fixture", duplicate).is_err());
+        assert!(project_catalog("fixture", duplicate, false).is_err());
 
         let error = map_tool_result(&json!({
             "jsonrpc":"2.0",

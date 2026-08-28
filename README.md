@@ -259,14 +259,15 @@ already staged changes and intentionally disables hooks and signing. Destructive
 history operations and network operations are not exposed. Add an Approval Hook
 to the same Profile when `git_stage` and `git_commit` should use approve-then-retry.
 
-MCP servers are opt-in Plugin Instances too. The bundled MCP Client owns one
-stdio child process, protocol negotiation, Tool discovery, namespacing,
-cancellation, restart, and cleanup. It supports both modern per-request
+MCP servers are opt-in Plugin Instances too. The bundled MCP Client supports
+stdio and MCP 2026-07-28 Streamable HTTP, plus protocol negotiation, Tool
+discovery, namespacing, cancellation, restart, and cleanup. Stdio supports modern per-request
 metadata and legacy `initialize` servers; `auto` probes a disposable process
 before opening the real session.
 
 ```toml
 # plugins/lenso.agent.mcp-client/filesystem.toml
+transport = "stdio"
 program = "/absolute/path/to/node"
 arguments = ["/absolute/path/to/mcp-filesystem-server", "/workspace"]
 working_directory = "/workspace"
@@ -276,6 +277,25 @@ tool_namespace = "filesystem"
 startup_timeout_ms = 5000
 request_timeout_ms = 30000
 ```
+
+Remote MCP uses the same Plugin and Slot:
+
+```toml
+# plugins/lenso.agent.mcp-client/team.toml
+transport = "streamable_http"
+endpoint = "https://mcp.example.test/mcp"
+authorization_environment = "MCP_AUTHORIZATION"
+protocol = "modern"
+tool_namespace = "team"
+startup_timeout_ms = 5000
+request_timeout_ms = 30000
+```
+
+`MCP_AUTHORIZATION` contains the complete Authorization header value and is
+resolved only into the running Plugin. HTTP requests send the required
+protocol/method/name headers, support JSON or request-scoped SSE responses,
+and mirror valid `x-mcp-header` Tool parameters. The Tool catalog is refreshed
+at each new Turn; the current Turn keeps its already admitted immutable set.
 
 Select it only for the Profile that needs those Tools:
 
