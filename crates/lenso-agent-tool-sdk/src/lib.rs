@@ -1,4 +1,9 @@
 //! Typed authoring support for Agent Tool Provider Plugins.
+//!
+//! `#[tool_provider]` is the single Tool authoring interface. With the native
+//! `lenso` facade it generates linked Provider endpoints; with the portable
+//! `lenso-plugin-sdk` facade it generates the same Tool catalog and dispatcher
+//! before Runtime lowering to Wasm or Process.
 
 pub use lenso_agent_tool_sdk_macros::tool_provider;
 

@@ -1,6 +1,7 @@
 //! Procedural macros for typed Agent Tool Provider authoring.
 
 use proc_macro::TokenStream;
+use proc_macro_crate::crate_name;
 use quote::quote;
 use syn::{
     Attribute, Expr, ExprLit, FnArg, ImplItem, ImplItemFn, ItemImpl, Lit, LitStr, MetaNameValue,
@@ -43,11 +44,18 @@ struct ToolMethod {
 fn expand(implementation: &mut ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
     validate_impl(implementation)?;
     let tools = collect_tools(implementation)?;
+    if crate_name("lenso-plugin-sdk").is_ok() {
+        return expand_portable(implementation, &tools);
+    }
+    Ok(expand_native(implementation, &tools))
+}
+
+fn expand_native(implementation: &mut ItemImpl, tools: &[ToolMethod]) -> proc_macro2::TokenStream {
     let self_type = &implementation.self_ty;
     let catalog_entries = tools.iter().map(catalog_entry);
     let dispatch_arms = tools.iter().map(dispatch_arm);
 
-    Ok(quote! {
+    quote! {
         #implementation
 
         #[lenso::provides(tool_provider_contract::ToolProvider)]
@@ -79,6 +87,91 @@ fn expand(implementation: &mut ItemImpl) -> syn::Result<proc_macro2::TokenStream
                         ::lenso_agent_tool_sdk::__private::contract::ExecuteError::NotFound,
                     )),
                 }
+            }
+        }
+    }
+}
+
+fn expand_portable(
+    implementation: &ItemImpl,
+    tools: &[ToolMethod],
+) -> syn::Result<proc_macro2::TokenStream> {
+    if let Some(tool) = tools.iter().find(|tool| tool.is_async) {
+        return Err(syn::Error::new(
+            tool.method.span(),
+            "portable Tool methods must be synchronous",
+        ));
+    }
+
+    let self_type = &implementation.self_ty;
+    let catalog_entries = tools.iter().map(catalog_entry);
+    let dispatch_arms = tools.iter().map(portable_dispatch_arm);
+
+    Ok(quote! {
+        #implementation
+
+        impl ::lenso::JsonRequestHandler for #self_type {
+            fn invoke(
+                &self,
+                capability: &str,
+                operation: &str,
+                request: ::lenso::__private::serde_json::Value,
+            ) -> ::lenso::InvocationOutcome {
+                use ::lenso_agent_tool_sdk::__private::contract;
+
+                if capability != contract::CAPABILITY_ID {
+                    return ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("not_found"),
+                    );
+                }
+
+                match operation {
+                    contract::CATALOG_OPERATION => {
+                        if ::lenso::__private::serde_json::from_value::<contract::CatalogRequest>(
+                            request,
+                        )
+                        .is_err()
+                        {
+                            return ::lenso::InvocationOutcome::DomainError(
+                                ::lenso::__private::serde_json::json!("catalog_invalid"),
+                            );
+                        }
+                        let response = contract::CatalogResponse {
+                            tools: vec![#(#catalog_entries),*],
+                        };
+                        match ::lenso::__private::serde_json::to_value(response) {
+                            Ok(value) => ::lenso::InvocationOutcome::Success(value),
+                            Err(error) => ::lenso::InvocationOutcome::Failure(error.to_string()),
+                        }
+                    }
+                    contract::EXECUTE_OPERATION => {
+                        let request = match ::lenso::__private::serde_json::from_value::<
+                            contract::ExecuteRequest,
+                        >(request) {
+                            Ok(request) => request,
+                            Err(_) => return ::lenso::InvocationOutcome::DomainError(
+                                ::lenso::__private::serde_json::json!("invalid_arguments"),
+                            ),
+                        };
+                        match request.name.as_str() {
+                            #(#dispatch_arms,)*
+                            _ => ::lenso::InvocationOutcome::DomainError(
+                                ::lenso::__private::serde_json::json!("not_found"),
+                            ),
+                        }
+                    }
+                    _ => ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("not_found"),
+                    ),
+                }
+            }
+        }
+
+        ::lenso::__export_json_request_handler! {
+            #self_type {
+                capability_id: "lenso.agent.tool-provider@2",
+                descriptor_version: "2.0.0",
+                requests: ["catalog", "execute"],
             }
         }
     })
@@ -251,6 +344,40 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
                     ::lenso_agent_tool_sdk::__private::contract::ExecuteError::InvalidArguments,
                 ))?;
             #invoke.map_err(::lenso::PluginError::domain)
+        }
+    }
+}
+
+fn portable_dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
+    let method = &tool.method;
+    let argument_type = &tool.argument_type;
+    let name = &tool.name;
+    let invoke = if tool.takes_self {
+        quote!(self.#method(arguments))
+    } else {
+        quote!(Self::#method(arguments))
+    };
+    quote! {
+        #name => {
+            let arguments: #argument_type =
+                match ::lenso_agent_tool_sdk::__private::serde_json::from_str(
+                    request.arguments_json.as_str(),
+                ) {
+                    Ok(arguments) => arguments,
+                    Err(_) => return ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("invalid_arguments"),
+                    ),
+                };
+            match #invoke {
+                Ok(response) => match ::lenso::__private::serde_json::to_value(response) {
+                    Ok(value) => ::lenso::InvocationOutcome::Success(value),
+                    Err(error) => ::lenso::InvocationOutcome::Failure(error.to_string()),
+                },
+                Err(error) => match ::lenso::__private::serde_json::to_value(error) {
+                    Ok(value) => ::lenso::InvocationOutcome::DomainError(value),
+                    Err(error) => ::lenso::InvocationOutcome::Failure(error.to_string()),
+                },
+            }
         }
     }
 }
