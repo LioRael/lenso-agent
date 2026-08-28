@@ -1767,6 +1767,8 @@ dependencies = [
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-code-mode-tools-plugin",
  "lenso-agent-http-fetch-plugin",
+ "lenso-agent-lifecycle-audit-plugin",
+ "lenso-agent-lifecycle-command-plugin",
  "lenso-agent-loop-plugin",
  "lenso-agent-model-fixture-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
@@ -1814,6 +1816,7 @@ dependencies = [
  "lenso-app-plan",
  "lenso-capability-agent",
  "lenso-capability-agent-http-fetch",
+ "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-model",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
@@ -1855,12 +1858,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-lifecycle-audit-plugin"
+version = "0.1.0"
+dependencies = [
+ "fs2",
+ "lenso",
+ "lenso-capability-agent-lifecycle",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lenso-agent-lifecycle-command-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-lifecycle",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "lenso-agent-loop-plugin"
 version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
  "lenso-capability-agent",
+ "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-model",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
@@ -2312,6 +2341,24 @@ dependencies = [
  "lenso-runtime-codec",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-lifecycle"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

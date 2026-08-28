@@ -113,3 +113,12 @@ duration fields to the same bounded `run_turn` stream. A missing `kind` remains
 a `text_delta`, preserving messages from older providers. `tool_started`,
 `tool_completed`, and `tool_failed` expose the Agent Loop's live Step progress;
 they do not replace the durable Session events that own trajectory evidence.
+
+## Lifecycle observers
+
+`lenso.agent.lifecycle@1` delivers typed `session_started`, `session_resumed`,
+and `turn_started` transitions to zero or more observers in resolved Plan
+order. Session start runs only after the required System Instruction is
+durable and before the first user Turn. Delivery is at least once and carries
+a stable event ID; observers must be idempotent. Observer failure rejects the
+pending transition and never widens Agent authority.

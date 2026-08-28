@@ -14,6 +14,9 @@ use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
     RunTurnResponseProgressChannel,
 };
+use lenso_capability_agent_lifecycle::{
+    self as lifecycle_capability, LifecycleEventKind, ObserveRequest,
+};
 use lenso_capability_agent_model::{
     self as model_capability, CompleteError, CompleteMessage, CompleteMessageInput,
     CompleteMessageKind, CompleteMessageRole, CompleteOpen, CompleteTool, ModelEvent,
@@ -159,6 +162,7 @@ struct AgentLoop {
     prompt: Port<prompt_capability::PromptClient>,
     tools: Port<tools_capability::ToolsClient>,
     session: Port<session_capability::SessionClient>,
+    lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
     #[tasks]
     tasks: ManagedTasks,
     active: Rc<Cell<bool>>,
@@ -276,38 +280,22 @@ async fn run_turn(
     })?;
     let history_start = history.len().saturating_sub(history_event_count);
     let mut messages = reconstruct_history(&history[history_start..])?;
-    let turn_id = uuid::Uuid::new_v4().to_string();
-    let mut revision = opened.revision;
-    let mut initial_events = Vec::new();
-    if opened.created {
-        initial_events.push(session_event(
-            AppendSessionRequestEventsItemKind::SessionCreated,
-            None,
-            &serde_json::json!({"session_id": session_id}),
-        )?);
-    }
-    if install_system_instruction {
-        initial_events.push(session_event(
-            AppendSessionRequestEventsItemKind::SystemInstructionInstalled,
-            None,
-            &serde_json::to_value(&system_instruction).map_err(|error| {
-                PluginError::runtime(RuntimeFailure::Internal {
-                    detail: format!("failed to encode installed System Instruction: {error}"),
-                })
-            })?,
-        )?);
-    }
-    initial_events.extend(interrupted_turn_events(&history)?);
-    initial_events.push(session_event(
-        AppendSessionRequestEventsItemKind::TurnStarted,
-        Some(&turn_id),
-        &serde_json::json!({
-            "generation_spec_digest": generation_spec_digest,
-            "input": request.input,
-            "run_scope": run_scope.as_ref()
-        }),
-    )?);
-    revision = append_events(clients, context, &session_id, revision, initial_events).await?;
+    let (turn_id, mut revision) = start_turn(
+        clients,
+        context,
+        TurnStart {
+            opened_created: opened.created,
+            session_id: &session_id,
+            revision: opened.revision,
+            history: &history,
+            install_system_instruction,
+            system_instruction: &system_instruction,
+            generation_spec_digest,
+            input: &request.input,
+            run_scope: run_scope.as_ref(),
+        },
+    )
+    .await?;
     messages.push(user_message(request.input));
 
     let result = execute_steps(
@@ -327,6 +315,96 @@ async fn run_turn(
         record_turn_failure(clients, context, &session_id, &turn_id, revision, error).await;
     }
     result
+}
+
+struct TurnStart<'a> {
+    opened_created: bool,
+    session_id: &'a str,
+    revision: String,
+    history: &'a [ReadSessionResponseEventsItem],
+    install_system_instruction: bool,
+    system_instruction: &'a InstalledSystemInstruction,
+    generation_spec_digest: &'a str,
+    input: &'a str,
+    run_scope: Option<&'a RunScope>,
+}
+
+async fn start_turn(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    start: TurnStart<'_>,
+) -> Result<(String, String), TurnFailure> {
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let mut revision = start.revision;
+    let mut initialization_events = Vec::new();
+    if start.opened_created {
+        initialization_events.push(session_event(
+            AppendSessionRequestEventsItemKind::SessionCreated,
+            None,
+            &serde_json::json!({"session_id": start.session_id}),
+        )?);
+    }
+    if start.install_system_instruction {
+        initialization_events.push(session_event(
+            AppendSessionRequestEventsItemKind::SystemInstructionInstalled,
+            None,
+            &serde_json::to_value(start.system_instruction).map_err(|error| {
+                PluginError::runtime(RuntimeFailure::Internal {
+                    detail: format!("failed to encode installed System Instruction: {error}"),
+                })
+            })?,
+        )?);
+    }
+    if !initialization_events.is_empty() {
+        revision = append_events(
+            clients,
+            context,
+            start.session_id,
+            revision,
+            initialization_events,
+        )
+        .await?;
+    }
+    let first_turn = !start
+        .history
+        .iter()
+        .any(|event| event.kind == ReadSessionResponseEventsItemKind::TurnStarted);
+    observe_lifecycle(
+        clients,
+        context,
+        if first_turn {
+            LifecycleEventKind::SessionStarted
+        } else {
+            LifecycleEventKind::SessionResumed
+        },
+        start.session_id,
+        if first_turn { None } else { Some(&turn_id) },
+        start.generation_spec_digest,
+        &serde_json::json!({"revision": revision}),
+    )
+    .await?;
+    observe_lifecycle(
+        clients,
+        context,
+        LifecycleEventKind::TurnStarted,
+        start.session_id,
+        Some(&turn_id),
+        start.generation_spec_digest,
+        &serde_json::json!({"input": start.input, "run_scope": start.run_scope}),
+    )
+    .await?;
+    let mut turn_events = interrupted_turn_events(start.history)?;
+    turn_events.push(session_event(
+        AppendSessionRequestEventsItemKind::TurnStarted,
+        Some(&turn_id),
+        &serde_json::json!({
+            "generation_spec_digest": start.generation_spec_digest,
+            "input": start.input,
+            "run_scope": start.run_scope
+        }),
+    )?);
+    revision = append_events(clients, context, start.session_id, revision, turn_events).await?;
+    Ok((turn_id, revision))
 }
 
 fn run_scope(context: &InvocationContext) -> Result<Option<RunScope>, TurnFailure> {
@@ -1546,6 +1624,59 @@ fn session_event(
     })
 }
 
+async fn observe_lifecycle(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    kind: LifecycleEventKind,
+    session_id: &str,
+    turn_id: Option<&str>,
+    generation_spec_digest: &str,
+    payload: &serde_json::Value,
+) -> Result<(), TurnFailure> {
+    let event_name = match kind {
+        LifecycleEventKind::SessionStarted => "session-started",
+        LifecycleEventKind::SessionResumed => "session-resumed",
+        LifecycleEventKind::TurnStarted => "turn-started",
+    };
+    let event_id = turn_id.map_or_else(
+        || format!("session/{session_id}/{event_name}"),
+        |turn_id| format!("session/{session_id}/turn/{turn_id}/{event_name}"),
+    );
+    let occurred_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| {
+            PluginError::runtime(RuntimeFailure::Internal {
+                detail: format!("failed to format lifecycle timestamp: {error}"),
+            })
+        })?;
+    lifecycle_capability::observe_all(
+        &clients.lifecycle,
+        context,
+        ObserveRequest {
+            event_id,
+            kind,
+            session_id: session_id.to_owned(),
+            turn_id: Some(turn_id.map(ToOwned::to_owned)),
+            occurred_at,
+            generation_spec_digest: generation_spec_digest.to_owned(),
+            payload_json: serde_json::to_string(payload)
+                .map_err(|error| {
+                    PluginError::runtime(RuntimeFailure::Internal {
+                        detail: format!("failed to encode lifecycle payload: {error}"),
+                    })
+                })?
+                .try_into()
+                .map_err(|_| {
+                    PluginError::runtime(RuntimeFailure::Internal {
+                        detail: "lifecycle payload exceeded its contract bound".to_owned(),
+                    })
+                })?,
+        },
+    )
+    .await
+    .map_err(PluginError::runtime)
+}
+
 fn map_session_open_error(error: SessionOpenInvocationError) -> TurnFailure {
     match error {
         SessionOpenInvocationError::Domain(OpenError::InvalidSessionId | OpenError::NotFound) => {
@@ -1648,12 +1779,17 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 4);
+        assert_eq!(requirements.len(), 5);
         assert!(
             requirements
                 .iter()
+                .filter(|requirement| requirement["capability_id"] != "lenso.agent.lifecycle@1")
                 .all(|requirement| requirement["cardinality"] == "one")
         );
+        assert!(requirements.iter().any(|requirement| {
+            requirement["capability_id"] == "lenso.agent.lifecycle@1"
+                && requirement["cardinality"] == "many"
+        }));
         assert_eq!(
             descriptor["configuration_schema"]["required"],
             serde_json::json!([

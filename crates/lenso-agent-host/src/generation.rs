@@ -21,6 +21,7 @@ use lenso_app_plan::{
 };
 use lenso_capability_agent::{Agent, AgentJsonCodec};
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
+use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::SessionJsonCodec;
@@ -1340,6 +1341,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::many("surfaces"),
         HostSlot::many("tool-providers"),
         HostSlot::many("tool-hooks"),
+        HostSlot::many("lifecycle-hooks"),
         HostSlot::one("http-fetch"),
         HostSlot::one("model").replaceable(),
         HostSlot::optional("process"),
@@ -1367,6 +1369,11 @@ fn host_catalog_defaults() -> Vec<HostDefaultPlugin> {
             serde_json::json!({
                 "allowed_origins": [], "timeout_ms": 30000
             }),
+        ),
+        default_plugin(
+            "lenso.agent.lifecycle.audit",
+            "local-audit",
+            serde_json::json!({"path": ".lenso/lifecycle/events.jsonl"}),
         ),
         HostDefaultPlugin::new("lenso.agent.prompt", "prompt"),
         default_plugin(
@@ -1715,6 +1722,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
     MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
         .with_wasm_codec(AgentJsonCodec)
         .with_wasm_codec(HttpFetchJsonCodec)
+        .with_wasm_codec(LifecycleJsonCodec)
         .with_wasm_codec(ModelJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)
@@ -1723,6 +1731,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(ToolsJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
+        .with_quickjs_codec(LifecycleJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
@@ -1731,6 +1740,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(WorkspaceReadJsonCodec)
         .with_process_codec(AgentJsonCodec)
         .with_process_codec(HttpFetchJsonCodec)
+        .with_process_codec(LifecycleJsonCodec)
         .with_process_codec(ModelJsonCodec)
         .with_process_codec(PromptJsonCodec)
         .with_process_codec(SessionJsonCodec)

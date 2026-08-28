@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["program", "arguments", "timeout_ms"],
+  "properties": {
+    "program": { "type": "string" },
+    "arguments": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 60000 }
+  }
+}

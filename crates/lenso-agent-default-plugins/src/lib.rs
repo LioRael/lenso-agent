@@ -4,6 +4,8 @@ use lenso_agent_approval_hook_plugin as _;
 use lenso_agent_auth_openai_codex_plugin as _;
 use lenso_agent_code_mode_tools_plugin as _;
 use lenso_agent_http_fetch_plugin as _;
+use lenso_agent_lifecycle_audit_plugin as _;
+use lenso_agent_lifecycle_command_plugin as _;
 use lenso_agent_loop_plugin as _;
 use lenso_agent_model_fixture_plugin as _;
 use lenso_agent_model_openai_codex_direct_plugin as _;

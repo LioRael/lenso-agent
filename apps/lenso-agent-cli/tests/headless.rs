@@ -787,6 +787,50 @@ fn direct_answer_finishes_without_a_tool_call() {
 }
 
 #[test]
+fn lifecycle_audit_observes_session_start_resume_and_turn_start() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let first = run_derived(
+        temporary.path(),
+        "Answer directly: first lifecycle turn",
+        None,
+    );
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    let session_id = String::from_utf8(first.stderr)
+        .unwrap()
+        .trim()
+        .strip_prefix("session: ")
+        .unwrap()
+        .to_owned();
+    let second = run_derived(
+        temporary.path(),
+        "Answer directly: resumed lifecycle turn",
+        Some(&session_id),
+    );
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+
+    let audit = fs::read_to_string(temporary.path().join(".lenso/lifecycle/events.jsonl")).unwrap();
+    let events = audit
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(events.len(), 4);
+    assert_eq!(events[0]["kind"], "session_started");
+    assert_eq!(events[1]["kind"], "turn_started");
+    assert_eq!(events[2]["kind"], "session_resumed");
+    assert_eq!(events[3]["kind"], "turn_started");
+    assert!(events.iter().all(|event| event["session_id"] == session_id));
+}
+
+#[test]
 fn sqlite_session_adapter_runs_a_real_turn_and_backend_neutral_provenance() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
