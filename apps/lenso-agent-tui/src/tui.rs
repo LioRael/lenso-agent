@@ -281,6 +281,18 @@ struct SuggestionHitTarget {
 }
 
 #[derive(Clone, Copy, Debug)]
+struct InteractionHitTarget {
+    area: Rect,
+    action: InteractionHitAction,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InteractionHitAction {
+    Option(usize),
+    Other,
+}
+
+#[derive(Clone, Copy, Debug)]
 struct ShortcutHitTarget {
     area: Rect,
     action: ShortcutAction,
@@ -565,6 +577,7 @@ struct TuiState {
     queue_hit_targets: Vec<QueueHitTarget>,
     queue_hovered: Option<usize>,
     suggestion_hit_targets: Vec<SuggestionHitTarget>,
+    interaction_hit_targets: Vec<InteractionHitTarget>,
     shortcut_hit_targets: Vec<ShortcutHitTarget>,
     animation_tick: u64,
 }
@@ -633,6 +646,7 @@ impl TuiState {
             queue_hit_targets: Vec::new(),
             queue_hovered: None,
             suggestion_hit_targets: Vec::new(),
+            interaction_hit_targets: Vec::new(),
             shortcut_hit_targets: Vec::new(),
             animation_tick: 0,
         }
@@ -1657,6 +1671,13 @@ fn handle_mouse_click(
 ) {
     update_hovered_entry(position, state);
     if let Some(target) = state
+        .interaction_hit_targets
+        .iter()
+        .copied()
+        .find(|target| target.area.contains(position))
+    {
+        activate_interaction_hit(target, state);
+    } else if let Some(target) = state
         .queue_hit_targets
         .iter()
         .copied()
@@ -1772,6 +1793,15 @@ fn safe_link_target(url: &str) -> bool {
 }
 
 fn handle_mouse_move(position: ratatui::layout::Position, state: &mut TuiState) {
+    if let Some(target) = state
+        .interaction_hit_targets
+        .iter()
+        .copied()
+        .find(|target| target.area.contains(position))
+    {
+        focus_interaction_hit(target, state);
+        return;
+    }
     update_hovered_entry(position, state);
     state.queue_hovered = state
         .queue_hit_targets
@@ -1785,6 +1815,37 @@ fn handle_mouse_move(position: ratatui::layout::Position, state: &mut TuiState) 
     {
         state.suggestion_selected = target.selection;
     }
+}
+
+fn focus_interaction_hit(target: InteractionHitTarget, state: &mut TuiState) {
+    let Some(draft) = state.interaction_draft.as_mut() else {
+        return;
+    };
+    let cursor = match target.action {
+        InteractionHitAction::Option(index) => index,
+        InteractionHitAction::Other => state
+            .pending_interaction
+            .as_ref()
+            .and_then(|interaction| interaction.questions.get(draft.question_index))
+            .map_or(0, |question| question.options.len()),
+    };
+    draft.set_option_cursor(cursor);
+    state.focus = Focus::Prompt;
+}
+
+fn activate_interaction_hit(target: InteractionHitTarget, state: &mut TuiState) {
+    focus_interaction_hit(target, state);
+    let multi_select = state
+        .pending_interaction
+        .as_ref()
+        .zip(state.interaction_draft.as_ref())
+        .and_then(|(interaction, draft)| interaction.questions.get(draft.question_index))
+        .is_some_and(|question| question.multi_select);
+    let code = match target.action {
+        InteractionHitAction::Option(_) if multi_select => KeyCode::Char(' '),
+        InteractionHitAction::Option(_) | InteractionHitAction::Other => KeyCode::Enter,
+    };
+    handle_interaction_key(KeyEvent::new(code, KeyModifiers::NONE), state);
 }
 
 fn update_hovered_entry(position: ratatui::layout::Position, state: &mut TuiState) {
@@ -2531,6 +2592,7 @@ fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
     if interaction_open {
         render_interaction_card(frame, composer, state);
     } else {
+        state.interaction_hit_targets.clear();
         render_suggestions(frame, suggestions, state);
         render_composer(frame, composer, state);
     }
@@ -2562,7 +2624,8 @@ fn interaction_card_height(state: &TuiState, screen_height: u16) -> u16 {
         .saturating_add(2)
 }
 
-fn render_interaction_card(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
+fn render_interaction_card(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
+    state.interaction_hit_targets.clear();
     let (Some(interaction), Some(draft)) = (
         state.pending_interaction.as_ref(),
         state.interaction_draft.as_ref(),
@@ -2632,7 +2695,7 @@ fn render_interaction_card(frame: &mut Frame<'_>, area: Rect, state: &TuiState) 
     if let Some(preview) = preview {
         render_interaction_preview(frame, preview_area, preview);
     }
-    render_interaction_choices(frame, options_area, question, draft);
+    let interaction_hit_targets = render_interaction_choices(frame, options_area, question, draft);
     let footer = Rect::new(
         area.x.saturating_add(3),
         area.bottom().saturating_sub(1),
@@ -2640,6 +2703,7 @@ fn render_interaction_card(frame: &mut Frame<'_>, area: Rect, state: &TuiState) 
         1,
     );
     render_interaction_help(frame, footer, interaction.questions.len(), question, draft);
+    state.interaction_hit_targets = interaction_hit_targets;
 }
 
 fn render_interaction_choices(
@@ -2647,11 +2711,21 @@ fn render_interaction_choices(
     area: Rect,
     question: &InteractionQuestion,
     draft: &InteractionDraft,
-) {
+) -> Vec<InteractionHitTarget> {
+    let visible_option_rows = usize::from(area.height.saturating_sub(1));
+    let focused_option = draft
+        .option_cursor()
+        .min(question.options.len().saturating_sub(1));
+    let option_start = focused_option
+        .saturating_add(1)
+        .saturating_sub(visible_option_rows)
+        .min(question.options.len().saturating_sub(visible_option_rows));
     let lines = question
         .options
         .iter()
         .enumerate()
+        .skip(option_start)
+        .take(visible_option_rows)
         .map(|(index, option)| interaction_option_line(question, draft, index, option))
         .collect::<Vec<_>>();
     let [options, other] = Layout::vertical([
@@ -2660,11 +2734,27 @@ fn render_interaction_choices(
     ])
     .areas(area);
     frame.render_widget(
-        Paragraph::new(lines)
-            .style(Style::default().bg(Palette::SURFACE))
-            .wrap(Wrap { trim: false }),
+        Paragraph::new(lines).style(Style::default().bg(Palette::SURFACE)),
         options,
     );
+    let mut hit_targets = Vec::with_capacity(question.options.len().saturating_add(1));
+    let mut option_y = options.y;
+    for (index, _) in question
+        .options
+        .iter()
+        .enumerate()
+        .skip(option_start)
+        .take(visible_option_rows)
+    {
+        if option_y >= options.bottom() {
+            break;
+        }
+        hit_targets.push(InteractionHitTarget {
+            area: Rect::new(options.x, option_y, options.width, 1),
+            action: InteractionHitAction::Option(index),
+        });
+        option_y = option_y.saturating_add(1);
+    }
     let other_focused = draft.option_cursor() == question.options.len();
     let other_value = if draft.editing_other {
         format!("❯ {}", draft.other_input)
@@ -2705,6 +2795,13 @@ fn render_interaction_choices(
         Paragraph::new(other_line).style(Style::default().bg(Palette::SURFACE)),
         other,
     );
+    if other.height > 0 {
+        hit_targets.push(InteractionHitTarget {
+            area: other,
+            action: InteractionHitAction::Other,
+        });
+    }
+    hit_targets
 }
 
 fn interaction_option_line(
@@ -4775,6 +4872,68 @@ mod tests {
             Some("fast")
         );
         assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn question_options_are_focusable_and_selectable_with_the_mouse() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        let interaction = choice_interaction();
+        state.interaction_draft = Some(InteractionDraft::new(&interaction));
+        state.pending_interaction = Some(interaction);
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+
+        let fast = state.interaction_hit_targets[1].area;
+        let position = ratatui::layout::Position::new(fast.x, fast.y);
+        handle_mouse_move(position, &mut state);
+        assert_eq!(state.interaction_draft.as_ref().unwrap().option_cursor(), 1);
+        handle_mouse_click(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: fast.x,
+                row: fast.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            position,
+            &mut state,
+        );
+
+        let draft = state.interaction_draft.as_ref().unwrap();
+        assert_eq!(draft.question_index, 1);
+        assert_eq!(
+            draft.selected[0].iter().next().map(String::as_str),
+            Some("fast")
+        );
+
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let tests = state.interaction_hit_targets[0].area;
+        let tests_position = ratatui::layout::Position::new(tests.x, tests.y);
+        handle_mouse_click(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: tests.x,
+                row: tests.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            tests_position,
+            &mut state,
+        );
+        assert!(state.interaction_draft.as_ref().unwrap().selected[1].contains("tests"));
+
+        terminal.draw(|frame| render(frame, &mut state)).unwrap();
+        let other = state.interaction_hit_targets.last().unwrap().area;
+        handle_mouse_click(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: other.x,
+                row: other.y,
+                modifiers: KeyModifiers::NONE,
+            },
+            ratatui::layout::Position::new(other.x, other.y),
+            &mut state,
+        );
+        assert!(state.interaction_draft.as_ref().unwrap().editing_other);
     }
 
     #[test]
