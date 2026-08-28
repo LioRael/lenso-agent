@@ -1,10 +1,12 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 use lenso_app_plan::{
-    ResolvedAppPlan,
+    ExecutionClassId, ResolvedAppPlan,
     authoring::{PluginDescriptor, PluginInstanceId, PluginRootInstance, PluginRootSnapshot},
 };
-use lenso_plugin_bundle::{MANIFEST_FILE, PluginManifestV2, verify_bundle_directory};
+use lenso_plugin_bundle::{
+    ImplementationPolicy, read_bundle_manifest, resolve_implementation, verify_bundle_directory,
+};
 use lenso_plugin_control_plane::PlanArtifact;
 use lenso_runtime_codec::ArtifactHandle;
 
@@ -78,32 +80,31 @@ pub(crate) fn plan_artifacts(
                 bundle.display()
             )
         })?;
-        let manifest_path = bundle.join(MANIFEST_FILE);
-        let bytes = fs::read(&manifest_path)
-            .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
-        let manifest: PluginManifestV2 = serde_json::from_slice(&bytes).map_err(|error| {
+        let manifest = read_bundle_manifest(&bundle).map_err(|error| {
             format!(
-                "invalid Plugin Manifest {}: {error}",
-                manifest_path.display()
+                "failed to read Plugin Manifest {}: {error}",
+                bundle.display()
             )
         })?;
-        if manifest.plugin_id != plugin_id {
+        if manifest.plugin_id() != plugin_id {
             return Err(format!(
                 "Plugin Bundle ID `{}` does not match directory `{plugin_id}`",
-                manifest.plugin_id
+                manifest.plugin_id()
             ));
         }
-        if instance.package_revision() != manifest.artifact.digest {
+        let selected = resolve_implementation(&manifest, &implementation_policy())
+            .map_err(|error| format!("failed to select Plugin implementation: {error}"))?;
+        if instance.package_revision() != selected.artifact.digest {
             return Err(format!(
                 "Plugin Instance `{}` does not select the verified Artifact digest",
                 instance.instance_key()
             ));
         }
-        let artifact_path = bundle.join(&manifest.artifact.path);
+        let artifact_path = bundle.join(&selected.artifact.path);
         let handle = ArtifactHandle::open(
             &artifact_path,
-            &manifest.artifact.digest,
-            manifest.artifact.size,
+            &selected.artifact.digest,
+            selected.artifact.size,
         )
         .map_err(|error| {
             format!(
@@ -115,8 +116,8 @@ pub(crate) fn plan_artifacts(
             instance_key: instance.instance_key().to_owned(),
             plugin_id: plugin_id.to_owned(),
             artifact_id: "main".to_owned(),
-            media_type: manifest.artifact.media_type,
-            target: manifest.artifact.target,
+            media_type: selected.artifact.media_type,
+            target: selected.artifact.target,
             handle,
         });
     }
@@ -187,23 +188,35 @@ fn read_bundle_descriptor(path: &Path, plugin_id: &str) -> Result<PluginDescript
             verified.plugin_id
         ));
     }
-    let manifest_path = path.join(MANIFEST_FILE);
-    let bytes = fs::read(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
-    let manifest: PluginManifestV2 = serde_json::from_slice(&bytes).map_err(|error| {
-        format!(
-            "invalid Plugin Manifest {}: {error}",
-            manifest_path.display()
-        )
-    })?;
-    let descriptor: PluginDescriptor = serde_json::from_value(manifest.entry.descriptor)
-        .map_err(|error| format!("invalid Plugin Descriptor {}: {error}", path.display()))?;
+    let manifest = read_bundle_manifest(path)
+        .map_err(|error| format!("invalid Plugin Manifest {}: {error}", path.display()))?;
+    let descriptor = resolve_implementation(&manifest, &implementation_policy())
+        .map_err(|error| format!("failed to select Plugin implementation: {error}"))?
+        .descriptor;
     if descriptor.plugin_id() != plugin_id
         || descriptor.release_version() != verified.release_version
     {
         return Err("Plugin Descriptor identity does not match the verified Bundle".to_owned());
     }
     Ok(descriptor)
+}
+
+fn implementation_policy() -> ImplementationPolicy {
+    ImplementationPolicy {
+        host_target: format!(
+            "{}-unknown-{}",
+            std::env::consts::ARCH,
+            std::env::consts::OS
+        ),
+        execution_classes: [
+            "lenso.quickjs@1",
+            "lenso.process@1",
+            "lenso.wasm-component@1",
+        ]
+        .into_iter()
+        .map(ExecutionClassId::new)
+        .collect(),
+    }
 }
 
 fn read_configuration(path: &Path) -> Result<serde_json::Value, String> {
@@ -274,7 +287,14 @@ fn reject_case_collision(
 
 #[cfg(test)]
 mod tests {
-    use super::snapshot;
+    use lenso_app_plan::{
+        CapabilityEndpointPlan, ExecutionClassId, authoring::PluginContract,
+    };
+    use lenso_plugin_bundle::{
+        SourcePluginImplementation, SourcePluginReleaseBuild, build_source_plugin_release_bundle,
+    };
+
+    use super::{read_bundle_descriptor, snapshot};
 
     #[test]
     fn missing_root_is_the_empty_root() {
@@ -314,5 +334,37 @@ mod tests {
                         && binding["provider_instance"] == "lenso.agent.text-tools/default"
                 })
         );
+    }
+
+    #[test]
+    fn selects_one_v3_implementation_before_plugin_root_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let artifact = directory.path().join("plugin.js");
+        std::fs::write(&artifact, "export function invoke() {}\n").unwrap();
+        let bundle = directory.path().join("plugin.lenso-plugin");
+        let contract = PluginContract::new("example.multi", "1.0.0", "tool-providers")
+            .with_capability(CapabilityEndpointPlan::new(
+                "example.echo@1",
+                "1.0.0",
+                ["echo"],
+            ));
+        build_source_plugin_release_bundle(&SourcePluginReleaseBuild {
+            contract,
+            implementations: vec![SourcePluginImplementation {
+                id: "quickjs".to_owned(),
+                host_targets: vec!["*".to_owned()],
+                artifact,
+                bundle_path: "implementations/quickjs/plugin.js".to_owned(),
+                media_type: "application/javascript".to_owned(),
+                target: "javascript-es2023".to_owned(),
+                entrypoint: "plugin.js".to_owned(),
+                execution_class: ExecutionClassId::new("lenso.quickjs@1"),
+            }],
+            output: bundle.clone(),
+        })
+        .unwrap();
+
+        let selected = read_bundle_descriptor(&bundle, "example.multi").unwrap();
+        assert_eq!(selected.execution_class().as_str(), "lenso.quickjs@1");
     }
 }
