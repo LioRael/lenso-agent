@@ -29,6 +29,7 @@ members = [
     "crates/lenso-agent-loop-plugin",
     "crates/lenso-agent-context-compaction-plugin",
     "crates/lenso-agent-memory-sqlite-plugin",
+    "crates/lenso-agent-mcp-client-plugin",
     "crates/lenso-agent-model-fixture-plugin",
     "crates/lenso-agent-model-openai-compatible-plugin",
     "crates/lenso-agent-model-openai-codex-direct-plugin",

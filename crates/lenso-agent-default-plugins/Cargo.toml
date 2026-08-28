@@ -16,6 +16,7 @@ lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-pl
 lenso-agent-context-compaction-plugin = { path = "../lenso-agent-context-compaction-plugin" }
 lenso-agent-git-tools-plugin = { path = "../lenso-agent-git-tools-plugin" }
 lenso-agent-memory-sqlite-plugin = { path = "../lenso-agent-memory-sqlite-plugin" }
+lenso-agent-mcp-client-plugin = { path = "../lenso-agent-mcp-client-plugin" }
 lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
 lenso-agent-lifecycle-audit-plugin = { path = "../lenso-agent-lifecycle-audit-plugin" }
 lenso-agent-lifecycle-command-plugin = { path = "../lenso-agent-lifecycle-command-plugin" }

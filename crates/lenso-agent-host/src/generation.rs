@@ -2334,4 +2334,56 @@ mod tests {
         let error = resolve_host_plan(&root).unwrap_err();
         assert!(error.contains("lenso.agent.process@1"), "{error}");
     }
+
+    #[test]
+    fn mcp_client_is_linked_opt_in_and_uses_one_plugin_root_configuration() {
+        let empty = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        assert!(
+            !empty
+                .plugin_instances()
+                .iter()
+                .any(|plugin| plugin.instance_key() == "lenso.agent.mcp-client/filesystem")
+        );
+
+        let configuration = serde_json::json!({
+            "program": "/usr/bin/env",
+            "arguments": ["node", "/opt/mcp/filesystem.js", "/workspace"],
+            "working_directory": "/workspace",
+            "environment_allowlist": ["PATH", "HOME"],
+            "protocol": "auto",
+            "tool_namespace": "filesystem",
+            "startup_timeout_ms": 5_000,
+            "request_timeout_ms": 30_000
+        });
+        let root = PluginRootSnapshot::new(
+            [],
+            [lenso_app_plan::authoring::PluginRootInstance::new(
+                "lenso.agent.mcp-client",
+                "filesystem",
+            )
+            .with_configuration(configuration.clone())],
+            [],
+        );
+        let plan = resolve_host_plan(&root).unwrap();
+        let selected = plan
+            .plugin_instances()
+            .iter()
+            .find(|plugin| plugin.instance_key() == "lenso.agent.mcp-client/filesystem")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(selected.configuration()).unwrap(),
+            configuration
+        );
+        let plan_json = serde_json::to_value(&plan).unwrap();
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["provider_instance"] == "lenso.agent.mcp-client/filesystem"
+                        && binding["capability_id"] == "lenso.agent.tool-provider@2"
+                })
+        );
+    }
 }
