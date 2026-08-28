@@ -48,3 +48,4 @@
 - [0046 — Compose portable user interaction](0046-compose-portable-user-interaction.md)
 - [0047 — Compose provider-first Context Compaction](0047-compose-provider-first-context-compaction.md)
 - [0048 — Compose provider-first Memory](0048-compose-provider-first-memory.md)
+- [0049 — Compose bounded Git tools over Process](0049-compose-bounded-git-tools-over-process.md)

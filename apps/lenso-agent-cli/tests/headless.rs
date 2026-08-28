@@ -1464,6 +1464,122 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
 }
 
 #[test]
+fn git_plugin_inspects_stages_commits_and_reads_history_in_a_real_repository() {
+    let temporary = tempfile::tempdir().unwrap();
+    let git = |arguments: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(temporary.path())
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.name", "Fixture User"]);
+    git(&["config", "user.email", "fixture@example.com"]);
+    fs::write(temporary.path().join("note.txt"), "before\n").unwrap();
+    git(&["add", "note.txt"]);
+    git(&["commit", "--quiet", "-m", "test: initial"]);
+    fs::write(temporary.path().join("note.txt"), "after\n").unwrap();
+
+    let hook = temporary.path().join(".git/hooks/pre-commit");
+    fs::write(&hook, "#!/bin/sh\nexit 91\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process.native",
+        "root = \".\"\nallowed_programs = [\"git\"]\nenvironment_allowlist = [\"PATH\", \"HOME\", \"TMPDIR\", \"LANG\", \"LC_ALL\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.git-tools",
+        "default_timeout_ms = 30000\nmax_log_entries = 50\nmax_commit_message_bytes = 4096\n",
+    );
+
+    let output = run_derived(
+        temporary.path(),
+        "Inspect and commit the prepared Git change.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Git Plugin result: prepared change committed.\n"
+    );
+    let log = git(&["log", "-1", "--pretty=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "test: bounded Git Plugin commit"
+    );
+    assert!(
+        String::from_utf8_lossy(&git(&["status", "--porcelain", "--", "note.txt"]).stdout)
+            .trim()
+            .is_empty()
+    );
+
+    let session = stored_session(temporary.path());
+    let requested = session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()["name"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requested,
+        ["git_status", "git_stage", "git_commit", "git_log"]
+    );
+}
+
+#[test]
+fn git_plugin_fails_readiness_when_process_does_not_authorize_git() {
+    let temporary = tempfile::tempdir().unwrap();
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process.native",
+        "root = \".\"\nallowed_programs = [\"cargo\"]\nenvironment_allowlist = [\"PATH\", \"HOME\", \"TMPDIR\", \"LANG\", \"LC_ALL\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.git-tools",
+        "default_timeout_ms = 30000\nmax_log_entries = 50\nmax_commit_message_bytes = 4096\n",
+    );
+
+    let output = run_derived(
+        temporary.path(),
+        "Inspect and commit the prepared Git change.",
+        None,
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("Git Tools requires its Process provider to authorize `git`"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn on_demand_skill_catalog_lists_then_reads_only_the_selected_skill() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();

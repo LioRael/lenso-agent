@@ -38,6 +38,7 @@ members = [
     "crates/lenso-agent-prompt-static-plugin",
     "crates/lenso-agent-process-native-plugin",
     "crates/lenso-agent-process-tools-plugin",
+    "crates/lenso-agent-git-tools-plugin",
     "crates/lenso-agent-session-file-plugin",
     "crates/lenso-agent-session-inspection",
     "crates/lenso-agent-session-sqlite-plugin",

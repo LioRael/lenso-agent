@@ -1730,6 +1730,14 @@ fn local_tool_configurations() -> Vec<HostPluginConfiguration> {
             }),
         ),
         host_plugin_configuration(
+            "lenso.agent.git-tools",
+            serde_json::json!({
+                "default_timeout_ms": 30_000,
+                "max_log_entries": 50,
+                "max_commit_message_bytes": 4_096
+            }),
+        ),
+        host_plugin_configuration(
             "lenso.agent.process.native",
             serde_json::json!({
                 "allowed_programs": ["cargo", "git", "rg"],
@@ -2216,5 +2224,58 @@ mod tests {
             plugin.configuration(),
             r#"{"max_edit_bytes":131072,"max_file_bytes":1048576,"root":"."}"#
         );
+    }
+
+    #[test]
+    fn git_tools_are_optional_and_bind_to_the_selected_process_provider() {
+        let empty = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        assert!(
+            !empty
+                .plugin_instances()
+                .iter()
+                .any(|plugin| { plugin.instance_key() == "lenso.agent.git-tools/default" })
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        for plugin_id in ["lenso.agent.process.native", "lenso.agent.git-tools"] {
+            let plugin_directory = directory.path().join(plugin_id);
+            fs::create_dir_all(&plugin_directory).unwrap();
+            fs::write(plugin_directory.join("default.toml"), "").unwrap();
+        }
+        let root = crate::plugin_root::snapshot(directory.path()).unwrap();
+        let configured = resolve_host_plan(&root).unwrap();
+        let plugin = configured
+            .plugin_instances()
+            .iter()
+            .find(|plugin| plugin.instance_key() == "lenso.agent.git-tools/default")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(plugin.configuration()).unwrap(),
+            serde_json::json!({
+                "default_timeout_ms": 30_000,
+                "max_log_entries": 50,
+                "max_commit_message_bytes": 4_096
+            })
+        );
+        let plan_json = serde_json::to_value(&configured).unwrap();
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.git-tools/default"
+                        && binding["provider_instance"] == "lenso.agent.process.native/default"
+                        && binding["capability_id"] == "lenso.agent.process@1"
+                })
+        );
+
+        let git_only_directory = tempfile::tempdir().unwrap();
+        let plugin_directory = git_only_directory.path().join("lenso.agent.git-tools");
+        fs::create_dir_all(&plugin_directory).unwrap();
+        fs::write(plugin_directory.join("default.toml"), "").unwrap();
+        let root = crate::plugin_root::snapshot(git_only_directory.path()).unwrap();
+        let error = resolve_host_plan(&root).unwrap_err();
+        assert!(error.contains("lenso.agent.process@1"), "{error}");
     }
 }

@@ -65,19 +65,7 @@ impl FixtureModel {
             .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
         let current_user = &request.messages[current_user_index].content;
         if current_user.starts_with("Answer directly:") {
-            let plugin_prefix = request.messages.iter().any(|message| {
-                message.role == CompleteMessageRole::System
-                    && message
-                        .content
-                        .contains("Prefix direct answers with `Plugin: `.")
-            });
-            let filesystem_prefix = request.messages.iter().any(|message| {
-                message.role == CompleteMessageRole::System
-                    && message
-                        .content
-                        .contains("Prefix direct answers with `Filesystem: `.")
-            });
-            return Ok(direct_response(plugin_prefix, filesystem_prefix));
+            return Ok(direct_fixture_response(request));
         }
         if current_user == "What did you summarize?" {
             let previous = request.messages[..current_user_index]
@@ -108,6 +96,9 @@ impl FixtureModel {
         }
         if current_user == "Edit and validate the workspace project." {
             return local_coding_response(request, &tool_results);
+        }
+        if current_user == "Inspect and commit the prepared Git change." {
+            return git_workflow_response(request, &tool_results);
         }
         if current_user == "Use the text Plugin to uppercase Lenso plugin." {
             return text_plugin_response(request, &tool_results);
@@ -152,6 +143,18 @@ impl FixtureModel {
         }
         Ok(tool_request(1))
     }
+}
+
+fn direct_fixture_response(request: &CompleteOpen) -> Vec<CompleteMessage> {
+    let has_prefix = |prefix: &str| {
+        request.messages.iter().any(|message| {
+            message.role == CompleteMessageRole::System && message.content.contains(prefix)
+        })
+    };
+    direct_response(
+        has_prefix("Prefix direct answers with `Plugin: `."),
+        has_prefix("Prefix direct answers with `Filesystem: `."),
+    )
 }
 
 fn ask_user_response(
@@ -706,6 +709,59 @@ fn local_coding_final_response() -> Vec<CompleteMessage> {
             "12",
         ),
     ]
+}
+
+fn git_workflow_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_git_tools = ["git_status", "git_stage", "git_commit", "git_log"]
+        .iter()
+        .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    if !has_git_tools {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request("call-git-status", "git_status", "{}")),
+        [status] if status.content.contains(" M note.txt") => Ok(named_tool_request(
+            "call-git-stage",
+            "git_stage",
+            r#"{"paths":["note.txt"]}"#,
+        )),
+        [_, staged] if staged.content == "Git operation completed successfully." => {
+            Ok(named_tool_request(
+                "call-git-commit",
+                "git_commit",
+                r#"{"message":"test: bounded Git Plugin commit"}"#,
+            ))
+        }
+        [_, _, committed] if committed.content.contains("bounded Git Plugin commit") => Ok(
+            named_tool_request("call-git-log", "git_log", r#"{"max_entries":1}"#),
+        ),
+        [_, _, _, log] if log.content.contains("test: bounded Git Plugin commit") => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Git Plugin result: prepared change committed.",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "48",
+                "12",
+            ),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
 }
 
 fn direct_response(plugin_prefix: bool, filesystem_prefix: bool) -> Vec<CompleteMessage> {
