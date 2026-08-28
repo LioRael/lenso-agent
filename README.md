@@ -141,6 +141,37 @@ lenso plugins configure uppercase default
 again. There is no separate `plugin verify` step. See the
 [10-minute Tool Plugin tutorial](docs/tutorials/10-minute-tool-provider.md).
 
+## Embed the Harness
+
+An application declares only the Plugins compiled into its Host Build, its
+process-owned surface, and the Profile to run:
+
+```rust
+let host = AgentHost::builder()
+    .plugins(lenso_agent_default_plugins::link)
+    .surface(TuiSurface::terminal())
+    .build()?;
+
+let mut app = host.run(Profile::named("code")).await?;
+// The TUI owns its event loop; `app` supplies Generation-pinned Agent Turns.
+app.shutdown().await?;
+```
+
+A headless binary swaps only the surface:
+
+```rust
+let host = AgentHost::builder()
+    .plugins(lenso_agent_default_plugins::link)
+    .surface(HeadlessSurface::stdio())
+    .build()?;
+
+let mut app = host.run(Profile::Default).await?;
+```
+
+`lenso::host::HostBuilder` is the lower framework seam that owns durable
+Generation recovery, Controller execution, fenced routes, and shutdown. Agent
+Profiles, Turns, sessions, and TUI or channel loops remain in this Harness.
+
 ## Run chat channels
 
 Copy the reviewed configuration, select exact chat or channel allowlists, and

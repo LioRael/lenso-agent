@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
-use lenso_agent_host::{generation::AgentApp, plan_bytes_for_profile};
+use lenso_agent_host::{AgentHost, Profile, TuiSurface};
 use lenso_agent_tui_command_suggestions_plugin as _;
 use lenso_agent_tui_plugin as _;
 use lenso_agent_tui_static_plugin as _;
@@ -52,11 +52,17 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
-    lenso_agent_default_plugins::link();
-    let bytes = plan_bytes_for_profile(args.plan.as_deref(), args.profile.as_deref())?;
-    let mut app = AgentApp::start_tui_with_profile(&bytes, args.profile.clone())
-        .await
-        .map_err(|error| format!("App startup failed: {error}"))?;
+    let profile = match (&args.plan, &args.profile) {
+        (Some(plan), None) => Profile::resolved_plan(plan),
+        (None, Some(profile)) => Profile::named(profile),
+        (None, None) => Profile::Default,
+        (Some(_), Some(_)) => unreachable!("clap rejects Plan/Profile conflicts"),
+    };
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(TuiSurface::terminal())
+        .build()?;
+    let mut app = host.run(profile).await?;
     let allowed_tools = if args.no_tools {
         Some(Vec::new())
     } else if args.allowed_tools.is_empty() {

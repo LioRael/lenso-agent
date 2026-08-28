@@ -11,6 +11,7 @@ rust-version.workspace = true
 [dependencies]
 fs2.workspace = true
 jsonschema.workspace = true
+lenso = { workspace = true, features = ["host"] }
 lenso-app-plan.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
