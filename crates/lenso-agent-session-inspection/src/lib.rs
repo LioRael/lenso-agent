@@ -2,6 +2,13 @@
 
 use std::collections::BTreeSet;
 
+mod trajectory;
+
+pub use trajectory::{
+    Trajectory, TrajectoryDetail, TrajectoryKind, TrajectoryRecord, TrajectoryStatus,
+    TrajectorySummary, project_trajectory,
+};
+
 /// One normalized event read from a durable Session Adapter.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]

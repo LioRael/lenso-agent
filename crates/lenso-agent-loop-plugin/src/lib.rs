@@ -705,6 +705,8 @@ async fn execute_steps(
     let mut turn_output = String::new();
 
     for step in 1..=config.max_steps {
+        let message_count = messages.len();
+        let tool_count = tools.len();
         *revision = append_events(
             clients,
             context,
@@ -715,6 +717,11 @@ async fn execute_steps(
                 Some(turn_id),
                 &serde_json::json!({
                     "step": step,
+                    "model": config.model,
+                    "message_count": message_count,
+                    "tool_count": tool_count,
+                    "temperature": 0.0,
+                    "max_output_tokens": remaining_output_tokens,
                     "prompt_contributions": prompt_contributions,
                     "system_instruction_digest": system_instruction_digest
                 }),
@@ -742,6 +749,21 @@ async fn execute_steps(
             remaining_output_tokens = remaining_output_tokens.saturating_sub(used);
         }
         turn_output.push_str(&completion.text);
+        let model_event = session_event(
+            AppendSessionRequestEventsItemKind::ModelOutput,
+            Some(turn_id),
+            &serde_json::json!({
+                "step": step,
+                "model": config.model,
+                "text": completion.text,
+                "tool_call_count": completion.tool_calls.len(),
+                "input_tokens": completion.input_tokens,
+                "output_tokens": completion.output_tokens,
+                "duration_ms": completion.duration_ms,
+                "time_to_first_token_ms": completion.time_to_first_token_ms,
+                "status": "completed"
+            }),
+        )?;
         if completion.tool_calls.is_empty() {
             if completion.text.is_empty() {
                 return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
@@ -763,11 +785,7 @@ async fn execute_steps(
                 session_id,
                 revision.clone(),
                 vec![
-                    session_event(
-                        AppendSessionRequestEventsItemKind::ModelOutput,
-                        Some(turn_id),
-                        &serde_json::json!({"text": completion.text}),
-                    )?,
+                    model_event,
                     memory_event,
                     session_event(
                         AppendSessionRequestEventsItemKind::TurnCompleted,
@@ -789,19 +807,15 @@ async fn execute_steps(
             .await;
             return Ok(());
         }
+        *revision = append_events(
+            clients,
+            context,
+            session_id,
+            revision.clone(),
+            vec![model_event],
+        )
+        .await?;
         if !completion.text.is_empty() {
-            *revision = append_events(
-                clients,
-                context,
-                session_id,
-                revision.clone(),
-                vec![session_event(
-                    AppendSessionRequestEventsItemKind::ModelOutput,
-                    Some(turn_id),
-                    &serde_json::json!({"step": step, "text": completion.text}),
-                )?],
-            )
-            .await?;
             messages.push(CompleteMessageInput {
                 role: CompleteMessageRole::Assistant,
                 content: completion.text.clone(),
@@ -963,7 +977,11 @@ async fn execute_tool_wave(
                         &serde_json::json!({
                             "call_id": tool_call.tool_call_id,
                             "name": tool_call.tool_name,
-                            "metadata_json": tool_result.metadata_json
+                            "content": bounded_session_text(&tool_result.content),
+                            "content_truncated": tool_result.content.chars().count() > 262_144,
+                            "metadata_json": tool_result.metadata_json,
+                            "duration_ms": duration_ms,
+                            "status": "completed"
                         }),
                     )?],
                 )
@@ -991,6 +1009,25 @@ async fn execute_tool_wave(
                 });
             }
             Err(error) => {
+                let error_detail = bounded_tool_stream_error(&error);
+                *revision = append_events(
+                    clients,
+                    context,
+                    session_id,
+                    revision.clone(),
+                    vec![session_event(
+                        AppendSessionRequestEventsItemKind::ToolResult,
+                        Some(turn_id),
+                        &serde_json::json!({
+                            "call_id": tool_call.tool_call_id,
+                            "name": tool_call.tool_name,
+                            "duration_ms": duration_ms,
+                            "status": "failed",
+                            "error": error_detail
+                        }),
+                    )?],
+                )
+                .await?;
                 *sequence = sequence.saturating_add(1);
                 send_agent_message(
                     channel,
@@ -999,7 +1036,7 @@ async fn execute_tool_wave(
                         session_id,
                         *sequence,
                         duration_ms,
-                        bounded_tool_stream_error(&error),
+                        error_detail,
                     ),
                     context.request_id(),
                 )
@@ -1136,7 +1173,10 @@ async fn stream_tool_execution(
 struct ModelStep {
     text: String,
     tool_calls: Vec<CompleteMessage>,
+    input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+    duration_ms: u64,
+    time_to_first_token_ms: Option<u64>,
 }
 
 struct ReasoningProgress<'a> {
@@ -1195,6 +1235,10 @@ impl<'a> ReasoningProgress<'a> {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one stream consumer keeps timing, usage, reasoning, text, and Tool-call ordering coherent"
+)]
 async fn stream_model(
     clients: &AgentLoop,
     context: &InvocationContext,
@@ -1204,6 +1248,7 @@ async fn stream_model(
     sequence: &mut u64,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<ModelStep, TurnFailure> {
+    let started_at = Instant::now();
     let stream = clients
         .model
         .complete_with_context(context.clone(), request)
@@ -1213,7 +1258,10 @@ async fn stream_model(
     let mut completion = ModelStep {
         text: String::new(),
         tool_calls: Vec::new(),
+        input_tokens: None,
         output_tokens: None,
+        duration_ms: 0,
+        time_to_first_token_ms: None,
     };
     let mut reasoning = ReasoningProgress::new(reasoning_id, session_id);
     loop {
@@ -1223,11 +1271,19 @@ async fn stream_model(
                     if message.text.is_empty() {
                         continue;
                     }
+                    completion
+                        .time_to_first_token_ms
+                        .get_or_insert_with(|| elapsed_millis(started_at));
                     reasoning
                         .emit_delta(message.text, sequence, channel, context.request_id())
                         .await?;
                 }
                 CompleteMessageKind::TextDelta => {
+                    if !message.text.is_empty() {
+                        completion
+                            .time_to_first_token_ms
+                            .get_or_insert_with(|| elapsed_millis(started_at));
+                    }
                     reasoning
                         .finish(sequence, channel, context.request_id())
                         .await?;
@@ -1255,6 +1311,9 @@ async fn stream_model(
                     .await?;
                 }
                 CompleteMessageKind::ToolCall => {
+                    completion
+                        .time_to_first_token_ms
+                        .get_or_insert_with(|| elapsed_millis(started_at));
                     reasoning
                         .finish(sequence, channel, context.request_id())
                         .await?;
@@ -1264,6 +1323,11 @@ async fn stream_model(
                     reasoning
                         .finish(sequence, channel, context.request_id())
                         .await?;
+                    completion.input_tokens = Some(message.input_tokens.parse().map_err(|_| {
+                        PluginError::runtime(RuntimeFailure::PluginFailure {
+                            detail: "Model emitted invalid input token usage".to_owned(),
+                        })
+                    })?);
                     completion.output_tokens =
                         Some(message.output_tokens.parse().map_err(|_| {
                             PluginError::runtime(RuntimeFailure::PluginFailure {
@@ -1277,6 +1341,7 @@ async fn stream_model(
                 reasoning
                     .finish(sequence, channel, context.request_id())
                     .await?;
+                completion.duration_ms = elapsed_millis(started_at);
                 return Ok(completion);
             }
             StreamEvent::Terminal(Err(error)) => {
@@ -1441,6 +1506,11 @@ fn bounded_tool_stream_error(error: &ToolsExecuteStreamInvocationError) -> Strin
     } else {
         error.chars().take(MAX_ERROR_CHARACTERS).collect()
     }
+}
+
+fn bounded_session_text(value: &str) -> String {
+    const MAX_CHARACTERS: usize = 262_144;
+    value.chars().take(MAX_CHARACTERS).collect()
 }
 
 async fn assemble_system_instruction(
