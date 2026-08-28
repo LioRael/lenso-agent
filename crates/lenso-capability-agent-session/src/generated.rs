@@ -13,7 +13,7 @@ pub const SESSION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.4.0\",\"operations\":[\"append\",\"open\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.4.0\",\"operations\":[\"append\",\"list\",\"open\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
@@ -24,6 +24,7 @@ macro_rules! __lenso_required_session_client { () => { "{\"capability_id\":\"len
 macro_rules! __lenso_required_many_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.4.0\",\"cardinality\":\"many\"}" }; }
 
 pub const APPEND_OPERATION: &str = "append";
+pub const LIST_OPERATION: &str = "list";
 pub const OPEN_OPERATION: &str = "open";
 pub const READ_OPERATION: &str = "read";
 
@@ -119,6 +120,40 @@ pub enum AppendError {
     InvalidEvent,
     NotFound,
     RevisionConflict { payload: AppendErrorRevisionConflictPayload },
+    Unknown(UnknownDomainError),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ListSessionsRequest {
+    #[serde(rename = "limit")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub limit: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ListSessionsResponse {
+    #[serde(rename = "sessions")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub sessions: Vec<ListSessionsResponseSessionsItem>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ListSessionsResponseSessionsItem {
+    #[serde(rename = "revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub revision: Uint64,
+    #[serde(rename = "session_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub session_id: String,
+    #[serde(rename = "updated_at")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub updated_at: Timestamp,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ListError {
+    InvalidCursor,
+    InvalidLimit,
     Unknown(UnknownDomainError),
 }
 
@@ -266,6 +301,29 @@ impl RequestCapability for SessionAppend {
 }
 
 #[derive(Debug)]
+pub struct SessionList;
+impl RequestCapability for SessionList {
+    type Request = ListSessionsRequest;
+    type Response = ListSessionsResponse;
+    type DomainError = ListError;
+    const ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn invoke_native(endpoint: &dyn NativeRequestEndpoint, operation: &str, request: Self::Request, context: InvocationContext) -> NativeRequestFuture<Self> {
+        if operation != LIST_OPERATION {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        }
+        let Some(typed_endpoint) = endpoint
+            .typed_endpoint()
+            .and_then(|endpoint| endpoint.downcast_ref::<SessionRequestEndpoint>())
+        else {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        };
+        Rc::clone(&typed_endpoint.provider).list(context, request)
+    }
+}
+
+#[derive(Debug)]
 pub struct SessionOpen;
 impl RequestCapability for SessionOpen {
     type Request = OpenSessionRequest;
@@ -369,6 +427,55 @@ impl<'de> serde::Deserialize<'de> for AppendError {
                         Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
                     }
                 }
+            }
+            other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
+        }
+    }
+}
+
+impl serde::Serialize for ListError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::InvalidCursor => serializer.serialize_str("invalid_cursor"),
+            Self::InvalidLimit => serializer.serialize_str("invalid_limit"),
+            Self::Unknown(value) => {
+                let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
+                map.serialize_entry("code", &value.code)?;
+                if let Some(payload) = &value.payload {
+                    map.serialize_entry("payload", payload)?;
+                }
+                for (key, extra) in &value.extra {
+                    map.serialize_entry(key, extra)?;
+                }
+                map.end()
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ListError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(code) => match code.as_str() {
+                "invalid_cursor" => Ok(Self::InvalidCursor),
+                "invalid_limit" => Ok(Self::InvalidLimit),
+                _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
+            },
+            serde_json::Value::Object(mut object) => {
+                let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
+                    return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
+                };
+                let payload = object.remove("payload");
+                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
             }
             other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
         }
@@ -480,6 +587,13 @@ pub fn decode_append_response(wire: &str) -> Result<AppendSessionResponse, serde
 pub fn encode_append_error(value: &AppendError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_append_error(wire: &str) -> Result<AppendError, serde_json::Error> { decode_portable_json(wire) }
 
+pub fn encode_list_request(value: &ListSessionsRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_list_request(wire: &str) -> Result<ListSessionsRequest, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_list_response(value: &ListSessionsResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_list_response(wire: &str) -> Result<ListSessionsResponse, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_list_error(value: &ListError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_list_error(wire: &str) -> Result<ListError, serde_json::Error> { decode_portable_json(wire) }
+
 pub fn encode_open_request(value: &OpenSessionRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_open_request(wire: &str) -> Result<OpenSessionRequest, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_open_response(value: &OpenSessionResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
@@ -519,6 +633,35 @@ impl __LensoIntoSessionAppendResult for Result<AppendSessionResponse, SessionApp
             Ok(value) => Ok(Ok(value)),
             Err(SessionAppendInvocationError::Domain(error)) => Ok(Err(error)),
             Err(SessionAppendInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoSessionListResult {
+    fn __lenso_into_result(self) -> Result<Result<ListSessionsResponse, ListError>, RuntimeFailure>;
+}
+impl __LensoIntoSessionListResult for Result<ListSessionsResponse, ListError> {
+    fn __lenso_into_result(self) -> Result<Result<ListSessionsResponse, ListError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoSessionListResult for Result<Result<ListSessionsResponse, ListError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<ListSessionsResponse, ListError>, RuntimeFailure> { self }
+}
+impl __LensoIntoSessionListResult for Result<ListSessionsResponse, lenso_plugin_authoring::PluginError<ListError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<ListSessionsResponse, ListError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_plugin_authoring::PluginError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_plugin_authoring::PluginError::Runtime(error)) => Err(error),
+        }
+    }
+}
+impl __LensoIntoSessionListResult for Result<ListSessionsResponse, SessionListInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<ListSessionsResponse, ListError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(SessionListInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(SessionListInvocationError::Runtime(error)) => Err(error),
         }
     }
 }
@@ -583,6 +726,7 @@ impl __LensoIntoSessionReadResult for Result<ReadSessionResponse, SessionReadInv
 
 pub trait SessionProvider: fmt::Debug + 'static {
     fn append(&self, context: InvocationContext, request: AppendSessionRequest) -> NativeRequestFuture<SessionAppend>;
+    fn list(&self, context: InvocationContext, request: ListSessionsRequest) -> NativeRequestFuture<SessionList>;
     fn open(&self, context: InvocationContext, request: OpenSessionRequest) -> NativeRequestFuture<SessionOpen>;
     fn read(&self, context: InvocationContext, request: ReadSessionRequest) -> NativeRequestFuture<SessionRead>;
 }
@@ -598,6 +742,13 @@ macro_rules! __lenso_native_lower_session {
             ::std::boxed::Box::pin(async move {
                 let result = <$plugin>::append(&plugin, context, request).await;
                 $crate::__LensoIntoSessionAppendResult::__lenso_into_result(result)
+            })
+        }
+        fn list(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::ListSessionsRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionList> {
+            let plugin = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$plugin>::list(&plugin, context, request).await;
+                $crate::__LensoIntoSessionListResult::__lenso_into_result(result)
             })
         }
         fn open(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::OpenSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionOpen> {
@@ -636,6 +787,7 @@ impl<P: SessionProvider> NativeRequestEndpoint for SessionEndpoint<P> {
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
     fn operations(&self) -> &'static [&'static str] { &[
         APPEND_OPERATION,
+        LIST_OPERATION,
         OPEN_OPERATION,
         READ_OPERATION,
     ] }
@@ -647,6 +799,19 @@ impl<P: SessionProvider> NativeRequestEndpoint for SessionEndpoint<P> {
                     return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
                 };
                 let invocation = Rc::clone(&self.provider).append(context, *request);
+                Box::pin(async move {
+                    invocation.await.map(|result| {
+                        result
+                            .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                            .map_err(|error| Box::new(error) as Box<dyn std::any::Any>)
+                    })
+                })
+            },
+            LIST_OPERATION => {
+                let Ok(request) = request.downcast::<ListSessionsRequest>() else {
+                    return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
+                };
+                let invocation = Rc::clone(&self.provider).list(context, *request);
                 Box::pin(async move {
                     invocation.await.map(|result| {
                         result
@@ -719,6 +884,7 @@ macro_rules! __lenso_native_provide_session {
 #[derive(Debug)]
 pub struct SessionClient {
     append: NativeRequestHandle<SessionAppend>,
+    list: NativeRequestHandle<SessionList>,
     open: NativeRequestHandle<SessionOpen>,
     read: NativeRequestHandle<SessionRead>,
 }
@@ -737,6 +903,18 @@ impl SessionClient {
         self.append.invoke_with_context(APPEND_OPERATION, context, request).await
             .map_err(SessionAppendInvocationError::Runtime)?
             .map_err(SessionAppendInvocationError::Domain)
+    }
+
+    pub async fn list(&self, request: ListSessionsRequest) -> Result<ListSessionsResponse, SessionListInvocationError> {
+        self.list.invoke(LIST_OPERATION, request).await
+            .map_err(SessionListInvocationError::Runtime)?
+            .map_err(SessionListInvocationError::Domain)
+    }
+
+    pub async fn list_with_context(&self, context: InvocationContext, request: ListSessionsRequest) -> Result<ListSessionsResponse, SessionListInvocationError> {
+        self.list.invoke_with_context(LIST_OPERATION, context, request).await
+            .map_err(SessionListInvocationError::Runtime)?
+            .map_err(SessionListInvocationError::Domain)
     }
 
     pub async fn open(&self, request: OpenSessionRequest) -> Result<OpenSessionResponse, SessionOpenInvocationError> {
@@ -774,6 +952,7 @@ impl CapabilityClient for SessionClient {
     fn from_dependencies(dependencies: &PluginDependencies) -> Result<Self, RuntimeFailure> {
         Ok(Self {
             append: dependencies.one::<SessionAppend>()?,
+            list: dependencies.one::<SessionList>()?,
             open: dependencies.one::<SessionOpen>()?,
             read: dependencies.one::<SessionRead>()?,
         })
@@ -799,6 +978,7 @@ impl CapabilityClientMany for SessionClient {
                     binding.provider_instance(),
                     Self {
                     append: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionAppend>()?,
+                    list: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionList>()?,
                     open: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionOpen>()?,
                     read: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<SessionRead>()?,
                     },
@@ -811,6 +991,11 @@ impl CapabilityClientMany for SessionClient {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SessionAppendInvocationError {
     Domain(AppendError),
+    Runtime(RuntimeFailure),
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionListInvocationError {
+    Domain(ListError),
     Runtime(RuntimeFailure),
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -832,12 +1017,16 @@ pub struct SessionGuestClient<'a, H: lenso_guest_sdk::HostImports> {
 impl<'a, H: lenso_guest_sdk::HostImports> SessionGuestClient<'a, H> {
     pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
         context
-            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[APPEND_OPERATION, OPEN_OPERATION, READ_OPERATION], &[])
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[APPEND_OPERATION, LIST_OPERATION, OPEN_OPERATION, READ_OPERATION], &[])
             .map(|capability| Self { capability })
     }
 
     pub fn append(&self, request: &AppendSessionRequest) -> Result<AppendSessionResponse, lenso_guest_sdk::GuestError<AppendError>> {
         self.capability.request(APPEND_OPERATION, request)
+    }
+
+    pub fn list(&self, request: &ListSessionsRequest) -> Result<ListSessionsResponse, lenso_guest_sdk::GuestError<ListError>> {
+        self.capability.request(LIST_OPERATION, request)
     }
 
     pub fn open(&self, request: &OpenSessionRequest) -> Result<OpenSessionResponse, lenso_guest_sdk::GuestError<OpenError>> {
@@ -857,13 +1046,17 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
 
-    fn request_operations(&self) -> &'static [&'static str] { &[APPEND_OPERATION, OPEN_OPERATION, READ_OPERATION] }
+    fn request_operations(&self) -> &'static [&'static str] { &[APPEND_OPERATION, LIST_OPERATION, OPEN_OPERATION, READ_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }
 
     fn encode_request(&self, operation: &str, request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         match operation {
             APPEND_OPERATION => {
                 let value = request.downcast_ref::<AppendSessionRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
+            LIST_OPERATION => {
+                let value = request.downcast_ref::<ListSessionsRequest>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
             },
             OPEN_OPERATION => {
@@ -883,6 +1076,9 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
             APPEND_OPERATION => serde_json::from_value::<AppendSessionResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
+            LIST_OPERATION => serde_json::from_value::<ListSessionsResponse>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
             OPEN_OPERATION => serde_json::from_value::<OpenSessionResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
@@ -896,6 +1092,9 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
     fn decode_domain_error(&self, operation: &str, value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
         match operation {
             APPEND_OPERATION => serde_json::from_value::<AppendError>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
+            LIST_OPERATION => serde_json::from_value::<ListError>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             OPEN_OPERATION => serde_json::from_value::<OpenError>(value)
@@ -932,6 +1131,21 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
                     let request = request?;
                     let handle = dependency.typed::<SessionAppend>()?;
                     match handle.invoke_with_context(APPEND_OPERATION, context, request).await? {
+                        Ok(response) => serde_json::to_value(response)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                        Err(error) => serde_json::to_value(error)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::DomainError)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                    }
+                })
+            },
+            LIST_OPERATION => {
+                let request = serde_json::from_value::<ListSessionsRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                Box::pin(async move {
+                    let request = request?;
+                    let handle = dependency.typed::<SessionList>()?;
+                    match handle.invoke_with_context(LIST_OPERATION, context, request).await? {
                         Ok(response) => serde_json::to_value(response)
                             .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
                             .map_err(|_| runtime_codec_protocol_failure()),

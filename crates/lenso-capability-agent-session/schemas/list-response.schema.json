@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ListSessionsResponse",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sessions"],
+  "properties": {
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session_id", "revision", "updated_at"],
+        "properties": {
+          "session_id": { "type": "string" },
+          "revision": { "type": "string", "format": "uint64" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

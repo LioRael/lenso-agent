@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ListSessionsError",
+  "oneOf": [
+    { "const": "invalid_limit" },
+    { "const": "invalid_cursor" }
+  ]
+}

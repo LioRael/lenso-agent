@@ -15,7 +15,7 @@ mod test_support;
 
 pub use host::{
     AgentHost, AgentHostBuilder, AgentSurface, ChannelSurface, ConfiguredAgentHost, DiscordSurface,
-    HeadlessSurface, Profile, TelegramSurface, TuiSurface,
+    HeadlessSurface, Profile, TelegramSurface, TuiSurface, WebSurface,
 };
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.
