@@ -629,7 +629,9 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         initial["configurationAuthority"],
         serde_json::json!({
             "kind": "sqlite_configuration_store",
+            "publicationHistory": true,
             "reference": "agent",
+            "rollbackProposals": true,
         })
     );
     let initial_revision = initial["revision"].as_str().unwrap();
@@ -718,6 +720,118 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         management["configurationAuthority"],
         initial["configurationAuthority"]
     );
+    let second_configuration = configuration.replacen("max_steps = 7", "max_steps = 8", 1);
+    let second_proposal = client
+        .post(&proposals_endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": published_revision,
+            "toml": second_configuration,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let second_publication = client
+        .put(&endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": published_revision,
+            "proposalDigest": second_proposal["proposalDigest"],
+            "toml": second_configuration,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let publications_endpoint = format!("{endpoint}/publications");
+    let history = client
+        .get(&publications_endpoint)
+        .bearer_auth(&control_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        history["schema"],
+        "lenso.agent.plugin-configuration-history.v1"
+    );
+    assert_eq!(history["publications"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        history["publications"][0]["proposalDigest"],
+        second_proposal["proposalDigest"]
+    );
+    assert_eq!(
+        history["publications"][1]["configurationToml"],
+        configuration
+    );
+
+    let rollback = client
+        .post(format!("{endpoint}/rollback-proposals"))
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": second_publication["revision"],
+            "publicationProposalDigest": proposal["proposalDigest"],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(
+        rollback["schema"],
+        "lenso.agent.plugin-configuration-rollback-proposal.v1"
+    );
+    assert_eq!(rollback["configurationToml"], configuration);
+    assert_eq!(rollback["proposal"]["status"], "ready");
+    assert_eq!(
+        fs::read_to_string(root.path().join("plugins/lenso.agent.loop/agent.toml")).unwrap(),
+        second_configuration
+    );
+    client
+        .put(&endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": second_publication["revision"],
+            "proposalDigest": rollback["proposal"]["proposalDigest"],
+            "toml": rollback["configurationToml"],
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let history = client
+        .get(&publications_endpoint)
+        .bearer_auth(&control_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(history["publications"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        history["publications"][0]["rollbackOfProposalDigest"],
+        proposal["proposalDigest"]
+    );
     let connection = rusqlite::Connection::open_with_flags(
         &database,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -730,7 +844,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
             |row| row.get::<_, i64>(0),
         )
         .unwrap();
-    assert_eq!(publications, 1);
+    assert_eq!(publications, 2);
 }
 
 async fn read_plugin_management(
