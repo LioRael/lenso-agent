@@ -1,7 +1,47 @@
 # Lenso Agent Harness
 
-A terminal-first Agent that starts with a small base App and gains optional
-behavior through Plugins.
+**A local coding Agent whose tools, models, memory, and interfaces are
+replaceable Plugins.**
+
+Lenso Agent Harness starts with a small base App and gains product behavior
+through explicit Plugins. Install or select a different implementation without
+rewriting the Agent loop, and keep every accepted App tied to exact Plugin,
+permission, and runtime evidence.
+
+Use it when you want a terminal-first Agent with:
+
+- interactive TUI, headless, ACP, Web, Telegram, and Discord surfaces;
+- direct Codex and compatible model implementations selected through Profiles;
+- durable Sessions and memory that remain independent from the current
+  Workspace;
+- reviewed workspace, process, Git, Skill, and user-interaction Tools;
+- fail-closed Tool grants and recoverable Plugin configuration history.
+
+The repository currently runs from source while versioned binary and ACP
+Registry releases are being prepared. The Harness is a Lenso product Host, not
+a special mode built into the Lenso Kernel.
+
+## Quick start
+
+Authenticate once before the first Turn. The default App uses the direct Codex
+Model with the `default` ChatGPT Profile:
+
+```sh
+cargo run -p lenso-agent-cli -- auth login
+```
+
+Start the interactive TUI from the repository root:
+
+```sh
+cargo run -p lenso-agent-tui
+```
+
+Or run one headless Turn against the current Workspace:
+
+```sh
+cargo run -p lenso-agent-cli -- \
+  "Summarize this workspace README."
+```
 
 ## Agent Home and Workspace
 
@@ -37,27 +77,7 @@ lenso plugins list
 lenso app show
 ```
 
-## Run it
-
-Authenticate once before the first Turn. The default App uses the direct Codex
-Model with the `default` ChatGPT profile:
-
-```sh
-cargo run -p lenso-agent-cli -- auth login
-```
-
-Start the interactive TUI from the repository root:
-
-```sh
-cargo run -p lenso-agent-tui
-```
-
-Run one headless Turn:
-
-```sh
-cargo run -p lenso-agent-cli -- \
-  "Summarize this workspace README."
-```
+## Connect other surfaces
 
 Expose the same selected Profile to an ACP-compatible editor over stdio:
 
