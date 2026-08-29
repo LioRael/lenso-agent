@@ -11,13 +11,15 @@ mod host;
 mod plugin_root;
 mod profile;
 pub mod provenance;
+mod runtime_state;
 #[cfg(test)]
 mod test_support;
 
 pub use directories::{AGENT_HOME_ENV, AgentDirectories};
 pub use host::{
-    AgentHost, AgentHostBuilder, AgentSurface, ChannelSurface, ConfiguredAgentHost, DiscordSurface,
-    HeadlessSurface, Profile, TelegramSurface, TuiSurface, WebSurface,
+    AgentHost, AgentHostBuilder, AgentSurface, AgentSurfaceKind, ChannelSurface,
+    ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,
+    WebSurface,
 };
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.

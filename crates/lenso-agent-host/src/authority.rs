@@ -7,6 +7,7 @@ use fs2::FileExt;
 
 const LOCK_FILE: &str = "generation-authority.lock";
 const GENERATION_GC_LOCK_FILE: &str = "generation-gc.lock";
+const LEASE_DIRECTORY: &str = ".leases";
 
 /// Coordinates one Host's durable Plugin authority across processes.
 #[derive(Debug)]
@@ -20,19 +21,20 @@ impl AuthorityCoordinator {
         fs::create_dir_all(root)
             .map_err(|error| format!("failed to create Plugin authority root: {error}"))?;
         validate_root(root)?;
-        let coordinator = Self {
-            root: root.to_path_buf(),
-        };
+        let root = root.join(LEASE_DIRECTORY);
+        fs::create_dir_all(&root)
+            .map_err(|error| format!("failed to create Agent runtime lease root: {error}"))?;
+        validate_root(&root)?;
+        let coordinator = Self { root };
         coordinator.open_lock(true)?;
         Ok(coordinator)
     }
 
     /// Open an existing authority without creating inspection state.
     pub(crate) fn open_existing(root: &Path) -> Result<Self, String> {
-        validate_root(root)?;
-        let coordinator = Self {
-            root: root.to_path_buf(),
-        };
+        let root = root.join(LEASE_DIRECTORY);
+        validate_root(&root)?;
+        let coordinator = Self { root };
         coordinator.open_lock(false)?;
         Ok(coordinator)
     }
@@ -80,6 +82,16 @@ impl AuthorityCoordinator {
         FileExt::lock_exclusive(&file)
             .map_err(|error| format!("failed to fence Generation collection: {error}"))?;
         Ok(AuthorityFence { file })
+    }
+
+    /// Attempts one maintenance transition without delaying Host startup or shutdown.
+    pub(crate) fn try_generation_gc_transition(&self) -> Result<Option<AuthorityFence>, String> {
+        let file = open_regular_lock(&self.root.join(GENERATION_GC_LOCK_FILE), true)?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(AuthorityFence { file })),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(format!("failed to fence Generation collection: {error}")),
+        }
     }
 
     /// Attempts to own one Controller namespace without blocking another Host.

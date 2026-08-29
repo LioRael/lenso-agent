@@ -22,10 +22,8 @@ use crate::{
         recovery_generation_authority_gc_candidates_unfenced,
         retained_resolution_authority_digests, retained_resolution_authority_digests_unfenced,
     },
+    runtime_state::RuntimeState,
 };
-
-const GENERATION_DIRECTORY: &str = "generations";
-const APP_ID: &str = "lenso.agent.harness";
 
 #[derive(Debug)]
 pub enum GenerationCommand {
@@ -282,9 +280,34 @@ pub fn run_generation(command: GenerationCommand) -> Result<(), String> {
     }
 }
 
+/// Reports the semantic health of the private Host runtime ledger.
+pub fn run_runtime_status(root: &Path) -> Result<(), String> {
+    let summary = RuntimeState::open_existing(root)?.summary()?;
+    println!("runtime: healthy");
+    println!("controller-lineages: {}", summary.controller_lineages);
+    println!(
+        "recoverable-generations: {}",
+        summary.recoverable_generations
+    );
+    match summary.last_maintenance {
+        Some((completed_at, removed)) => {
+            println!("last-maintenance-unix-seconds: {completed_at}");
+            println!("last-maintenance-removed: {removed}");
+        }
+        None => println!("last-maintenance: pending"),
+    }
+    Ok(())
+}
+
 fn print_gc_preview(root: &Path, sessions: &SessionStore) -> Result<(), String> {
+    let state = RuntimeState::open_existing(root)?;
     let resolution_authorities = retained_resolution_authority_roots(root, false);
-    print_gc_plan(&build_gc_plan(root, sessions, &resolution_authorities)?)
+    print_gc_plan(&build_gc_plan(
+        &state,
+        root,
+        sessions,
+        &resolution_authorities,
+    )?)
 }
 
 #[derive(Debug)]
@@ -311,6 +334,7 @@ impl GenerationGcPlan {
 }
 
 fn build_gc_plan(
+    state: &RuntimeState,
     root: &Path,
     sessions: &SessionStore,
     resolution_authorities: &BTreeSet<String>,
@@ -334,7 +358,7 @@ fn build_gc_plan(
         })
         .collect::<Result<BTreeSet<_>, _>>()?;
     let controller_generations = live_controller_generation_digests(root)?;
-    let generations = load_all_generations(root)?;
+    let generations = state.generations()?;
     for (source, digests) in [
         ("Session provenance", &session_generations),
         ("Generation Controller", &controller_generations),
@@ -391,17 +415,18 @@ fn print_gc_plan(plan: &GenerationGcPlan) -> Result<(), String> {
 }
 
 fn apply_gc(root: &Path, sessions: &SessionStore) -> Result<(), String> {
+    let state = RuntimeState::open(root)?;
     let coordinator = AuthorityCoordinator::open_existing(root)?;
     let _gc_fence = coordinator.generation_gc_transition()?;
     let _authority_fence = coordinator.transition()?;
     let resolution_authorities = retained_resolution_authority_roots(root, true);
-    let plan = build_gc_plan(root, sessions, &resolution_authorities)?;
+    let plan = build_gc_plan(&state, root, sessions, &resolution_authorities)?;
     let candidates = plan.candidates().cloned().collect::<Vec<_>>();
     let mut retained_authorities = plan.protected_resolution_authorities();
     retained_authorities.extend(resolution_authorities);
     recovery_generation_authority_gc_candidates_unfenced(root, &retained_authorities);
     for digest in &candidates {
-        remove_generation(root, digest)?;
+        state.remove_generation(digest)?;
         println!("removed-generation: {digest}");
     }
     let removed_authorities =
@@ -409,6 +434,7 @@ fn apply_gc(root: &Path, sessions: &SessionStore) -> Result<(), String> {
     for digest in &removed_authorities {
         println!("removed-recovery-authority: {digest}");
     }
+    state.record_maintenance(candidates.len())?;
     println!(
         "summary: removed-generations={} removed-recovery-authorities={}",
         candidates.len(),
@@ -417,65 +443,42 @@ fn apply_gc(root: &Path, sessions: &SessionStore) -> Result<(), String> {
     Ok(())
 }
 
+/// Applies ordinary maintenance only when no Host still holds a provenance lease.
+/// A busy runtime is a normal deferral, not an error.
+pub(crate) fn try_apply_automatic_gc(
+    root: &Path,
+    session_database: &Path,
+) -> Result<Option<usize>, String> {
+    if !session_database.exists() {
+        return Ok(None);
+    }
+    let state = RuntimeState::open(root)?;
+    let coordinator = AuthorityCoordinator::open_existing(root)?;
+    let Some(_gc_fence) = coordinator.try_generation_gc_transition()? else {
+        return Ok(None);
+    };
+    let _authority_fence = coordinator.transition()?;
+    let resolution_authorities = retained_resolution_authority_roots(root, true);
+    let sessions = SessionStore::Sqlite(session_database.to_path_buf());
+    let plan = build_gc_plan(&state, root, &sessions, &resolution_authorities)?;
+    let candidates = plan.candidates().cloned().collect::<Vec<_>>();
+    let mut retained_authorities = plan.protected_resolution_authorities();
+    retained_authorities.extend(resolution_authorities);
+    recovery_generation_authority_gc_candidates_unfenced(root, &retained_authorities);
+    for digest in &candidates {
+        state.remove_generation(digest)?;
+    }
+    prune_recovery_generation_authorities_unfenced(root, &retained_authorities);
+    state.record_maintenance(candidates.len())?;
+    Ok(Some(candidates.len()))
+}
+
 fn retained_resolution_authority_roots(root: &Path, authority_fenced: bool) -> BTreeSet<String> {
     if authority_fenced {
         retained_resolution_authority_digests_unfenced(root)
     } else {
         retained_resolution_authority_digests(root)
     }
-}
-
-fn remove_generation(root: &Path, digest: &str) -> Result<(), String> {
-    load_generation(root, digest)?;
-    let hash = canonical_digest_hash(digest)?;
-    fs::remove_file(root.join(GENERATION_DIRECTORY).join(format!("{hash}.json")))
-        .map_err(|error| format!("failed to remove Generation Spec `{digest}`: {error}"))?;
-    fs::File::open(root.join(GENERATION_DIRECTORY))
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| format!("failed to sync Generation provenance directory: {error}"))
-}
-
-fn load_all_generations(
-    root: &Path,
-) -> Result<BTreeMap<String, CanonicalDocument<AppGenerationSpec>>, String> {
-    let directory = root.join(GENERATION_DIRECTORY);
-    let metadata = fs::symlink_metadata(&directory)
-        .map_err(|error| format!("failed to inspect Generation provenance directory: {error}"))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("Generation provenance path is not a regular directory".to_owned());
-    }
-    let mut entries = fs::read_dir(&directory)
-        .map_err(|error| format!("failed to enumerate Generation Specs: {error}"))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to enumerate Generation Specs: {error}"))?;
-    entries.sort_by_key(fs::DirEntry::file_name);
-
-    let mut generations = BTreeMap::new();
-    for entry in entries {
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| "Generation directory contains a non-UTF-8 name".to_owned())?;
-        if name.starts_with('.')
-            && Path::new(&name)
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("tmp"))
-        {
-            continue;
-        }
-        let hash = name
-            .strip_suffix(".json")
-            .filter(|hash| {
-                hash.len() == 64
-                    && hash
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            })
-            .ok_or_else(|| format!("Generation entry `{name}` is not content-addressed"))?;
-        let digest = format!("sha256:{hash}");
-        generations.insert(digest.clone(), load_generation(root, &digest)?);
-    }
-    Ok(generations)
 }
 
 pub fn run_session(command: SessionCommand) -> Result<(), String> {
@@ -602,41 +605,17 @@ fn load_generation(
     root: &std::path::Path,
     digest: &str,
 ) -> Result<CanonicalDocument<AppGenerationSpec>, String> {
-    let hash = canonical_digest_hash(digest)?;
-    let directory = root.join(GENERATION_DIRECTORY);
-    let metadata = fs::symlink_metadata(&directory)
-        .map_err(|error| format!("failed to inspect Generation provenance directory: {error}"))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("Generation provenance path is not a regular directory".to_owned());
-    }
-    let path = directory.join(format!("{hash}.json"));
-    let metadata = fs::symlink_metadata(&path)
-        .map_err(|error| format!("failed to inspect Generation Spec: {error}"))?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err("Generation Spec is not a regular file".to_owned());
-    }
-    let bytes =
-        fs::read(path).map_err(|error| format!("failed to read Generation Spec: {error}"))?;
-    let generation = CanonicalDocument::<AppGenerationSpec>::parse("lenso-generation.json", &bytes)
-        .map_err(|error| format!("Generation Spec validation failed: {error}"))?;
-    if generation.digest() != digest {
-        return Err("Generation Spec does not match its requested digest".to_owned());
-    }
-    if generation.value().app_id != APP_ID {
-        return Err("Generation Spec belongs to another App".to_owned());
-    }
-    Ok(generation)
+    RuntimeState::open_existing(root)?.load_generation(digest)
 }
 
 fn generation_status(root: &std::path::Path, digest: &str) -> &'static str {
-    let Ok(hash) = canonical_digest_hash(digest) else {
+    if canonical_digest_hash(digest).is_err() {
         return "invalid";
-    };
-    let path = root.join(GENERATION_DIRECTORY).join(format!("{hash}.json"));
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "missing",
-        _ if load_generation(root, digest).is_ok() => "available",
-        _ => "invalid",
+    }
+    match RuntimeState::open_existing(root) {
+        Ok(state) if state.load_generation(digest).is_ok() => "available",
+        Ok(state) if state.has_generation(digest) == Ok(false) => "missing",
+        Ok(_) | Err(_) => "invalid",
     }
 }
 

@@ -65,6 +65,9 @@ and resolved, its complete Generation is staged behind the Ready Gate, and only
 then may a long-lived surface route new Turns to it. Existing Turns retain their
 Generation lease. Controller state, recovery records, receipts, and artifact
 cache are derived Host internals, not an App authoring model.
+Controller lineages and immutable Generation records share one private Host
+runtime ledger; surfaces select only a semantic kind and never own its physical
+storage layout. Operating-system process fences remain private runtime leases.
 
 The Harness currently owns terminal, Telegram, Discord, Model, Tool, Prompt,
 Session, approval, workspace, process, and other Agent Plugins. Capabilities

@@ -51,6 +51,7 @@ enum CliCommand {
     Help,
     Auth(AuthCommand),
     Generations(provenance::GenerationCommand),
+    RuntimeStatus { root: PathBuf },
     Sessions(provenance::SessionCommand),
     Approvals(ApprovalCommand),
     Contexts { profile: Option<String> },
@@ -91,6 +92,7 @@ async fn run() -> Result<(), String> {
         }
         CliCommand::Auth(command) => return run_auth(&command).await,
         CliCommand::Generations(command) => return provenance::run_generation(command),
+        CliCommand::RuntimeStatus { root } => return provenance::run_runtime_status(&root),
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
         CliCommand::Contexts { profile } => return run_contexts(profile).await,
@@ -272,6 +274,9 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "generations") {
         return provenance::parse_generation_command(&raw[1..]).map(CliCommand::Generations);
     }
+    if raw.first().is_some_and(|value| value == "runtime") {
+        return parse_runtime(&raw[1..]);
+    }
     if raw.first().is_some_and(|value| value == "sessions") {
         return provenance::parse_session_command(&raw[1..]).map(CliCommand::Sessions);
     }
@@ -282,6 +287,21 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
         return parse_contexts(&raw[1..]);
     }
     parse_run_args(raw)
+}
+
+fn parse_runtime(arguments: &[String]) -> Result<CliCommand, String> {
+    let directories = AgentDirectories::resolve()?;
+    match arguments {
+        [command] if command == "status" => Ok(CliCommand::RuntimeStatus {
+            root: directories.runtime(),
+        }),
+        [command, flag, root] if command == "status" && flag == "--root" => {
+            Ok(CliCommand::RuntimeStatus {
+                root: PathBuf::from(root),
+            })
+        }
+        _ => Err("usage: lenso-agent-cli runtime status [--root <runtime-root>]".to_owned()),
+    }
 }
 
 fn parse_contexts(arguments: &[String]) -> Result<CliCommand, String> {
@@ -443,7 +463,7 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
