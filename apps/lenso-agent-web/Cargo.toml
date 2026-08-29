@@ -13,6 +13,10 @@ name = "lenso-agent-web"
 path = "src/main.rs"
 required-features = ["standalone"]
 
+[[bin]]
+name = "lenso-plugin-configuration-service"
+path = "src/configuration_service_main.rs"
+
 [lib]
 name = "lenso_agent_web"
 path = "src/lib.rs"
@@ -39,16 +43,18 @@ lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-s
 lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
 rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
+tower.workspace = true
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
-reqwest.workspace = true
 tempfile.workspace = true

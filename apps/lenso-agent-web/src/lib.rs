@@ -3,6 +3,7 @@ use std::{
     convert::Infallible,
     path::{Path as FsPath, PathBuf},
     sync::{Arc, Mutex, RwLock},
+    time::Duration,
 };
 
 use axum::{
@@ -39,17 +40,30 @@ use lenso_capability_agent_user_interaction::{
 };
 use lenso_kernel::{CancellationToken, StreamEvent};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod configuration_service;
 mod configuration_store;
+mod remote_configuration_authority;
 
+pub use configuration_service::{
+    CONFIGURATION_SERVICE_READ_TOKEN_ENV, CONFIGURATION_SERVICE_WRITE_TOKEN_ENV,
+    PluginConfigurationService, PluginConfigurationServiceAccess,
+    PluginConfigurationServiceResource,
+};
 pub use configuration_store::{
     PluginConfigurationHistoryAuthority, PluginConfigurationPublicationRecord,
     PluginConfigurationStoreConfig, SqlitePluginConfigurationAuthority,
 };
+pub use remote_configuration_authority::{
+    RemotePluginConfigurationAuthority, RemotePluginConfigurationConfig,
+    RemotePluginConfigurationResource,
+};
 
 const MAX_REQUEST_BYTES: usize = 65_536;
+const REMOTE_CONFIGURATION_WATCH_WAIT: Duration = Duration::from_secs(5);
+const REMOTE_CONFIGURATION_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_PROMPT_BYTES: usize = 65_536;
 const TOOL_POLICY_SCHEMA: &str = "lenso.agent.tool-policy.v1";
 /// Environment variable used by the standalone server for Tool policy control.
@@ -104,6 +118,11 @@ pub struct AgentWebConfig {
     /// This conflicts with `plugin_configuration_authority`; it is a concrete
     /// standalone adapter for the same Host port.
     pub plugin_configuration_store: Option<PluginConfigurationStoreConfig>,
+    /// Optional remote service selected as the Plugin configuration authority.
+    ///
+    /// This conflicts with both injected and SQLite authorities. The service
+    /// owns desired-state CAS; the Host Plugin Root remains its exact materialized mirror.
+    pub plugin_configuration_remote: Option<RemotePluginConfigurationConfig>,
     /// Exact linked Plugin inventory exposed by this Host build.
     pub plugins: fn(),
 }
@@ -123,6 +142,7 @@ impl AgentWebConfig {
             plugin_configuration_authority: None,
             plugin_configuration_history: None,
             plugin_configuration_store: None,
+            plugin_configuration_remote: None,
             plugins,
         }
     }
@@ -162,6 +182,7 @@ struct WebRuntimeConfig {
     policy: ToolPolicyDocument,
     policy_path: Option<PathBuf>,
     profile: Option<String>,
+    remote_configuration: Option<Arc<RemotePluginConfigurationAuthority>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -599,6 +620,9 @@ enum RuntimeCommand {
     PluginInventory {
         reply: oneshot::Sender<Result<PluginInventoryResponse, String>>,
     },
+    RemoteConfigurationWatchDegraded {
+        detail: String,
+    },
     AnswerInteraction {
         answers: Vec<InteractionAnswer>,
         interaction_id: String,
@@ -640,6 +664,12 @@ enum RuntimeCommand {
     Shutdown {
         reply: oneshot::Sender<Result<(), String>>,
     },
+}
+
+#[derive(Debug)]
+struct RemoteConfigurationSyncRuntime {
+    stop: watch::Sender<bool>,
+    task: tokio::task::JoinHandle<()>,
 }
 
 #[derive(Debug)]
@@ -955,25 +985,20 @@ impl AgentWebSurface {
             plugin_configuration_authority,
             plugin_configuration_history,
             plugin_configuration_store,
+            plugin_configuration_remote,
             plugins,
         } = config;
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
-        let selected_profile = match (&plan, &profile) {
-            (Some(plan), None) => Profile::resolved_plan(plan),
-            (None, Some(profile)) => Profile::named(profile),
-            (None, None) => Profile::Default,
-            (Some(_), Some(_)) => {
-                return Err("an exact Plan conflicts with a named Agent Profile".to_owned());
-            }
-        };
+        let selected_profile = select_profile(plan.as_deref(), profile.as_deref())?;
         let directories = match agent_home.as_ref() {
             Some(agent_home) => AgentDirectories::from_home(agent_home)?,
             None => AgentDirectories::resolve()?,
         };
         let authority_selection = plugin_configuration_authority_selection(
-            plugin_configuration_authority.is_some(),
-            plugin_configuration_history.is_some(),
-            plugin_configuration_store.is_some(),
+            plugin_configuration_authority.as_ref(),
+            plugin_configuration_history.as_ref(),
+            plugin_configuration_store.as_ref(),
+            plugin_configuration_remote.as_ref(),
         )?;
         validate_plugin_control_configuration(
             plugin_control,
@@ -991,22 +1016,21 @@ impl AgentWebSurface {
         }
         .surface(WebSurface::browser())
         .build()?;
-        let app = host.run(selected_profile).await?;
+        host.prepare_authoring()?;
         let app_root = managed_app_root.as_deref().unwrap_or(directories.home());
-        let (plugin_configuration_authority, plugin_configuration_history) =
-            match plugin_configuration_store {
-                Some(store) => {
-                    let authority = Arc::new(
-                        SqlitePluginConfigurationAuthority::open(app_root, store)
-                            .map_err(|error| error.to_string())?,
-                    );
-                    (
-                        Some(Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>),
-                        Some(authority as Arc<dyn PluginConfigurationHistoryAuthority>),
-                    )
-                }
-                None => (plugin_configuration_authority, plugin_configuration_history),
-            };
+        let authorities = resolve_configuration_authorities(
+            app_root,
+            plugin_configuration_authority,
+            plugin_configuration_history,
+            plugin_configuration_store,
+            plugin_configuration_remote,
+        )?;
+        let app = host.run(selected_profile).await?;
+        let ResolvedConfigurationAuthorities {
+            authority: plugin_configuration_authority,
+            history: plugin_configuration_history,
+            remote,
+        } = authorities;
         let plugin_control = resolve_plugin_control(
             plugin_control,
             plugin_configuration_authority,
@@ -1038,6 +1062,7 @@ impl AgentWebSurface {
                 policy,
                 policy_path: tool_policy,
                 profile,
+                remote_configuration: remote,
             },
         );
         Ok(Self { runtime })
@@ -1054,22 +1079,43 @@ impl AgentWebSurface {
     }
 }
 
+fn select_profile(plan: Option<&FsPath>, profile: Option<&str>) -> Result<Profile, String> {
+    match (plan, profile) {
+        (Some(plan), None) => Ok(Profile::resolved_plan(plan)),
+        (None, Some(profile)) => Ok(Profile::named(profile)),
+        (None, None) => Ok(Profile::Default),
+        (Some(_), Some(_)) => Err("an exact Plan conflicts with a named Agent Profile".to_owned()),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PluginConfigurationAuthoritySelection {
     Local,
     Injected,
     InjectedWithHistory,
     Store,
+    Remote,
 }
 
 fn plugin_configuration_authority_selection(
-    injected_authority: bool,
-    injected_history: bool,
-    store: bool,
+    injected_authority: Option<&Arc<dyn PluginConfigurationAuthority>>,
+    injected_history: Option<&Arc<dyn PluginConfigurationHistoryAuthority>>,
+    store: Option<&PluginConfigurationStoreConfig>,
+    remote: Option<&RemotePluginConfigurationConfig>,
 ) -> Result<PluginConfigurationAuthoritySelection, String> {
-    if injected_authority && store {
+    let injected_authority = injected_authority.is_some();
+    let injected_history = injected_history.is_some();
+    let store = store.is_some();
+    let remote = remote.is_some();
+    if injected_authority && (store || remote) {
         return Err(
-            "a Plugin configuration store conflicts with an injected configuration authority"
+            "a concrete Plugin configuration authority conflicts with an injected configuration authority"
+                .to_owned(),
+        );
+    }
+    if store && remote {
+        return Err(
+            "a remote Plugin configuration authority conflicts with the SQLite configuration store"
                 .to_owned(),
         );
     }
@@ -1078,13 +1124,65 @@ fn plugin_configuration_authority_selection(
             "Plugin configuration history requires an injected configuration authority".to_owned(),
         );
     }
-    Ok(match (injected_authority, injected_history, store) {
-        (false, false, false) => PluginConfigurationAuthoritySelection::Local,
-        (true, false, false) => PluginConfigurationAuthoritySelection::Injected,
-        (true, true, false) => PluginConfigurationAuthoritySelection::InjectedWithHistory,
-        (false, false, true) => PluginConfigurationAuthoritySelection::Store,
-        _ => unreachable!("invalid authority combination should fail before selection"),
-    })
+    Ok(
+        match (injected_authority, injected_history, store, remote) {
+            (false, false, false, false) => PluginConfigurationAuthoritySelection::Local,
+            (true, false, false, false) => PluginConfigurationAuthoritySelection::Injected,
+            (true, true, false, false) => {
+                PluginConfigurationAuthoritySelection::InjectedWithHistory
+            }
+            (false, false, true, false) => PluginConfigurationAuthoritySelection::Store,
+            (false, false, false, true) => PluginConfigurationAuthoritySelection::Remote,
+            _ => unreachable!("invalid authority combination should fail before selection"),
+        },
+    )
+}
+
+struct ResolvedConfigurationAuthorities {
+    authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
+    remote: Option<Arc<RemotePluginConfigurationAuthority>>,
+}
+
+fn resolve_configuration_authorities(
+    app_root: &FsPath,
+    injected_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    injected_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
+    store: Option<PluginConfigurationStoreConfig>,
+    remote: Option<RemotePluginConfigurationConfig>,
+) -> Result<ResolvedConfigurationAuthorities, String> {
+    match (store, remote) {
+        (Some(store), None) => {
+            let authority = Arc::new(
+                SqlitePluginConfigurationAuthority::open(app_root, store)
+                    .map_err(|error| error.to_string())?,
+            );
+            Ok(ResolvedConfigurationAuthorities {
+                authority: Some(Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>),
+                history: Some(authority as Arc<dyn PluginConfigurationHistoryAuthority>),
+                remote: None,
+            })
+        }
+        (None, Some(remote)) => {
+            let authority = Arc::new(
+                RemotePluginConfigurationAuthority::connect(app_root, remote)
+                    .map_err(|error| error.to_string())?,
+            );
+            Ok(ResolvedConfigurationAuthorities {
+                authority: Some(Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>),
+                history: Some(
+                    Arc::clone(&authority) as Arc<dyn PluginConfigurationHistoryAuthority>
+                ),
+                remote: Some(authority),
+            })
+        }
+        (None, None) => Ok(ResolvedConfigurationAuthorities {
+            authority: injected_authority,
+            history: injected_history,
+            remote: None,
+        }),
+        (Some(_), Some(_)) => unreachable!("authority selection rejects this conflict"),
+    }
 }
 
 fn validate_plugin_control_configuration(
@@ -2070,14 +2168,18 @@ impl WebRuntime {
             policy,
             policy_path,
             profile,
+            remote_configuration,
         } = config;
         let (commands, receiver) = mpsc::channel(16);
         let policy = Arc::new(RwLock::new(policy));
+        let remote_sync = remote_configuration
+            .map(|authority| start_remote_configuration_sync(authority, commands.clone()));
         tokio::task::spawn_local(runtime_actor(
             app,
             receiver,
             Arc::clone(&policy),
             plugin_inventory.clone(),
+            remote_sync,
         ));
         Self {
             available_tools,
@@ -2174,6 +2276,7 @@ async fn runtime_actor(
     mut commands: mpsc::Receiver<RuntimeCommand>,
     policy: Arc<RwLock<ToolPolicyDocument>>,
     mut plugin_inventory: PluginInventoryResponse,
+    mut remote_sync: Option<RemoteConfigurationSyncRuntime>,
 ) {
     let mut pending = VecDeque::new();
     let mut pre_cancelled = BTreeSet::new();
@@ -2188,6 +2291,14 @@ async fn runtime_actor(
         match command {
             RuntimeCommand::PluginInventory { reply } => {
                 let _ = reply.send(snapshot_plugin_inventory(&mut app, &mut plugin_inventory));
+            }
+            RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
+                plugin_inventory
+                    .generation_events
+                    .push(PluginGenerationEvent {
+                        detail,
+                        status: "watch_degraded",
+                    });
             }
             RuntimeCommand::AnswerInteraction { reply, .. } => {
                 let _ = reply.send(Err(RuntimeInteractionError::Inactive));
@@ -2331,23 +2442,108 @@ async fn runtime_actor(
                     shutdown
                 };
                 if let Some(reply) = shutdown {
-                    let _ = reply.send(app.shutdown().await);
+                    let sync = stop_remote_configuration_sync(&mut remote_sync).await;
+                    let app = app.shutdown().await;
+                    let _ = reply.send(sync.and(app));
                     return;
                 }
             }
             RuntimeCommand::Shutdown { reply } => {
-                let _ = reply.send(app.shutdown().await);
+                let sync = stop_remote_configuration_sync(&mut remote_sync).await;
+                let app = app.shutdown().await;
+                let _ = reply.send(sync.and(app));
                 return;
             }
         }
     }
+    let _ = stop_remote_configuration_sync(&mut remote_sync).await;
     let _ = app.shutdown().await;
+}
+
+fn start_remote_configuration_sync(
+    authority: Arc<RemotePluginConfigurationAuthority>,
+    commands: mpsc::Sender<RuntimeCommand>,
+) -> RemoteConfigurationSyncRuntime {
+    let (stop, receiver) = watch::channel(false);
+    let task = tokio::spawn(remote_configuration_sync_actor(
+        authority, commands, receiver,
+    ));
+    RemoteConfigurationSyncRuntime { stop, task }
+}
+
+async fn remote_configuration_sync_actor(
+    authority: Arc<RemotePluginConfigurationAuthority>,
+    commands: mpsc::Sender<RuntimeCommand>,
+    mut stop: watch::Receiver<bool>,
+) {
+    let mut last_error = None::<String>;
+    loop {
+        if *stop.borrow() {
+            break;
+        }
+        let target = Arc::clone(&authority);
+        let result = tokio::task::spawn_blocking(move || {
+            target.synchronize(REMOTE_CONFIGURATION_WATCH_WAIT)
+        })
+        .await
+        .map_err(|error| format!("remote configuration synchronization task failed: {error}"))
+        .and_then(|result| result.map_err(|error| error.to_string()));
+        let changed = match result {
+            Ok(changed) => {
+                last_error = None;
+                changed
+            }
+            Err(detail) => {
+                if last_error.as_deref() != Some(&detail) {
+                    if commands
+                        .send(RuntimeCommand::RemoteConfigurationWatchDegraded {
+                            detail: detail.clone(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                    last_error = Some(detail);
+                }
+                false
+            }
+        };
+        if changed {
+            continue;
+        }
+        tokio::select! {
+            update = stop.changed() => {
+                if update.is_err() || *stop.borrow() {
+                    break;
+                }
+            }
+            () = tokio::time::sleep(REMOTE_CONFIGURATION_RETRY_DELAY) => {}
+        }
+    }
+}
+
+async fn stop_remote_configuration_sync(
+    runtime: &mut Option<RemoteConfigurationSyncRuntime>,
+) -> Result<(), String> {
+    let Some(runtime) = runtime.take() else {
+        return Ok(());
+    };
+    runtime
+        .stop
+        .send(true)
+        .map_err(|_| "remote configuration synchronizer already stopped".to_owned())?;
+    runtime
+        .task
+        .await
+        .map_err(|error| format!("remote configuration synchronizer failed: {error}"))
 }
 
 fn snapshot_plugin_inventory(
     app: &mut AgentApp,
     inventory: &mut PluginInventoryResponse,
 ) -> Result<PluginInventoryResponse, String> {
+    let remote_events = std::mem::take(&mut inventory.generation_events);
     let events = app.take_online_generation_events();
     if events
         .iter()
@@ -2361,9 +2557,11 @@ fn snapshot_plugin_inventory(
         .into_iter()
         .map(|instance| instance.to_string())
         .collect();
-    Ok(inventory
+    let mut snapshot = inventory
         .clone()
-        .with_runtime_state(disabled, &disableable, events))
+        .with_runtime_state(disabled, &disableable, events);
+    snapshot.generation_events.splice(0..0, remote_events);
+    Ok(snapshot)
 }
 
 async fn handle_read_command(

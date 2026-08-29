@@ -68,3 +68,5 @@
 - [0066 — Accept parallel coding supervision end to end](0066-accept-parallel-coding-supervision-end-to-end.md)
 - [0067 — Enter the Host through ACP](0067-enter-the-host-through-acp.md)
 - [0068 — Distribute ACP through the Registry](0068-distribute-acp-through-the-registry.md)
+- [0069 — Adapt one remote Plugin configuration resource](0069-adapt-remote-plugin-configuration-resource.md)
+- [0070 — Serve one durable Plugin configuration resource](0070-serve-one-durable-plugin-configuration-resource.md)

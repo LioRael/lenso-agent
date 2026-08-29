@@ -29,6 +29,12 @@ pub struct PluginConfigurationPublicationRecord {
     pub rollback_of_proposal_digest: Option<String>,
 }
 
+pub(crate) struct PluginConfigurationChangeBatch {
+    pub desired_revision: String,
+    pub head_cursor: String,
+    pub publications: Vec<PluginConfigurationPublicationRecord>,
+}
+
 pub trait PluginConfigurationHistoryAuthority: std::fmt::Debug + Send + Sync {
     fn publications(
         &self,
@@ -363,6 +369,52 @@ impl SqlitePluginConfigurationAuthority {
         })
     }
 
+    pub(crate) fn publication_changes(
+        &self,
+        after_revision: &str,
+        after_cursor: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<PluginConfigurationChangeBatch> {
+        let limit =
+            i64::try_from(limit.clamp(1, 64)).context("publication change limit exceeds i64")?;
+        self.with_operation(|connection| {
+            let desired_revision = self.reconcile(connection)?.revision().as_str().to_owned();
+            let head = connection
+                .query_row(
+                    "SELECT proposal_digest, revision FROM configuration_publications ORDER BY rowid DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?;
+            if let Some((_, head_revision)) = head.as_ref()
+                && head_revision != &desired_revision
+            {
+                bail!("Plugin configuration publication ledger does not reach desired revision");
+            }
+            let head_cursor = head.map_or_else(|| "initial".to_owned(), |(digest, _)| digest);
+            let publications = if after_revision == desired_revision {
+                Vec::new()
+            } else {
+                publication_changes_from(connection, after_revision, after_cursor, limit)?
+            };
+            if after_revision != desired_revision
+                && publications
+                    .first()
+                    .is_none_or(|record| record.base_revision != after_revision)
+            {
+                bail!("revision history gap");
+            }
+            if !publication_chain_is_continuous(&publications) {
+                bail!("Plugin configuration publication ledger is discontinuous");
+            }
+            Ok(PluginConfigurationChangeBatch {
+                desired_revision,
+                head_cursor,
+                publications,
+            })
+        })
+    }
+
     pub fn propose_rollback(
         &self,
         expected_revision: &PluginRootRevision,
@@ -386,6 +438,108 @@ impl SqlitePluginConfigurationAuthority {
         )?;
         Ok(Some((proposal, publication.configuration_toml)))
     }
+}
+
+type StoredPublicationRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    Vec<u8>,
+    i64,
+    Option<String>,
+);
+
+fn publication_record_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredPublicationRow> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
+}
+
+fn publication_record(
+    row: StoredPublicationRow,
+) -> anyhow::Result<PluginConfigurationPublicationRecord> {
+    let (
+        proposal_digest,
+        revision,
+        base_revision,
+        plugin_id,
+        instance_key,
+        configuration_toml,
+        published_at_unix_ms,
+        rollback_of_proposal_digest,
+    ) = row;
+    Ok(PluginConfigurationPublicationRecord {
+        proposal_digest,
+        revision,
+        base_revision,
+        plugin_id,
+        instance_key,
+        configuration_toml: String::from_utf8(configuration_toml)
+            .context("published Plugin configuration TOML is not UTF-8")?,
+        published_at_unix_ms,
+        rollback_of_proposal_digest,
+    })
+}
+
+fn publication_changes_from(
+    connection: &Connection,
+    after_revision: &str,
+    after_cursor: Option<&str>,
+    limit: i64,
+) -> anyhow::Result<Vec<PluginConfigurationPublicationRecord>> {
+    let (comparison, anchor) = match after_cursor {
+        Some("initial") => (">", 0_i64),
+        Some(cursor) => {
+            let rowid = connection
+                .query_row(
+                    "SELECT rowid FROM configuration_publications WHERE proposal_digest = ?1",
+                    [cursor],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .context("change cursor is unavailable")?;
+            (">", rowid)
+        }
+        None => {
+            let rowid = connection
+                .query_row(
+                    "SELECT rowid FROM configuration_publications WHERE base_revision = ?1 ORDER BY rowid DESC LIMIT 1",
+                    [after_revision],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?
+                .context("revision history gap")?;
+            (">=", rowid)
+        }
+    };
+    let query = format!(
+        "SELECT proposal_digest, revision, base_revision, plugin_id, instance_key,
+                configuration_toml, published_at_unix_ms, rollback_of_proposal_digest
+         FROM configuration_publications
+         WHERE rowid {comparison} ?1
+         ORDER BY rowid ASC
+         LIMIT ?2"
+    );
+    let mut statement = connection.prepare(&query)?;
+    statement
+        .query_map(params![anchor, limit], publication_record_row)?
+        .map(|row| publication_record(row?))
+        .collect()
+}
+
+fn publication_chain_is_continuous(publications: &[PluginConfigurationPublicationRecord]) -> bool {
+    publications
+        .windows(2)
+        .all(|pair| pair[0].revision == pair[1].base_revision)
 }
 
 impl PluginConfigurationAuthority for SqlitePluginConfigurationAuthority {
