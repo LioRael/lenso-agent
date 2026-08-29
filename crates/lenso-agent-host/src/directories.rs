@@ -60,7 +60,7 @@ impl AgentDirectories {
     }
 
     pub fn host_catalog(&self) -> PathBuf {
-        self.home.join("host-catalog.json")
+        self.home.join(".lenso/host-catalog.json")
     }
 
     pub fn sessions(&self) -> PathBuf {
@@ -123,6 +123,10 @@ mod tests {
         assert_eq!(
             directories.runtime(),
             Path::new("/tmp/lenso-agent-home/runtime")
+        );
+        assert_eq!(
+            directories.host_catalog(),
+            Path::new("/tmp/lenso-agent-home/.lenso/host-catalog.json")
         );
         assert_eq!(
             directories.session_database(),

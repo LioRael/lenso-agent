@@ -380,7 +380,7 @@ fn global_agent_home_keeps_configuration_and_state_outside_the_workspace() {
         String::from_utf8_lossy(&output.stdout),
         "README summary: # Separate Workspace\n"
     );
-    assert!(home.path().join("host-catalog.json").is_file());
+    assert!(home.path().join(".lenso/host-catalog.json").is_file());
     assert!(home.path().join("runtime").is_dir());
     assert!(home.path().join("sessions.sqlite3").is_file());
     assert!(!workspace.path().join("plugins").exists());
@@ -1355,7 +1355,7 @@ fn product_runner_resolves_a_configured_app_without_cargo_or_a_plan_path() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
     assert!(!temporary.path().join("resolved-plan.json").exists());
     assert!(temporary.path().join("plugins").is_dir());
-    assert!(temporary.path().join("host-catalog.json").is_file());
+    assert!(temporary.path().join(".lenso/host-catalog.json").is_file());
 }
 
 #[test]
