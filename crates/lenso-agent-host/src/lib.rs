@@ -55,6 +55,13 @@ pub(crate) fn plan_bytes_for_profile_in(
 }
 
 fn ensure_host_catalog(directories: &AgentDirectories) -> Result<(), String> {
+    let plugin_root = directories.plugins();
+    fs::create_dir_all(&plugin_root).map_err(|error| {
+        format!(
+            "failed to create visible Plugin Root {}: {error}",
+            plugin_root.display()
+        )
+    })?;
     let path = directories.host_catalog();
     let catalog = generation::linked_host_catalog_in(directories)?;
     let mut bytes = serde_json::to_vec_pretty(&catalog)

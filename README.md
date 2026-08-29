@@ -78,8 +78,8 @@ Each process atomically claims an independent recoverable Controller slot, so
 different sessions and profiles retain Generation fencing without contending
 for one global TUI lock.
 
-Start the Console Web surface with a durable, administrator-controlled Tool
-allowlist:
+Start the standalone Harness Web surface with a durable, administrator-controlled
+Tool allowlist:
 
 ```sh
 LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
@@ -91,6 +91,23 @@ LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
 The control route accepts only the matching bearer token. Updates validate
 against the active Plan-bound Tool catalog, use an expected revision, persist
 before activation, and affect only Turns admitted after the update.
+
+An embedding Host composes the library Surface with its own explicitly linked
+Plugin inventory. `lenso-agent-web` does not select Console, workspace, process,
+or other product behavior for the Host:
+
+```rust,ignore
+let mut config = AgentWebConfig::new(my_product_plugins::link);
+config.agent_home = Some(agent_home);
+config.control = AgentWebControl::HostAuthorized;
+
+let surface = AgentWebSurface::start(config).await?;
+let app = Router::new().merge(surface.router());
+```
+
+Cross-repository Hosts consume `lenso-agent-web` and their selected Plugin
+inventory from the same exact Harness Git revision. Local path dependencies are
+only a coordinated-development aid and are not a delivery boundary.
 
 ## Choose a Session Profile
 
