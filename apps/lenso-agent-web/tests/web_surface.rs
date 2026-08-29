@@ -385,9 +385,15 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let endpoint = format!(
         "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/configuration"
     );
+    let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
     let configuration = root.path().join("plugins/lenso.agent.loop/agent.toml");
     assert!(!configuration.exists());
     let initial_generation = active_generation_digest(root.path());
+
+    assert_plugin_management_forbidden(&client, &management_endpoint).await;
+    let initial_management =
+        read_plugin_management(&client, &management_endpoint, &control_token).await;
+    assert_initial_plugin_management(&initial_management);
 
     assert_eq!(
         client
@@ -448,9 +454,64 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         fs::read_to_string(&configuration).unwrap(),
         updated_configuration
     );
+    let updated_management =
+        read_plugin_management(&client, &management_endpoint, &control_token).await;
+    let updated_loop = managed_plugin(&updated_management, "lenso.agent.loop");
+    assert_eq!(
+        updated_loop["instances"][0]["rootConfigurationToml"],
+        updated_configuration
+    );
+    assert_eq!(updated_loop["instances"][0]["hasRootDifference"], true);
 
     let switched_generation = wait_for_generation_change(root.path(), &initial_generation).await;
     assert_ne!(switched_generation, initial_generation);
+}
+
+async fn read_plugin_management(
+    client: &reqwest::Client,
+    endpoint: &str,
+    control_token: &str,
+) -> serde_json::Value {
+    client
+        .get(endpoint)
+        .bearer_auth(control_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()
+}
+
+async fn assert_plugin_management_forbidden(client: &reqwest::Client, endpoint: &str) {
+    assert_eq!(
+        client.get(endpoint).send().await.unwrap().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+}
+
+fn managed_plugin<'a>(
+    management: &'a serde_json::Value,
+    package_id: &str,
+) -> &'a serde_json::Value {
+    management["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plugin| plugin["packageId"] == package_id)
+        .unwrap()
+}
+
+fn assert_initial_plugin_management(management: &serde_json::Value) {
+    assert_eq!(management["schema"], "lenso.agent.plugin-management.v1");
+    let plugin = managed_plugin(management, "lenso.agent.loop");
+    assert_eq!(plugin["instances"][0]["selection"], "enabled");
+    assert_eq!(
+        plugin["instances"][0]["rootConfigurationToml"],
+        serde_json::Value::Null
+    );
 }
 
 fn write_web_fixture(root: &std::path::Path) {

@@ -22,8 +22,8 @@ use lenso_agent_session_inspection::{
 };
 use lenso_agent_web_plugin as _;
 use lenso_app_authoring::{
-    add_bundle, configure_instance, remove_instance_difference, remove_plugin,
-    set_instance_disabled,
+    PluginRootAuthoringState, add_bundle, configure_instance, inspect_plugin_root,
+    remove_instance_difference, remove_plugin, set_instance_disabled,
 };
 use lenso_app_plan::{ResolvedAppPlan, authoring::ResolvedApp};
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
@@ -146,6 +146,72 @@ struct PluginInventoryItem {
     package_revision: String,
     provided_capabilities: Vec<String>,
     required_capabilities: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginManagementResponse {
+    plugins: Vec<ManagedPlugin>,
+    schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedPlugin {
+    instances: Vec<ManagedPluginInstance>,
+    package_id: String,
+    package_revision: String,
+    root_supplied: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ManagedPluginInstance {
+    disableable: bool,
+    has_root_difference: bool,
+    instance_key: String,
+    origin: &'static str,
+    root_configuration_toml: Option<String>,
+    selection: &'static str,
+}
+
+impl From<&PluginRootAuthoringState> for PluginManagementResponse {
+    fn from(state: &PluginRootAuthoringState) -> Self {
+        Self {
+            plugins: state
+                .plugins()
+                .iter()
+                .map(|plugin| ManagedPlugin {
+                    instances: plugin
+                        .instances()
+                        .iter()
+                        .map(|instance| ManagedPluginInstance {
+                            disableable: instance.is_disableable(),
+                            has_root_difference: instance.has_root_difference(),
+                            instance_key: instance.id().instance_key().to_owned(),
+                            origin: if instance.is_host_default() {
+                                "host-default"
+                            } else {
+                                "plugin-root"
+                            },
+                            root_configuration_toml: instance
+                                .root_configuration_toml()
+                                .map(str::to_owned),
+                            selection: if instance.is_enabled() {
+                                "enabled"
+                            } else {
+                                "disabled-by-root"
+                            },
+                        })
+                        .collect(),
+                    package_id: plugin.plugin_id().to_owned(),
+                    package_revision: plugin.release_version().to_owned(),
+                    root_supplied: plugin.is_root_supplied(),
+                })
+                .collect(),
+            schema: "lenso.agent.plugin-management.v1",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -617,6 +683,10 @@ fn router(runtime: WebRuntime) -> Router {
             get(read_tool_policy).put(update_tool_policy),
         )
         .route(
+            "/api/console/v1/agent/control/plugins",
+            get(plugin_management),
+        )
+        .route(
             "/api/console/v1/agent/control/plugins/install",
             post(install_plugin),
         )
@@ -650,6 +720,21 @@ fn router(runtime: WebRuntime) -> Router {
 
 async fn plugin_inventory(State(runtime): State<WebRuntime>) -> Json<PluginInventoryResponse> {
     Json(runtime.plugin_inventory)
+}
+
+async fn plugin_management(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+) -> Result<Json<PluginManagementResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let control = runtime.plugin_control()?;
+    tokio::task::spawn_blocking(move || control.inspect())
+        .await
+        .map_err(|error| {
+            ApiProblem::unavailable(format!("Plugin inspection task failed: {error}"))
+        })?
+        .map(Json)
+        .map_err(ApiProblem::conflict)
 }
 
 async fn bootstrap(
@@ -1100,6 +1185,16 @@ impl PluginControl {
                 .map(|(_, _, app)| app)
                 .map_err(|error| error.to_string())
         })
+    }
+
+    fn inspect(&self) -> Result<PluginManagementResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        inspect_plugin_root(&self.app_root)
+            .map(|state| PluginManagementResponse::from(&state))
+            .map_err(|error| error.to_string())
     }
 
     fn configure(
