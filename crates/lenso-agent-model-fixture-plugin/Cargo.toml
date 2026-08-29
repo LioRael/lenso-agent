@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-model-fixture-plugin"
-version = "0.2.0"
+version = "0.5.0"
 description = "Deterministic Model Plugin for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true

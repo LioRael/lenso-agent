@@ -31,6 +31,7 @@ lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-session-presentation = { path = "../lenso-capability-agent-session-presentation" }
 lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-agent-turn-input = { path = "../lenso-capability-agent-turn-input" }
 lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
 lenso-capability-agent-tui-contribution = { path = "../lenso-capability-agent-tui-contribution" }
 lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }

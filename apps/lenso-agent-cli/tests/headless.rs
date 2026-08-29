@@ -1627,6 +1627,313 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
 }
 
 #[test]
+fn delegated_child_records_versioned_result_metadata_and_durable_session() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin(temporary.path(), "lenso.agent.subagent-tools");
+
+    let output = run_configured_derived(temporary.path(), "Delegate a README.md summary.", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Delegated result: Child summary: # Plugin Fixture\n"
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    assert_eq!(sessions.len(), 2);
+    let delegate_result = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .find_map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            (payload["name"] == "delegate").then_some(payload)
+        })
+        .expect("parent Session must retain the delegate Tool result");
+    let metadata: serde_json::Value =
+        serde_json::from_str(delegate_result["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["schema"], "lenso.agent.subagent-result@1");
+    assert_eq!(metadata["status"], "completed");
+    assert_eq!(metadata["context_mode"], "fresh");
+    assert_eq!(metadata["task_bytes"], 41);
+    assert_eq!(metadata["output_bytes"], 31);
+    assert_eq!(metadata["text_delta_count"], 1);
+    assert_eq!(metadata["tool_call_count"], 1);
+
+    let child_session_id = metadata["child_session_id"].as_str().unwrap();
+    let child = sessions
+        .iter()
+        .find(|session| session["session_id"] == child_session_id)
+        .expect("metadata must locate the durable child Session");
+    let child_turn = child["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "turn_started")
+        .unwrap();
+    let child_turn_payload: serde_json::Value =
+        serde_json::from_str(child_turn["payload_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        child_turn_payload["input"],
+        "Summarize README.md for the parent Agent."
+    );
+}
+
+#[test]
+fn spawned_child_can_be_joined_by_task_id_without_losing_session_provenance() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin(temporary.path(), "lenso.agent.subagent-tools");
+
+    let output = run_configured_derived(
+        temporary.path(),
+        "Spawn and wait for a README.md subagent.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Asynchronous result: Child summary: # Plugin Fixture\n"
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    assert_eq!(sessions.len(), 2);
+    let tool_results = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let spawned = tool_results
+        .iter()
+        .find(|result| result["name"] == "spawn_subagent")
+        .expect("parent Session must retain the spawned task ID");
+    let spawn_metadata: serde_json::Value =
+        serde_json::from_str(spawned["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(spawn_metadata["schema"], "lenso.agent.subagent-task@1");
+    assert_eq!(spawn_metadata["status"], "running");
+    let task_id = spawn_metadata["task_id"].as_str().unwrap();
+
+    let waited = tool_results
+        .iter()
+        .find(|result| result["name"] == "wait_subagent")
+        .expect("parent Session must retain the joined child result");
+    let wait_metadata: serde_json::Value =
+        serde_json::from_str(waited["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(wait_metadata["schema"], "lenso.agent.subagent-result@1");
+    assert_eq!(wait_metadata["status"], "completed");
+    assert_eq!(wait_metadata["task_id"], task_id);
+    let child_session_id = wait_metadata["child_session_id"].as_str().unwrap();
+    assert!(
+        sessions
+            .iter()
+            .any(|session| session["session_id"] == child_session_id)
+    );
+}
+
+#[test]
+fn running_child_accepts_input_only_after_the_session_fact_is_durable() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin(temporary.path(), "lenso.agent.subagent-tools");
+
+    let output = run_configured_derived(
+        temporary.path(),
+        "Spawn, steer, and wait for a README.md subagent.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Steered result: Steered child summary: # Plugin Fixture\n"
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    let tool_results = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let sent = tool_results
+        .iter()
+        .find(|result| result["name"] == "send_subagent")
+        .expect("parent Session must retain the accepted send_subagent result");
+    let acceptance: serde_json::Value =
+        serde_json::from_str(sent["content"].as_str().unwrap()).unwrap();
+    assert_eq!(acceptance["status"], "input_accepted");
+    let child_session_id = acceptance["child_session_id"].as_str().unwrap();
+    let accepted_revision = acceptance["accepted_revision"].as_str().unwrap();
+
+    let child = sessions
+        .iter()
+        .find(|session| session["session_id"] == child_session_id)
+        .expect("accepted input must identify its durable child Session");
+    let accepted_event = child["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event["revision"]
+                .as_u64()
+                .map(|revision| revision.to_string())
+                .as_deref()
+                == Some(accepted_revision)
+                && event["kind"] == "model_requested"
+                && serde_json::from_str::<serde_json::Value>(
+                    event["payload_json"].as_str().unwrap(),
+                )
+                .is_ok_and(|payload| {
+                    payload["additional_inputs"] == serde_json::json!(["Emphasize the heading."])
+                })
+        })
+        .expect("acceptance revision must point at the durable additional input fact");
+    assert_eq!(accepted_event["turn_id"].as_str().unwrap().len(), 36);
+}
+
+#[test]
+fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
+    let temporary = tempfile::tempdir().unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin(temporary.path(), "lenso.agent.subagent-tools");
+
+    let output = run_configured_derived(
+        temporary.path(),
+        "Spawn and cancel a pending subagent.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Pending subagent cancelled without cancelling the parent Turn.\n"
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    assert_eq!(sessions.len(), 2);
+    let tool_results = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let cancelled = tool_results
+        .iter()
+        .find(|result| result["name"] == "cancel_subagent")
+        .unwrap();
+    let cancel_metadata: serde_json::Value =
+        serde_json::from_str(cancelled["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(cancel_metadata["status"], "cancellation_requested");
+    let listed = tool_results
+        .iter()
+        .find(|result| result["name"] == "list_subagents")
+        .unwrap();
+    let listed_content: serde_json::Value =
+        serde_json::from_str(listed["content"].as_str().unwrap()).unwrap();
+    let listed_metadata: serde_json::Value =
+        serde_json::from_str(listed["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        listed_metadata["schema"],
+        "lenso.agent.subagent-task-list@1"
+    );
+    assert_eq!(listed_metadata["task_count"], 1);
+    assert_eq!(listed_content["task_count"], 1);
+    assert_eq!(listed_content["tasks"][0]["status"], "running");
+    assert_eq!(
+        listed_content["tasks"][0]["task_id"],
+        cancel_metadata["task_id"]
+    );
+    let waited = tool_results
+        .iter()
+        .find(|result| result["name"] == "wait_subagent")
+        .unwrap();
+    let wait_metadata: serde_json::Value =
+        serde_json::from_str(waited["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(wait_metadata["status"], "cancelled");
+    assert_eq!(wait_metadata["task_id"], cancel_metadata["task_id"]);
+}
+
+#[test]
+fn delegated_output_limit_failure_retains_child_session_provenance() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.subagent-tools",
+        "max_output_bytes = 8\nmax_task_bytes = 262144\nmax_tasks = 8\n",
+    );
+
+    let output = run_configured_derived(temporary.path(), "Delegate a README.md summary.", None);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("child_output_limit_exceeded"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    assert_eq!(sessions.len(), 2);
+    let failed_result = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .find_map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            (payload["name"] == "delegate").then_some(payload)
+        })
+        .expect("parent Session must retain the failed delegate Tool result");
+    let error = failed_result["error"].as_str().unwrap();
+    assert!(error.contains("child_output_limit_exceeded"));
+    let child_session_id = sessions
+        .iter()
+        .find(|session| {
+            session["events"].as_array().unwrap().iter().any(|event| {
+                event["kind"] == "turn_started"
+                    && serde_json::from_str::<serde_json::Value>(
+                        event["payload_json"].as_str().unwrap(),
+                    )
+                    .is_ok_and(|payload| {
+                        payload["input"] == "Summarize README.md for the parent Agent."
+                    })
+            })
+        })
+        .unwrap()["session_id"]
+        .as_str()
+        .unwrap();
+    assert!(error.contains(child_session_id));
+}
+
+#[test]
 fn headless_ask_user_fails_immediately_instead_of_waiting_for_a_timeout() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();

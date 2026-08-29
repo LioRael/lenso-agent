@@ -58,6 +58,7 @@ use lenso_capability_agent_tui_suggestion::{
     SnapshotRequest as SuggestionSnapshotRequest, Suggestion, TuiSuggestion,
     validate_snapshot_suggestions,
 };
+use lenso_capability_agent_turn_input::TurnInputJsonCodec;
 use lenso_capability_agent_user_interaction::{
     ANSWER_OPERATION, AnswerRequest, CAPABILITY_ID as USER_INTERACTION_CAPABILITY_ID,
     InteractionAnswer, InteractiveSurface, PENDING_OPERATION, PendingInteraction, PendingRequest,
@@ -2338,7 +2339,8 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
             "lenso.agent.subagent-tools",
             serde_json::json!({
                 "max_output_bytes": 1_048_576,
-                "max_task_bytes": 262_144
+                "max_task_bytes": 262_144,
+                "max_tasks": 8
             }),
         ),
         host_plugin_configuration(
@@ -2413,9 +2415,15 @@ fn host_catalog_bindings(
         ));
     }
     if available.contains("lenso.agent.subagent-tools") {
+        let subagent_tools = PluginInstanceId::new("lenso.agent.subagent-tools", "default");
         bindings.push(HostBinding::to_instance(
-            PluginInstanceId::new("lenso.agent.subagent-tools", "default"),
+            subagent_tools.clone(),
             "lenso.agent@3",
+            child_agent.clone(),
+        ));
+        bindings.push(HostBinding::to_instance(
+            subagent_tools,
+            "lenso.agent.turn-input@1",
             child_agent,
         ));
     }
@@ -2480,6 +2488,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(SessionPresentationJsonCodec)
         .with_wasm_codec(ToolHookJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
+        .with_wasm_codec(TurnInputJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
         .with_wasm_codec(UserInteractionJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
@@ -2492,6 +2501,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
         .with_quickjs_codec(ToolHookJsonCodec)
+        .with_quickjs_codec(TurnInputJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
         .with_quickjs_codec(UserInteractionJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
@@ -2506,6 +2516,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_process_codec(SessionJsonCodec)
         .with_process_codec(ToolHookJsonCodec)
         .with_process_codec(ToolProviderJsonCodec)
+        .with_process_codec(TurnInputJsonCodec)
         .with_process_codec(ToolsJsonCodec)
         .with_process_codec(UserInteractionJsonCodec)
         .with_process_codec(WorkspaceReadJsonCodec)
@@ -2930,6 +2941,60 @@ mod tests {
         assert_eq!(
             plugin.configuration(),
             r#"{"max_edit_bytes":131072,"max_file_bytes":1048576,"root":"."}"#
+        );
+    }
+
+    #[test]
+    fn subagent_tasks_are_optional_bounded_and_bound_to_the_child_agent() {
+        let empty = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        assert!(
+            !empty
+                .plugin_instances()
+                .iter()
+                .any(|plugin| { plugin.instance_key() == "lenso.agent.subagent-tools/default" })
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let plugin_directory = directory.path().join("lenso.agent.subagent-tools");
+        fs::create_dir_all(&plugin_directory).unwrap();
+        fs::write(plugin_directory.join("default.toml"), "").unwrap();
+        let root = crate::plugin_root::snapshot(directory.path()).unwrap();
+        let configured = resolve_host_plan(&root).unwrap();
+        let plugin = configured
+            .plugin_instances()
+            .iter()
+            .find(|plugin| plugin.instance_key() == "lenso.agent.subagent-tools/default")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(plugin.configuration()).unwrap(),
+            serde_json::json!({
+                "max_output_bytes": 1_048_576,
+                "max_task_bytes": 262_144,
+                "max_tasks": 8
+            })
+        );
+        let plan_json = serde_json::to_value(&configured).unwrap();
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
+                        && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
+                        && binding["capability_id"] == "lenso.agent@3"
+                })
+        );
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
+                        && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
+                        && binding["capability_id"] == "lenso.agent.turn-input@1"
+                })
         );
     }
 

@@ -1,12 +1,19 @@
 //! Deterministic Model Plugin for the headless read-only proof.
 
-use futures::future::{LocalBoxFuture, ready};
+use std::{
+    any::Any,
+    cell::{Cell, RefCell},
+    rc::Rc,
+    task::Poll,
+};
+
+use futures::future::{LocalBoxFuture, poll_fn, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
     self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
     CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
 };
-use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
+use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
 /// Only model identifier supported by the deterministic fixture.
 pub const MODEL_ID: &str = "fixture/readme-summary-v1";
@@ -53,11 +60,81 @@ impl ModelProvider for FixtureModel {
         _context: InvocationContext,
         request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
+        if waits_for_running_input(&request)
+            || request.messages.iter().rev().any(|message| {
+                message.role == CompleteMessageRole::User
+                    && message.content == "Remain pending until cancelled."
+            })
+        {
+            return Box::pin(ready(Ok(
+                Box::new(PendingOutputStream::default()) as Box<dyn NativeStreamSession>
+            )));
+        }
         let result = self.complete_now(&request).map(|messages| {
             Box::new(FiniteOutputStream::successful(CAPABILITY_ID, messages))
                 as Box<dyn NativeStreamSession>
         });
         Box::pin(ready(result))
+    }
+}
+
+fn waits_for_running_input(request: &CompleteOpen) -> bool {
+    let Some(user_index) = request
+        .messages
+        .iter()
+        .rposition(|message| message.role == CompleteMessageRole::User)
+    else {
+        return false;
+    };
+    request.messages[user_index].content == "Draft a README.md summary."
+        && request.messages[user_index + 1..]
+            .iter()
+            .any(|message| message.role == CompleteMessageRole::Tool)
+}
+
+#[derive(Debug, Default)]
+struct PendingOutputStream {
+    cancelled: Rc<Cell<bool>>,
+    receive_waker: Rc<RefCell<Option<std::task::Waker>>>,
+    send_closed: Cell<bool>,
+}
+
+impl NativeStreamSession for PendingOutputStream {
+    fn send(&self, _message: Box<dyn Any>) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        Box::pin(ready(Err(RuntimeFailure::ProtocolViolation {
+            capability: model_contract::CAPABILITY_ID,
+        })))
+    }
+
+    fn receive(&self) -> LocalBoxFuture<'static, Result<NativeStreamItem, RuntimeFailure>> {
+        let cancelled = self.cancelled.clone();
+        let receive_waker = self.receive_waker.clone();
+        Box::pin(poll_fn(move |context| {
+            if cancelled.get() {
+                Poll::Ready(Err(RuntimeFailure::AdmissionClosed))
+            } else {
+                receive_waker.replace(Some(context.waker().clone()));
+                Poll::Pending
+            }
+        }))
+    }
+
+    fn close_send(&self) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        let result = if self.send_closed.replace(true) {
+            Err(RuntimeFailure::ProtocolViolation {
+                capability: model_contract::CAPABILITY_ID,
+            })
+        } else {
+            Ok(())
+        };
+        Box::pin(ready(result))
+    }
+
+    fn cancel(&self) {
+        self.cancelled.set(true);
+        if let Some(waker) = self.receive_waker.borrow_mut().take() {
+            waker.wake();
+        }
     }
 }
 
@@ -141,8 +218,13 @@ impl FixtureModel {
         if current_user == "Use the workspace Plugin to read README.md." {
             return workspace_plugin_response(request, &tool_results);
         }
-        if current_user == "Delegate a README.md summary." {
-            return subagent_root_response(request, &tool_results);
+        if let Some(response) = subagent_fixture_response(request, current_user, &tool_results) {
+            return response;
+        }
+        if let Some(response) =
+            steered_subagent_child_response(request, current_user, &tool_results)
+        {
+            return response;
         }
         if current_user == "Use Code Mode to compare README.md twice." {
             return code_mode_response(request, &tool_results);
@@ -150,30 +232,7 @@ impl FixtureModel {
         if current_user == "Summarize README.md for the parent Agent." {
             return subagent_child_response(request, &tool_results);
         }
-        if let Some(url) = current_user
-            .strip_prefix("Use the network Plugin to fetch ")
-            .and_then(|value| value.strip_suffix('.'))
-        {
-            return network_plugin_response(request, &tool_results, url);
-        }
-        if current_user == "Read README.md twice." && tool_results.len() < 2 {
-            return Ok(tool_request(tool_results.len() + 1));
-        }
-        let tool_result = tool_results.last().copied();
-        if let Some(tool_result) = tool_result {
-            let first_line = tool_result
-                .content
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("The README is empty.")
-                .trim();
-            return Ok(summary_response(first_line));
-        }
-        let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
-        if !has_workspace_tool {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
-        }
-        Ok(tool_request(1))
+        default_fixture_response(request, current_user, &tool_results)
     }
 }
 
@@ -222,6 +281,57 @@ fn session_presentation_fixture_response(
             "12",
         ),
     ])
+}
+
+fn default_fixture_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if let Some(url) = current_user
+        .strip_prefix("Use the network Plugin to fetch ")
+        .and_then(|value| value.strip_suffix('.'))
+    {
+        return network_plugin_response(request, tool_results, url);
+    }
+    if current_user == "Read README.md twice." && tool_results.len() < 2 {
+        return Ok(tool_request(tool_results.len() + 1));
+    }
+    let tool_result = tool_results.last().copied();
+    if let Some(tool_result) = tool_result {
+        let first_line = tool_result
+            .content
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("The README is empty.")
+            .trim();
+        return Ok(summary_response(first_line));
+    }
+    let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
+    if !has_workspace_tool {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    Ok(tool_request(1))
+}
+
+fn subagent_fixture_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Option<Result<Vec<CompleteMessage>, ModelInvocationError>> {
+    match current_user {
+        "Delegate a README.md summary." => Some(subagent_root_response(request, tool_results)),
+        "Spawn and wait for a README.md subagent." => {
+            Some(asynchronous_subagent_response(request, tool_results))
+        }
+        "Spawn and cancel a pending subagent." => {
+            Some(cancelled_subagent_response(request, tool_results))
+        }
+        "Spawn, steer, and wait for a README.md subagent." => {
+            Some(steered_subagent_response(request, tool_results))
+        }
+        _ => None,
+    }
 }
 
 fn direct_fixture_response(request: &CompleteOpen) -> Vec<CompleteMessage> {
@@ -376,6 +486,218 @@ fn subagent_root_response(
     }
 }
 
+fn asynchronous_subagent_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["spawn_subagent", "wait_subagent", "cancel_subagent"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-spawn-subagent-readme",
+            "spawn_subagent",
+            r#"{"task":"Summarize README.md for the parent Agent."}"#,
+        )),
+        [spawned] => {
+            let spawned: serde_json::Value = serde_json::from_str(&spawned.content)
+                .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            let task_id = spawned["task_id"]
+                .as_str()
+                .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-wait-subagent-readme",
+                "wait_subagent",
+                &arguments,
+            ))
+        }
+        [_, result] if result.content == "Child summary: # Plugin Fixture" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Asynchronous result: Child summary: # Plugin Fixture",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "36",
+                "14",
+            ),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn cancelled_subagent_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in [
+        "spawn_subagent",
+        "list_subagents",
+        "wait_subagent",
+        "cancel_subagent",
+    ] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    let task_id = tool_results.first().map(|spawned| {
+        serde_json::from_str::<serde_json::Value>(&spawned.content)
+            .ok()
+            .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+    });
+    match (tool_results, task_id) {
+        ([], None) => Ok(named_tool_request(
+            "call-spawn-pending-subagent",
+            "spawn_subagent",
+            r#"{"task":"Remain pending until cancelled."}"#,
+        )),
+        ([_], Some(Ok(_))) => Ok(named_tool_request(
+            "call-list-subagents",
+            "list_subagents",
+            "{}",
+        )),
+        ([_, listed], Some(Ok(task_id)))
+            if serde_json::from_str::<serde_json::Value>(&listed.content).is_ok_and(|value| {
+                value["task_count"] == 1
+                    && value["tasks"][0]["task_id"] == task_id
+                    && value["tasks"][0]["status"] == "running"
+            }) =>
+        {
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-cancel-pending-subagent",
+                "cancel_subagent",
+                &arguments,
+            ))
+        }
+        ([_, _, _], Some(Ok(task_id))) => {
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-wait-cancelled-subagent",
+                "wait_subagent",
+                &arguments,
+            ))
+        }
+        ([_, _, _, waited], Some(Ok(_)))
+            if serde_json::from_str::<serde_json::Value>(&waited.content)
+                .is_ok_and(|value| value["status"] == "cancelled") =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Pending subagent cancelled without cancelling the parent Turn.",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::Usage,
+                    "",
+                    "",
+                    "",
+                    "{}",
+                    "36",
+                    "14",
+                ),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn steered_subagent_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["spawn_subagent", "send_subagent", "wait_subagent"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    let task_id = tool_results.first().map(|spawned| {
+        serde_json::from_str::<serde_json::Value>(&spawned.content)
+            .ok()
+            .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+    });
+    match (tool_results, task_id) {
+        ([], None) => Ok(named_tool_request(
+            "call-spawn-steered-subagent",
+            "spawn_subagent",
+            r#"{"task":"Draft a README.md summary."}"#,
+        )),
+        ([_], Some(Ok(task_id))) => {
+            let arguments = serde_json::json!({
+                "task_id": task_id,
+                "input": "Emphasize the heading."
+            })
+            .to_string();
+            Ok(named_tool_request(
+                "call-send-steered-subagent",
+                "send_subagent",
+                &arguments,
+            ))
+        }
+        ([_, accepted], Some(Ok(task_id)))
+            if serde_json::from_str::<serde_json::Value>(&accepted.content)
+                .is_ok_and(|value| value["status"] == "input_accepted") =>
+        {
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-wait-steered-subagent",
+                "wait_subagent",
+                &arguments,
+            ))
+        }
+        ([_, _, result], Some(Ok(_)))
+            if result.content == "Steered child summary: # Plugin Fixture" =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Steered result: Steered child summary: # Plugin Fixture",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::Usage,
+                    "",
+                    "",
+                    "",
+                    "{}",
+                    "42",
+                    "16",
+                ),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
 fn subagent_child_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
@@ -404,6 +726,57 @@ fn subagent_child_response(
         ]),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
+}
+
+fn steered_subagent_child_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Option<Result<Vec<CompleteMessage>, ModelInvocationError>> {
+    if !current_user.starts_with("Draft a README.md summary.") {
+        return None;
+    }
+    if !request.tools.iter().any(|tool| tool.name == "read_text") {
+        return Some(Err(ModelInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )));
+    }
+    let result = match tool_results {
+        [] => Ok(named_tool_request(
+            "call-steered-child-readme",
+            "read_text",
+            r#"{"path":"README.md"}"#,
+        )),
+        [result]
+            if result.content == "# Plugin Fixture\n"
+                && current_user.contains("[Additional instruction]\nEmphasize the heading.") =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Steered child summary: # Plugin Fixture",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::Usage,
+                    "",
+                    "",
+                    "",
+                    "{}",
+                    "24",
+                    "10",
+                ),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    };
+    Some(result)
 }
 
 fn text_plugin_response(

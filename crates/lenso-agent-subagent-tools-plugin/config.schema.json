@@ -4,15 +4,14 @@
   "additionalProperties": false,
   "properties": {
     "max_output_bytes": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 1048576
+      "type": "integer"
     },
     "max_task_bytes": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 262144
+      "type": "integer"
+    },
+    "max_tasks": {
+      "type": "integer"
     }
   },
-  "required": ["max_output_bytes", "max_task_bytes"]
+  "required": ["max_output_bytes", "max_task_bytes", "max_tasks"]
 }
