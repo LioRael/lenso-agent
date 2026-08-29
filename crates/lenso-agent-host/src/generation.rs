@@ -571,7 +571,7 @@ impl AgentApp {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        instances.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+        instances.sort_by_key(ToString::to_string);
         Ok(instances)
     }
 
@@ -2010,6 +2010,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
     vec![
         HostSlot::many("agents"),
         HostSlot::optional("auth"),
+        HostSlot::optional("console"),
         HostSlot::one("context-compactor").replaceable(),
         HostSlot::one("memory").replaceable(),
         HostSlot::many("surfaces"),
@@ -2617,6 +2618,19 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn console_is_an_optional_host_slot() {
+        let slot = host_catalog_slots()
+            .into_iter()
+            .find(|slot| slot.id() == "console")
+            .unwrap();
+
+        assert_eq!(
+            slot.cardinality(),
+            lenso_app_plan::authoring::HostSlotCardinality::Optional
+        );
+    }
 
     #[test]
     fn tui_panel_limits_reject_oversized_snapshots() {
