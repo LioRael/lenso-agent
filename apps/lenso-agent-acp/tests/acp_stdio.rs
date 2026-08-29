@@ -42,6 +42,21 @@ async fn acp_stdio_preserves_generation_tool_and_approval_policy() {
     let initialized = next_message(&mut output).await;
     assert_eq!(initialized["id"], 1);
     assert_eq!(initialized["result"]["protocolVersion"], 1);
+    assert_eq!(initialized["result"]["authMethods"][0]["id"], "chatgpt");
+    assert_eq!(initialized["result"]["authMethods"][0]["name"], "ChatGPT");
+    send(
+        &mut input,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 10,
+            "method": "authenticate",
+            "params": {"methodId": "unknown"}
+        }),
+    )
+    .await;
+    let rejected_auth = next_message(&mut output).await;
+    assert_eq!(rejected_auth["id"], 10);
+    assert_eq!(rejected_auth["error"]["code"], -32602);
 
     send(
         &mut input,

@@ -2811,6 +2811,7 @@ dependencies = [
  "agent-client-protocol",
  "clap",
  "lenso-agent-acp-plugin",
+ "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-default-plugins",
  "lenso-agent-host",
  "lenso-agent-loop-plugin",

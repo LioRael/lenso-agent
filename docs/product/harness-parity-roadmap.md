@@ -51,8 +51,9 @@ explicit parent approval.
 
 Expose the same Host and immutable Generation semantics through:
 
-1. ACP stdio editor integration is delivered by ADR-0067; first-party VS Code
-   and Zed packaging follows;
+1. ACP stdio editor integration is delivered by ADR-0067; ADR-0068 targets the
+   ACP Registry for Zed and records VS Code's missing public ACP registration
+   surface instead of shipping an incompatible package;
 2. a provider/model catalog with typed authentication and capability metadata;
 3. Plugin discovery and marketplace UX over the existing Plugin Root and
    admission policy;

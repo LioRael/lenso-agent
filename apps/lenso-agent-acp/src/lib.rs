@@ -1,6 +1,7 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -11,16 +12,22 @@ use std::{
 use agent_client_protocol::schema::{
     ProtocolVersion,
     v1::{
-        AgentCapabilities, CancelNotification, ContentBlock, ContentChunk, Implementation,
-        InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
-        PermissionOption, PermissionOptionKind, PromptRequest, PromptResponse,
-        RequestPermissionOutcome, RequestPermissionRequest, SessionNotification, SessionUpdate,
-        StopReason, ToolCall, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
+        AgentCapabilities, AuthMethod, AuthMethodAgent, AuthenticateRequest, AuthenticateResponse,
+        CancelNotification, ContentBlock, ContentChunk, Implementation, InitializeRequest,
+        InitializeResponse, NewSessionRequest, NewSessionResponse, PermissionOption,
+        PermissionOptionKind, PromptRequest, PromptResponse, RequestPermissionOutcome,
+        RequestPermissionRequest, SessionNotification, SessionUpdate, StopReason, ToolCall,
+        ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
     },
 };
 use agent_client_protocol::{Agent, Client, ConnectTo, ConnectionTo, Stdio};
 use lenso_agent_acp_plugin as _;
-use lenso_agent_host::{AcpSurface, AgentHost, Profile, generation::TurnGeneration};
+use lenso_agent_auth_openai_codex_plugin::{
+    DirectAuthOptions, begin_browser_login, complete_browser_login,
+};
+use lenso_agent_host::{
+    AcpSurface, AgentDirectories, AgentHost, Profile, generation::TurnGeneration,
+};
 use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{
     RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
@@ -31,6 +38,7 @@ use tokio::sync::{mpsc, oneshot};
 
 const COMMAND_CAPACITY: usize = 32;
 const INTERACTION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const CHATGPT_AUTH_METHOD: &str = "chatgpt";
 
 #[derive(Clone, Debug)]
 pub struct AgentAcpConfig {
@@ -55,6 +63,14 @@ enum RuntimeCommand {
 }
 
 pub async fn run_stdio(config: AgentAcpConfig) -> Result<(), String> {
+    let directories = match config.agent_home.as_ref() {
+        Some(home) => AgentDirectories::from_home(home.clone())?,
+        None => AgentDirectories::resolve()?,
+    };
+    let auth = DirectAuthOptions {
+        credential_file: Some(directories.auth()),
+        ..DirectAuthOptions::default()
+    };
     let selected_profile = match (&config.plan, &config.profile) {
         (Some(plan), None) => Profile::resolved_plan(plan),
         (None, Some(profile)) => Profile::named(profile),
@@ -80,7 +96,7 @@ pub async fn run_stdio(config: AgentAcpConfig) -> Result<(), String> {
         cancellations_rx,
     ));
     let busy = Arc::new(AtomicBool::new(false));
-    let connection_result = build_agent(commands_tx, cancellations_tx, busy)
+    let connection_result = build_agent(commands_tx, cancellations_tx, busy, auth)
         .connect_to(Stdio::new())
         .await
         .map_err(|error| format!("ACP stdio connection failed: {error}"));
@@ -94,6 +110,7 @@ fn build_agent(
     commands: mpsc::Sender<RuntimeCommand>,
     cancellations: mpsc::UnboundedSender<String>,
     busy: Arc<AtomicBool>,
+    auth: DirectAuthOptions,
 ) -> impl agent_client_protocol::ConnectTo<Client> {
     let new_session_commands = commands.clone();
     let prompt_commands = commands;
@@ -103,14 +120,24 @@ fn build_agent(
         .on_receive_request(
             async move |request: InitializeRequest, responder, _connection| {
                 let _ = request;
-                responder.respond(
-                    InitializeResponse::new(ProtocolVersion::V1)
-                        .agent_capabilities(AgentCapabilities::new())
-                        .agent_info(
-                            Implementation::new("lenso-agent-acp", env!("CARGO_PKG_VERSION"))
-                                .title("Lenso Agent"),
-                        ),
-                )
+                responder.respond(initialize_response())
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
+            async move |request: AuthenticateRequest, responder, connection| {
+                if request.method_id.0.as_ref() != CHATGPT_AUTH_METHOD {
+                    return responder.respond_with_error(
+                        agent_client_protocol::Error::invalid_params()
+                            .data("unknown ACP authentication method"),
+                    );
+                }
+                let auth = auth.clone();
+                connection.spawn(async move {
+                    let response = authenticate_chatgpt(auth).await?;
+                    responder.respond(response)
+                })?;
+                Ok(())
             },
             agent_client_protocol::on_receive_request!(),
         )
@@ -177,6 +204,51 @@ fn build_agent(
             },
             agent_client_protocol::on_receive_notification!(),
         )
+}
+
+fn initialize_response() -> InitializeResponse {
+    InitializeResponse::new(ProtocolVersion::V1)
+        .agent_capabilities(AgentCapabilities::new())
+        .auth_methods(vec![AuthMethod::Agent(
+            AuthMethodAgent::new(CHATGPT_AUTH_METHOD, "ChatGPT")
+                .description("Authenticate the direct Codex model with ChatGPT"),
+        )])
+        .agent_info(
+            Implementation::new("lenso-agent-acp", env!("CARGO_PKG_VERSION")).title("Lenso Agent"),
+        )
+}
+
+async fn authenticate_chatgpt(
+    auth: DirectAuthOptions,
+) -> Result<AuthenticateResponse, agent_client_protocol::Error> {
+    let pending = begin_browser_login(auth.clone())
+        .await
+        .map_err(protocol_error)?;
+    open_browser(&pending.authorization_url).map_err(protocol_error)?;
+    complete_browser_login(auth, pending)
+        .await
+        .map_err(protocol_error)?;
+    Ok(AuthenticateResponse::new())
+}
+
+fn open_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let status = Command::new("open").arg(url).status();
+    #[cfg(target_os = "linux")]
+    let status = Command::new("xdg-open").arg(url).status();
+    #[cfg(target_os = "windows")]
+    let status = Command::new("cmd").args(["/C", "start", "", url]).status();
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    return Err(format!(
+        "automatic browser opening is unsupported; open {url} manually"
+    ));
+    #[cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))]
+    match status {
+        Ok(status) if status.success() => Ok(()),
+        Ok(_) | Err(_) => Err(format!(
+            "failed to open the login page; open {url} manually"
+        )),
+    }
 }
 
 fn protocol_error(detail: String) -> agent_client_protocol::Error {
