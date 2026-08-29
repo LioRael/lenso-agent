@@ -62,6 +62,10 @@ pub enum AgentWebControl {
 pub struct AgentWebConfig {
     /// Explicit Agent Home used instead of process-global environment discovery.
     pub agent_home: Option<PathBuf>,
+    /// App root whose Plugin Root is managed by the Console surface.
+    ///
+    /// Omit to preserve the standalone behavior of managing the Agent Home.
+    pub managed_app_root: Option<PathBuf>,
     /// Exact immutable Resolved App Plan used as a diagnostic override.
     pub plan: Option<PathBuf>,
     /// Named Agent Profile selected before App resolution.
@@ -83,6 +87,7 @@ impl AgentWebConfig {
     pub fn new(plugins: fn()) -> Self {
         Self {
             agent_home: None,
+            managed_app_root: None,
             plan: None,
             profile: None,
             allowed_tools: Vec::new(),
@@ -275,7 +280,7 @@ impl PluginInventoryResponse {
     fn with_runtime_state(
         mut self,
         disabled: Vec<lenso_app_plan::authoring::PluginInstanceId>,
-        disableable: BTreeSet<String>,
+        disableable: &BTreeSet<String>,
         events: Vec<OnlineGenerationEvent>,
     ) -> Self {
         for plugin in &mut self.plugins {
@@ -666,6 +671,7 @@ impl AgentWebSurface {
     pub async fn start(config: AgentWebConfig) -> Result<Self, String> {
         let AgentWebConfig {
             agent_home,
+            managed_app_root,
             plan,
             profile,
             allowed_tools,
@@ -696,6 +702,9 @@ impl AgentWebSurface {
                     .to_owned(),
             );
         }
+        if let Some(managed_app_root) = managed_app_root.as_ref() {
+            validate_managed_app_root(managed_app_root)?;
+        }
         let host = AgentHost::builder().plugins(plugins);
         let host = match agent_home {
             Some(agent_home) => host.agent_home(agent_home)?,
@@ -705,7 +714,11 @@ impl AgentWebSurface {
         .build()?;
         let app = host.run(selected_profile).await?;
         let plugin_inventory = PluginInventoryResponse::from_plan(app.resolved_plan());
-        let plugin_control = plugin_control.then(|| PluginControl::new(directories.home()));
+        let plugin_control = resolve_plugin_control(
+            plugin_control,
+            managed_app_root.as_deref(),
+            directories.home(),
+        );
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
             return Err(format!("a Tool policy requires {CONTROL_TOKEN_ENV}"));
@@ -1305,6 +1318,30 @@ async fn resolve_tool_policy(
     Ok(available_tools)
 }
 
+fn validate_managed_app_root(app_root: &FsPath) -> Result<(), String> {
+    if !app_root.is_absolute() {
+        return Err(format!(
+            "managed App root must be an absolute path: {}",
+            app_root.display()
+        ));
+    }
+    if app_root.to_str().is_none() {
+        return Err(format!(
+            "managed App root must be valid UTF-8: {}",
+            app_root.display()
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_plugin_control(
+    enabled: bool,
+    managed_app_root: Option<&FsPath>,
+    agent_home: &FsPath,
+) -> Option<PluginControl> {
+    enabled.then(|| PluginControl::new(managed_app_root.unwrap_or(agent_home)))
+}
+
 impl PluginControl {
     fn new(app_root: &FsPath) -> Self {
         Self {
@@ -1682,7 +1719,7 @@ fn snapshot_plugin_inventory(
         .collect();
     Ok(inventory
         .clone()
-        .with_runtime_state(disabled, disableable, events))
+        .with_runtime_state(disabled, &disableable, events))
 }
 
 async fn handle_read_command(
@@ -2126,6 +2163,31 @@ mod tests {
         let error = AgentWebSurface::start(config).await.unwrap_err();
 
         assert!(error.contains("default authoring-managed App"));
+    }
+
+    #[test]
+    fn plugin_control_can_manage_an_app_root_separate_from_agent_home() {
+        let agent_home = tempfile::tempdir().unwrap();
+        let managed_app = tempfile::tempdir().unwrap();
+
+        let control =
+            resolve_plugin_control(true, Some(managed_app.path()), agent_home.path()).unwrap();
+
+        assert_eq!(control.app_root, managed_app.path());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plugin_control_rejects_a_relative_managed_app_root() {
+        let agent_home = tempfile::tempdir().unwrap();
+        let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+        config.agent_home = Some(agent_home.path().to_path_buf());
+        config.managed_app_root = Some(PathBuf::from("relative/app"));
+        config.control = AgentWebControl::HostAuthorized;
+        config.plugin_control = true;
+
+        let error = AgentWebSurface::start(config).await.unwrap_err();
+
+        assert!(error.contains("managed App root must be an absolute path"));
     }
 
     #[test]
