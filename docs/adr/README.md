@@ -55,3 +55,6 @@
 - [0053 — Compose Session presentation without a generic Turn summary](0053-compose-session-presentation-without-a-generic-turn-summary.md)
 - [0054 — Separate the global Agent Home from the Workspace](0054-separate-global-agent-home-from-workspace.md)
 - [0055 — Store Host runtime state in one private ledger](0055-store-host-runtime-state-in-one-private-ledger.md)
+- [0056 — Compose the official coding and planning Profiles](0056-compose-official-coding-and-planning-profiles.md)
+- [0057 — Make Workspace edits explicitly reviewable and reversible](0057-make-workspace-edits-reviewable-and-reversible.md)
+- [0058 — Isolate coding processes behind an explicit OS sandbox Profile](0058-isolate-coding-processes-behind-an-explicit-os-sandbox-profile.md)

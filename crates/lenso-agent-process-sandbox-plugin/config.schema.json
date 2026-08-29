@@ -4,6 +4,9 @@
   "additionalProperties": false,
   "required": [
     "root",
+    "temporary_directory",
+    "backend",
+    "allow_network",
     "allowed_programs",
     "environment_allowlist",
     "max_timeout_ms",
@@ -12,6 +15,9 @@
   ],
   "properties": {
     "root": { "type": "string" },
+    "temporary_directory": { "type": "string" },
+    "backend": { "type": "string" },
+    "allow_network": { "type": "boolean" },
     "allowed_programs": {
       "type": "array",
       "items": { "type": "string" }

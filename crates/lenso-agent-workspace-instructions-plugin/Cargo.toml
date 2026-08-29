@@ -1,0 +1,28 @@
+[package]
+name = "lenso-agent-workspace-instructions-plugin"
+version = "0.1.0"
+description = "Hierarchical workspace instruction Prompt Provider for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.workspace-instructions"
+root-slot = "prompt-providers"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
+lenso-kernel.workspace = true
+serde.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

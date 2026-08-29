@@ -2201,6 +2201,20 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
             }),
         ),
         host_plugin_configuration(
+            "lenso.agent.interactive-approval-hook",
+            serde_json::json!({
+                "allow_tools": [
+                    "read_text", "skill_list", "skill", "skill_resources", "skill_resource",
+                    "ask_user", "git_status", "git_diff", "git_log", "list_subagents",
+                    "checkpoint_create", "checkpoint_review"
+                ],
+                "ask_tools": [],
+                "default_decision": "ask",
+                "deny_tools": [],
+                "max_preview_bytes": 16_384
+            }),
+        ),
+        host_plugin_configuration(
             "lenso.agent.code-mode-tools",
             serde_json::json!({
                 "max_code_bytes": 32_768,
@@ -2223,6 +2237,7 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
             "lenso.agent.process.native",
             serde_json::json!({
                 "allowed_programs": ["cargo", "git", "rg"],
+                "program_presets": ["rust", "javascript", "python", "go", "build"],
                 "environment_allowlist": [
                     "PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "TMPDIR", "LANG", "LC_ALL"
                 ],
@@ -2232,6 +2247,7 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
                 "root": "."
             }),
         ),
+        sandbox_process_configuration(directories),
         host_plugin_configuration(
             "lenso.agent.process-tools",
             serde_json::json!({"default_timeout_ms": 120_000}),
@@ -2247,12 +2263,46 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
         host_plugin_configuration(
             "lenso.agent.workspace-edit",
             serde_json::json!({
+                "checkpoint_directory": directories.runtime().join("workspace-checkpoints"),
+                "max_checkpoints": 100,
                 "max_edit_bytes": 131_072,
                 "max_file_bytes": 1_048_576,
+                "max_review_bytes": 262_144,
+                "require_checkpoint": false,
                 "root": "."
             }),
         ),
+        host_plugin_configuration(
+            "lenso.agent.workspace-instructions",
+            serde_json::json!({
+                "working_directory": ".",
+                "file_name": "AGENTS.md",
+                "max_ancestor_depth": 32,
+                "max_file_bytes": 262_144,
+                "max_total_bytes": 1_048_576
+            }),
+        ),
     ]
+}
+
+fn sandbox_process_configuration(directories: &AgentDirectories) -> HostPluginConfiguration {
+    host_plugin_configuration(
+        "lenso.agent.process.sandbox",
+        serde_json::json!({
+            "allow_network": false,
+            "allowed_programs": ["cargo", "git", "rg"],
+            "backend": "auto",
+            "environment_allowlist": [
+                "PATH", "HOME", "CARGO_HOME", "RUSTUP_HOME", "LANG", "LC_ALL"
+            ],
+            "max_argument_bytes": 131_072,
+            "max_output_bytes": 262_144,
+            "max_timeout_ms": 600_000,
+            "program_presets": ["rust", "javascript", "python", "go", "build"],
+            "root": ".",
+            "temporary_directory": directories.runtime().join("process-sandbox")
+        }),
+    )
 }
 
 fn host_plugin_configuration(
@@ -2847,9 +2897,18 @@ mod tests {
             .iter()
             .find(|plugin| plugin.instance_key() == "lenso.agent.workspace-edit/default")
             .unwrap();
-        assert_eq!(
-            plugin.configuration(),
-            r#"{"max_edit_bytes":131072,"max_file_bytes":1048576,"root":"."}"#
+        let configuration: serde_json::Value =
+            serde_json::from_str(plugin.configuration()).unwrap();
+        assert_eq!(configuration["root"], ".");
+        assert_eq!(configuration["max_file_bytes"], 1_048_576);
+        assert_eq!(configuration["max_edit_bytes"], 131_072);
+        assert_eq!(configuration["max_checkpoints"], 100);
+        assert_eq!(configuration["max_review_bytes"], 262_144);
+        assert_eq!(configuration["require_checkpoint"], false);
+        assert!(
+            configuration["checkpoint_directory"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("runtime/workspace-checkpoints"))
         );
     }
 

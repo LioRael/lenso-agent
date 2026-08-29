@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-workspace-edit-plugin"
-version = "0.2.0"
+version = "0.3.0"
 description = "Opt-in workspace mutation Tool Provider Plugin for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,7 @@ root-slot = "tool-providers"
 
 [dependencies]
 futures.workspace = true
+fs2.workspace = true
 lenso.workspace = true
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-kernel.workspace = true
@@ -22,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

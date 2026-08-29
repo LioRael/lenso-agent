@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin" }
+lenso-agent-interactive-approval-hook-plugin = { path = "../lenso-agent-interactive-approval-hook-plugin" }
 lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plugin" }
 lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-plugin" }
@@ -27,6 +28,7 @@ lenso-agent-model-fixture-plugin = { path = "../lenso-agent-model-fixture-plugin
 lenso-agent-model-openai-compatible-plugin = { path = "../lenso-agent-model-openai-compatible-plugin" }
 lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
 lenso-agent-process-native-plugin = { path = "../lenso-agent-process-native-plugin" }
+lenso-agent-process-sandbox-plugin = { path = "../lenso-agent-process-sandbox-plugin" }
 lenso-agent-process-tools-plugin = { path = "../lenso-agent-process-tools-plugin" }
 lenso-agent-prompt-filesystem-plugin = { path = "../lenso-agent-prompt-filesystem-plugin" }
 lenso-agent-prompt-plugin = { path = "../lenso-agent-prompt-plugin" }
@@ -44,6 +46,7 @@ lenso-agent-workspace-edit-plugin = { path = "../lenso-agent-workspace-edit-plug
 lenso-agent-workspace-import-read-plugin = { path = "../lenso-agent-workspace-import-read-plugin" }
 lenso-agent-workspace-read-plugin = { path = "../lenso-agent-workspace-read-plugin" }
 lenso-agent-workspace-read-tools-plugin = { path = "../lenso-agent-workspace-read-tools-plugin" }
+lenso-agent-workspace-instructions-plugin = { path = "../lenso-agent-workspace-instructions-plugin" }
 lenso-secrets-command-plugin.workspace = true
 lenso-secrets-encrypted-file-plugin.workspace = true
 lenso-secrets-env-plugin.workspace = true

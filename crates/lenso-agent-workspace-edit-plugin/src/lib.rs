@@ -1,11 +1,13 @@
 //! Opt-in, workspace-rooted mutation Tool Provider Plugin.
 
 use std::{
-    fs,
+    collections::BTreeSet,
+    fs::{self, OpenOptions},
     io::Write,
     path::{Component, Path, PathBuf},
 };
 
+use fs2::FileExt;
 use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
 use lenso_capability_agent_tool_provider::{
@@ -20,6 +22,14 @@ use sha2::{Digest, Sha256};
 pub const EDIT_TOOL: &str = "edit";
 /// Stable Tool name for create-only UTF-8 file writes.
 pub const CREATE_FILE_TOOL: &str = "create_file";
+/// Starts one explicit reversible set of Workspace edits.
+pub const CHECKPOINT_CREATE_TOOL: &str = "checkpoint_create";
+/// Renders the current changes recorded by one checkpoint.
+pub const CHECKPOINT_REVIEW_TOOL: &str = "checkpoint_review";
+/// Accepts current changes and removes their stored preimages.
+pub const CHECKPOINT_ACCEPT_TOOL: &str = "checkpoint_accept";
+/// Restores recorded preimages when no target changed outside the checkpoint.
+pub const CHECKPOINT_RESTORE_TOOL: &str = "checkpoint_restore";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,6 +37,10 @@ struct WorkspaceEditConfig {
     root: PathBuf,
     max_file_bytes: usize,
     max_edit_bytes: usize,
+    checkpoint_directory: PathBuf,
+    require_checkpoint: bool,
+    max_checkpoints: usize,
+    max_review_bytes: usize,
 }
 
 fn validate_config(config: &WorkspaceEditConfig) -> Result<(), RuntimeFailure> {
@@ -40,7 +54,28 @@ fn validate_config(config: &WorkspaceEditConfig) -> Result<(), RuntimeFailure> {
             "workspace-edit max_edit_bytes must be between 1 and 262144",
         ));
     }
+    if config.checkpoint_directory.as_os_str().is_empty()
+        || !(1..=1_000).contains(&config.max_checkpoints)
+        || !(1_024..=1_048_576).contains(&config.max_review_bytes)
+    {
+        return Err(invalid_plan("workspace checkpoint limits are invalid"));
+    }
     Ok(())
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct WorkspaceCheckpoint {
+    schema_version: u32,
+    checkpoint_id: String,
+    workspace_root: String,
+    files: Vec<CheckpointFile>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+struct CheckpointFile {
+    path: String,
+    original: Option<String>,
+    known_digests: BTreeSet<String>,
 }
 
 #[lenso::plugin(
@@ -118,12 +153,326 @@ impl WorkspaceEditProvider {
         Ok(target)
     }
 
+    fn checkpoint_store(&self) -> Result<PathBuf, RuntimeFailure> {
+        fs::create_dir_all(&self.config.checkpoint_directory).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("failed to create Workspace checkpoint directory: {error}"),
+            }
+        })?;
+        let metadata =
+            fs::symlink_metadata(&self.config.checkpoint_directory).map_err(|error| {
+                RuntimeFailure::PluginFailure {
+                    detail: format!("failed to inspect Workspace checkpoint directory: {error}"),
+                }
+            })?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "Workspace checkpoint path is not a regular directory".to_owned(),
+            });
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                &self.config.checkpoint_directory,
+                fs::Permissions::from_mode(0o700),
+            )
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("failed to protect Workspace checkpoint directory: {error}"),
+            })?;
+        }
+        fs::canonicalize(&self.config.checkpoint_directory).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("failed to resolve Workspace checkpoint directory: {error}"),
+            }
+        })
+    }
+
+    fn lock_checkpoint_store(&self) -> Result<(PathBuf, fs::File), RuntimeFailure> {
+        let store = self.checkpoint_store()?;
+        let lock_path = store.join(".checkpoints.lock");
+        if fs::symlink_metadata(&lock_path)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+        {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "Workspace checkpoint lock is not a regular file".to_owned(),
+            });
+        }
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("failed to open Workspace checkpoint lock: {error}"),
+            })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            lock.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|error| RuntimeFailure::PluginFailure {
+                    detail: format!("failed to protect Workspace checkpoint lock: {error}"),
+                })?;
+        }
+        lock.lock_exclusive()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("failed to lock Workspace checkpoints: {error}"),
+            })?;
+        Ok((store, lock))
+    }
+
+    fn create_checkpoint(&self) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let root = root.to_str().ok_or_else(|| {
+            WorkspaceEditFailure::Runtime(RuntimeFailure::PluginFailure {
+                detail: "Workspace root must be valid UTF-8 for checkpointing".to_owned(),
+            })
+        })?;
+        let (store, lock) = self
+            .lock_checkpoint_store()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let count = fs::read_dir(&store)
+            .map_err(|error| runtime_io("list Workspace checkpoints", &error))?
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .is_some_and(|value| value == "json")
+            })
+            .count();
+        if count >= self.config.max_checkpoints {
+            return Err(execution_failed(
+                "checkpoint_limit_reached",
+                "Workspace checkpoint limit reached",
+            ));
+        }
+        let checkpoint_id = uuid::Uuid::new_v4().to_string();
+        let checkpoint = WorkspaceCheckpoint {
+            schema_version: 1,
+            checkpoint_id: checkpoint_id.clone(),
+            workspace_root: root.to_owned(),
+            files: Vec::new(),
+        };
+        write_checkpoint(&store, &checkpoint)?;
+        FileExt::unlock(&lock)
+            .map_err(|error| runtime_io("unlock Workspace checkpoints", &error))?;
+        Ok(ExecuteResponse {
+            content: format!("created checkpoint {checkpoint_id}"),
+            content_type: ContentType::Text,
+            metadata_json: serde_json::json!({
+                "operation": "checkpoint_created",
+                "checkpoint_id": checkpoint_id,
+                "files": 0
+            })
+            .to_string()
+            .try_into()
+            .expect("checkpoint metadata is valid JSON"),
+        })
+    }
+
+    fn record_checkpoint(
+        &self,
+        checkpoint_id: Option<&str>,
+        root: &Path,
+        path: &str,
+        original: Option<&str>,
+        updated: &str,
+    ) -> Result<(), WorkspaceEditFailure> {
+        let Some(checkpoint_id) = checkpoint_id else {
+            if self.config.require_checkpoint {
+                return Err(execution_failed(
+                    "checkpoint_required",
+                    "Create a Workspace checkpoint and pass its ID before editing",
+                ));
+            }
+            return Ok(());
+        };
+        validate_checkpoint_id(checkpoint_id)?;
+        let root_text = root.to_str().ok_or_else(|| {
+            WorkspaceEditFailure::Runtime(RuntimeFailure::PluginFailure {
+                detail: "Workspace root must be valid UTF-8 for checkpointing".to_owned(),
+            })
+        })?;
+        let (store, lock) = self
+            .lock_checkpoint_store()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let mut checkpoint = read_checkpoint(&store, checkpoint_id)?;
+        if checkpoint.workspace_root != root_text {
+            return Err(ExecuteError::PermissionDenied.into());
+        }
+        let original_digest = original.map(content_digest);
+        let updated_digest = content_digest(updated);
+        if let Some(file) = checkpoint.files.iter_mut().find(|file| file.path == path) {
+            if file.original.as_deref().map(content_digest) != original_digest
+                && !file.known_digests.contains(
+                    &original_digest
+                        .clone()
+                        .unwrap_or_else(|| "missing".to_owned()),
+                )
+            {
+                return Err(execution_failed(
+                    "checkpoint_content_conflict",
+                    "Workspace file changed outside this checkpoint",
+                ));
+            }
+            if let Some(digest) = original_digest {
+                file.known_digests.insert(digest);
+            }
+            file.known_digests.insert(updated_digest);
+        } else {
+            let mut known_digests = BTreeSet::new();
+            if let Some(digest) = original_digest {
+                known_digests.insert(digest);
+            }
+            known_digests.insert(updated_digest);
+            checkpoint.files.push(CheckpointFile {
+                path: path.to_owned(),
+                original: original.map(ToOwned::to_owned),
+                known_digests,
+            });
+            checkpoint
+                .files
+                .sort_by(|left, right| left.path.cmp(&right.path));
+        }
+        write_checkpoint(&store, &checkpoint)?;
+        FileExt::unlock(&lock)
+            .map_err(|error| runtime_io("unlock Workspace checkpoints", &error))?;
+        Ok(())
+    }
+
+    fn review_checkpoint(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        validate_checkpoint_id(checkpoint_id)?;
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let (store, lock) = self
+            .lock_checkpoint_store()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let checkpoint = read_checkpoint(&store, checkpoint_id)?;
+        ensure_checkpoint_root(&checkpoint, &root)?;
+        let mut review = String::new();
+        let mut conflicts = 0_usize;
+        let mut changes = 0_usize;
+        for file in &checkpoint.files {
+            let current =
+                read_optional_checkpoint_target(&root, &file.path, self.config.max_file_bytes)?;
+            if current == file.original {
+                continue;
+            }
+            changes += 1;
+            if current
+                .as_deref()
+                .map(content_digest)
+                .is_some_and(|digest| !file.known_digests.contains(&digest))
+                || (current.is_none() && file.original.is_some())
+            {
+                conflicts += 1;
+            }
+            review.push_str(&render_file_diff(
+                &file.path,
+                file.original.as_deref(),
+                current.as_deref(),
+            ));
+            if review.len() > self.config.max_review_bytes {
+                return Err(ExecuteError::OutputLimitExceeded.into());
+            }
+        }
+        FileExt::unlock(&lock)
+            .map_err(|error| runtime_io("unlock Workspace checkpoints", &error))?;
+        if review.is_empty() {
+            review.push_str("No changes recorded for this checkpoint.\n");
+        }
+        Ok(ExecuteResponse {
+            content: review,
+            content_type: ContentType::Text,
+            metadata_json: serde_json::json!({
+                "operation": "checkpoint_reviewed",
+                "checkpoint_id": checkpoint_id,
+                "changes": changes,
+                "conflicts": conflicts
+            })
+            .to_string()
+            .try_into()
+            .expect("checkpoint metadata is valid JSON"),
+        })
+    }
+
+    fn finish_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        restore: bool,
+    ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        validate_checkpoint_id(checkpoint_id)?;
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let (store, lock) = self
+            .lock_checkpoint_store()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        let checkpoint = read_checkpoint(&store, checkpoint_id)?;
+        ensure_checkpoint_root(&checkpoint, &root)?;
+        if restore {
+            let mut current_files = Vec::with_capacity(checkpoint.files.len());
+            for file in &checkpoint.files {
+                let current =
+                    read_optional_checkpoint_target(&root, &file.path, self.config.max_file_bytes)?;
+                let safe = current == file.original
+                    || current
+                        .as_deref()
+                        .map(content_digest)
+                        .is_some_and(|digest| file.known_digests.contains(&digest))
+                    || (current.is_none() && file.original.is_none());
+                if !safe {
+                    return Err(execution_failed(
+                        "checkpoint_content_conflict",
+                        "Workspace file changed outside this checkpoint; nothing was restored",
+                    ));
+                }
+                current_files.push(current);
+            }
+            for (file, current) in checkpoint.files.iter().zip(current_files) {
+                restore_checkpoint_file(&root, file, current.as_deref())?;
+            }
+        }
+        fs::remove_file(checkpoint_path(&store, checkpoint_id))
+            .map_err(|error| runtime_io("remove Workspace checkpoint", &error))?;
+        sync_directory(&store)?;
+        FileExt::unlock(&lock)
+            .map_err(|error| runtime_io("unlock Workspace checkpoints", &error))?;
+        let operation = if restore {
+            "checkpoint_restored"
+        } else {
+            "checkpoint_accepted"
+        };
+        Ok(ExecuteResponse {
+            content: format!("{operation} {checkpoint_id}"),
+            content_type: ContentType::Text,
+            metadata_json: serde_json::json!({
+                "operation": operation,
+                "checkpoint_id": checkpoint_id,
+                "files": checkpoint.files.len()
+            })
+            .to_string()
+            .try_into()
+            .expect("checkpoint metadata is valid JSON"),
+        })
+    }
+
     fn write_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceEditFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
             path: String,
             content: String,
+            #[serde(default)]
+            checkpoint_id: Option<String>,
         }
 
         let arguments = serde_json::from_str::<Arguments>(arguments_json)
@@ -144,6 +493,13 @@ impl WorkspaceEditProvider {
             Err(_) => return Err(ExecuteError::PermissionDenied.into()),
         }
         let parent = target.parent().ok_or(ExecuteError::PermissionDenied)?;
+        self.record_checkpoint(
+            arguments.checkpoint_id.as_deref(),
+            &root,
+            &arguments.path,
+            None,
+            &arguments.content,
+        )?;
         Self::persist_new(parent, &target, arguments.content.as_bytes())?;
         Ok(success_response(
             "created",
@@ -161,6 +517,8 @@ impl WorkspaceEditProvider {
             path: String,
             old_text: String,
             new_text: String,
+            #[serde(default)]
+            checkpoint_id: Option<String>,
         }
 
         let arguments = serde_json::from_str::<Arguments>(arguments_json)
@@ -215,6 +573,13 @@ impl WorkspaceEditProvider {
         updated.push_str(&arguments.new_text);
         updated.push_str(&original[start + arguments.old_text.len()..]);
         let parent = target.parent().ok_or(ExecuteError::PermissionDenied)?;
+        self.record_checkpoint(
+            arguments.checkpoint_id.as_deref(),
+            &root,
+            &arguments.path,
+            Some(&original),
+            &updated,
+        )?;
         Self::persist_replacement(parent, &target, &original, updated.as_bytes(), &metadata)?;
         Ok(success_response(
             "edited",
@@ -284,6 +649,195 @@ impl WorkspaceEditProvider {
     }
 }
 
+fn validate_checkpoint_id(checkpoint_id: &str) -> Result<(), WorkspaceEditFailure> {
+    uuid::Uuid::parse_str(checkpoint_id)
+        .map(|_| ())
+        .map_err(|_| ExecuteError::InvalidArguments.into())
+}
+
+fn checkpoint_path(store: &Path, checkpoint_id: &str) -> PathBuf {
+    store.join(format!("{checkpoint_id}.json"))
+}
+
+fn read_checkpoint(
+    store: &Path,
+    checkpoint_id: &str,
+) -> Result<WorkspaceCheckpoint, WorkspaceEditFailure> {
+    let path = checkpoint_path(store, checkpoint_id);
+    let metadata = fs::symlink_metadata(&path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound => WorkspaceEditFailure::Domain(ExecuteError::NotFound),
+        _ => runtime_io("inspect Workspace checkpoint", &error),
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 32_000_000 {
+        return Err(WorkspaceEditFailure::Runtime(
+            RuntimeFailure::PluginFailure {
+                detail: "Workspace checkpoint is not a bounded regular file".to_owned(),
+            },
+        ));
+    }
+    let checkpoint = serde_json::from_slice::<WorkspaceCheckpoint>(
+        &fs::read(&path).map_err(|error| runtime_io("read Workspace checkpoint", &error))?,
+    )
+    .map_err(|error| {
+        WorkspaceEditFailure::Runtime(RuntimeFailure::PluginFailure {
+            detail: format!("Workspace checkpoint is corrupt: {error}"),
+        })
+    })?;
+    if checkpoint.schema_version != 1 || checkpoint.checkpoint_id != checkpoint_id {
+        return Err(WorkspaceEditFailure::Runtime(
+            RuntimeFailure::PluginFailure {
+                detail: "Workspace checkpoint identity is invalid".to_owned(),
+            },
+        ));
+    }
+    Ok(checkpoint)
+}
+
+fn write_checkpoint(
+    store: &Path,
+    checkpoint: &WorkspaceCheckpoint,
+) -> Result<(), WorkspaceEditFailure> {
+    let encoded = serde_json::to_vec(checkpoint).map_err(|error| {
+        WorkspaceEditFailure::Runtime(RuntimeFailure::PluginFailure {
+            detail: format!("failed to encode Workspace checkpoint: {error}"),
+        })
+    })?;
+    if encoded.len() > 32_000_000 {
+        return Err(ExecuteError::OutputLimitExceeded.into());
+    }
+    let mut temporary = tempfile::NamedTempFile::new_in(store)
+        .map_err(|error| runtime_io("create Workspace checkpoint", &error))?;
+    temporary
+        .write_all(&encoded)
+        .and_then(|()| temporary.as_file().sync_all())
+        .map_err(|error| runtime_io("write Workspace checkpoint", &error))?;
+    temporary
+        .persist(checkpoint_path(store, &checkpoint.checkpoint_id))
+        .map_err(|error| runtime_io("persist Workspace checkpoint", &error.error))?;
+    sync_directory(store)
+}
+
+fn ensure_checkpoint_root(
+    checkpoint: &WorkspaceCheckpoint,
+    root: &Path,
+) -> Result<(), WorkspaceEditFailure> {
+    if root.to_str() == Some(&checkpoint.workspace_root) {
+        Ok(())
+    } else {
+        Err(ExecuteError::PermissionDenied.into())
+    }
+}
+
+fn content_digest(content: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(content.as_bytes()))
+}
+
+fn read_optional_checkpoint_target(
+    root: &Path,
+    path: &str,
+    max_file_bytes: usize,
+) -> Result<Option<String>, WorkspaceEditFailure> {
+    let target = WorkspaceEditProvider::resolve_target(root, path)?;
+    let metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(runtime_io("inspect checkpoint target", &error)),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(ExecuteError::PermissionDenied.into());
+    }
+    if metadata.len() > max_file_bytes as u64 {
+        return Err(ExecuteError::OutputLimitExceeded.into());
+    }
+    fs::read_to_string(target)
+        .map(Some)
+        .map_err(|error| map_read_error(&error))
+}
+
+fn restore_checkpoint_file(
+    root: &Path,
+    file: &CheckpointFile,
+    current: Option<&str>,
+) -> Result<(), WorkspaceEditFailure> {
+    if current == file.original.as_deref() {
+        return Ok(());
+    }
+    let target = WorkspaceEditProvider::resolve_target(root, &file.path)?;
+    match &file.original {
+        Some(original) => {
+            let metadata = fs::symlink_metadata(&target)
+                .map_err(|error| runtime_io("inspect checkpoint restore target", &error))?;
+            let parent = target.parent().ok_or(ExecuteError::PermissionDenied)?;
+            WorkspaceEditProvider::persist_replacement(
+                parent,
+                &target,
+                current.unwrap_or_default(),
+                original.as_bytes(),
+                &metadata,
+            )
+        }
+        None => {
+            fs::remove_file(&target)
+                .map_err(|error| runtime_io("remove checkpoint-created file", &error))?;
+            sync_directory(target.parent().ok_or(ExecuteError::PermissionDenied)?)
+        }
+    }
+}
+
+fn render_file_diff(path: &str, original: Option<&str>, current: Option<&str>) -> String {
+    let old = original.unwrap_or_default();
+    let new = current.unwrap_or_default();
+    let old_lines = old.lines().collect::<Vec<_>>();
+    let new_lines = new.lines().collect::<Vec<_>>();
+    let prefix = old_lines
+        .iter()
+        .zip(&new_lines)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let suffix = old_lines[prefix..]
+        .iter()
+        .rev()
+        .zip(new_lines[prefix..].iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let old_end = old_lines.len().saturating_sub(suffix);
+    let new_end = new_lines.len().saturating_sub(suffix);
+    let mut diff = format!(
+        "--- a/{path}\n+++ b/{path}\n@@ -{},{} +{},{} @@\n",
+        prefix + 1,
+        old_end.saturating_sub(prefix),
+        prefix + 1,
+        new_end.saturating_sub(prefix)
+    );
+    for line in &old_lines[prefix..old_end] {
+        diff.push('-');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    for line in &new_lines[prefix..new_end] {
+        diff.push('+');
+        diff.push_str(line);
+        diff.push('\n');
+    }
+    diff
+}
+
+fn checkpoint_tool_schema() -> String {
+    r#"{"additionalProperties":false,"properties":{"checkpoint_id":{"type":"string"}},"required":["checkpoint_id"],"type":"object"}"#
+        .to_owned()
+}
+
+fn checkpoint_argument(arguments_json: &str) -> Result<String, WorkspaceEditFailure> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Arguments {
+        checkpoint_id: String,
+    }
+    serde_json::from_str::<Arguments>(arguments_json)
+        .map(|arguments| arguments.checkpoint_id)
+        .map_err(|_| ExecuteError::InvalidArguments.into())
+}
+
 #[lenso::provides(tool_provider_contract::ToolProvider)]
 impl ToolProviderProvider for WorkspaceEditProvider {
     fn catalog(
@@ -296,14 +850,38 @@ impl ToolProviderProvider for WorkspaceEditProvider {
             tools: vec![
                 ToolDefinition {
                     name: EDIT_TOOL.to_owned(),
-                    description: "Replace one unique, exact UTF-8 string in an existing workspace file. The call fails if old_text is absent or not unique.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    description: "Replace one unique, exact UTF-8 string in an existing workspace file. Pass checkpoint_id when the Profile requires reversible edits.".to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"checkpoint_id":{"type":"string"},"new_text":{"type":"string"},"old_text":{"minLength":1,"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","old_text","new_text"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
                     execution: ToolExecutionClass::Exclusive,
                 },
                 ToolDefinition {
                     name: CREATE_FILE_TOOL.to_owned(),
-                    description: "Create one new UTF-8 workspace file below an existing directory. Existing targets are never overwritten.".to_owned(),
-                    input_schema_json: r#"{"additionalProperties":false,"properties":{"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    description: "Create one new UTF-8 workspace file below an existing directory. Pass checkpoint_id when the Profile requires reversible edits.".to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{"checkpoint_id":{"type":"string"},"content":{"type":"string"},"path":{"minLength":1,"type":"string"}},"required":["path","content"],"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: CHECKPOINT_CREATE_TOOL.to_owned(),
+                    description: "Start one explicit reversible Workspace change set before editing files.".to_owned(),
+                    input_schema_json: r#"{"additionalProperties":false,"properties":{},"type":"object"}"#.to_owned().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: CHECKPOINT_REVIEW_TOOL.to_owned(),
+                    description: "Review the bounded unified diff and conflict count for one Workspace checkpoint.".to_owned(),
+                    input_schema_json: checkpoint_tool_schema().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: CHECKPOINT_ACCEPT_TOOL.to_owned(),
+                    description: "Accept the current Workspace changes and delete their stored checkpoint preimages.".to_owned(),
+                    input_schema_json: checkpoint_tool_schema().try_into().expect("static Tool schema must be valid JSON"),
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: CHECKPOINT_RESTORE_TOOL.to_owned(),
+                    description: "Restore every file in one Workspace checkpoint, but only when no file has an external content conflict.".to_owned(),
+                    input_schema_json: checkpoint_tool_schema().try_into().expect("static Tool schema must be valid JSON"),
                     execution: ToolExecutionClass::Exclusive,
                 },
             ],
@@ -319,6 +897,23 @@ impl ToolProviderProvider for WorkspaceEditProvider {
         let result = match request.name.as_str() {
             EDIT_TOOL => self.edit_text(request.arguments_json.as_str()),
             CREATE_FILE_TOOL => self.write_text(request.arguments_json.as_str()),
+            CHECKPOINT_CREATE_TOOL => serde_json::from_str::<
+                serde_json::Map<String, serde_json::Value>,
+            >(request.arguments_json.as_str())
+            .map_err(|_| ExecuteError::InvalidArguments.into())
+            .and_then(|arguments| {
+                if arguments.is_empty() {
+                    self.create_checkpoint()
+                } else {
+                    Err(ExecuteError::InvalidArguments.into())
+                }
+            }),
+            CHECKPOINT_REVIEW_TOOL => checkpoint_argument(request.arguments_json.as_str())
+                .and_then(|checkpoint_id| self.review_checkpoint(&checkpoint_id)),
+            CHECKPOINT_ACCEPT_TOOL => checkpoint_argument(request.arguments_json.as_str())
+                .and_then(|checkpoint_id| self.finish_checkpoint(&checkpoint_id, false)),
+            CHECKPOINT_RESTORE_TOOL => checkpoint_argument(request.arguments_json.as_str())
+                .and_then(|checkpoint_id| self.finish_checkpoint(&checkpoint_id, true)),
             _ => Err(ExecuteError::NotFound.into()),
         };
         Box::pin(ready(match result {
@@ -332,7 +927,8 @@ impl ToolProviderProvider for WorkspaceEditProvider {
 impl Lifecycle for WorkspaceEditProvider {
     #[allow(clippy::unused_async_trait_impl)]
     async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
-        self.canonical_root().map(|_| ())
+        self.canonical_root()?;
+        self.checkpoint_store().map(|_| ())
     }
 }
 
@@ -432,13 +1028,149 @@ mod tests {
     use super::*;
 
     fn provider(root: PathBuf) -> WorkspaceEditProvider {
+        let checkpoint_directory = root.join(".test-checkpoints");
         WorkspaceEditProvider {
             config: WorkspaceEditConfig {
                 root,
                 max_file_bytes: 4096,
                 max_edit_bytes: 2048,
+                checkpoint_directory,
+                require_checkpoint: false,
+                max_checkpoints: 16,
+                max_review_bytes: 16_384,
             },
         }
+    }
+
+    fn checkpoint_id(provider: &WorkspaceEditProvider) -> String {
+        let response = provider.create_checkpoint().unwrap();
+        serde_json::from_str::<serde_json::Value>(response.metadata_json.as_str()).unwrap()
+            ["checkpoint_id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    #[test]
+    fn checkpoint_reviews_and_restores_edited_and_created_files() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("note.txt"), "before\n").unwrap();
+        let provider = provider(temporary.path().to_path_buf());
+        let checkpoint_id = checkpoint_id(&provider);
+
+        provider
+            .edit_text(
+                &serde_json::json!({
+                    "path": "note.txt",
+                    "old_text": "before",
+                    "new_text": "after",
+                    "checkpoint_id": checkpoint_id
+                })
+                .to_string(),
+            )
+            .unwrap();
+        provider
+            .write_text(
+                &serde_json::json!({
+                    "path": "created.txt",
+                    "content": "new\n",
+                    "checkpoint_id": checkpoint_id
+                })
+                .to_string(),
+            )
+            .unwrap();
+
+        let review = provider.review_checkpoint(&checkpoint_id).unwrap();
+        assert!(review.content.contains("--- a/note.txt"));
+        assert!(review.content.contains("-before"));
+        assert!(review.content.contains("+after"));
+        let metadata: serde_json::Value =
+            serde_json::from_str(review.metadata_json.as_str()).unwrap();
+        assert_eq!(metadata["changes"], 2);
+        assert_eq!(metadata["conflicts"], 0);
+
+        provider.finish_checkpoint(&checkpoint_id, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(temporary.path().join("note.txt")).unwrap(),
+            "before\n"
+        );
+        assert!(!temporary.path().join("created.txt").exists());
+    }
+
+    #[test]
+    fn checkpoint_restore_rejects_every_write_when_external_content_conflicts() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("first.txt"), "one\n").unwrap();
+        fs::write(temporary.path().join("second.txt"), "two\n").unwrap();
+        let provider = provider(temporary.path().to_path_buf());
+        let checkpoint_id = checkpoint_id(&provider);
+        for (path, old_text, new_text) in [
+            ("first.txt", "one", "changed-one"),
+            ("second.txt", "two", "changed-two"),
+        ] {
+            provider
+                .edit_text(
+                    &serde_json::json!({
+                        "path": path,
+                        "old_text": old_text,
+                        "new_text": new_text,
+                        "checkpoint_id": checkpoint_id
+                    })
+                    .to_string(),
+                )
+                .unwrap();
+        }
+        fs::write(temporary.path().join("second.txt"), "external\n").unwrap();
+
+        assert!(matches!(
+            provider.finish_checkpoint(&checkpoint_id, true),
+            Err(WorkspaceEditFailure::Domain(
+                ExecuteError::ExecutionFailed { .. }
+            ))
+        ));
+        assert_eq!(
+            fs::read_to_string(temporary.path().join("first.txt")).unwrap(),
+            "changed-one\n"
+        );
+        assert_eq!(
+            fs::read_to_string(temporary.path().join("second.txt")).unwrap(),
+            "external\n"
+        );
+    }
+
+    #[test]
+    fn required_checkpoint_rejects_untracked_edits_and_accept_keeps_changes() {
+        let temporary = tempfile::tempdir().unwrap();
+        fs::write(temporary.path().join("note.txt"), "before\n").unwrap();
+        let mut provider = provider(temporary.path().to_path_buf());
+        provider.config.require_checkpoint = true;
+        assert!(matches!(
+            provider.edit_text(r#"{"path":"note.txt","old_text":"before","new_text":"after"}"#),
+            Err(WorkspaceEditFailure::Domain(
+                ExecuteError::ExecutionFailed { .. }
+            ))
+        ));
+        let checkpoint_id = checkpoint_id(&provider);
+        provider
+            .edit_text(
+                &serde_json::json!({
+                    "path": "note.txt",
+                    "old_text": "before",
+                    "new_text": "after",
+                    "checkpoint_id": checkpoint_id
+                })
+                .to_string(),
+            )
+            .unwrap();
+        provider.finish_checkpoint(&checkpoint_id, false).unwrap();
+        assert_eq!(
+            fs::read_to_string(temporary.path().join("note.txt")).unwrap(),
+            "after\n"
+        );
+        assert!(matches!(
+            provider.review_checkpoint(&checkpoint_id),
+            Err(WorkspaceEditFailure::Domain(ExecuteError::NotFound))
+        ));
     }
 
     #[test]

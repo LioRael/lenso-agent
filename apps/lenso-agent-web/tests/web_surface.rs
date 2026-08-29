@@ -491,10 +491,19 @@ fn write_web_fixture(root: &std::path::Path) {
 }
 
 fn active_generation_digest(root: &std::path::Path) -> String {
-    let state: serde_json::Value = serde_json::from_slice(
-        &fs::read(root.join("runtime/web-generation-control/control-state.json")).unwrap(),
+    let connection = rusqlite::Connection::open_with_flags(
+        root.join("runtime/.state/runtime.sqlite3"),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )
     .unwrap();
+    let state_bytes = connection
+        .query_row(
+            "SELECT state_json FROM controller_states WHERE lineage = 'web'",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .unwrap();
+    let state: serde_json::Value = serde_json::from_slice(&state_bytes).unwrap();
     state["active_generation_spec_digest"]
         .as_str()
         .unwrap()

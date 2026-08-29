@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["default_decision", "max_preview_bytes"],
+  "properties": {
+    "default_decision": { "type": "string", "enum": ["allow", "ask", "deny"] },
+    "allow_tools": { "type": "array", "items": { "type": "string" } },
+    "ask_tools": { "type": "array", "items": { "type": "string" } },
+    "deny_tools": { "type": "array", "items": { "type": "string" } },
+    "max_preview_bytes": { "type": "integer" }
+  }
+}

@@ -133,6 +133,32 @@ fn configure_file_sessions(root: &Path) {
     );
 }
 
+#[test]
+fn official_coding_sandbox_and_plan_profiles_install_and_resolve() {
+    let temporary = tempfile::tempdir().unwrap();
+    let install = command(temporary.path())
+        .args(["profiles", "install", "coding"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    for profile in ["code", "code-sandbox", "plan"] {
+        let output = command(temporary.path())
+            .args(["contexts", "--profile", profile])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{profile}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
     session["events"]
         .as_array()
@@ -2127,6 +2153,71 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
         ["edit", "run_process", "read"]
     );
     let process_result = events
+        .iter()
+        .filter(|event| event["kind"] == "tool_result")
+        .nth(1)
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(process_result["payload_json"].as_str().unwrap()).unwrap();
+    let metadata: serde_json::Value =
+        serde_json::from_str(payload["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["program"], "cargo");
+    assert_eq!(metadata["exit_code"], "0");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sandbox_coding_profile_runs_a_real_cargo_check_inside_seatbelt() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::create_dir(temporary.path().join("src")).unwrap();
+    fs::write(
+        temporary.path().join("Cargo.toml"),
+        "[package]\nname = \"sandbox-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        temporary.path().join("src/lib.rs"),
+        "pub fn value() -> u32 { 1 }\n",
+    )
+    .unwrap();
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process.sandbox",
+        "root = \".\"\nbackend = \"seatbelt\"\nallow_network = false\nallowed_programs = [\"cargo\"]\nenvironment_allowlist = [\"PATH\", \"HOME\", \"CARGO_HOME\", \"RUSTUP_HOME\", \"LANG\", \"LC_ALL\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process-tools",
+        "default_timeout_ms = 120000\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.workspace-edit",
+        "root = \".\"\nmax_file_bytes = 1048576\nmax_edit_bytes = 131072\n",
+    );
+
+    let output = run_derived(
+        temporary.path(),
+        "Edit and validate the workspace project.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Local coding result: cargo check passed.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(temporary.path().join("src/lib.rs")).unwrap(),
+        "pub fn value() -> u32 { 2 }\n"
+    );
+    let state = stored_session(temporary.path());
+    let process_result = state["events"]
+        .as_array()
+        .unwrap()
         .iter()
         .filter(|event| event["kind"] == "tool_result")
         .nth(1)

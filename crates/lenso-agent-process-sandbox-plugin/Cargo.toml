@@ -1,0 +1,30 @@
+[package]
+name = "lenso-agent-process-sandbox-plugin"
+version = "0.1.0"
+description = "OS-isolated bounded process provider Plugin for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.process.sandbox"
+root-slot = "process"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
+lenso-kernel.workspace = true
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

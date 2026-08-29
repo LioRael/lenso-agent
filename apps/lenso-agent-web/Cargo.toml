@@ -47,4 +47,5 @@ workspace = true
 [dev-dependencies]
 lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
 reqwest.workspace = true
+rusqlite.workspace = true
 tempfile.workspace = true

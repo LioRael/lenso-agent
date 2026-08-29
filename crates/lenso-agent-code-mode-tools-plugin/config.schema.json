@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "max_code_bytes": { "type": "integer", "minimum": 1, "maximum": 262144 },
-    "max_instructions": { "type": "integer", "minimum": 1, "maximum": 10000000 },
-    "max_memory_bytes": { "type": "integer", "minimum": 65536, "maximum": 67108864 },
-    "max_output_bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
-    "max_parallel_subcalls": { "type": "integer", "minimum": 1, "maximum": 16 },
-    "max_subcalls": { "type": "integer", "minimum": 1, "maximum": 64 }
+    "max_code_bytes": { "type": "integer" },
+    "max_instructions": { "type": "integer" },
+    "max_memory_bytes": { "type": "integer" },
+    "max_output_bytes": { "type": "integer" },
+    "max_parallel_subcalls": { "type": "integer" },
+    "max_subcalls": { "type": "integer" }
   },
   "required": [
     "max_code_bytes",

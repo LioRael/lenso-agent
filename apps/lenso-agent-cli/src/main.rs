@@ -1,7 +1,8 @@
 use std::{
     env,
+    fs::{self, OpenOptions},
     io::{self, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, ExitCode},
 };
 
@@ -54,7 +55,13 @@ enum CliCommand {
     RuntimeStatus { root: PathBuf },
     Sessions(provenance::SessionCommand),
     Approvals(ApprovalCommand),
+    Profiles(ProfileCommand),
     Contexts { profile: Option<String> },
+}
+
+#[derive(Debug)]
+enum ProfileCommand {
+    InstallCoding,
 }
 
 #[derive(Debug)]
@@ -95,6 +102,7 @@ async fn run() -> Result<(), String> {
         CliCommand::RuntimeStatus { root } => return provenance::run_runtime_status(&root),
         CliCommand::Sessions(command) => return provenance::run_session(command),
         CliCommand::Approvals(command) => return run_approval(command),
+        CliCommand::Profiles(command) => return run_profile(&command),
         CliCommand::Contexts { profile } => return run_contexts(profile).await,
     };
     let profile = selected_profile(args.plan.clone(), args.profile.clone());
@@ -283,6 +291,9 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "approvals") {
         return parse_approval(&raw[1..]).map(CliCommand::Approvals);
     }
+    if raw.first().is_some_and(|value| value == "profiles") {
+        return parse_profile(&raw[1..]).map(CliCommand::Profiles);
+    }
     if raw.first().is_some_and(|value| value == "contexts") {
         return parse_contexts(&raw[1..]);
     }
@@ -463,7 +474,139 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|auth> ...\n\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent-cli profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+}
+
+fn parse_profile(arguments: &[String]) -> Result<ProfileCommand, String> {
+    match arguments {
+        [install, preset] if install == "install" && preset == "coding" => {
+            Ok(ProfileCommand::InstallCoding)
+        }
+        _ => Err("usage: lenso-agent-cli profiles install coding".to_owned()),
+    }
+}
+
+fn run_profile(command: &ProfileCommand) -> Result<(), String> {
+    match command {
+        ProfileCommand::InstallCoding => {
+            let home = AgentDirectories::resolve()?.home().to_path_buf();
+            install_coding_profiles(&home)?;
+            println!("Installed coding Profiles in {}", home.display());
+            println!(
+                "Run `lenso-agent --profile code`, `lenso-agent --profile code-sandbox`, or `lenso-agent --profile plan`."
+            );
+            Ok(())
+        }
+    }
+}
+
+fn install_coding_profiles(home: &Path) -> Result<(), String> {
+    let files = coding_profile_files();
+    for (relative, content) in &files {
+        let path = home.join(relative);
+        match fs::read_to_string(&path) {
+            Ok(existing) if existing == *content => {}
+            Ok(_) => {
+                return Err(format!(
+                    "refusing to overwrite customized coding Profile file: {}",
+                    path.display()
+                ));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("failed to inspect {}: {error}", path.display())),
+        }
+    }
+    for (index, (relative, content)) in files.iter().enumerate() {
+        let path = home.join(relative);
+        if path.exists() {
+            continue;
+        }
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("Profile path has no parent: {}", path.display()))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        let temporary = parent.join(format!(
+            ".lenso-agent-profile-install-{}-{index}",
+            std::process::id()
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("failed to create {}: {error}", temporary.display()))?;
+        file.write_all(content.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("failed to write {}: {error}", temporary.display()))?;
+        fs::rename(&temporary, &path)
+            .map_err(|error| format!("failed to install {}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "plugins/lenso.agent.workspace-instructions/default.toml",
+            "working_directory = \".\"\nfile_name = \"AGENTS.md\"\nmax_ancestor_depth = 32\nmax_file_bytes = 262144\nmax_total_bytes = 1048576\n",
+        ),
+        (
+            "plugins/lenso.agent.workspace-edit/default.toml",
+            "root = \".\"\nmax_file_bytes = 1048576\nmax_edit_bytes = 131072\nrequire_checkpoint = true\n",
+        ),
+        (
+            "plugins/lenso.agent.process.native/default.toml",
+            "root = \".\"\nallowed_programs = [\"cargo\", \"git\", \"rg\"]\nprogram_presets = [\"rust\", \"javascript\", \"python\", \"go\", \"build\"]\nenvironment_allowlist = [\"PATH\", \"HOME\", \"CARGO_HOME\", \"RUSTUP_HOME\", \"TMPDIR\", \"LANG\", \"LC_ALL\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+        ),
+        (
+            "plugins/lenso.agent.process.sandbox/default.toml",
+            "root = \".\"\nbackend = \"auto\"\nallow_network = false\nallowed_programs = [\"cargo\", \"git\", \"rg\"]\nprogram_presets = [\"rust\", \"javascript\", \"python\", \"go\", \"build\"]\nenvironment_allowlist = [\"PATH\", \"HOME\", \"CARGO_HOME\", \"RUSTUP_HOME\", \"LANG\", \"LC_ALL\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+        ),
+        (
+            "plugins/lenso.agent.process-tools/default.toml",
+            "default_timeout_ms = 120000\n",
+        ),
+        (
+            "plugins/lenso.agent.git-tools/default.toml",
+            "default_timeout_ms = 30000\nmax_log_entries = 50\nmax_commit_message_bytes = 4096\nenable_branch_management = false\nenable_history_integration = false\nallowed_network_remotes = []\n",
+        ),
+        (
+            "plugins/lenso.agent.code-mode-tools/default.toml",
+            "max_code_bytes = 32768\nmax_instructions = 1000000\nmax_memory_bytes = 8388608\nmax_output_bytes = 262144\nmax_parallel_subcalls = 4\nmax_subcalls = 16\n",
+        ),
+        (
+            "plugins/lenso.agent.subagent-tools/default.toml",
+            "max_output_bytes = 1048576\nmax_task_bytes = 262144\nmax_tasks = 8\n",
+        ),
+        (
+            "plugins/lenso.agent.interactive-approval-hook/default.toml",
+            "default_decision = \"ask\"\nallow_tools = [\"read_text\", \"skill_list\", \"skill\", \"skill_resources\", \"skill_resource\", \"ask_user\", \"git_status\", \"git_diff\", \"git_log\", \"list_subagents\", \"checkpoint_create\", \"checkpoint_review\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n",
+        ),
+        (
+            "plugins/lenso.agent.prompt.static/coding.toml",
+            "[[contributions]]\nid = \"harness.coding\"\nversion = \"1.1.0\"\nkind = \"instruction\"\ncontent = \"Work as a coding agent. Inspect before editing and preserve unrelated work. Before the first file mutation, create a Workspace checkpoint and pass its ID to every edit or create_file call. Review the checkpoint after changes, then ask the user to accept or restore it when that decision is not already explicit. Keep changes bounded and verify the result. Treat native processes as trusted execution, not as a security sandbox.\"\n",
+        ),
+        (
+            "plugins/lenso.agent.prompt.static/sandbox-coding.toml",
+            "[[contributions]]\nid = \"harness.sandbox-coding\"\nversion = \"1.0.0\"\nkind = \"instruction\"\ncontent = \"Work as a coding agent inside the selected OS sandbox. Inspect before editing and preserve unrelated work. Before the first file mutation, create a Workspace checkpoint and pass its ID to every edit or create_file call. Review the checkpoint after changes, then ask the user to accept or restore it when that decision is not already explicit. Keep changes bounded and verify the result. The process sandbox grants read-only host files, Workspace and private temporary writes, and no network by default; do not claim stronger isolation than the selected backend provides.\"\n",
+        ),
+        (
+            "plugins/lenso.agent.prompt.static/plan.toml",
+            "[[contributions]]\nid = \"harness.plan\"\nversion = \"1.0.0\"\nkind = \"instruction\"\ncontent = \"Work in read-only planning mode. Inspect the workspace, explain evidence and tradeoffs, and produce an executable plan. Do not claim to have changed files or external state.\"\n",
+        ),
+        (
+            "profiles/code.toml",
+            "description = \"Official coding agent with workspace instructions and inline approval\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.native/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.subagent-tools/default\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/coding\",\n]\n",
+        ),
+        (
+            "profiles/code-sandbox.toml",
+            "description = \"Official coding agent with OS-isolated process execution\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.sandbox/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.subagent-tools/default\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/sandbox-coding\",\n]\n",
+        ),
+        (
+            "profiles/plan.toml",
+            "description = \"Official read-only planning agent\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.prompt.static/plan\",\n]\n",
+        ),
+    ]
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
@@ -603,5 +746,65 @@ fn open_browser(url: &str) -> Result<(), String> {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => Err(format!("browser command exited with {status}")),
         Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::*;
+
+    #[test]
+    fn coding_profile_install_is_idempotent_and_creates_all_modes() {
+        let home = tempfile::tempdir().unwrap();
+
+        install_coding_profiles(home.path()).unwrap();
+        install_coding_profiles(home.path()).unwrap();
+
+        let code = fs::read_to_string(home.path().join("profiles/code.toml")).unwrap();
+        let sandbox = fs::read_to_string(home.path().join("profiles/code-sandbox.toml")).unwrap();
+        let plan = fs::read_to_string(home.path().join("profiles/plan.toml")).unwrap();
+        let native_process = fs::read_to_string(
+            home.path()
+                .join("plugins/lenso.agent.process.native/default.toml"),
+        )
+        .unwrap();
+        let sandbox_process = fs::read_to_string(
+            home.path()
+                .join("plugins/lenso.agent.process.sandbox/default.toml"),
+        )
+        .unwrap();
+        assert!(code.contains("lenso.agent.workspace-edit/default"));
+        assert!(code.contains("lenso.agent.interactive-approval-hook/default"));
+        assert!(sandbox.contains("lenso.agent.process.sandbox/default"));
+        assert!(!sandbox.contains("lenso.agent.process.native/default"));
+        assert!(!plan.contains("workspace-edit"));
+        assert!(plan.contains("lenso.agent.workspace-instructions/default"));
+        for configuration in [native_process, sandbox_process] {
+            assert!(configuration.contains(
+                "program_presets = [\"rust\", \"javascript\", \"python\", \"go\", \"build\"]"
+            ));
+        }
+    }
+
+    #[test]
+    fn coding_profile_install_preserves_customized_files() {
+        let home = tempfile::tempdir().unwrap();
+        install_coding_profiles(home.path()).unwrap();
+        let profile = home.path().join("profiles/code.toml");
+        fs::write(&profile, "custom = true\n").unwrap();
+
+        let error = install_coding_profiles(home.path()).unwrap_err();
+
+        assert!(error.contains("refusing to overwrite"));
+        assert_eq!(fs::read_to_string(profile).unwrap(), "custom = true\n");
+    }
+
+    #[test]
+    fn profile_command_accepts_only_the_official_installer() {
+        assert!(matches!(
+            parse_profile(&["install".to_owned(), "coding".to_owned()]),
+            Ok(ProfileCommand::InstallCoding)
+        ));
+        assert!(parse_profile(&["install".to_owned(), "unknown".to_owned()]).is_err());
     }
 }
