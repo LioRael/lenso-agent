@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["allowed_repositories", "default_timeout_ms", "max_body_bytes"],
+  "properties": {
+    "allowed_repositories": { "type": "array", "items": { "type": "string" } },
+    "default_timeout_ms": { "type": "integer" },
+    "enable_mutations": { "type": "boolean" },
+    "max_body_bytes": { "type": "integer" }
+  }
+}

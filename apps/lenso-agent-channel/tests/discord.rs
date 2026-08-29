@@ -98,6 +98,18 @@ fn discord_messages_run_real_agent_turns_and_resume_gateway_and_session() {
             .count(),
         2
     );
+    assert!(
+        session
+            .events
+            .iter()
+            .filter(|event| event.kind == "turn_started")
+            .all(|event| {
+                serde_json::from_str::<serde_json::Value>(&event.payload_json).unwrap()
+            ["agent_behavior_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+            })
+    );
 }
 
 fn run_discord(

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["allowed_origins", "cdp_endpoint", "max_snapshot_bytes", "screenshot_directory", "timeout_ms"],
+  "properties": {
+    "allowed_origins": { "type": "array", "items": { "type": "string" } },
+    "cdp_endpoint": { "type": "string" },
+    "max_snapshot_bytes": { "type": "integer" },
+    "screenshot_directory": { "type": "string" },
+    "timeout_ms": { "type": "integer" }
+  }
+}

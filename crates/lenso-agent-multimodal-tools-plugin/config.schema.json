@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["api_key_ref", "audio_model", "base_url", "image_model", "max_file_bytes", "root", "timeout_ms"],
+  "properties": {
+    "api_key_ref": { "type": "string" },
+    "audio_model": { "type": "string" },
+    "base_url": { "type": "string" },
+    "image_model": { "type": "string" },
+    "max_file_bytes": { "type": "integer" },
+    "root": { "type": "string" },
+    "timeout_ms": { "type": "integer" }
+  }
+}

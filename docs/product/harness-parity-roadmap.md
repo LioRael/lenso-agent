@@ -54,13 +54,30 @@ Expose the same Host and immutable Generation semantics through:
 1. ACP stdio editor integration is delivered by ADR-0067; ADR-0068 targets the
    ACP Registry for Zed and records VS Code's missing public ACP registration
    surface instead of shipping an incompatible package;
-2. a provider/model catalog with typed authentication and capability metadata;
-3. Plugin discovery and marketplace UX over the existing Plugin Root and
-   admission policy;
-4. GitHub issue/PR/CI workflow Plugins;
-5. browser and multimodal Tool Providers with explicit grants; and
-6. OTLP traces plus a replay/evaluation runner grounded in Session facts.
+2. a Provider/Model catalog with typed authentication and capability metadata
+   is delivered by ADR-0071 through the shared Host projection, Web endpoint,
+   and headless CLI command;
+3. searchable local Plugin discovery and Marketplace UX over the existing
+   Plugin Root and admission policy is delivered by ADR-0072; a public remote
+   registry remains a separate distribution trust decision;
+4. bounded GitHub Issue, pull-request, and Actions workflow Tools are delivered
+   by the optional Process-backed Plugin in ADR-0073;
+5. Playwright/CDP browser Tools and provider-backed image/audio Tools with
+   explicit Process, origin, root, endpoint, and Secret grants are delivered by
+   ADR-0074; and
+6. deterministic OTLP/HTTP trace export plus presentation replay and CI-ready
+   evaluation grounded in durable Session facts are delivered by ADR-0075.
 
-Acceptance requires every entrypoint to resolve the same Profile to the same
-Generation Spec digest, preserve Tool/approval policy, and emit comparable
-Session provenance. No entrypoint may construct or mutate Kernel graphs.
+ADR-0076 completes the cross-entrypoint acceptance boundary. Every entrypoint
+records its exact Host-specific Generation Spec digest, while the selected
+Agent dependency closure produces a separate surface-neutral behavior digest.
+For one Profile and Plugin Root, entrypoints must preserve the same Agent
+behavior digest and RunScope Tool/approval policy even though ADR-0042 requires
+their surface-specific Host Catalogs, Plans, and Generation Spec digests to
+differ. Both identities are persisted in Session provenance. No entrypoint may
+construct or mutate Kernel graphs.
+
+The entrypoints and ecosystem slice is complete at this boundary. Remote
+registry trust, live telemetry pipelines, and stronger browser or untrusted
+execution isolation remain explicit follow-on products rather than hidden
+requirements of this slice.

@@ -66,6 +66,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 /// Host-issued Invocation Context key for one Turn's narrowed Tool authority.
 pub const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
+/// Host-issued Invocation Context key for the surface-neutral Agent dependency closure.
+pub const AGENT_BEHAVIOR_PROVENANCE_EXTENSION: &str = "lenso.agent.behavior-provenance@1";
 const DEFAULT_MAX_USER_RESUMES: u32 = 8;
 
 /// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
@@ -102,6 +104,26 @@ impl TypedExtension for RunScope {
     const KEY: &'static str = RUN_SCOPE_EXTENSION;
 }
 
+/// Surface-neutral identity of the immutable Agent behavior selected for one Turn.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentBehaviorProvenance {
+    pub digest: String,
+}
+
+impl AgentBehaviorProvenance {
+    pub fn new(digest: String) -> Result<Self, String> {
+        if !canonical_generation_digest(&digest) {
+            return Err("Agent behavior digest is not canonical SHA-256".to_owned());
+        }
+        Ok(Self { digest })
+    }
+}
+
+impl TypedExtension for AgentBehaviorProvenance {
+    const KEY: &'static str = AGENT_BEHAVIOR_PROVENANCE_EXTENSION;
+}
+
 type TurnFailure = PluginError<RunTurnError>;
 const RECOVERY_EVENT_LIMIT: u64 = 512;
 const SESSION_SCAN_PAGE_LIMIT: i64 = 1000;
@@ -127,6 +149,8 @@ pub struct TurnGenerationProvenance {
     pub turn_id: String,
     /// Exact content-addressed App Generation Spec digest.
     pub generation_spec_digest: String,
+    /// Surface-neutral digest of the selected Agent dependency closure, when recorded.
+    pub agent_behavior_digest: Option<String>,
 }
 
 /// Interpret one `turn_started` payload owned by this Agent Loop.
@@ -139,6 +163,8 @@ pub fn inspect_turn_generation_provenance(
     #[serde(deny_unknown_fields)]
     struct TurnStartedPayload {
         generation_spec_digest: String,
+        #[serde(default)]
+        agent_behavior_digest: Option<String>,
         input: String,
         #[serde(default)]
         run_scope: Option<RunScope>,
@@ -150,6 +176,13 @@ pub fn inspect_turn_generation_provenance(
     if !canonical_generation_digest(&payload.generation_spec_digest) {
         return Err("Turn Generation Spec digest is invalid".to_owned());
     }
+    if payload
+        .agent_behavior_digest
+        .as_deref()
+        .is_some_and(|digest| !canonical_generation_digest(digest))
+    {
+        return Err("Turn Agent behavior digest is invalid".to_owned());
+    }
     Ok(TurnGenerationProvenance {
         revision,
         turn_id: turn_id
@@ -157,6 +190,7 @@ pub fn inspect_turn_generation_provenance(
             .ok_or_else(|| "Turn provenance has no Turn ID".to_owned())?
             .to_owned(),
         generation_spec_digest: payload.generation_spec_digest,
+        agent_behavior_digest: payload.agent_behavior_digest,
     })
 }
 
@@ -467,6 +501,7 @@ async fn run_turn(
 ) -> Result<(), TurnFailure> {
     let turn_input = request.input;
     let generation_spec_digest = generation_spec_digest(context)?;
+    let agent_behavior = agent_behavior_provenance(context)?;
     let run_scope = run_scope(context)?;
     let opened = clients
         .session
@@ -521,6 +556,7 @@ async fn run_turn(
             install_system_instruction,
             system_instruction: &system_instruction,
             generation_spec_digest,
+            agent_behavior_digest: agent_behavior.as_ref().map(|value| value.digest.as_str()),
             input: &turn_input,
             run_scope: run_scope.as_ref(),
         },
@@ -580,6 +616,7 @@ struct TurnStart<'a> {
     install_system_instruction: bool,
     system_instruction: &'a InstalledSystemInstruction,
     generation_spec_digest: &'a str,
+    agent_behavior_digest: Option<&'a str>,
     input: &'a str,
     run_scope: Option<&'a RunScope>,
 }
@@ -654,6 +691,7 @@ async fn start_turn(
         Some(&turn_id),
         &serde_json::json!({
             "generation_spec_digest": start.generation_spec_digest,
+            "agent_behavior_digest": start.agent_behavior_digest,
             "input": start.input,
             "run_scope": start.run_scope
         }),
@@ -903,6 +941,18 @@ fn generation_spec_digest(context: &InvocationContext) -> Result<&str, TurnFailu
             })
         })?;
     Ok(digest)
+}
+
+fn agent_behavior_provenance(
+    context: &InvocationContext,
+) -> Result<Option<AgentBehaviorProvenance>, TurnFailure> {
+    context
+        .typed_extension::<AgentBehaviorProvenance>()
+        .map_err(|error| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: format!("Agent Turn has invalid behavior provenance: {error}"),
+            })
+        })
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -3462,8 +3512,10 @@ mod tests {
     #[test]
     fn turn_provenance_parser_owns_the_exact_agent_event_payload() {
         let digest = format!("sha256:{}", "a".repeat(64));
+        let behavior_digest = format!("sha256:{}", "b".repeat(64));
         let payload = serde_json::json!({
             "generation_spec_digest": digest,
+            "agent_behavior_digest": behavior_digest,
             "input": "hello"
         })
         .to_string();
@@ -3471,9 +3523,14 @@ mod tests {
         assert_eq!(provenance.revision, 2);
         assert_eq!(provenance.turn_id, "turn-1");
         assert_eq!(provenance.generation_spec_digest, digest);
+        assert_eq!(
+            provenance.agent_behavior_digest.as_deref(),
+            Some(behavior_digest.as_str())
+        );
 
         let unknown = serde_json::json!({
             "generation_spec_digest": digest,
+            "agent_behavior_digest": behavior_digest,
             "input": "hello",
             "unexpected": true
         })

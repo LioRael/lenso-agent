@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin" }
+lenso-agent-browser-playwright-plugin = { path = "../lenso-agent-browser-playwright-plugin" }
 lenso-agent-interactive-approval-hook-plugin = { path = "../lenso-agent-interactive-approval-hook-plugin" }
 lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plugin" }
 lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
@@ -17,6 +18,7 @@ lenso-agent-code-mode-tools-plugin = { path = "../lenso-agent-code-mode-tools-pl
 lenso-agent-context-compaction-plugin = { path = "../lenso-agent-context-compaction-plugin" }
 lenso-agent-context-compaction-command-plugin = { path = "../lenso-agent-context-compaction-command-plugin" }
 lenso-agent-git-tools-plugin = { path = "../lenso-agent-git-tools-plugin" }
+lenso-agent-github-workflows-plugin = { path = "../lenso-agent-github-workflows-plugin" }
 lenso-agent-memory-sqlite-plugin = { path = "../lenso-agent-memory-sqlite-plugin" }
 lenso-agent-memory-command-plugin = { path = "../lenso-agent-memory-command-plugin" }
 lenso-agent-mcp-client-plugin = { path = "../lenso-agent-mcp-client-plugin" }
@@ -26,6 +28,7 @@ lenso-agent-lifecycle-command-plugin = { path = "../lenso-agent-lifecycle-comman
 lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
 lenso-agent-model-fixture-plugin = { path = "../lenso-agent-model-fixture-plugin" }
 lenso-agent-model-openai-compatible-plugin = { path = "../lenso-agent-model-openai-compatible-plugin" }
+lenso-agent-multimodal-tools-plugin = { path = "../lenso-agent-multimodal-tools-plugin" }
 lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
 lenso-agent-process-native-plugin = { path = "../lenso-agent-process-native-plugin" }
 lenso-agent-process-sandbox-plugin = { path = "../lenso-agent-process-sandbox-plugin" }

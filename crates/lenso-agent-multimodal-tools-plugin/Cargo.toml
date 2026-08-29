@@ -1,0 +1,27 @@
+[package]
+name = "lenso-agent-multimodal-tools-plugin"
+version = "0.1.0"
+description = "Root-bounded image and audio understanding tools for Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.multimodal-tools"
+root-slot = "tool-providers"
+
+[dependencies]
+base64.workspace = true
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-capability-secrets.workspace = true
+lenso-kernel.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

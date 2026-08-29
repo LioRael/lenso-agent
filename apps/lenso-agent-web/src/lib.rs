@@ -8,13 +8,13 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response, sse::Event, sse::Sse},
     routing::{get, post},
 };
 use lenso_agent_host::{
-    AgentDirectories, AgentHost, Profile, WebSurface,
+    AgentDirectories, AgentHost, Profile, ProviderModelCatalog, WebSurface,
     generation::{AgentApp, OnlineGenerationEvent, RenameSessionFailure},
 };
 use lenso_agent_loop_plugin::RunScope;
@@ -247,6 +247,33 @@ struct PluginManagementResponse {
     plugins: Vec<ManagedPlugin>,
     revision: String,
     schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginCatalogResponse {
+    installation: PluginCatalogInstallation,
+    plugins: Vec<PluginCatalogItem>,
+    query: String,
+    schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginCatalogInstallation {
+    kind: &'static str,
+    requires_absolute_path: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginCatalogItem {
+    actions: Vec<&'static str>,
+    instances: Vec<ManagedPluginInstance>,
+    package_id: String,
+    package_revision: String,
+    source: &'static str,
+    status: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -617,6 +644,9 @@ impl PluginInventoryResponse {
 
 #[derive(Debug)]
 enum RuntimeCommand {
+    ModelCatalog {
+        reply: oneshot::Sender<Result<ProviderModelCatalog, String>>,
+    },
     PluginInventory {
         reply: oneshot::Sender<Result<PluginInventoryResponse, String>>,
     },
@@ -866,6 +896,13 @@ struct UpdateToolPolicyRequest {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct InstallPluginRequest {
     bundle_path: PathBuf,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PluginCatalogQuery {
+    #[serde(default)]
+    query: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1208,6 +1245,7 @@ fn validate_plugin_control_configuration(
 fn router(runtime: WebRuntime) -> Router {
     Router::new()
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
+        .route("/api/console/v1/agent/models", get(model_catalog))
         .route("/api/console/v1/agent/plugins", get(plugin_inventory))
         .route("/api/console/v1/agent/turns", post(run_turn))
         .route(
@@ -1231,6 +1269,10 @@ fn router(runtime: WebRuntime) -> Router {
         .route(
             "/api/console/v1/agent/control/plugins",
             get(plugin_management),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/catalog",
+            get(plugin_catalog),
         )
         .route(
             "/api/console/v1/agent/control/plugins/install",
@@ -1282,6 +1324,22 @@ fn router(runtime: WebRuntime) -> Router {
         )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(runtime)
+}
+
+async fn model_catalog(
+    State(runtime): State<WebRuntime>,
+) -> Result<Json<ProviderModelCatalog>, ApiProblem> {
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ModelCatalog { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
 }
 
 async fn plugin_inventory(
@@ -1388,6 +1446,25 @@ async fn install_plugin(
         StatusCode::ACCEPTED,
         Json(PluginMutationResponse::accepted(inventory)),
     ))
+}
+
+async fn plugin_catalog(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Query(request): Query<PluginCatalogQuery>,
+) -> Result<Json<PluginCatalogResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let query = request.query.trim();
+    if query.len() > 128 {
+        return Err(ApiProblem::bad_request(
+            "Plugin catalog query exceeds 128 bytes",
+        ));
+    }
+    runtime
+        .plugin_control()?
+        .catalog(query)
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
 }
 
 async fn propose_plugin_instance_configuration(
@@ -1977,6 +2054,76 @@ impl PluginControl {
             .map_err(|error| error.to_string())
     }
 
+    fn catalog(&self, query: &str) -> Result<PluginCatalogResponse, String> {
+        let query_folded = query.to_lowercase();
+        let mut plugins = self
+            .configuration_authority
+            .inspect()
+            .map_err(|error| error.to_string())?
+            .plugins()
+            .iter()
+            .filter(|plugin| {
+                query_folded.is_empty() || plugin.plugin_id().to_lowercase().contains(&query_folded)
+            })
+            .map(|plugin| {
+                let instances = plugin
+                    .instances()
+                    .iter()
+                    .map(|instance| ManagedPluginInstance {
+                        disableable: instance.is_disableable(),
+                        has_root_difference: instance.has_root_difference(),
+                        instance_key: instance.id().instance_key().to_owned(),
+                        origin: if instance.is_host_default() {
+                            "host-default"
+                        } else {
+                            "plugin-root"
+                        },
+                        root_configuration_toml: instance
+                            .root_configuration_toml()
+                            .map(str::to_owned),
+                        selection: if instance.is_enabled() {
+                            "enabled"
+                        } else {
+                            "disabled-by-root"
+                        },
+                    })
+                    .collect::<Vec<_>>();
+                let active = instances
+                    .iter()
+                    .any(|instance| instance.selection == "enabled");
+                let mut actions = vec!["configure"];
+                if instances.iter().any(|instance| instance.disableable) {
+                    actions.push("set_enabled");
+                }
+                if plugin.is_root_supplied() {
+                    actions.push("remove");
+                }
+                PluginCatalogItem {
+                    actions,
+                    instances,
+                    package_id: plugin.plugin_id().to_owned(),
+                    package_revision: plugin.release_version().to_owned(),
+                    source: if plugin.is_root_supplied() {
+                        "plugin-root"
+                    } else {
+                        "host-build"
+                    },
+                    status: if active { "active" } else { "available" },
+                }
+            })
+            .collect::<Vec<_>>();
+        plugins.sort_by(|left, right| left.package_id.cmp(&right.package_id));
+        Ok(PluginCatalogResponse {
+            installation: PluginCatalogInstallation {
+                kind: "local_bundle",
+                requires_absolute_path: true,
+            },
+            plugins,
+            query: query.to_owned(),
+            schema: "lenso.agent.plugin-catalog.v1",
+        })
+    }
+
     fn desired_revision(&self) -> Result<String, String> {
         self.configuration_authority
             .inspect()
@@ -2289,6 +2436,9 @@ async fn runtime_actor(
             },
         };
         match command {
+            RuntimeCommand::ModelCatalog { reply } => {
+                let _ = reply.send(app.provider_model_catalog().await);
+            }
             RuntimeCommand::PluginInventory { reply } => {
                 let _ = reply.send(snapshot_plugin_inventory(&mut app, &mut plugin_inventory));
             }
@@ -2387,6 +2537,9 @@ async fn runtime_actor(
                                     break;
                                 };
                                 match command {
+                                    RuntimeCommand::ModelCatalog { reply } => {
+                                        let _ = reply.send(app.provider_model_catalog().await);
+                                    }
                                     RuntimeCommand::PluginInventory { reply } => {
                                         let _ = reply.send(snapshot_plugin_inventory(
                                             &mut app,
