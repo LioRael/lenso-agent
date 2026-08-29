@@ -22,7 +22,9 @@ use lenso_agent_session_inspection::{
 };
 use lenso_agent_web_plugin as _;
 use lenso_app_authoring::{
-    PluginRootAuthoringState, add_bundle, configure_instance, inspect_plugin_root,
+    PluginConfigurationApplication, PluginConfigurationDiagnostic, PluginConfigurationProposal,
+    PluginConfigurationProposalStatus, PluginRootAuthoringState, PluginRootRevision, add_bundle,
+    inspect_plugin_root, propose_instance_configuration, publish_instance_configuration,
     remove_instance_difference, remove_plugin, set_instance_disabled,
 };
 use lenso_app_plan::{ResolvedAppPlan, authoring::ResolvedApp};
@@ -136,8 +138,13 @@ struct WebRuntimeConfig {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginInventoryResponse {
+    applied_revision: Option<String>,
+    configuration_status: &'static str,
+    desired_revision: Option<String>,
     generation_events: Vec<PluginGenerationEvent>,
     plugins: Vec<PluginInventoryItem>,
+    #[serde(skip)]
+    rejected_revision: Option<String>,
     schema: &'static str,
 }
 
@@ -166,6 +173,7 @@ struct PluginGenerationEvent {
 #[serde(rename_all = "camelCase")]
 struct PluginManagementResponse {
     plugins: Vec<ManagedPlugin>,
+    revision: String,
     schema: &'static str,
 }
 
@@ -223,9 +231,87 @@ impl From<&PluginRootAuthoringState> for PluginManagementResponse {
                     root_supplied: plugin.is_root_supplied(),
                 })
                 .collect(),
+            revision: state.revision().as_str().to_owned(),
             schema: "lenso.agent.plugin-management.v1",
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginConfigurationProposalResponse {
+    application: &'static str,
+    base_revision: String,
+    candidate_revision: String,
+    diagnostics: Vec<PluginConfigurationDiagnosticResponse>,
+    instance_key: String,
+    plugin_id: String,
+    proposal_digest: String,
+    schema: String,
+    status: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginConfigurationDiagnosticResponse {
+    code: String,
+    detail: String,
+}
+
+impl From<&PluginConfigurationProposal> for PluginConfigurationProposalResponse {
+    fn from(proposal: &PluginConfigurationProposal) -> Self {
+        Self {
+            application: proposal_application(proposal.application()),
+            base_revision: proposal.base_revision().as_str().to_owned(),
+            candidate_revision: proposal.candidate_revision().as_str().to_owned(),
+            diagnostics: proposal
+                .diagnostics()
+                .iter()
+                .map(PluginConfigurationDiagnosticResponse::from)
+                .collect(),
+            instance_key: proposal.instance_key().to_owned(),
+            plugin_id: proposal.plugin_id().to_owned(),
+            proposal_digest: proposal.digest().to_owned(),
+            schema: proposal.schema().to_owned(),
+            status: proposal_status(proposal.status()),
+        }
+    }
+}
+
+impl From<&PluginConfigurationDiagnostic> for PluginConfigurationDiagnosticResponse {
+    fn from(diagnostic: &PluginConfigurationDiagnostic) -> Self {
+        Self {
+            code: diagnostic.code().to_owned(),
+            detail: diagnostic.detail().to_owned(),
+        }
+    }
+}
+
+fn proposal_status(status: PluginConfigurationProposalStatus) -> &'static str {
+    match status {
+        PluginConfigurationProposalStatus::Ready => "ready",
+        PluginConfigurationProposalStatus::NeedsDecision => "needs_decision",
+        PluginConfigurationProposalStatus::Rejected => "rejected",
+    }
+}
+
+fn proposal_application(application: PluginConfigurationApplication) -> &'static str {
+    match application {
+        PluginConfigurationApplication::Noop => "noop",
+        PluginConfigurationApplication::AppGeneration => "app_generation",
+        PluginConfigurationApplication::Blocked => "blocked",
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginConfigurationPublicationResponse {
+    base_revision: String,
+    desired: PluginInventoryResponse,
+    proposal_digest: String,
+    revision: String,
+    schema: String,
+    status: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -249,6 +335,9 @@ impl PluginMutationResponse {
 impl PluginInventoryResponse {
     fn from_plan(plan: &ResolvedAppPlan) -> Self {
         Self {
+            applied_revision: None,
+            configuration_status: "unavailable",
+            desired_revision: None,
             generation_events: Vec::new(),
             plugins: plan
                 .plugin_instances()
@@ -273,8 +362,28 @@ impl PluginInventoryResponse {
                     status: "active",
                 })
                 .collect(),
+            rejected_revision: None,
             schema: "lenso.agent.plugin-inventory.v1",
         }
+    }
+
+    fn with_initial_configuration_revision(mut self, revision: String) -> Self {
+        self.applied_revision = Some(revision.clone());
+        self.desired_revision = Some(revision);
+        self.configuration_status = "applied";
+        self
+    }
+
+    fn with_desired_configuration_revision(mut self, revision: &str) -> Self {
+        self.desired_revision = Some(revision.to_owned());
+        self.configuration_status = if self.applied_revision.as_deref() == Some(revision) {
+            "applied"
+        } else if self.rejected_revision.as_deref() == Some(revision) {
+            "rejected"
+        } else {
+            "pending"
+        };
+        self
     }
 
     fn with_runtime_state(
@@ -283,6 +392,22 @@ impl PluginInventoryResponse {
         disableable: &BTreeSet<String>,
         events: Vec<OnlineGenerationEvent>,
     ) -> Self {
+        for event in &events {
+            match event {
+                OnlineGenerationEvent::Switched {
+                    plugin_root_revision,
+                    ..
+                } => {
+                    self.applied_revision = Some(plugin_root_revision.clone());
+                    self.rejected_revision = None;
+                }
+                OnlineGenerationEvent::Rejected {
+                    plugin_root_revision: Some(plugin_root_revision),
+                    ..
+                } => self.rejected_revision = Some(plugin_root_revision.clone()),
+                _ => {}
+            }
+        }
         for plugin in &mut self.plugins {
             plugin.disableable = disableable.contains(&plugin.instance_key);
         }
@@ -313,9 +438,10 @@ impl PluginInventoryResponse {
             .map(|event| match event {
                 OnlineGenerationEvent::Switched {
                     generation_spec_digest,
+                    plugin_root_revision,
                     ..
                 } => PluginGenerationEvent {
-                    detail: generation_spec_digest,
+                    detail: format!("{plugin_root_revision} -> {generation_spec_digest}"),
                     status: "switched",
                 },
                 OnlineGenerationEvent::Rejected { detail, .. } => PluginGenerationEvent {
@@ -583,7 +709,17 @@ struct InstallPluginRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ConfigurePluginRequest {
+#[serde(rename_all = "camelCase")]
+struct ProposePluginConfigurationRequest {
+    expected_revision: String,
+    toml: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PublishPluginConfigurationRequest {
+    expected_revision: String,
+    proposal_digest: String,
     toml: String,
 }
 
@@ -713,12 +849,16 @@ impl AgentWebSurface {
         .surface(WebSurface::browser())
         .build()?;
         let app = host.run(selected_profile).await?;
-        let plugin_inventory = PluginInventoryResponse::from_plan(app.resolved_plan());
         let plugin_control = resolve_plugin_control(
             plugin_control,
             managed_app_root.as_deref(),
             directories.home(),
         );
+        let plugin_inventory = match plugin_control.as_ref() {
+            Some(control) => PluginInventoryResponse::from_plan(app.resolved_plan())
+                .with_initial_configuration_revision(control.desired_revision()?),
+            None => PluginInventoryResponse::from_plan(app.resolved_plan()),
+        };
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
             return Err(format!("a Tool policy requires {CONTROL_TOKEN_ENV}"));
@@ -790,7 +930,11 @@ fn router(runtime: WebRuntime) -> Router {
         )
         .route(
             "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/configuration",
-            axum::routing::put(configure_plugin_instance),
+            axum::routing::put(publish_plugin_instance_configuration),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/configuration/proposals",
+            post(propose_plugin_instance_configuration),
         )
         .route(
             "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/enabled",
@@ -819,17 +963,27 @@ fn router(runtime: WebRuntime) -> Router {
 async fn plugin_inventory(
     State(runtime): State<WebRuntime>,
 ) -> Result<Json<PluginInventoryResponse>, ApiProblem> {
+    let plugin_control = runtime.plugin_control.clone();
     let (reply, response) = oneshot::channel();
     runtime
         .commands
         .send(RuntimeCommand::PluginInventory { reply })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime already stopped"))?;
-    response
+    let inventory = response
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped without an inventory"))?
-        .map(Json)
-        .map_err(ApiProblem::unavailable)
+        .map_err(ApiProblem::unavailable)?;
+    let Some(control) = plugin_control else {
+        return Ok(Json(inventory));
+    };
+    let revision = tokio::task::spawn_blocking(move || control.desired_revision())
+        .await
+        .map_err(|error| ApiProblem::unavailable(format!("Plugin revision task failed: {error}")))?
+        .map_err(ApiProblem::conflict)?;
+    Ok(Json(
+        inventory.with_desired_configuration_revision(&revision),
+    ))
 }
 
 async fn plugin_management(
@@ -911,24 +1065,57 @@ async fn install_plugin(
     ))
 }
 
-async fn configure_plugin_instance(
+async fn propose_plugin_instance_configuration(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
     Path((plugin_id, instance)): Path<(String, String)>,
-    Json(request): Json<ConfigurePluginRequest>,
-) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    Json(request): Json<ProposePluginConfigurationRequest>,
+) -> Result<Json<PluginConfigurationProposalResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
+    let expected_revision = request
+        .expected_revision
+        .parse::<PluginRootRevision>()
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
     let control = runtime.plugin_control()?;
-    let inventory = tokio::task::spawn_blocking(move || {
-        control.configure(&plugin_id, &instance, request.toml.as_bytes())
+    tokio::task::spawn_blocking(move || {
+        control.propose_configuration(
+            &plugin_id,
+            &instance,
+            &expected_revision,
+            request.toml.as_bytes(),
+        )
     })
     .await
-    .map_err(|error| ApiProblem::unavailable(format!("Plugin configure task failed: {error}")))?
+    .map_err(|error| ApiProblem::unavailable(format!("Plugin proposal task failed: {error}")))?
+    .map(Json)
+    .map_err(ApiProblem::conflict)
+}
+
+async fn publish_plugin_instance_configuration(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Path((plugin_id, instance)): Path<(String, String)>,
+    Json(request): Json<PublishPluginConfigurationRequest>,
+) -> Result<(StatusCode, Json<PluginConfigurationPublicationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let expected_revision = request
+        .expected_revision
+        .parse::<PluginRootRevision>()
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
+    let control = runtime.plugin_control()?;
+    let publication = tokio::task::spawn_blocking(move || {
+        control.publish_configuration(
+            &plugin_id,
+            &instance,
+            &expected_revision,
+            &request.proposal_digest,
+            request.toml.as_bytes(),
+        )
+    })
+    .await
+    .map_err(|error| ApiProblem::unavailable(format!("Plugin publication task failed: {error}")))?
     .map_err(ApiProblem::conflict)?;
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(PluginMutationResponse::accepted(inventory)),
-    ))
+    Ok((StatusCode::ACCEPTED, Json(publication)))
 }
 
 async fn set_plugin_instance_enabled(
@@ -1368,14 +1555,75 @@ impl PluginControl {
             .map_err(|error| error.to_string())
     }
 
-    fn configure(
+    fn desired_revision(&self) -> Result<String, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        inspect_plugin_root(&self.app_root)
+            .map(|state| state.revision().as_str().to_owned())
+            .map_err(|error| error.to_string())
+    }
+
+    fn propose_configuration(
         &self,
         plugin_id: &str,
         instance: &str,
+        expected_revision: &PluginRootRevision,
         bytes: &[u8],
-    ) -> Result<PluginInventoryResponse, String> {
-        self.mutate(|root| {
-            configure_instance(root, plugin_id, instance, bytes).map_err(|error| error.to_string())
+    ) -> Result<PluginConfigurationProposalResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        propose_instance_configuration(
+            &self.app_root,
+            expected_revision,
+            plugin_id,
+            instance,
+            bytes,
+        )
+        .map(|proposal| PluginConfigurationProposalResponse::from(&proposal))
+        .map_err(|error| error.to_string())
+    }
+
+    fn publish_configuration(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+        expected_revision: &PluginRootRevision,
+        expected_proposal_digest: &str,
+        bytes: &[u8],
+    ) -> Result<PluginConfigurationPublicationResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        let proposal = propose_instance_configuration(
+            &self.app_root,
+            expected_revision,
+            plugin_id,
+            instance,
+            bytes,
+        )
+        .map_err(|error| error.to_string())?;
+        if proposal.digest() != expected_proposal_digest {
+            return Err(
+                "Plugin configuration proposal digest does not match the reviewed proposal"
+                    .to_owned(),
+            );
+        }
+        let publication = publish_instance_configuration(&self.app_root, &proposal)
+            .map_err(|error| error.to_string())?;
+        let revision = publication.revision().as_str().to_owned();
+        Ok(PluginConfigurationPublicationResponse {
+            base_revision: publication.base_revision().as_str().to_owned(),
+            desired: PluginInventoryResponse::from_plan(publication.resolved().plan())
+                .with_desired_configuration_revision(&revision),
+            proposal_digest: publication.proposal_digest().to_owned(),
+            revision,
+            schema: publication.schema().to_owned(),
+            status: "published",
         })
     }
 

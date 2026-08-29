@@ -3709,12 +3709,13 @@ dependencies = [
 [[package]]
 name = "lenso-cli"
 version = "0.4.8"
-source = "git+https://github.com/LioRael/lenso-cli?rev=13e09e052e83ab2226307d79d5c673612d61ec98#13e09e052e83ab2226307d79d5c673612d61ec98"
+source = "git+https://github.com/LioRael/lenso-cli?rev=5e805c2439bf520c9da3577a77ed40d2ce6e2c2a#5e805c2439bf520c9da3577a77ed40d2ce6e2c2a"
 dependencies = [
  "anyhow",
  "lenso-app-plan",
  "lenso-plugin-bundle",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "ureq",

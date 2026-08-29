@@ -207,12 +207,14 @@ pub(crate) struct HostBuildIdentity {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OnlineGenerationEvent {
     Switched {
+        plugin_root_revision: String,
         resolution_authority_digest: String,
         generation_spec_digest: String,
         previous_generation_spec_digest: String,
         routing_epoch: u64,
     },
     Rejected {
+        plugin_root_revision: Option<String>,
         resolution_authority_digest: Option<String>,
         detail: String,
     },
@@ -1018,6 +1020,7 @@ fn start_generation_reconciler(
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
                             push_reconcile_event(&events, OnlineGenerationEvent::Rejected {
+                                plugin_root_revision: None,
                                 resolution_authority_digest: None,
                                 detail: format!(
                                     "Generation Controller event stream lagged by {skipped} events"
@@ -1180,6 +1183,7 @@ async fn reconcile_online_generation(
         Ok(coordinator) => coordinator,
         Err(detail) => {
             return Some(OnlineGenerationEvent::Rejected {
+                plugin_root_revision: None,
                 resolution_authority_digest: None,
                 detail,
             });
@@ -1190,26 +1194,29 @@ async fn reconcile_online_generation(
         Ok(None) => return None,
         Err(detail) => {
             return Some(OnlineGenerationEvent::Rejected {
+                plugin_root_revision: None,
                 resolution_authority_digest: None,
                 detail,
             });
         }
     };
-    let (resolution_authority_digest, candidate) = match resolve_desired_generation(
-        plugin_root,
-        store_root,
-        host_build,
-        profile_name,
-        last_attempted_desired_state_digest,
-    ) {
-        Ok(Some(candidate)) => candidate,
-        Ok(None) => return None,
-        Err(event) => return Some(event),
-    };
+    let (resolution_authority_digest, plugin_root_revision, candidate) =
+        match resolve_desired_generation(
+            plugin_root,
+            store_root,
+            host_build,
+            profile_name,
+            last_attempted_desired_state_digest,
+        ) {
+            Ok(Some(candidate)) => candidate,
+            Ok(None) => return None,
+            Err(event) => return Some(event),
+        };
     let state = match client.inspect().await.map_err(control_error) {
         Ok(state) => state,
         Err(detail) => {
             return Some(OnlineGenerationEvent::Rejected {
+                plugin_root_revision: Some(plugin_root_revision),
                 resolution_authority_digest: Some(resolution_authority_digest),
                 detail,
             });
@@ -1218,6 +1225,7 @@ async fn reconcile_online_generation(
     let Some(previous_generation_spec_digest) = state.active_generation_spec_digest.as_deref()
     else {
         return Some(OnlineGenerationEvent::Rejected {
+            plugin_root_revision: Some(plugin_root_revision),
             resolution_authority_digest: Some(resolution_authority_digest),
             detail: "online reconcile requires one active App Generation".to_owned(),
         });
@@ -1227,6 +1235,7 @@ async fn reconcile_online_generation(
     }
     if let Err(detail) = record_generation_spec(store_root, &candidate.spec) {
         return Some(OnlineGenerationEvent::Rejected {
+            plugin_root_revision: Some(plugin_root_revision),
             resolution_authority_digest: Some(resolution_authority_digest),
             detail,
         });
@@ -1235,6 +1244,7 @@ async fn reconcile_online_generation(
         .await
     {
         Ok(Some(outcome)) => Some(OnlineGenerationEvent::Switched {
+            plugin_root_revision,
             resolution_authority_digest,
             generation_spec_digest: outcome.active_generation_spec_digest,
             previous_generation_spec_digest: previous_generation_spec_digest.to_owned(),
@@ -1245,6 +1255,7 @@ async fn reconcile_online_generation(
             None
         }
         Err(detail) => Some(OnlineGenerationEvent::Rejected {
+            plugin_root_revision: Some(plugin_root_revision),
             resolution_authority_digest: Some(resolution_authority_digest),
             detail,
         }),
@@ -1257,19 +1268,34 @@ fn resolve_desired_generation(
     host_build: &HostBuildIdentity,
     profile_name: Option<&str>,
     last_attempted_desired_state_digest: &mut Option<String>,
-) -> Result<Option<(String, ResolvedGeneration)>, OnlineGenerationEvent> {
+) -> Result<Option<(String, String, ResolvedGeneration)>, OnlineGenerationEvent> {
     let directories = directories_for_store_root(store_root).map_err(|detail| {
         OnlineGenerationEvent::Rejected {
+            plugin_root_revision: None,
             resolution_authority_digest: None,
             detail,
         }
     })?;
     let authority = crate::generation_authority::load_generation_authority_unfenced(store_root);
+    let root = crate::plugin_root::snapshot(plugin_root).map_err(|detail| {
+        OnlineGenerationEvent::Rejected {
+            plugin_root_revision: None,
+            resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
+            detail,
+        }
+    })?;
+    let plugin_root_revision = sha256_digest(&serde_json::to_vec(&root).map_err(|error| {
+        OnlineGenerationEvent::Rejected {
+            plugin_root_revision: None,
+            resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
+            detail: format!("failed to identify Plugin Root revision: {error}"),
+        }
+    })?);
     let rejected = |detail| OnlineGenerationEvent::Rejected {
+        plugin_root_revision: Some(plugin_root_revision.clone()),
         resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
         detail,
     };
-    let root = crate::plugin_root::snapshot(plugin_root).map_err(rejected)?;
     let plan = if let Some(profile_name) = profile_name {
         let profile = crate::profile::select(profile_name, &root, &directories.profiles())
             .map_err(rejected)?;
@@ -1298,7 +1324,11 @@ fn resolve_desired_generation(
     let candidate =
         resolve_generation_from_plan(&plan, &authority, host_build, plugin_root, resources)
             .map_err(rejected)?;
-    Ok(Some((authority.resolution_authority_digest, candidate)))
+    Ok(Some((
+        authority.resolution_authority_digest,
+        plugin_root_revision,
+        candidate,
+    )))
 }
 
 fn push_reconcile_event(
@@ -2905,7 +2935,7 @@ mod tests {
         let host_build = HostBuildIdentity::current().unwrap();
         let mut last_attempted = None;
 
-        let (_, base) = resolve_desired_generation(
+        let (_, _, base) = resolve_desired_generation(
             &plugin_root,
             &store_root,
             &host_build,
@@ -2918,7 +2948,7 @@ mod tests {
         let text_tools = plugin_root.join("lenso.agent.text-tools");
         fs::create_dir_all(&text_tools).unwrap();
         fs::write(text_tools.join("default.toml"), "").unwrap();
-        let (_, configured) = resolve_desired_generation(
+        let (_, _, configured) = resolve_desired_generation(
             &plugin_root,
             &store_root,
             &host_build,
@@ -2948,7 +2978,7 @@ mod tests {
         assert!(matches!(rejected, OnlineGenerationEvent::Rejected { .. }));
 
         fs::remove_dir_all(text_tools).unwrap();
-        let (_, restored) = resolve_desired_generation(
+        let (_, _, restored) = resolve_desired_generation(
             &plugin_root,
             &store_root,
             &host_build,
@@ -2975,7 +3005,7 @@ mod tests {
         let host_build = HostBuildIdentity::current().unwrap();
         let mut last_attempted = None;
 
-        let (_, first) = resolve_desired_generation(
+        let (_, _, first) = resolve_desired_generation(
             &plugin_root,
             &store_root,
             &host_build,
@@ -2987,7 +3017,7 @@ mod tests {
         let retained_resources = first.resources.clone();
 
         fs::write(&resource, "generation two").unwrap();
-        let (_, second) = resolve_desired_generation(
+        let (_, _, second) = resolve_desired_generation(
             &plugin_root,
             &store_root,
             &host_build,

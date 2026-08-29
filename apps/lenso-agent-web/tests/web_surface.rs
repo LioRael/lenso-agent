@@ -365,6 +365,7 @@ async fn updates_and_recovers_the_durable_tool_policy_with_revision_fencing() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)]
 async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let root = tempfile::tempdir().unwrap();
     let control_token = ["fixture", "plugin", "control"].join("-");
@@ -385,7 +386,9 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let endpoint = format!(
         "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/configuration"
     );
+    let proposals_endpoint = format!("{endpoint}/proposals");
     let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
+    let inventory_endpoint = format!("http://{address}/api/console/v1/agent/plugins");
     let configuration = root.path().join("plugins/lenso.agent.loop/agent.toml");
     assert!(!configuration.exists());
     let initial_generation = active_generation_digest(root.path());
@@ -394,11 +397,19 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let initial_management =
         read_plugin_management(&client, &management_endpoint, &control_token).await;
     assert_initial_plugin_management(&initial_management);
+    let initial_revision = initial_management["revision"].as_str().unwrap();
+    let initial_inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
+    assert_eq!(initial_inventory["desiredRevision"], initial_revision);
+    assert_eq!(initial_inventory["appliedRevision"], initial_revision);
+    assert_eq!(initial_inventory["configurationStatus"], "applied");
 
     assert_eq!(
         client
-            .put(&endpoint)
-            .json(&serde_json::json!({ "toml": "unexpected = true\n" }))
+            .post(&proposals_endpoint)
+            .json(&serde_json::json!({
+                "expectedRevision": initial_revision,
+                "toml": "unexpected = true\n",
+            }))
             .send()
             .await
             .unwrap()
@@ -409,15 +420,34 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
 
     assert_eq!(
         client
-            .put(&endpoint)
+            .post(&proposals_endpoint)
             .bearer_auth(&control_token)
-            .json(&serde_json::json!({ "toml": "unexpected = true\n" }))
+            .json(&serde_json::json!({
+                "expectedRevision": initial_revision,
+                "toml": "unexpected = true\n",
+            }))
             .send()
             .await
             .unwrap()
             .status(),
-        reqwest::StatusCode::CONFLICT
+        reqwest::StatusCode::OK
     );
+    let rejected = client
+        .post(&proposals_endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "toml": "unexpected = true\n",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(rejected["status"], "rejected");
+    assert_eq!(rejected["application"], "blocked");
+    assert_eq!(rejected["diagnostics"][0]["code"], "invalid_configuration");
     assert!(!configuration.exists());
     assert_eq!(active_generation_digest(root.path()), initial_generation);
 
@@ -432,10 +462,53 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "max_memory_items = 8\n",
         "max_memory_characters = 16384\n",
     );
+    let proposal = client
+        .post(&proposals_endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "toml": updated_configuration,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(proposal["schema"], "lenso.plugin-configuration-proposal.v1");
+    assert_eq!(proposal["status"], "ready");
+    assert_eq!(proposal["application"], "app_generation");
+    assert_eq!(proposal["baseRevision"], initial_revision);
+    assert_ne!(proposal["candidateRevision"], initial_revision);
+    assert!(!configuration.exists());
+
+    assert_eq!(
+        client
+            .put(&endpoint)
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "expectedRevision": initial_revision,
+                "proposalDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "toml": updated_configuration,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert!(!configuration.exists());
+
     let accepted = client
         .put(&endpoint)
         .bearer_auth(&control_token)
-        .json(&serde_json::json!({ "toml": updated_configuration }))
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "proposalDigest": proposal["proposalDigest"],
+            "toml": updated_configuration,
+        }))
         .send()
         .await
         .unwrap();
@@ -447,15 +520,24 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "unexpected Plugin mutation response: {accepted_body}"
     );
     let accepted: serde_json::Value = serde_json::from_str(&accepted_body).unwrap();
-    assert_eq!(accepted["schema"], "lenso.agent.plugin-mutation.v1");
-    assert_eq!(accepted["status"], "accepted");
+    assert_eq!(
+        accepted["schema"],
+        "lenso.plugin-configuration-publication.v1"
+    );
+    assert_eq!(accepted["status"], "published");
+    assert_eq!(accepted["baseRevision"], initial_revision);
+    assert_eq!(accepted["revision"], proposal["candidateRevision"]);
+    assert_eq!(accepted["proposalDigest"], proposal["proposalDigest"]);
     assert!(accepted["desired"]["plugins"].is_array());
+    assert_eq!(accepted["desired"]["desiredRevision"], accepted["revision"]);
+    assert_eq!(accepted["desired"]["configurationStatus"], "pending");
     assert_eq!(
         fs::read_to_string(&configuration).unwrap(),
         updated_configuration
     );
     let updated_management =
         read_plugin_management(&client, &management_endpoint, &control_token).await;
+    assert_eq!(updated_management["revision"], accepted["revision"]);
     let updated_loop = managed_plugin(&updated_management, "lenso.agent.loop");
     assert_eq!(
         updated_loop["instances"][0]["rootConfigurationToml"],
@@ -463,8 +545,33 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     );
     assert_eq!(updated_loop["instances"][0]["hasRootDifference"], true);
 
+    assert_eq!(
+        client
+            .put(&endpoint)
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "expectedRevision": initial_revision,
+                "proposalDigest": proposal["proposalDigest"],
+                "toml": updated_configuration,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+
     let switched_generation = wait_for_generation_change(root.path(), &initial_generation).await;
     assert_ne!(switched_generation, initial_generation);
+    let applied = wait_for_configuration_applied(
+        &client,
+        &inventory_endpoint,
+        accepted["revision"].as_str().unwrap(),
+    )
+    .await;
+    assert_eq!(applied["desiredRevision"], accepted["revision"]);
+    assert_eq!(applied["appliedRevision"], accepted["revision"]);
+    assert_eq!(applied["configurationStatus"], "applied");
 }
 
 async fn read_plugin_management(
@@ -483,6 +590,37 @@ async fn read_plugin_management(
         .json::<serde_json::Value>()
         .await
         .unwrap()
+}
+
+async fn read_plugin_inventory(client: &reqwest::Client, endpoint: &str) -> serde_json::Value {
+    client
+        .get(endpoint)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap()
+}
+
+async fn wait_for_configuration_applied(
+    client: &reqwest::Client,
+    endpoint: &str,
+    revision: &str,
+) -> serde_json::Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let inventory = read_plugin_inventory(client, endpoint).await;
+            if inventory["appliedRevision"] == revision {
+                break inventory;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("published Plugin configuration should become the applied Generation")
 }
 
 async fn assert_plugin_management_forbidden(client: &reqwest::Client, endpoint: &str) {
@@ -506,6 +644,12 @@ fn managed_plugin<'a>(
 
 fn assert_initial_plugin_management(management: &serde_json::Value) {
     assert_eq!(management["schema"], "lenso.agent.plugin-management.v1");
+    assert!(
+        management["revision"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
     let plugin = managed_plugin(management, "lenso.agent.loop");
     assert_eq!(plugin["instances"][0]["selection"], "enabled");
     assert_eq!(
