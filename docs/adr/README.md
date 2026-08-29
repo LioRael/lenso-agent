@@ -67,3 +67,4 @@
 - [0065 — Render task supervision through read-only surfaces](0065-render-task-supervision-through-read-only-surfaces.md)
 - [0066 — Accept parallel coding supervision end to end](0066-accept-parallel-coding-supervision-end-to-end.md)
 - [0067 — Enter the Host through ACP](0067-enter-the-host-through-acp.md)
+- [0068 — Distribute ACP through the Registry](0068-distribute-acp-through-the-registry.md)

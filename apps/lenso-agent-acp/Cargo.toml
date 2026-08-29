@@ -16,6 +16,7 @@ path = "src/main.rs"
 agent-client-protocol.workspace = true
 clap.workspace = true
 lenso-agent-acp-plugin = { path = "../../crates/lenso-agent-acp-plugin" }
+lenso-agent-auth-openai-codex-plugin = { path = "../../crates/lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins" }
 lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
