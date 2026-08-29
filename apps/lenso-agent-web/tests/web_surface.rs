@@ -397,11 +397,19 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let initial_management =
         read_plugin_management(&client, &management_endpoint, &control_token).await;
     assert_initial_plugin_management(&initial_management);
+    assert_eq!(
+        initial_management["configurationAuthority"]["kind"],
+        "local_plugin_root"
+    );
     let initial_revision = initial_management["revision"].as_str().unwrap();
     let initial_inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
     assert_eq!(initial_inventory["desiredRevision"], initial_revision);
     assert_eq!(initial_inventory["appliedRevision"], initial_revision);
     assert_eq!(initial_inventory["configurationStatus"], "applied");
+    assert_eq!(
+        initial_inventory["configurationAuthority"]["reference"],
+        "app"
+    );
 
     assert_eq!(
         client
@@ -481,6 +489,10 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_eq!(proposal["status"], "ready");
     assert_eq!(proposal["application"], "app_generation");
     assert_eq!(proposal["baseRevision"], initial_revision);
+    assert_eq!(
+        proposal["configurationAuthority"]["kind"],
+        "local_plugin_root"
+    );
     assert_ne!(proposal["candidateRevision"], initial_revision);
     assert!(!configuration.exists());
 
@@ -528,6 +540,10 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_eq!(accepted["baseRevision"], initial_revision);
     assert_eq!(accepted["revision"], proposal["candidateRevision"]);
     assert_eq!(accepted["proposalDigest"], proposal["proposalDigest"]);
+    assert_eq!(
+        accepted["configurationAuthority"],
+        proposal["configurationAuthority"]
+    );
     assert!(accepted["desired"]["plugins"].is_array());
     assert_eq!(accepted["desired"]["desiredRevision"], accepted["revision"]);
     assert_eq!(accepted["desired"]["configurationStatus"], "pending");
