@@ -26,12 +26,19 @@ impl Profile {
 
 /// Describes a process-owned presentation surface and its independent Controller lineage.
 pub trait AgentSurface: Debug {
-    fn control_directory(&self) -> &'static str;
+    fn kind(&self) -> AgentSurfaceKind;
+}
 
-    /// Maximum number of independently recoverable Host instances for this surface.
-    fn max_instances(&self) -> usize {
-        1
-    }
+/// Logical process-owned presentation surface. Durable lineage and lease
+/// layout remain private Host policy.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentSurfaceKind {
+    Headless,
+    Tui,
+    Channels,
+    Telegram,
+    Discord,
+    Web,
 }
 
 /// A one-shot stdin/stdout or programmatic Agent surface.
@@ -45,8 +52,8 @@ impl HeadlessSurface {
 }
 
 impl AgentSurface for HeadlessSurface {
-    fn control_directory(&self) -> &'static str {
-        crate::generation::CONTROL_DIRECTORY
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Headless
     }
 }
 
@@ -61,12 +68,8 @@ impl TuiSurface {
 }
 
 impl AgentSurface for TuiSurface {
-    fn control_directory(&self) -> &'static str {
-        crate::generation::TUI_CONTROL_DIRECTORY
-    }
-
-    fn max_instances(&self) -> usize {
-        crate::generation::MAX_TUI_INSTANCES
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Tui
     }
 }
 
@@ -81,8 +84,8 @@ impl ChannelSurface {
 }
 
 impl AgentSurface for ChannelSurface {
-    fn control_directory(&self) -> &'static str {
-        crate::generation::CHANNEL_CONTROL_DIRECTORY
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Channels
     }
 }
 
@@ -97,8 +100,8 @@ impl TelegramSurface {
 }
 
 impl AgentSurface for TelegramSurface {
-    fn control_directory(&self) -> &'static str {
-        crate::generation::TELEGRAM_CONTROL_DIRECTORY
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Telegram
     }
 }
 
@@ -113,8 +116,8 @@ impl DiscordSurface {
 }
 
 impl AgentSurface for DiscordSurface {
-    fn control_directory(&self) -> &'static str {
-        crate::generation::DISCORD_CONTROL_DIRECTORY
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Discord
     }
 }
 
@@ -129,8 +132,8 @@ impl WebSurface {
 }
 
 impl AgentSurface for WebSurface {
-    fn control_directory(&self) -> &'static str {
-        crate::generation::WEB_CONTROL_DIRECTORY
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Web
     }
 }
 
@@ -180,10 +183,6 @@ impl<S> AgentHostBuilder<S> {
 impl<S: AgentSurface> AgentHostBuilder<S> {
     /// Validates the static Host composition. Runtime Plan resolution happens in `run`.
     pub fn build(self) -> Result<ConfiguredAgentHost<S>, String> {
-        validate_control_directory(self.surface.control_directory())?;
-        if self.surface.max_instances() == 0 {
-            return Err("Agent surface must allow at least one Host instance".to_owned());
-        }
         Ok(ConfiguredAgentHost {
             directories: self
                 .directories
@@ -211,30 +210,17 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
         let bytes =
             plan_bytes_for_profile_in(&self.directories, plan.as_deref(), profile_name.as_deref())
                 .map_err(|error| format!("App resolution failed: {error}"))?;
-        AgentApp::start_with_store_control_directory_profile_and_host_build(
+        AgentApp::start_with_runtime_state_profile_and_host_build(
             &bytes,
             &self.directories.runtime(),
-            self.surface.control_directory(),
-            self.surface.max_instances(),
+            self.directories.session_database(),
+            self.surface.kind(),
             profile_name,
             crate::generation::HostBuildIdentity::current()?,
         )
         .await
         .map_err(|error| format!("App startup failed: {error}"))
     }
-}
-
-fn validate_control_directory(directory: &str) -> Result<(), String> {
-    if directory.is_empty()
-        || directory == "."
-        || directory == ".."
-        || directory.contains(['/', '\\'])
-    {
-        return Err(format!(
-            "invalid Agent surface control directory `{directory}`"
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -247,24 +233,6 @@ mod tests {
 
     fn link_test_plugins() {
         LINKED.store(true, Ordering::SeqCst);
-    }
-
-    #[derive(Debug)]
-    struct UnsafeSurface;
-
-    impl AgentSurface for UnsafeSurface {
-        fn control_directory(&self) -> &'static str {
-            "../shared"
-        }
-    }
-
-    #[test]
-    fn surface_cannot_escape_runtime_control_root() {
-        let result = AgentHost::builder().surface(UnsafeSurface).build();
-        assert_eq!(
-            result.expect_err("unsafe surface must be rejected"),
-            "invalid Agent surface control directory `../shared`"
-        );
     }
 
     #[test]

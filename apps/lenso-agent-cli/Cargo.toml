@@ -36,6 +36,7 @@ zip.workspace = true
 lenso-agent-session-inspection = { path = "../../crates/lenso-agent-session-inspection" }
 lenso-agent-session-sqlite-plugin = { path = "../../crates/lenso-agent-session-sqlite-plugin" }
 lenso-plugin-control-plane.workspace = true
+rusqlite.workspace = true
 tempfile.workspace = true
 
 [lints]

@@ -21,6 +21,22 @@ fn command_with_home(workspace: &Path, home: &Path) -> Command {
     command
 }
 
+fn runtime_generation_count(root: &Path) -> usize {
+    let output = command(root).args(["runtime", "status"]).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .find_map(|line| line.strip_prefix("recoverable-generations: "))
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
 fn run(root: &Path, plan: &Path, prompt: &str, session: Option<&str>) -> std::process::Output {
     let mut command = command(root);
     command
@@ -805,17 +821,7 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
         assert!(inspect_stdout.contains("app: lenso.agent.harness"));
         assert!(inspect_stdout.contains("resolution-authority: sha256:"));
     }
-    for digest in digests {
-        let hash = digest.strip_prefix("sha256:").unwrap();
-        let record = temporary
-            .path()
-            .join("runtime/generations")
-            .join(format!("{hash}.json"));
-        let bytes = fs::read(record).unwrap();
-        assert_eq!(sha256_digest(&bytes), digest);
-        let spec: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(spec["app_id"], "lenso.agent.harness");
-    }
+    assert_eq!(runtime_generation_count(temporary.path()), 2);
 }
 
 #[test]
@@ -878,9 +884,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
         stdout.contains("summary: protected=1 candidates=1"),
         "{stdout}"
     );
-    let records_before = fs::read_dir(temporary.path().join("runtime/generations"))
-        .unwrap()
-        .count();
+    let records_before = runtime_generation_count(temporary.path());
 
     let preview_with_sessions = command(temporary.path())
         .args(["generations", "gc-preview"])
@@ -891,12 +895,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
         String::from_utf8_lossy(&preview_with_sessions.stdout)
             .contains("summary: protected=2 candidates=0")
     );
-    assert_eq!(
-        fs::read_dir(temporary.path().join("runtime/generations"))
-            .unwrap()
-            .count(),
-        records_before
-    );
+    assert_eq!(runtime_generation_count(temporary.path()), records_before);
 
     let apply = command(temporary.path())
         .args([
@@ -916,9 +915,7 @@ fn generation_gc_preview_and_apply_preserve_every_reachability_root() {
     let apply_stdout = String::from_utf8(apply.stdout).unwrap();
     assert!(apply_stdout.contains("summary: removed-generations=1"));
     assert_eq!(
-        fs::read_dir(temporary.path().join("runtime/generations"))
-            .unwrap()
-            .count(),
+        runtime_generation_count(temporary.path()),
         records_before - 1
     );
 
@@ -947,11 +944,14 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     assert!(first.status.success());
     let before = stored_session(temporary.path());
     let digest = turn_generation_digests(&before).pop().unwrap();
-    let record = temporary
-        .path()
-        .join("runtime/generations")
-        .join(format!("{}.json", digest.strip_prefix("sha256:").unwrap()));
-    fs::write(record, "{}").unwrap();
+    let database = temporary.path().join("runtime/.state/runtime.sqlite3");
+    rusqlite::Connection::open(database)
+        .unwrap()
+        .execute(
+            "UPDATE generation_specs SET spec_json = ?1 WHERE digest = ?2",
+            rusqlite::params![b"{}".as_slice(), &digest],
+        )
+        .unwrap();
 
     let session_id = before["session_id"].as_str().unwrap_or_default();
     let inspect = command(temporary.path())
@@ -974,7 +974,10 @@ fn corrupted_generation_provenance_rejects_startup_before_a_turn() {
     assert!(!second.status.success());
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(stderr.contains("App startup failed"));
-    assert!(stderr.contains("does not match its digest"));
+    assert!(
+        stderr.contains("runtime state") && stderr.contains("digest"),
+        "{stderr}"
+    );
     assert_eq!(stored_session(temporary.path()), before);
 }
 

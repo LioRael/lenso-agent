@@ -2,8 +2,6 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
-    fs::OpenOptions,
-    io::Write,
     path::{Path, PathBuf},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
@@ -74,14 +72,15 @@ use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, CanonicalDocument,
     CatalogFactory, ControlHealth, ControlLifecycle, ControlPlaneError, ControlStateStore,
     DurableControlState, DurableGenerationRoute, DurableTransitionOutcome, EmbeddedPlugin,
-    FileControlStateStore, GenerationControllerClient, GenerationControllerEvent,
-    GenerationMaintenanceOutcome, HostBuildManifest, HostExecutionPolicy, KernelGenerationRuntime,
-    MultiExecutionCatalogFactory, PlanGenerationInput, ReplacementMode, ResolvedGeneration,
-    RolloutPolicy, resolve_plan_generation, sha256_digest,
+    GenerationControllerClient, GenerationControllerEvent, GenerationMaintenanceOutcome,
+    HostBuildManifest, HostExecutionPolicy, KernelGenerationRuntime, MultiExecutionCatalogFactory,
+    PlanGenerationInput, ReplacementMode, ResolvedGeneration, RolloutPolicy,
+    resolve_plan_generation, sha256_digest,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
-use crate::AgentDirectories;
+use crate::runtime_state::{LedgerControlStateStore, RuntimeAttachment, RuntimeState};
+use crate::{AgentDirectories, AgentSurfaceKind};
 
 const APP_ID: &str = "lenso.agent.harness";
 const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
@@ -96,14 +95,6 @@ const READY_TIMEOUT_NANOS: u64 = 30_000_000_000;
 const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const ONLINE_DRAIN_TIMEOUT_NANOS: u64 = 300_000_000_000;
 const ONLINE_ROLLBACK_WINDOW_NANOS: u64 = 1_000_000_000;
-const GENERATION_DIRECTORY: &str = "generations";
-pub(crate) const CONTROL_DIRECTORY: &str = "generation-control";
-pub(crate) const TUI_CONTROL_DIRECTORY: &str = "tui-generation-control";
-pub(crate) const MAX_TUI_INSTANCES: usize = 32;
-pub(crate) const TELEGRAM_CONTROL_DIRECTORY: &str = "telegram-generation-control";
-pub(crate) const DISCORD_CONTROL_DIRECTORY: &str = "discord-generation-control";
-pub(crate) const CHANNEL_CONTROL_DIRECTORY: &str = "channel-generation-control";
-pub(crate) const WEB_CONTROL_DIRECTORY: &str = "web-generation-control";
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const RECONCILE_QUIET_PERIOD: Duration = Duration::from_millis(200);
 const RECONCILE_SETTLE_LIMIT: Duration = Duration::from_secs(2);
@@ -303,8 +294,8 @@ impl HostBuildIdentity {
 
 fn framework_host_builder<F: CatalogFactory>(
     runtime: KernelGenerationRuntime<F>,
-    store: FileControlStateStore,
-) -> FrameworkHostBuilder<KernelGenerationRuntime<F>, FileControlStateStore> {
+    store: LedgerControlStateStore,
+) -> FrameworkHostBuilder<KernelGenerationRuntime<F>, LedgerControlStateStore> {
     FrameworkHostBuilder::new(APP_ID, runtime, store).maintenance_interval(MAINTENANCE_INTERVAL)
 }
 
@@ -313,7 +304,7 @@ async fn recover_or_open_host<F: CatalogFactory>(
     store_root: &Path,
     host_build: &HostBuildIdentity,
     runtime: KernelGenerationRuntime<F>,
-    store: FileControlStateStore,
+    store: LedgerControlStateStore,
     durable: DurableControlState,
 ) -> Result<FrameworkHost<NativeApp>, String> {
     let has_live_state = durable.generations.iter().any(|record| {
@@ -375,10 +366,10 @@ async fn recover_or_open_host<F: CatalogFactory>(
 pub struct AgentApp {
     host: FrameworkHost<NativeApp>,
     resolved_plan: ResolvedAppPlan,
+    runtime: RuntimeAttachment,
+    session_database: PathBuf,
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
-    host_lease: Option<crate::authority::AuthorityFence>,
-    generation_gc_lease: Option<crate::authority::AuthorityFence>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -388,36 +379,22 @@ pub enum RenameSessionFailure {
 }
 
 impl AgentApp {
-    pub(crate) async fn start_with_store_control_directory_profile_and_host_build(
+    pub(crate) async fn start_with_runtime_state_profile_and_host_build(
         plan_bytes: &[u8],
         store_root: &Path,
-        control_directory: &str,
-        max_instances: usize,
+        session_database: PathBuf,
+        surface: AgentSurfaceKind,
         profile_name: Option<String>,
         host_build: HostBuildIdentity,
     ) -> Result<Self, String> {
         let resolved_plan: ResolvedAppPlan = serde_json::from_slice(plan_bytes)
             .map_err(|error| format!("failed to decode the resolved App Plan: {error}"))?;
-        let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
-        let (control_directory, host_lease) = (0..max_instances)
-            .find_map(|index| {
-                let directory = controller_instance_directory(control_directory, index);
-                match authority.try_host_lease(&directory) {
-                    Ok(Some(lease)) => Some(Ok((directory, lease))),
-                    Ok(None) => None,
-                    Err(error) => Some(Err(error)),
-                }
-            })
-            .transpose()?
-            .ok_or_else(|| {
-                format!("all {max_instances} `{control_directory}` Host slots are already in use")
-            })?;
-        let generation_gc_lease = authority.generation_gc_snapshot()?;
-        let _authority_fence = authority.snapshot()?;
+        let runtime_state = RuntimeState::open(store_root)?;
+        let runtime_attachment = runtime_state.attach(surface)?;
+        let _authority_fence = runtime_attachment.authority_snapshot()?;
         let (generation, _resolution_authority_digest) =
             resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
-        let store = FileControlStateStore::open(store_root.join(&control_directory))
-            .map_err(control_error)?;
+        let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
         let mut host =
@@ -447,6 +424,10 @@ impl AgentApp {
                 return Err(control_error(error));
             }
         }
+        if let Err(error) = runtime_attachment.state().confirm_legacy_migration() {
+            let _ = host.shutdown().await;
+            return Err(error);
+        }
         let client = host.controller();
         let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
         let authoring_managed =
@@ -462,10 +443,10 @@ impl AgentApp {
         Ok(Self {
             host,
             resolved_plan,
+            runtime: runtime_attachment,
+            session_database,
             reconciler: Some(reconciler),
             reconcile_events,
-            host_lease: Some(host_lease),
-            generation_gc_lease: Some(generation_gc_lease),
         })
     }
 
@@ -823,22 +804,17 @@ impl AgentApp {
                 .map_err(|error| format!("Generation Reconciler task failed: {error}"))?;
         }
         self.host.suspend().await.map_err(control_error)?;
-        self.host_lease.take();
-        self.generation_gc_lease.take();
+        self.runtime.release();
+        crate::provenance::try_apply_automatic_gc(
+            self.runtime.state().root(),
+            &self.session_database,
+        )?;
         Ok(())
     }
 
     /// Drains bounded online-reconcile events for terminal or host presentation.
     pub fn take_online_generation_events(&self) -> Vec<OnlineGenerationEvent> {
         self.reconcile_events.borrow_mut().drain(..).collect()
-    }
-}
-
-fn controller_instance_directory(base: &str, index: usize) -> String {
-    if index == 0 {
-        base.to_owned()
-    } else {
-        format!("{base}-{}", index + 1)
     }
 }
 
@@ -856,41 +832,7 @@ pub(crate) fn live_controller_generation_digests(
 fn existing_controller_states(
     store_root: &Path,
 ) -> Result<Vec<(String, DurableControlState)>, String> {
-    let mut states = Vec::new();
-    let mut controllers = vec![
-        ("headless".to_owned(), CONTROL_DIRECTORY.to_owned()),
-        ("telegram".to_owned(), TELEGRAM_CONTROL_DIRECTORY.to_owned()),
-        ("discord".to_owned(), DISCORD_CONTROL_DIRECTORY.to_owned()),
-        ("web".to_owned(), WEB_CONTROL_DIRECTORY.to_owned()),
-        ("channels".to_owned(), CHANNEL_CONTROL_DIRECTORY.to_owned()),
-    ];
-    controllers.extend((0..MAX_TUI_INSTANCES).map(|index| {
-        (
-            format!("tui instance {}", index + 1),
-            controller_instance_directory(TUI_CONTROL_DIRECTORY, index),
-        )
-    }));
-    for (surface, directory) in controllers {
-        let path = store_root.join(directory);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "failed to inspect `{surface}` Generation Controller: {error}"
-                ));
-            }
-        };
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err(format!(
-                "`{surface}` Generation Controller state is not a regular directory"
-            ));
-        }
-        let store = FileControlStateStore::open(path).map_err(control_error)?;
-        let state = store.load(APP_ID).map_err(control_error)?;
-        states.push((surface, state));
-    }
-    Ok(states)
+    RuntimeState::open_existing(store_root)?.controller_states()
 }
 
 fn resolve_and_record_current_generation(
@@ -1684,64 +1626,7 @@ fn record_generation_spec(
     store_root: &Path,
     spec: &CanonicalDocument<AppGenerationSpec>,
 ) -> Result<(), String> {
-    let digest = spec
-        .digest()
-        .strip_prefix("sha256:")
-        .filter(|digest| digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
-        .ok_or_else(|| "Generation Spec digest is not canonical SHA-256".to_owned())?;
-    let directory = store_root.join(GENERATION_DIRECTORY);
-    fs::create_dir_all(&directory)
-        .map_err(|error| format!("failed to create Generation provenance directory: {error}"))?;
-    let metadata = fs::symlink_metadata(&directory)
-        .map_err(|error| format!("failed to inspect Generation provenance directory: {error}"))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("Generation provenance path is not a regular directory".to_owned());
-    }
-
-    let destination = directory.join(format!("{digest}.json"));
-    match fs::symlink_metadata(&destination) {
-        Ok(metadata) => {
-            if !metadata.is_file() || metadata.file_type().is_symlink() {
-                return Err("Generation provenance record is not a regular file".to_owned());
-            }
-            let existing = fs::read(&destination)
-                .map_err(|error| format!("failed to read Generation provenance: {error}"))?;
-            if existing != spec.bytes() {
-                return Err("Generation provenance record does not match its digest".to_owned());
-            }
-            return Ok(());
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "failed to inspect Generation provenance record: {error}"
-            ));
-        }
-    }
-
-    let temporary = directory.join(format!(".{digest}.{}.tmp", uuid::Uuid::new_v4()));
-    let write_result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| format!("failed to create Generation provenance: {error}"))?;
-        file.write_all(spec.bytes())
-            .map_err(|error| format!("failed to write Generation provenance: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("failed to sync Generation provenance: {error}"))?;
-        fs::rename(&temporary, &destination)
-            .map_err(|error| format!("failed to commit Generation provenance: {error}"))?;
-        OpenOptions::new()
-            .read(true)
-            .open(&directory)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| format!("failed to sync Generation provenance directory: {error}"))
-    })();
-    if write_result.is_err() {
-        let _ = fs::remove_file(temporary);
-    }
-    write_result
+    RuntimeState::open(store_root)?.record_generation(spec)
 }
 
 #[cfg(test)]

@@ -54,3 +54,4 @@
 - [0052 — Coordinate MCP request continuations in the client Plugin](0052-coordinate-mcp-request-continuations.md)
 - [0053 — Compose Session presentation without a generic Turn summary](0053-compose-session-presentation-without-a-generic-turn-summary.md)
 - [0054 — Separate the global Agent Home from the Workspace](0054-separate-global-agent-home-from-workspace.md)
+- [0055 — Store Host runtime state in one private ledger](0055-store-host-runtime-state-in-one-private-ledger.md)
