@@ -3709,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "lenso-cli"
 version = "0.4.8"
-source = "git+https://github.com/LioRael/lenso-cli?rev=5e805c2439bf520c9da3577a77ed40d2ce6e2c2a#5e805c2439bf520c9da3577a77ed40d2ce6e2c2a"
+source = "git+https://github.com/LioRael/lenso-cli?rev=86d54b9d99ba32f486e50e13bc6df6f50f089399#86d54b9d99ba32f486e50e13bc6df6f50f089399"
 dependencies = [
  "anyhow",
  "lenso-app-plan",
