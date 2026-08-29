@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 
 use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
+use lenso_agent_native_support::WorkspaceScope;
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
     authoring::{
@@ -1437,12 +1438,24 @@ impl TurnGeneration {
                 Err(current) => request_id = current,
             }
         }
+        let workspace = env::current_dir()
+            .map_err(|error| format!("failed to resolve the current Workspace: {error}"))?
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "the current Workspace path is not UTF-8".to_owned())?;
+        if workspace.is_empty() || workspace.len() > 4_096 {
+            return Err("the current Workspace path is outside the supported bound".to_owned());
+        }
         let context = InvocationContext::new(request_id, None, cancellation)
             .with_extension(
                 GENERATION_SPEC_DIGEST_EXTENSION,
                 self.generation_spec_digest().as_bytes().to_vec(),
             )
-            .map_err(|error| format!("failed to attach Generation provenance: {error}"))?;
+            .map_err(|error| format!("failed to attach Generation provenance: {error}"))?
+            .with_typed_extension(&WorkspaceScope {
+                absolute_path: workspace,
+            })
+            .map_err(|error| format!("failed to attach Workspace scope: {error}"))?;
         if self.interactive {
             context
                 .with_typed_extension(&InteractiveSurface)

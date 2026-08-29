@@ -1895,7 +1895,7 @@ fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
         serde_json::from_str(listed["metadata_json"].as_str().unwrap()).unwrap();
     assert_eq!(
         listed_metadata["schema"],
-        "lenso.agent.subagent-task-list@1"
+        "lenso.agent.task-supervisor-snapshot@1"
     );
     assert_eq!(listed_metadata["task_count"], 1);
     assert_eq!(listed_content["task_count"], 1);
@@ -1907,6 +1907,19 @@ fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
     assert_eq!(
         listed_content["tasks"][0]["task_id"],
         cancel_metadata["task_id"]
+    );
+    assert!(listed_content["tasks"][0]["owner"]["session_id"].is_string());
+    assert!(listed_content["tasks"][0]["owner"]["turn_id"].is_string());
+    assert!(listed_content["tasks"][0]["owner"]["tool_call_id"].is_string());
+    assert!(listed_content["tasks"][0]["generation_spec_digest"].is_string());
+    assert_eq!(
+        listed_content["tasks"][0]["workspace"],
+        temporary
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
     );
     let waited = tool_results
         .iter()

@@ -9,13 +9,18 @@ use std::{
 
 use futures::future::{Either, ready, select};
 use lenso::prelude::*;
+use lenso_agent_native_support::{TOOL_TASK_OWNER_EXTENSION, ToolTaskOwner, WorkspaceScope};
 use lenso_capability_agent::{
     self as agent_contract, AgentInvocationError, RunTurnError, RunTurnRequest, RunTurnResponseKind,
+};
+use lenso_capability_agent_task_supervisor::{
+    self as task_supervisor_contract, SnapshotRequest as SupervisorSnapshotRequest,
+    SnapshotResponse as SupervisorSnapshotResponse, TaskOwner, TaskSnapshot, TaskStatus,
+    TerminalResult,
 };
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
-    ToolProviderProvider,
 };
 use lenso_capability_agent_turn_input::{
     self as turn_input_contract, SubmitError, SubmitRequest, TurnInputInvocationError,
@@ -38,7 +43,9 @@ pub const SEND_SUBAGENT_TOOL: &str = "send_subagent";
 pub const LIST_SUBAGENTS_TOOL: &str = "list_subagents";
 const RESULT_METADATA_SCHEMA: &str = "lenso.agent.subagent-result@1";
 const TASK_METADATA_SCHEMA: &str = "lenso.agent.subagent-task@1";
-const TASK_LIST_METADATA_SCHEMA: &str = "lenso.agent.subagent-task-list@1";
+const TASK_LIST_METADATA_SCHEMA: &str = "lenso.agent.task-supervisor-snapshot@1";
+const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
+const MAX_SUPERVISOR_RESULT_BYTES: usize = 16_384;
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,8 +112,11 @@ struct SubagentToolsPlugin {
     managed_tasks: ManagedTasks,
 }
 
-#[lenso::provides(tool_provider_contract::ToolProvider)]
-impl ToolProviderProvider for SubagentToolsPlugin {
+#[lenso::provides(
+    tool_provider_contract::ToolProvider,
+    task_supervisor_contract::TaskSupervisor
+)]
+impl SubagentToolsPlugin {
     fn catalog(
         &self,
         _context: InvocationContext,
@@ -160,6 +170,10 @@ impl ToolProviderProvider for SubagentToolsPlugin {
         }))))
     }
 
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "the generated Capability Provider lowering owns request values"
+    )]
     fn execute(
         &self,
         context: InvocationContext,
@@ -174,6 +188,14 @@ impl ToolProviderProvider for SubagentToolsPlugin {
             LIST_SUBAGENTS_TOOL => self.execute_list(&request),
             _ => Box::pin(ready(Ok(Err(ExecuteError::NotFound)))),
         }
+    }
+
+    fn snapshot(
+        &self,
+        _context: InvocationContext,
+        _request: SupervisorSnapshotRequest,
+    ) -> lenso_kernel::NativeRequestFuture<task_supervisor_contract::TaskSupervisor> {
+        Box::pin(ready(Ok(Ok(self.supervisor_snapshot()))))
     }
 }
 
@@ -304,6 +326,10 @@ impl SubagentToolsPlugin {
         let Ok(arguments) = self.parse_task(request) else {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         };
+        let provenance = match TaskProvenance::from_context(context) {
+            Ok(provenance) => provenance,
+            Err(error) => return Box::pin(ready(Err(error))),
+        };
         let mut registry = self.registry.borrow_mut();
         if registry.tasks.len() >= self.config.max_tasks {
             return Box::pin(ready(Ok(Err(execution_failed(
@@ -313,7 +339,10 @@ impl SubagentToolsPlugin {
             )))));
         }
         let task_id = format!("subagent-{}", uuid::Uuid::new_v4());
-        let task = Rc::new(RefCell::new(SubagentTask::new(arguments.agent.clone())));
+        let task = Rc::new(RefCell::new(SubagentTask::new(
+            arguments.agent.clone(),
+            provenance,
+        )));
         registry.tasks.insert(task_id.clone(), task.clone());
         drop(registry);
 
@@ -520,23 +549,18 @@ impl SubagentToolsPlugin {
         if !arguments.is_empty() {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         }
-        let tasks = self
-            .registry
-            .borrow()
-            .tasks
-            .iter()
-            .map(|(task_id, task)| task.borrow().snapshot(task_id))
-            .collect::<Vec<_>>();
+        let snapshot = self.supervisor_snapshot();
+        let task_count = snapshot.tasks.len();
         Box::pin(ready(Ok(Ok(ExecuteResponse {
             content: serde_json::json!({
-                "task_count": tasks.len(),
-                "tasks": tasks,
+                "task_count": task_count,
+                "tasks": snapshot.tasks,
             })
             .to_string(),
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
                 "schema": TASK_LIST_METADATA_SCHEMA,
-                "task_count": tasks.len(),
+                "task_count": task_count,
             })
             .to_string()
             .try_into()
@@ -554,6 +578,18 @@ impl SubagentToolsPlugin {
             return Err(());
         }
         Ok(arguments)
+    }
+
+    fn supervisor_snapshot(&self) -> SupervisorSnapshotResponse {
+        SupervisorSnapshotResponse {
+            tasks: self
+                .registry
+                .borrow()
+                .tasks
+                .iter()
+                .map(|(task_id, task)| task.borrow().snapshot(task_id))
+                .collect(),
+        }
     }
 }
 
@@ -587,12 +623,20 @@ struct SubagentTaskRegistry {
 #[derive(Debug)]
 struct SubagentTask {
     agent: String,
+    provenance: TaskProvenance,
     child_session_id: Option<String>,
     cancel_requested: bool,
     cancellation: Option<CancellationToken>,
     stream: Option<Rc<NativeStream<agent_contract::Agent>>>,
     terminal: Option<SubagentTaskTerminal>,
     waiters: Vec<Waker>,
+}
+
+#[derive(Clone, Debug)]
+struct TaskProvenance {
+    owner: TaskOwner,
+    generation_spec_digest: String,
+    workspace: String,
 }
 
 #[derive(Clone, Debug)]
@@ -603,10 +647,60 @@ enum SubagentTaskTerminal {
     Runtime(RuntimeFailure),
 }
 
+impl TaskProvenance {
+    fn from_context(context: &InvocationContext) -> Result<Self, RuntimeFailure> {
+        let owner = context
+            .typed_extension::<ToolTaskOwner>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("subagent task owner is invalid: {error}"),
+            })?
+            .ok_or_else(|| RuntimeFailure::PluginFailure {
+                detail: "subagent task is missing its parent Tool owner".to_owned(),
+            })?;
+        let workspace = context
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("subagent Workspace scope is invalid: {error}"),
+            })?
+            .ok_or_else(|| RuntimeFailure::PluginFailure {
+                detail: "subagent task is missing its Workspace scope".to_owned(),
+            })?;
+        let generation_spec_digest = context
+            .extension(GENERATION_SPEC_DIGEST_EXTENSION)
+            .and_then(|value| std::str::from_utf8(value).ok())
+            .filter(|value| canonical_generation_digest(value))
+            .ok_or_else(|| RuntimeFailure::PluginFailure {
+                detail: "subagent task is missing canonical Generation provenance".to_owned(),
+            })?
+            .to_owned();
+        if !valid_owner_part(&owner.session_id)
+            || !valid_owner_part(&owner.turn_id)
+            || !valid_owner_part(&owner.tool_call_id)
+            || workspace.absolute_path.is_empty()
+            || workspace.absolute_path.len() > 4_096
+            || !std::path::Path::new(&workspace.absolute_path).is_absolute()
+        {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "subagent task ownership or Workspace provenance is invalid".to_owned(),
+            });
+        }
+        Ok(Self {
+            owner: TaskOwner {
+                session_id: owner.session_id,
+                turn_id: owner.turn_id,
+                tool_call_id: owner.tool_call_id,
+            },
+            generation_spec_digest,
+            workspace: workspace.absolute_path,
+        })
+    }
+}
+
 impl SubagentTask {
-    fn new(agent: String) -> Self {
+    fn new(agent: String, provenance: TaskProvenance) -> Self {
         Self {
             agent,
+            provenance,
             child_session_id: None,
             cancel_requested: false,
             cancellation: None,
@@ -671,21 +765,78 @@ impl SubagentTask {
         "cancellation_requested"
     }
 
-    fn snapshot(&self, task_id: &str) -> serde_json::Value {
+    fn snapshot(&self, task_id: &str) -> TaskSnapshot {
         let status = match self.terminal {
-            Some(SubagentTaskTerminal::Completed(_)) => "completed",
-            Some(SubagentTaskTerminal::Domain(_) | SubagentTaskTerminal::Runtime(_)) => "failed",
-            Some(SubagentTaskTerminal::Cancelled) => "cancelled",
-            None if self.cancel_requested => "cancellation_requested",
-            None => "running",
+            Some(SubagentTaskTerminal::Completed(_)) => TaskStatus::Completed,
+            Some(SubagentTaskTerminal::Domain(_) | SubagentTaskTerminal::Runtime(_)) => {
+                TaskStatus::Failed
+            }
+            Some(SubagentTaskTerminal::Cancelled) => TaskStatus::Cancelled,
+            None if self.cancel_requested => TaskStatus::CancellationRequested,
+            None => TaskStatus::Running,
         };
-        serde_json::json!({
-            "task_id": task_id,
-            "agent": self.agent,
-            "status": status,
-            "child_session_id": self.child_session_id,
+        TaskSnapshot {
+            task_id: task_id.to_owned(),
+            owner: self.provenance.owner.clone(),
+            agent: self.agent.clone(),
+            status,
+            child_session_id: Some(self.child_session_id.clone()),
+            generation_spec_digest: self.provenance.generation_spec_digest.clone(),
+            workspace: self.provenance.workspace.clone(),
+            terminal_result: Some(self.terminal_result(task_id)),
+        }
+    }
+
+    fn terminal_result(&self, task_id: &str) -> Option<TerminalResult> {
+        let (content, reason_code) = match self.terminal.as_ref()? {
+            SubagentTaskTerminal::Completed(response) => (response.content.clone(), None),
+            SubagentTaskTerminal::Domain(error) => {
+                let response = task_domain_error_response(task_id, &self.agent, error.clone());
+                let reason = serde_json::from_str::<serde_json::Value>(&response.content)
+                    .ok()
+                    .and_then(|value| value["reason_code"].as_str().map(ToOwned::to_owned));
+                (response.content, reason)
+            }
+            SubagentTaskTerminal::Cancelled => (
+                "The child-Agent task was cancelled".to_owned(),
+                Some("subagent_cancelled".to_owned()),
+            ),
+            SubagentTaskTerminal::Runtime(error) => (
+                "The child-Agent task ended with a Runtime Failure".to_owned(),
+                Some(runtime_failure_code(error).to_owned()),
+            ),
+        };
+        let (content, content_truncated) = bounded_supervisor_result(&content);
+        Some(TerminalResult {
+            content,
+            content_truncated,
+            reason_code: Some(reason_code),
         })
     }
+}
+
+fn canonical_generation_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(|hash| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+fn valid_owner_part(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 128
+}
+
+fn bounded_supervisor_result(value: &str) -> (String, bool) {
+    if value.len() <= MAX_SUPERVISOR_RESULT_BYTES {
+        return (value.to_owned(), false);
+    }
+    let mut boundary = MAX_SUPERVISOR_RESULT_BYTES;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    (value[..boundary].to_owned(), true)
 }
 
 async fn wait_for_task(task: Rc<RefCell<SubagentTask>>) -> SubagentTaskTerminal {
@@ -734,6 +885,9 @@ fn detached_child_context(parent: &InvocationContext) -> Result<InvocationContex
         CancellationToken::new(),
     );
     for extension in parent.extensions() {
+        if extension.key() == TOOL_TASK_OWNER_EXTENSION {
+            continue;
+        }
         child = child
             .with_extension(extension.key(), extension.value().to_vec())
             .map_err(|error| RuntimeFailure::Internal {
@@ -1298,20 +1452,62 @@ mod tests {
 
     #[test]
     fn task_snapshot_is_non_destructive_and_tracks_lifecycle() {
-        let mut task = SubagentTask::new("lenso.agent.loop/researcher".to_owned());
-        assert_eq!(task.snapshot("task-1")["status"], "running");
+        let mut task =
+            SubagentTask::new("lenso.agent.loop/researcher".to_owned(), test_provenance());
+        let running = task.snapshot("task-1");
+        assert_eq!(running.status, TaskStatus::Running);
+        assert_eq!(running.owner.session_id, "parent-session");
+        assert_eq!(running.generation_spec_digest, test_generation_digest());
+        assert_eq!(running.workspace, "/workspace");
+        assert_eq!(running.terminal_result, Some(None));
 
         task.observe_session("session-1");
-        assert_eq!(task.snapshot("task-1")["child_session_id"], "session-1");
+        assert_eq!(
+            task.snapshot("task-1")
+                .child_session_id
+                .as_ref()
+                .and_then(Option::as_deref),
+            Some("session-1")
+        );
         assert_eq!(task.request_cancel(), "cancellation_requested");
-        assert_eq!(task.snapshot("task-1")["status"], "cancellation_requested");
+        assert_eq!(
+            task.snapshot("task-1").status,
+            TaskStatus::CancellationRequested
+        );
 
         task.terminal = Some(SubagentTaskTerminal::Cancelled);
-        assert_eq!(task.snapshot("task-1")["status"], "cancelled");
+        let cancelled = task.snapshot("task-1");
+        assert_eq!(cancelled.status, TaskStatus::Cancelled);
+        assert_eq!(
+            cancelled
+                .terminal_result
+                .unwrap()
+                .unwrap()
+                .reason_code
+                .as_ref()
+                .and_then(Option::as_deref),
+            Some("subagent_cancelled")
+        );
         assert!(matches!(
             task.terminal,
             Some(SubagentTaskTerminal::Cancelled)
         ));
+    }
+
+    #[test]
+    fn terminal_supervisor_result_is_utf8_safe_and_bounded() {
+        let mut task =
+            SubagentTask::new("lenso.agent.loop/researcher".to_owned(), test_provenance());
+        task.terminal = Some(SubagentTaskTerminal::Completed(ExecuteResponse {
+            content: "界".repeat(MAX_SUPERVISOR_RESULT_BYTES),
+            content_type: ContentType::Text,
+            metadata_json: "{}".try_into().unwrap(),
+        }));
+
+        let terminal = task.snapshot("task-1").terminal_result.unwrap().unwrap();
+        assert!(terminal.content_truncated);
+        assert!(terminal.content.len() <= MAX_SUPERVISOR_RESULT_BYTES);
+        assert!(std::str::from_utf8(terminal.content.as_bytes()).is_ok());
     }
 
     #[test]
@@ -1322,6 +1518,12 @@ mod tests {
                 "lenso.app.generation-spec-digest@1",
                 b"sha256:test".to_vec(),
             )
+            .unwrap()
+            .with_typed_extension(&ToolTaskOwner {
+                session_id: "parent-session".to_owned(),
+                turn_id: "parent-turn".to_owned(),
+                tool_call_id: "parent-call".to_owned(),
+            })
             .unwrap();
 
         let child = detached_child_context(&parent).unwrap();
@@ -1333,12 +1535,14 @@ mod tests {
             child.extension("lenso.app.generation-spec-digest@1"),
             Some(b"sha256:test".as_slice())
         );
+        assert!(child.typed_extension::<ToolTaskOwner>().unwrap().is_none());
     }
 
     #[test]
     fn cancellation_before_child_stream_open_is_terminal_and_waitable() {
         let task = Rc::new(RefCell::new(SubagentTask::new(
             "lenso.agent.loop/reviewer".to_owned(),
+            test_provenance(),
         )));
         let child_cancellation = CancellationToken::new();
         task.borrow_mut()
@@ -1350,5 +1554,21 @@ mod tests {
 
         let terminal = futures::executor::block_on(wait_for_task(task));
         assert!(matches!(terminal, SubagentTaskTerminal::Cancelled));
+    }
+
+    fn test_generation_digest() -> String {
+        format!("sha256:{}", "a".repeat(64))
+    }
+
+    fn test_provenance() -> TaskProvenance {
+        TaskProvenance {
+            owner: TaskOwner {
+                session_id: "parent-session".to_owned(),
+                turn_id: "parent-turn".to_owned(),
+                tool_call_id: "parent-tool-call".to_owned(),
+            },
+            generation_spec_digest: test_generation_digest(),
+            workspace: "/workspace".to_owned(),
+        }
     }
 }
