@@ -983,6 +983,7 @@ fn initial_control_state(app_id: &str) -> DurableControlState {
 
 fn surface_policy(surface: AgentSurfaceKind) -> (&'static str, usize) {
     match surface {
+        AgentSurfaceKind::Acp => ("acp", 1),
         AgentSurfaceKind::Headless => ("headless", 1),
         AgentSurfaceKind::Tui => ("tui", 32),
         AgentSurfaceKind::Channels => ("channels", 1),

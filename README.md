@@ -59,6 +59,18 @@ cargo run -p lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
+Expose the same selected Profile to an ACP-compatible editor over stdio:
+
+```sh
+cargo run -p lenso-agent-acp -- --profile code
+```
+
+The ACP process implements stable protocol v1. The editor's session `cwd` must
+match the process Workspace. Text and resource links, streaming Agent and Tool
+updates, cancellation, and one-shot permission requests are supported; the
+entrypoint does not advertise client-provided MCP servers, additional roots,
+session loading, or rich media yet.
+
 Use `--session <id>` to resume a Session, `--no-tools` to remove Tool access
 for one Turn, or repeat `--allow-tool <name>` to narrow the selected Tools.
 
@@ -661,9 +673,9 @@ transport. The shared Host runs one Agent Turn at a time and bounds pending
 work across channels.
 
 The distributions are independent. Installing `lenso-agent-cli` does not
-compile or install Ratatui, Telegram, or Discord support; install
-`lenso-agent-tui` or `lenso-agent-channel` only when those surfaces are
-needed. Each executable links only its own surface Plugin Catalog.
+compile or install Ratatui, ACP, Telegram, or Discord support; install
+`lenso-agent-tui`, `lenso-agent-acp`, or `lenso-agent-channel` only when those
+surfaces are needed. Each executable links only its own surface Plugin Catalog.
 
 ## Documentation
 

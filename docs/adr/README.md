@@ -66,3 +66,4 @@
 - [0064 — Compose bounded background process handles](0064-compose-background-process-handles.md)
 - [0065 — Render task supervision through read-only surfaces](0065-render-task-supervision-through-read-only-surfaces.md)
 - [0066 — Accept parallel coding supervision end to end](0066-accept-parallel-coding-supervision-end-to-end.md)
+- [0067 — Enter the Host through ACP](0067-enter-the-host-through-acp.md)
