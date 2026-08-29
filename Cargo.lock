@@ -2464,6 +2464,7 @@ dependencies = [
  "lenso-capability-agent-tools",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
+ "lenso-capability-agent-turn-input",
  "lenso-capability-agent-user-interaction",
  "lenso-capability-agent-workspace-read",
  "lenso-kernel",
@@ -2537,6 +2538,7 @@ dependencies = [
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-presentation",
  "lenso-capability-agent-tools",
+ "lenso-capability-agent-turn-input",
  "lenso-kernel",
  "serde",
  "serde_json",
@@ -2596,7 +2598,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-model-fixture-plugin"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "futures",
  "lenso",
@@ -2807,12 +2809,13 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-subagent-tools-plugin"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "futures",
  "lenso",
  "lenso-capability-agent",
  "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-turn-input",
  "lenso-kernel",
  "serde",
  "serde_json",
@@ -3374,6 +3377,25 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-turn-input"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

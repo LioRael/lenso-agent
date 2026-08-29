@@ -41,10 +41,20 @@ The Harness admits subagent delegation as an optional Tool Provider Plugin.
   Invocation Context while still observing parent cancellation and deadline.
   The child Session remains the durable record; task handles are not presented
   as surviving Host suspension or an App Generation switch.
-- Running-input steering is not projected. `lenso.agent@3` accepts one opening
-  input and then closes the caller-to-provider direction, so a truthful
-  `send_subagent` requires a later Agent Capability revision rather than private
-  side-channel glue in this Plugin.
+- Plugin release `0.4.0` also projects `send_subagent`. It requires the
+  separately bound `lenso.agent.turn-input@1` Capability from the same child
+  Agent Loop Instance; the Host privately binds both requirements to
+  `subagent-agent`, so steering cannot target the root Agent or discover another
+  Session. The request identifies the child Session and waits until the Agent
+  Loop has included the input in a durable `model_requested` Session fact for
+  the next model boundary. Acceptance returns that exact Session revision.
+- Running input does not mutate an in-flight Model request. On arrival, the
+  Agent Loop ends that Model stream, records `interrupted_by_input`, and starts
+  the next model step only after the additional input is included in a durable
+  `model_requested` fact. The queue is bounded and rejects input once the Turn
+  closes it. `lenso.agent@3` remains one opening input plus an output stream;
+  the request Capability avoids a private side channel and preserves existing
+  Agent consumers and providers.
 - Task and output bytes, child Agent steps, Tool calls, history, output tokens,
   binding admission, and root Tool-call admission remain independently bounded.
 - The first profile is `exclusive` and binds one child Agent. Pooling several
@@ -58,7 +68,9 @@ Capabilities to the child. Model replacement redirects the base child Model
 binding and updates both Agent Loop configurations atomically, so root and
 child remain compatible across App Generations. The native provider is trusted
 code, not a sandbox; independently authored untrusted subagent providers still
-require a reviewed isolated Adapter profile.
+require a reviewed isolated Adapter profile. A replacement child Agent must
+provide both `lenso.agent@3` and `lenso.agent.turn-input@1` for the `0.4.0`
+subagent Tool contract.
 
 ## Rejected alternatives
 

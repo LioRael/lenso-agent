@@ -27,6 +27,7 @@ members = [
     "crates/lenso-capability-agent-tool-progress",
     "crates/lenso-capability-agent-user-interaction",
     "crates/lenso-capability-agent-session",
+    "crates/lenso-capability-agent-turn-input",
     "crates/lenso-capability-agent-tui-contribution",
     "crates/lenso-capability-agent-tui-suggestion",
     "crates/lenso-agent-loop-plugin",

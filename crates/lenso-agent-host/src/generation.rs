@@ -58,6 +58,7 @@ use lenso_capability_agent_tui_suggestion::{
     SnapshotRequest as SuggestionSnapshotRequest, Suggestion, TuiSuggestion,
     validate_snapshot_suggestions,
 };
+use lenso_capability_agent_turn_input::TurnInputJsonCodec;
 use lenso_capability_agent_user_interaction::{
     ANSWER_OPERATION, AnswerRequest, CAPABILITY_ID as USER_INTERACTION_CAPABILITY_ID,
     InteractionAnswer, InteractiveSurface, PENDING_OPERATION, PendingInteraction, PendingRequest,
@@ -2414,9 +2415,15 @@ fn host_catalog_bindings(
         ));
     }
     if available.contains("lenso.agent.subagent-tools") {
+        let subagent_tools = PluginInstanceId::new("lenso.agent.subagent-tools", "default");
         bindings.push(HostBinding::to_instance(
-            PluginInstanceId::new("lenso.agent.subagent-tools", "default"),
+            subagent_tools.clone(),
             "lenso.agent@3",
+            child_agent.clone(),
+        ));
+        bindings.push(HostBinding::to_instance(
+            subagent_tools,
+            "lenso.agent.turn-input@1",
             child_agent,
         ));
     }
@@ -2481,6 +2488,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(SessionPresentationJsonCodec)
         .with_wasm_codec(ToolHookJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
+        .with_wasm_codec(TurnInputJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
         .with_wasm_codec(UserInteractionJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
@@ -2493,6 +2501,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
         .with_quickjs_codec(ToolHookJsonCodec)
+        .with_quickjs_codec(TurnInputJsonCodec)
         .with_quickjs_codec(ToolsJsonCodec)
         .with_quickjs_codec(UserInteractionJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
@@ -2507,6 +2516,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_process_codec(SessionJsonCodec)
         .with_process_codec(ToolHookJsonCodec)
         .with_process_codec(ToolProviderJsonCodec)
+        .with_process_codec(TurnInputJsonCodec)
         .with_process_codec(ToolsJsonCodec)
         .with_process_codec(UserInteractionJsonCodec)
         .with_process_codec(WorkspaceReadJsonCodec)
@@ -2973,6 +2983,17 @@ mod tests {
                     binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
                         && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
                         && binding["capability_id"] == "lenso.agent@3"
+                })
+        );
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
+                        && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
+                        && binding["capability_id"] == "lenso.agent.turn-input@1"
                 })
         );
     }

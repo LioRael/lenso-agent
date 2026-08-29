@@ -17,6 +17,9 @@ use lenso_capability_agent_tool_provider::{
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
     ToolProviderProvider,
 };
+use lenso_capability_agent_turn_input::{
+    self as turn_input_contract, SubmitError, SubmitRequest, TurnInputInvocationError,
+};
 use lenso_kernel::{
     CancellationToken, InvocationContext, NativeStream, RuntimeFailure, StreamEvent,
 };
@@ -29,6 +32,8 @@ pub const SPAWN_SUBAGENT_TOOL: &str = "spawn_subagent";
 pub const WAIT_SUBAGENT_TOOL: &str = "wait_subagent";
 /// Stable model-visible Tool name for cancelling one generation-owned child task.
 pub const CANCEL_SUBAGENT_TOOL: &str = "cancel_subagent";
+/// Stable model-visible Tool name for adding input at the child Agent's next model boundary.
+pub const SEND_SUBAGENT_TOOL: &str = "send_subagent";
 const RESULT_METADATA_SCHEMA: &str = "lenso.agent.subagent-result@1";
 const TASK_METADATA_SCHEMA: &str = "lenso.agent.subagent-task@1";
 
@@ -51,6 +56,13 @@ struct DelegateArguments {
 #[serde(deny_unknown_fields)]
 struct TaskIdArguments {
     task_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SendArguments {
+    task_id: String,
+    input: String,
 }
 
 fn validate_config(config: &SubagentToolsConfig) -> Result<(), RuntimeFailure> {
@@ -77,6 +89,7 @@ struct SubagentToolsPlugin {
     #[config]
     config: SubagentToolsConfig,
     agent: Port<agent_contract::AgentClient>,
+    turn_input: Port<turn_input_contract::TurnInputClient>,
     registry: Rc<RefCell<SubagentTaskRegistry>>,
     #[tasks]
     managed_tasks: ManagedTasks,
@@ -117,6 +130,12 @@ impl ToolProviderProvider for SubagentToolsPlugin {
                     input_schema_json: task_id_schema,
                     execution: ToolExecutionClass::Exclusive,
                 },
+                ToolDefinition {
+                    name: SEND_SUBAGENT_TOOL.to_owned(),
+                    description: "Submit additional input to a running child-Agent task. Acceptance waits until the input is durably recorded for the child's next model request.".to_owned(),
+                    input_schema_json: send_input_schema(self.config.max_task_bytes),
+                    execution: ToolExecutionClass::Exclusive,
+                },
             ],
         }))))
     }
@@ -131,6 +150,7 @@ impl ToolProviderProvider for SubagentToolsPlugin {
             SPAWN_SUBAGENT_TOOL => self.execute_spawn(&context, &request),
             WAIT_SUBAGENT_TOOL => self.execute_wait(&request),
             CANCEL_SUBAGENT_TOOL => self.execute_cancel(&request),
+            SEND_SUBAGENT_TOOL => self.execute_send(context, &request),
             _ => Box::pin(ready(Ok(Err(ExecuteError::NotFound)))),
         }
     }
@@ -166,6 +186,25 @@ fn task_id_input_schema() -> tool_provider_contract::RawJson {
     .to_string()
     .try_into()
     .expect("subagent task ID schema must be valid JSON")
+}
+
+fn send_input_schema(max_input_bytes: usize) -> tool_provider_contract::RawJson {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "task_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "input": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": max_input_bytes
+            }
+        },
+        "required": ["task_id", "input"]
+    })
+    .to_string()
+    .try_into()
+    .expect("subagent send schema must be valid JSON")
 }
 
 impl SubagentToolsPlugin {
@@ -206,7 +245,7 @@ impl SubagentToolsPlugin {
             )))));
         }
         let task_id = format!("subagent-{}", uuid::Uuid::new_v4());
-        let task = Rc::new(RefCell::new(SubagentTask::default()));
+        let task = Rc::new(RefCell::new(SubagentTask::new()));
         registry.tasks.insert(task_id.clone(), task.clone());
         drop(registry);
 
@@ -321,6 +360,61 @@ impl SubagentToolsPlugin {
         }))))
     }
 
+    fn execute_send(
+        &self,
+        context: InvocationContext,
+        request: &ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        let Ok(arguments) = parse_send(request, self.config.max_task_bytes) else {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        };
+        let Some(task) = self
+            .registry
+            .borrow()
+            .tasks
+            .get(&arguments.task_id)
+            .cloned()
+        else {
+            return Box::pin(ready(Ok(Err(task_not_found(&arguments.task_id)))));
+        };
+        let turn_input = self.turn_input.clone();
+        Box::pin(async move {
+            let Some(child_session_id) = wait_for_child_session(task).await else {
+                return Ok(Err(execution_failed(
+                    "subagent_task_not_running",
+                    "The subagent task ended before it accepted additional input",
+                    &task_metadata(Some(&arguments.task_id), "already_terminal"),
+                )));
+            };
+            match turn_input
+                .submit_with_context(
+                    context,
+                    SubmitRequest {
+                        session_id: child_session_id.clone(),
+                        input: arguments.input,
+                    },
+                )
+                .await
+            {
+                Ok(response) => Ok(Ok(ExecuteResponse {
+                    content: serde_json::json!({
+                        "task_id": arguments.task_id,
+                        "status": "input_accepted",
+                        "child_session_id": response.session_id,
+                        "accepted_revision": response.accepted_revision,
+                    })
+                    .to_string(),
+                    content_type: ContentType::Text,
+                    metadata_json: task_metadata(Some(&arguments.task_id), "input_accepted")
+                        .to_string()
+                        .try_into()
+                        .expect("subagent task metadata must be valid JSON"),
+                })),
+                Err(error) => Ok(Err(map_turn_input_error(&error, &arguments.task_id))),
+            }
+        })
+    }
+
     fn parse_task(&self, request: &ExecuteRequest) -> Result<DelegateArguments, ()> {
         let arguments = serde_json::from_str::<DelegateArguments>(request.arguments_json.as_str())
             .map_err(|_| ())?;
@@ -340,13 +434,27 @@ fn parse_task_id(request: &ExecuteRequest) -> Result<TaskIdArguments, ()> {
     Ok(arguments)
 }
 
+fn parse_send(request: &ExecuteRequest, max_input_bytes: usize) -> Result<SendArguments, ()> {
+    let arguments =
+        serde_json::from_str::<SendArguments>(request.arguments_json.as_str()).map_err(|_| ())?;
+    if arguments.task_id.trim().is_empty()
+        || arguments.task_id.len() > 64
+        || arguments.input.trim().is_empty()
+        || arguments.input.len() > max_input_bytes
+    {
+        return Err(());
+    }
+    Ok(arguments)
+}
+
 #[derive(Default, Debug)]
 struct SubagentTaskRegistry {
     tasks: BTreeMap<String, Rc<RefCell<SubagentTask>>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SubagentTask {
+    child_session_id: Option<String>,
     cancel_requested: bool,
     cancellation: Option<CancellationToken>,
     stream: Option<Rc<NativeStream<agent_contract::Agent>>>,
@@ -363,6 +471,17 @@ enum SubagentTaskTerminal {
 }
 
 impl SubagentTask {
+    fn new() -> Self {
+        Self {
+            child_session_id: None,
+            cancel_requested: false,
+            cancellation: None,
+            stream: None,
+            terminal: None,
+            waiters: Vec::new(),
+        }
+    }
+
     fn attach_cancellation(&mut self, cancellation: CancellationToken) {
         if self.cancel_requested {
             cancellation.cancel();
@@ -375,6 +494,15 @@ impl SubagentTask {
             stream.cancel();
         }
         self.stream = Some(stream);
+    }
+
+    fn observe_session(&mut self, session_id: &str) {
+        if self.child_session_id.is_none() {
+            self.child_session_id = Some(session_id.to_owned());
+            for waiter in self.waiters.drain(..) {
+                waiter.wake();
+            }
+        }
     }
 
     fn complete(&mut self, outcome: Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>) {
@@ -415,6 +543,27 @@ async fn wait_for_task(task: Rc<RefCell<SubagentTask>>) -> SubagentTaskTerminal 
         let mut task = task.borrow_mut();
         if let Some(terminal) = task.terminal.clone() {
             return Poll::Ready(terminal);
+        }
+        if !task
+            .waiters
+            .iter()
+            .any(|waiter| waiter.will_wake(context.waker()))
+        {
+            task.waiters.push(context.waker().clone());
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+async fn wait_for_child_session(task: Rc<RefCell<SubagentTask>>) -> Option<String> {
+    std::future::poll_fn(move |context| {
+        let mut task = task.borrow_mut();
+        if let Some(session_id) = &task.child_session_id {
+            return Poll::Ready(Some(session_id.clone()));
+        }
+        if task.terminal.is_some() {
+            return Poll::Ready(None);
         }
         if !task
             .waiters
@@ -627,6 +776,11 @@ async fn execute_delegation(
                 {
                     return Ok(Err(error));
                 }
+                if let Some((background_task, _)) = &background
+                    && let Some(session_id) = progress.child_session_id.as_deref()
+                {
+                    background_task.borrow_mut().observe_session(session_id);
+                }
             }
             StreamEvent::PeerHalfClosed => {}
             StreamEvent::Terminal(Ok(())) => break,
@@ -714,6 +868,34 @@ async fn receive_child_event(
             })
         }
     }
+}
+
+fn map_turn_input_error(error: &TurnInputInvocationError, task_id: &str) -> ExecuteError {
+    let (reason_code, message) = match error {
+        TurnInputInvocationError::Domain(SubmitError::InvalidInput) => (
+            "subagent_input_invalid",
+            "The additional child-Agent input is invalid",
+        ),
+        TurnInputInvocationError::Domain(SubmitError::TurnNotActive | SubmitError::InputClosed) => {
+            (
+                "subagent_task_not_running",
+                "The child-Agent task no longer accepts input",
+            )
+        }
+        TurnInputInvocationError::Domain(SubmitError::Unknown(_)) => (
+            "subagent_input_rejected",
+            "The child-Agent input provider rejected the input",
+        ),
+        TurnInputInvocationError::Runtime(_) => (
+            "subagent_input_runtime_failure",
+            "The child-Agent input provider failed before durable acceptance",
+        ),
+    };
+    execution_failed(
+        reason_code,
+        message,
+        &task_metadata(Some(task_id), "input_rejected"),
+    )
 }
 
 #[derive(Default)]
@@ -939,7 +1121,7 @@ mod tests {
 
     #[test]
     fn cancellation_before_child_stream_open_is_terminal_and_waitable() {
-        let task = Rc::new(RefCell::new(SubagentTask::default()));
+        let task = Rc::new(RefCell::new(SubagentTask::new()));
         let child_cancellation = CancellationToken::new();
         task.borrow_mut()
             .attach_cancellation(child_cancellation.clone());

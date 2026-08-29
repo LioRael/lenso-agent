@@ -1,15 +1,22 @@
 //! Agent Loop Plugin.
 
 use std::{
-    cell::Cell,
-    collections::{BTreeMap, BTreeSet},
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fmt::Write as _,
     future::Future,
     rc::Rc,
+    task::{Poll, Waker},
     time::Instant,
 };
 
-use futures::{StreamExt, lock::Mutex, stream};
+use futures::{
+    StreamExt,
+    channel::oneshot,
+    future::{Either, select},
+    lock::Mutex,
+    stream,
+};
 use lenso::prelude::*;
 use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
@@ -46,6 +53,9 @@ use lenso_capability_agent_session_presentation::{
 use lenso_capability_agent_tools::{
     self as tools_capability, CatalogRequest, ExecuteResponse, ExecuteResponseContentType,
     ExecuteStreamRequest, ExecuteStreamResponseKind, ToolsExecuteStreamInvocationError,
+};
+use lenso_capability_agent_turn_input::{
+    self as turn_input_capability, SubmitError, SubmitRequest, SubmitResponse,
 };
 use lenso_kernel::{InvocationContext, StreamEvent};
 use sha2::{Digest, Sha256};
@@ -94,6 +104,8 @@ type TurnFailure = PluginError<RunTurnError>;
 const RECOVERY_EVENT_LIMIT: u64 = 512;
 const SESSION_SCAN_PAGE_LIMIT: i64 = 1000;
 const COMPACTION_MESSAGE_LIMIT: usize = 256;
+const MAX_PENDING_TURN_INPUTS: usize = 8;
+const ADDITIONAL_INPUT_SEPARATOR: &str = "\n\n[Additional instruction]\n";
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -184,7 +196,7 @@ struct AgentLoop {
     lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
     #[tasks]
     tasks: ManagedTasks,
-    active: Rc<Cell<bool>>,
+    active: Rc<RefCell<Option<ActiveTurnState>>>,
 }
 
 fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
@@ -204,7 +216,7 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
     Ok(())
 }
 
-#[lenso::provides(agent_capability::Agent)]
+#[lenso::provides(agent_capability::Agent, turn_input_capability::TurnInput)]
 impl AgentLoop {
     async fn run_turn(
         &self,
@@ -214,35 +226,176 @@ impl AgentLoop {
         if request.input.trim().is_empty() {
             return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
         }
-        if self.active.replace(true) {
+        let active_id = uuid::Uuid::new_v4();
+        let mut active = self.active.borrow_mut();
+        if active.is_some() {
             return Err(PluginError::domain(RunTurnError::ConcurrentTurn));
         }
+        *active = Some(ActiveTurnState {
+            id: active_id,
+            accepting: true,
+            pending: VecDeque::new(),
+            session_id: request.session_id.clone(),
+            waiters: Vec::new(),
+        });
+        drop(active);
         let active = self.active.clone();
         let (stream, channel) = ProviderStream::channel(&context, 1);
         let plugin = self.clone();
         let task = self.tasks.spawn_local(async move {
-            let _turn = ActiveTurn(active);
+            let _turn = ActiveTurn {
+                active,
+                id: active_id,
+            };
             produce_turn(plugin, context, request, channel).await;
         });
         match task {
             Ok(_) => Ok(stream),
             Err(error) => {
-                self.active.set(false);
+                close_active_turn(&self.active, active_id);
                 Err(PluginError::runtime(RuntimeFailure::PluginFailure {
                     detail: format!("Agent turn task failed to start: {error:?}"),
                 }))
             }
         }
     }
+
+    async fn submit(
+        &self,
+        _context: Ctx,
+        request: SubmitRequest,
+    ) -> PluginResult<SubmitResponse, SubmitError> {
+        if request.input.trim().is_empty() {
+            return Err(PluginError::domain(SubmitError::InvalidInput));
+        }
+        let id = uuid::Uuid::new_v4();
+        let (sender, receiver) = oneshot::channel();
+        {
+            let mut active = self.active.borrow_mut();
+            let Some(active) = active.as_mut() else {
+                return Err(PluginError::domain(SubmitError::TurnNotActive));
+            };
+            if active.session_id.as_deref() != Some(request.session_id.as_str()) {
+                return Err(PluginError::domain(SubmitError::TurnNotActive));
+            }
+            if !active.accepting {
+                return Err(PluginError::domain(SubmitError::InputClosed));
+            }
+            if active.pending.len() >= MAX_PENDING_TURN_INPUTS {
+                return Err(PluginError::runtime(RuntimeFailure::ResourceExhausted {
+                    capability: turn_input_capability::CAPABILITY_ID,
+                    operation: turn_input_capability::SUBMIT_OPERATION.to_owned(),
+                }));
+            }
+            active.pending.push_back(PendingTurnInput {
+                id,
+                input: request.input,
+                response: sender,
+            });
+            for waiter in active.waiters.drain(..) {
+                waiter.wake();
+            }
+        }
+        let guard = PendingTurnInputGuard {
+            active: self.active.clone(),
+            id,
+        };
+        let accepted_revision = receiver
+            .await
+            .map_err(|_| PluginError::domain(SubmitError::InputClosed))?
+            .map_err(PluginError::domain)?;
+        drop(guard);
+        Ok(SubmitResponse {
+            session_id: request.session_id,
+            accepted_revision,
+        })
+    }
 }
 
 #[derive(Debug)]
-struct ActiveTurn(Rc<Cell<bool>>);
+struct PendingTurnInput {
+    id: uuid::Uuid,
+    input: String,
+    response: oneshot::Sender<Result<String, SubmitError>>,
+}
+
+#[derive(Debug)]
+struct ActiveTurnState {
+    id: uuid::Uuid,
+    accepting: bool,
+    pending: VecDeque<PendingTurnInput>,
+    session_id: Option<String>,
+    waiters: Vec<Waker>,
+}
+
+#[derive(Debug)]
+struct ActiveTurn {
+    active: Rc<RefCell<Option<ActiveTurnState>>>,
+    id: uuid::Uuid,
+}
 
 impl Drop for ActiveTurn {
     fn drop(&mut self) {
-        self.0.set(false);
+        close_active_turn(&self.active, self.id);
     }
+}
+
+#[derive(Debug)]
+struct PendingTurnInputGuard {
+    active: Rc<RefCell<Option<ActiveTurnState>>>,
+    id: uuid::Uuid,
+}
+
+impl Drop for PendingTurnInputGuard {
+    fn drop(&mut self) {
+        let mut active = self.active.borrow_mut();
+        let Some(active) = active.as_mut() else {
+            return;
+        };
+        active.pending.retain(|pending| pending.id != self.id);
+    }
+}
+
+fn close_active_turn(active: &Rc<RefCell<Option<ActiveTurnState>>>, id: uuid::Uuid) {
+    let mut slot = active.borrow_mut();
+    if slot.as_ref().is_none_or(|current| current.id != id) {
+        return;
+    }
+    if let Some(mut current) = slot.take() {
+        for waiter in current.waiters.drain(..) {
+            waiter.wake();
+        }
+        for pending in current.pending.drain(..) {
+            let _ = pending.response.send(Err(SubmitError::InputClosed));
+        }
+    }
+}
+
+async fn wait_for_pending_turn_input(
+    active: Rc<RefCell<Option<ActiveTurnState>>>,
+    session_id: String,
+) {
+    std::future::poll_fn(move |context| {
+        let mut slot = active.borrow_mut();
+        let Some(current) = slot.as_mut() else {
+            return Poll::Ready(());
+        };
+        if current.session_id.as_deref() != Some(session_id.as_str())
+            || !current.pending.is_empty()
+            || !current.accepting
+        {
+            return Poll::Ready(());
+        }
+        if !current
+            .waiters
+            .iter()
+            .any(|waiter| waiter.will_wake(context.waker()))
+        {
+            current.waiters.push(context.waker().clone());
+        }
+        Poll::Pending
+    })
+    .await;
 }
 
 async fn produce_turn(
@@ -277,6 +430,7 @@ async fn run_turn(
         .await
         .map_err(map_session_open_error)?;
     let session_id = opened.session_id;
+    register_active_session(&clients.active, &session_id)?;
     let (system_instruction, install_system_instruction) = if opened.created {
         (
             assemble_system_instruction(clients, context, generation_spec_digest).await?,
@@ -718,6 +872,7 @@ async fn execute_steps(
     generation_spec_digest: &str,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
+    let mut effective_turn_input = turn_input.to_owned();
     messages.insert(
         0,
         CompleteMessageInput {
@@ -728,6 +883,11 @@ async fn execute_steps(
             arguments_json: None,
         },
     );
+    let turn_input_message_index = messages.len().checked_sub(1).ok_or_else(|| {
+        PluginError::runtime(RuntimeFailure::Internal {
+            detail: "Agent Turn has no user input message".to_owned(),
+        })
+    })?;
     let prompt_contributions = system_instruction.contributions.clone();
     let system_instruction_digest = system_instruction.digest.clone();
     let catalog = clients
@@ -771,8 +931,25 @@ async fn execute_steps(
     let mut sequence = 0_u64;
     let mut remaining_output_tokens = config.max_output_tokens;
     let mut turn_output = String::new();
+    let mut staged_inputs = Vec::new();
 
     for step in 1..=config.max_steps {
+        let pending_inputs = if staged_inputs.is_empty() {
+            drain_pending_turn_inputs(&clients.active, session_id, false)?
+        } else {
+            std::mem::take(&mut staged_inputs)
+        };
+        let additional_inputs = pending_inputs
+            .iter()
+            .map(|pending| pending.input.clone())
+            .collect::<Vec<_>>();
+        for input in &additional_inputs {
+            effective_turn_input.push_str(ADDITIONAL_INPUT_SEPARATOR);
+            effective_turn_input.push_str(input);
+        }
+        messages[turn_input_message_index]
+            .content
+            .clone_from(&effective_turn_input);
         let message_count = messages.len();
         let tool_count = tools.len();
         *revision = append_events(
@@ -790,12 +967,14 @@ async fn execute_steps(
                     "tool_count": tool_count,
                     "temperature": 0.0,
                     "max_output_tokens": remaining_output_tokens,
+                    "additional_inputs": additional_inputs,
                     "prompt_contributions": prompt_contributions,
                     "system_instruction_digest": system_instruction_digest
                 }),
             )?],
         )
         .await?;
+        acknowledge_pending_turn_inputs(pending_inputs, revision);
         let completion = stream_model(
             clients,
             context,
@@ -829,21 +1008,79 @@ async fn execute_steps(
                 "output_tokens": completion.output_tokens,
                 "duration_ms": completion.duration_ms,
                 "time_to_first_token_ms": completion.time_to_first_token_ms,
-                "status": "completed"
+                "status": if completion.interrupted_by_input {
+                    "interrupted_by_input"
+                } else {
+                    "completed"
+                }
             }),
         )?;
+        if completion.interrupted_by_input {
+            *revision = append_events(
+                clients,
+                context,
+                session_id,
+                revision.clone(),
+                vec![model_event],
+            )
+            .await?;
+            if !completion.text.is_empty() {
+                messages.push(CompleteMessageInput {
+                    role: CompleteMessageRole::Assistant,
+                    content: completion.text.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    arguments_json: None,
+                });
+            }
+            staged_inputs = drain_pending_turn_inputs(&clients.active, session_id, false)?;
+            if step == config.max_steps {
+                reject_pending_turn_inputs(
+                    std::mem::take(&mut staged_inputs),
+                    &SubmitError::InputClosed,
+                );
+                return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
+            }
+            continue;
+        }
         if completion.tool_calls.is_empty() {
             if completion.text.is_empty() {
                 return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
                     detail: "Model completed without text or a Tool call".to_owned(),
                 }));
             }
+            staged_inputs = drain_pending_turn_inputs(&clients.active, session_id, true)?;
+            if !staged_inputs.is_empty() {
+                *revision = append_events(
+                    clients,
+                    context,
+                    session_id,
+                    revision.clone(),
+                    vec![model_event],
+                )
+                .await?;
+                messages.push(CompleteMessageInput {
+                    role: CompleteMessageRole::Assistant,
+                    content: completion.text.clone(),
+                    tool_call_id: None,
+                    tool_name: None,
+                    arguments_json: None,
+                });
+                if step == config.max_steps {
+                    reject_pending_turn_inputs(
+                        std::mem::take(&mut staged_inputs),
+                        &SubmitError::InputClosed,
+                    );
+                    return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
+                }
+                continue;
+            }
             let memory_event = memory_observation_event(
                 clients,
                 context,
                 session_id,
                 turn_id,
-                turn_input,
+                &effective_turn_input,
                 &turn_output,
             )
             .await?;
@@ -958,6 +1195,62 @@ async fn execute_steps(
         }
     }
     Err(PluginError::domain(RunTurnError::StepLimitExceeded))
+}
+
+fn drain_pending_turn_inputs(
+    active: &Rc<RefCell<Option<ActiveTurnState>>>,
+    session_id: &str,
+    close_if_empty: bool,
+) -> Result<Vec<PendingTurnInput>, TurnFailure> {
+    let mut slot = active.borrow_mut();
+    let current = slot.as_mut().ok_or_else(|| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Agent Turn input state disappeared while the Turn was active".to_owned(),
+        })
+    })?;
+    if current.session_id.as_deref() != Some(session_id) {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Agent Turn input state belongs to another Session".to_owned(),
+        }));
+    }
+    if close_if_empty && current.pending.is_empty() {
+        current.accepting = false;
+    }
+    Ok(current.pending.drain(..).collect())
+}
+
+fn register_active_session(
+    active: &Rc<RefCell<Option<ActiveTurnState>>>,
+    session_id: &str,
+) -> Result<(), TurnFailure> {
+    let mut slot = active.borrow_mut();
+    let current = slot.as_mut().ok_or_else(|| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Agent Turn input state disappeared before Session open".to_owned(),
+        })
+    })?;
+    match current.session_id.as_deref() {
+        None => current.session_id = Some(session_id.to_owned()),
+        Some(expected) if expected == session_id => {}
+        Some(_) => {
+            return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Agent Turn input state changed Session identity".to_owned(),
+            }));
+        }
+    }
+    Ok(())
+}
+
+fn acknowledge_pending_turn_inputs(inputs: Vec<PendingTurnInput>, revision: &str) {
+    for input in inputs {
+        let _ = input.response.send(Ok(revision.to_owned()));
+    }
+}
+
+fn reject_pending_turn_inputs(inputs: Vec<PendingTurnInput>, error: &SubmitError) {
+    for input in inputs {
+        let _ = input.response.send(Err(error.clone()));
+    }
 }
 
 fn tool_is_parallel_safe(
@@ -1263,6 +1556,7 @@ async fn stream_tool_execution(
 
 #[derive(Debug)]
 struct ModelStep {
+    interrupted_by_input: bool,
     text: String,
     tool_calls: Vec<CompleteMessage>,
     input_tokens: Option<u64>,
@@ -1348,6 +1642,7 @@ async fn stream_model(
         .map_err(map_model_error)?;
     stream.close_send().await.map_err(PluginError::runtime)?;
     let mut completion = ModelStep {
+        interrupted_by_input: false,
         text: String::new(),
         tool_calls: Vec::new(),
         input_tokens: None,
@@ -1357,7 +1652,23 @@ async fn stream_model(
     };
     let mut reasoning = ReasoningProgress::new(reasoning_id, session_id);
     loop {
-        match stream.receive().await.map_err(PluginError::runtime)? {
+        let receive = Box::pin(stream.receive());
+        let pending_input = Box::pin(wait_for_pending_turn_input(
+            clients.active.clone(),
+            session_id.to_owned(),
+        ));
+        let event = match select(receive, pending_input).await {
+            Either::Left((result, _)) => result.map_err(PluginError::runtime)?,
+            Either::Right(((), _)) => {
+                reasoning
+                    .finish(sequence, channel, context.request_id())
+                    .await?;
+                completion.interrupted_by_input = true;
+                completion.duration_ms = elapsed_millis(started_at);
+                return Ok(completion);
+            }
+        };
+        match event {
             ModelEvent::Message(message) => match message.kind {
                 CompleteMessageKind::ReasoningSummaryDelta => {
                     if message.text.is_empty() {
@@ -2238,6 +2549,7 @@ fn interrupted_turn_events(
 #[derive(Default)]
 struct HistoricalTurn {
     input: Option<String>,
+    additional_inputs: Vec<String>,
     output: Option<String>,
 }
 
@@ -2262,6 +2574,14 @@ fn reconstruct_history(
                 turns.entry(turn_id.clone()).or_default().output =
                     Some(history_payload_text(event, "output")?);
             }
+            ReadSessionResponseEventsItemKind::ModelRequested => {
+                let inputs = history_payload_additional_inputs(event)?;
+                turns
+                    .entry(turn_id.clone())
+                    .or_default()
+                    .additional_inputs
+                    .extend(inputs);
+            }
             _ => {}
         }
     }
@@ -2270,7 +2590,11 @@ fn reconstruct_history(
         let Some(turn) = turns.remove(&turn_id) else {
             continue;
         };
-        if let (Some(input), Some(output)) = (turn.input, turn.output) {
+        if let (Some(mut input), Some(output)) = (turn.input, turn.output) {
+            for additional_input in turn.additional_inputs {
+                input.push_str(ADDITIONAL_INPUT_SEPARATOR);
+                input.push_str(&additional_input);
+            }
             messages.push(user_message(input));
             messages.push(CompleteMessageInput {
                 role: CompleteMessageRole::Assistant,
@@ -2282,6 +2606,33 @@ fn reconstruct_history(
         }
     }
     Ok(messages)
+}
+
+fn history_payload_additional_inputs(
+    event: &ReadSessionResponseEventsItem,
+) -> Result<Vec<String>, TurnFailure> {
+    #[derive(serde::Deserialize)]
+    struct ModelRequestedPayload {
+        #[serde(default)]
+        additional_inputs: Vec<String>,
+    }
+
+    let payload = serde_json::from_str::<ModelRequestedPayload>(event.payload_json.as_str())
+        .map_err(|_| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Session history contains an invalid model request event".to_owned(),
+            })
+        })?;
+    if payload
+        .additional_inputs
+        .iter()
+        .any(|input| input.trim().is_empty() || input.len() > 262_144)
+    {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session history contains an invalid additional Turn input".to_owned(),
+        }));
+    }
+    Ok(payload.additional_inputs)
 }
 
 fn history_payload_text(
@@ -2572,15 +2923,25 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 mod tests {
     use super::*;
     use lenso_kernel::{CancellationToken, NativeStreamSession};
-    use std::{cell::RefCell, task::Poll};
+    use std::{
+        cell::{Cell, RefCell},
+        task::Poll,
+    };
 
     #[test]
     fn struct_authoring_derives_the_complete_plugin_descriptor() {
         let descriptor: serde_json::Value = serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
         assert_eq!(descriptor["plugin_id"], "lenso.agent.loop");
-        assert_eq!(
-            descriptor["provided_capabilities"][0]["capability_id"],
-            "lenso.agent@3"
+        let provided = descriptor["provided_capabilities"].as_array().unwrap();
+        assert!(
+            provided
+                .iter()
+                .any(|capability| { capability["capability_id"] == "lenso.agent@3" })
+        );
+        assert!(
+            provided
+                .iter()
+                .any(|capability| { capability["capability_id"] == "lenso.agent.turn-input@1" })
         );
         let requirements = descriptor["required_capabilities"]
             .as_array()
@@ -2656,6 +3017,35 @@ mod tests {
         assert_eq!(messages[0].content, "hello");
         assert_eq!(messages[1].role, CompleteMessageRole::Assistant);
         assert_eq!(messages[1].content, "world");
+    }
+
+    #[test]
+    fn durable_additional_inputs_reconstruct_into_the_turn_context() {
+        let messages = reconstruct_history(&[
+            history_event(
+                "1",
+                ReadSessionResponseEventsItemKind::TurnStarted,
+                r#"{"input":"draft"}"#,
+            ),
+            history_event(
+                "2",
+                ReadSessionResponseEventsItemKind::ModelRequested,
+                r#"{"additional_inputs":["emphasize tests"]}"#,
+            ),
+            history_event(
+                "3",
+                ReadSessionResponseEventsItemKind::TurnCompleted,
+                r#"{"output":"done"}"#,
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages[0].content,
+            "draft\n\n[Additional instruction]\nemphasize tests"
+        );
+        assert_eq!(messages[1].content, "done");
     }
 
     #[test]

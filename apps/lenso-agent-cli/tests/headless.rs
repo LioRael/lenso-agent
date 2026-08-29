@@ -1756,6 +1756,74 @@ fn spawned_child_can_be_joined_by_task_id_without_losing_session_provenance() {
 }
 
 #[test]
+fn running_child_accepts_input_only_after_the_session_fact_is_durable() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Plugin Fixture\n").unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin(temporary.path(), "lenso.agent.subagent-tools");
+
+    let output = run_configured_derived(
+        temporary.path(),
+        "Spawn, steer, and wait for a README.md subagent.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Steered result: Steered child summary: # Plugin Fixture\n"
+    );
+
+    let sessions = stored_sessions(temporary.path());
+    let tool_results = sessions
+        .iter()
+        .flat_map(|session| session["events"].as_array().unwrap())
+        .filter(|event| event["kind"] == "tool_result")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let sent = tool_results
+        .iter()
+        .find(|result| result["name"] == "send_subagent")
+        .expect("parent Session must retain the accepted send_subagent result");
+    let acceptance: serde_json::Value =
+        serde_json::from_str(sent["content"].as_str().unwrap()).unwrap();
+    assert_eq!(acceptance["status"], "input_accepted");
+    let child_session_id = acceptance["child_session_id"].as_str().unwrap();
+    let accepted_revision = acceptance["accepted_revision"].as_str().unwrap();
+
+    let child = sessions
+        .iter()
+        .find(|session| session["session_id"] == child_session_id)
+        .expect("accepted input must identify its durable child Session");
+    let accepted_event = child["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| {
+            event["revision"]
+                .as_u64()
+                .map(|revision| revision.to_string())
+                .as_deref()
+                == Some(accepted_revision)
+                && event["kind"] == "model_requested"
+                && serde_json::from_str::<serde_json::Value>(
+                    event["payload_json"].as_str().unwrap(),
+                )
+                .is_ok_and(|payload| {
+                    payload["additional_inputs"] == serde_json::json!(["Emphasize the heading."])
+                })
+        })
+        .expect("acceptance revision must point at the durable additional input fact");
+    assert_eq!(accepted_event["turn_id"].as_str().unwrap().len(), 36);
+}
+
+#[test]
 fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
     let temporary = tempfile::tempdir().unwrap();
     configure_fixture_app(temporary.path());

@@ -60,10 +60,12 @@ impl ModelProvider for FixtureModel {
         _context: InvocationContext,
         request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
-        if request.messages.iter().rev().any(|message| {
-            message.role == CompleteMessageRole::User
-                && message.content == "Remain pending until cancelled."
-        }) {
+        if waits_for_running_input(&request)
+            || request.messages.iter().rev().any(|message| {
+                message.role == CompleteMessageRole::User
+                    && message.content == "Remain pending until cancelled."
+            })
+        {
             return Box::pin(ready(Ok(
                 Box::new(PendingOutputStream::default()) as Box<dyn NativeStreamSession>
             )));
@@ -74,6 +76,20 @@ impl ModelProvider for FixtureModel {
         });
         Box::pin(ready(result))
     }
+}
+
+fn waits_for_running_input(request: &CompleteOpen) -> bool {
+    let Some(user_index) = request
+        .messages
+        .iter()
+        .rposition(|message| message.role == CompleteMessageRole::User)
+    else {
+        return false;
+    };
+    request.messages[user_index].content == "Draft a README.md summary."
+        && request.messages[user_index + 1..]
+            .iter()
+            .any(|message| message.role == CompleteMessageRole::Tool)
 }
 
 #[derive(Debug, Default)]
@@ -205,36 +221,18 @@ impl FixtureModel {
         if let Some(response) = subagent_fixture_response(request, current_user, &tool_results) {
             return response;
         }
+        if let Some(response) =
+            steered_subagent_child_response(request, current_user, &tool_results)
+        {
+            return response;
+        }
         if current_user == "Use Code Mode to compare README.md twice." {
             return code_mode_response(request, &tool_results);
         }
         if current_user == "Summarize README.md for the parent Agent." {
             return subagent_child_response(request, &tool_results);
         }
-        if let Some(url) = current_user
-            .strip_prefix("Use the network Plugin to fetch ")
-            .and_then(|value| value.strip_suffix('.'))
-        {
-            return network_plugin_response(request, &tool_results, url);
-        }
-        if current_user == "Read README.md twice." && tool_results.len() < 2 {
-            return Ok(tool_request(tool_results.len() + 1));
-        }
-        let tool_result = tool_results.last().copied();
-        if let Some(tool_result) = tool_result {
-            let first_line = tool_result
-                .content
-                .lines()
-                .find(|line| !line.trim().is_empty())
-                .unwrap_or("The README is empty.")
-                .trim();
-            return Ok(summary_response(first_line));
-        }
-        let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
-        if !has_workspace_tool {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
-        }
-        Ok(tool_request(1))
+        default_fixture_response(request, current_user, &tool_results)
     }
 }
 
@@ -285,6 +283,37 @@ fn session_presentation_fixture_response(
     ])
 }
 
+fn default_fixture_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if let Some(url) = current_user
+        .strip_prefix("Use the network Plugin to fetch ")
+        .and_then(|value| value.strip_suffix('.'))
+    {
+        return network_plugin_response(request, tool_results, url);
+    }
+    if current_user == "Read README.md twice." && tool_results.len() < 2 {
+        return Ok(tool_request(tool_results.len() + 1));
+    }
+    let tool_result = tool_results.last().copied();
+    if let Some(tool_result) = tool_result {
+        let first_line = tool_result
+            .content
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .unwrap_or("The README is empty.")
+            .trim();
+        return Ok(summary_response(first_line));
+    }
+    let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
+    if !has_workspace_tool {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    Ok(tool_request(1))
+}
+
 fn subagent_fixture_response(
     request: &CompleteOpen,
     current_user: &str,
@@ -297,6 +326,9 @@ fn subagent_fixture_response(
         }
         "Spawn and cancel a pending subagent." => {
             Some(cancelled_subagent_response(request, tool_results))
+        }
+        "Spawn, steer, and wait for a README.md subagent." => {
+            Some(steered_subagent_response(request, tool_results))
         }
         _ => None,
     }
@@ -576,6 +608,80 @@ fn cancelled_subagent_response(
     }
 }
 
+fn steered_subagent_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["spawn_subagent", "send_subagent", "wait_subagent"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    let task_id = tool_results.first().map(|spawned| {
+        serde_json::from_str::<serde_json::Value>(&spawned.content)
+            .ok()
+            .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+    });
+    match (tool_results, task_id) {
+        ([], None) => Ok(named_tool_request(
+            "call-spawn-steered-subagent",
+            "spawn_subagent",
+            r#"{"task":"Draft a README.md summary."}"#,
+        )),
+        ([_], Some(Ok(task_id))) => {
+            let arguments = serde_json::json!({
+                "task_id": task_id,
+                "input": "Emphasize the heading."
+            })
+            .to_string();
+            Ok(named_tool_request(
+                "call-send-steered-subagent",
+                "send_subagent",
+                &arguments,
+            ))
+        }
+        ([_, accepted], Some(Ok(task_id)))
+            if serde_json::from_str::<serde_json::Value>(&accepted.content)
+                .is_ok_and(|value| value["status"] == "input_accepted") =>
+        {
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-wait-steered-subagent",
+                "wait_subagent",
+                &arguments,
+            ))
+        }
+        ([_, _, result], Some(Ok(_)))
+            if result.content == "Steered child summary: # Plugin Fixture" =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Steered result: Steered child summary: # Plugin Fixture",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::Usage,
+                    "",
+                    "",
+                    "",
+                    "{}",
+                    "42",
+                    "16",
+                ),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
 fn subagent_child_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
@@ -604,6 +710,57 @@ fn subagent_child_response(
         ]),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
+}
+
+fn steered_subagent_child_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Option<Result<Vec<CompleteMessage>, ModelInvocationError>> {
+    if !current_user.starts_with("Draft a README.md summary.") {
+        return None;
+    }
+    if !request.tools.iter().any(|tool| tool.name == "read_text") {
+        return Some(Err(ModelInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )));
+    }
+    let result = match tool_results {
+        [] => Ok(named_tool_request(
+            "call-steered-child-readme",
+            "read_text",
+            r#"{"path":"README.md"}"#,
+        )),
+        [result]
+            if result.content == "# Plugin Fixture\n"
+                && current_user.contains("[Additional instruction]\nEmphasize the heading.") =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Steered child summary: # Plugin Fixture",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::Usage,
+                    "",
+                    "",
+                    "",
+                    "{}",
+                    "24",
+                    "10",
+                ),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    };
+    Some(result)
 }
 
 fn text_plugin_response(
