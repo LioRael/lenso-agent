@@ -60,3 +60,4 @@
 - [0058 — Isolate coding processes behind an explicit OS sandbox Profile](0058-isolate-coding-processes-behind-an-explicit-os-sandbox-profile.md)
 - [0059 — Compose named child Agents by Profile](0059-compose-named-child-agents-by-profile.md)
 - [0060 — Project bounded child-task supervision](0060-project-bounded-child-task-supervision.md)
+- [0061 — Abstract Plugin configuration authority](0061-abstract-plugin-configuration-authority.md)

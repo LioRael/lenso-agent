@@ -3204,6 +3204,7 @@ dependencies = [
 name = "lenso-agent-web"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "axum",
  "clap",
  "futures",
@@ -3731,7 +3732,7 @@ dependencies = [
 [[package]]
 name = "lenso-cli"
 version = "0.4.8"
-source = "git+https://github.com/LioRael/lenso-cli?rev=86d54b9d99ba32f486e50e13bc6df6f50f089399#86d54b9d99ba32f486e50e13bc6df6f50f089399"
+source = "git+https://github.com/LioRael/lenso-cli?rev=a0a9653b4581d3a9bed7c0282fee18edc9964de6#a0a9653b4581d3a9bed7c0282fee18edc9964de6"
 dependencies = [
  "anyhow",
  "lenso-app-plan",

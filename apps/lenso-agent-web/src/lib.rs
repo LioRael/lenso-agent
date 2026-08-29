@@ -22,9 +22,9 @@ use lenso_agent_session_inspection::{
 };
 use lenso_agent_web_plugin as _;
 use lenso_app_authoring::{
-    PluginConfigurationApplication, PluginConfigurationDiagnostic, PluginConfigurationProposal,
+    LocalPluginRootAuthority, PluginConfigurationApplication, PluginConfigurationAuthority,
+    PluginConfigurationAuthoritySource, PluginConfigurationDiagnostic, PluginConfigurationProposal,
     PluginConfigurationProposalStatus, PluginRootAuthoringState, PluginRootRevision, add_bundle,
-    inspect_plugin_root, propose_instance_configuration, publish_instance_configuration,
     remove_instance_difference, remove_plugin, set_instance_disabled,
 };
 use lenso_app_plan::{ResolvedAppPlan, authoring::ResolvedApp};
@@ -80,6 +80,12 @@ pub struct AgentWebConfig {
     pub control: AgentWebControl,
     /// Enables Host-authorized mutation of the visible App Plugin Root.
     pub plugin_control: bool,
+    /// Optional Host-provided authority for Plugin configuration authoring.
+    ///
+    /// The authority must publish a complete desired state that this Host can
+    /// observe through its managed Plugin Root before Generation reconciliation.
+    /// Omit to use the local Plugin Root authority.
+    pub plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     /// Exact linked Plugin inventory exposed by this Host build.
     pub plugins: fn(),
 }
@@ -96,6 +102,7 @@ impl AgentWebConfig {
             tool_policy: None,
             control: AgentWebControl::Disabled,
             plugin_control: false,
+            plugin_configuration_authority: None,
             plugins,
         }
     }
@@ -121,6 +128,7 @@ struct WebRuntime {
 #[derive(Clone, Debug)]
 struct PluginControl {
     app_root: PathBuf,
+    configuration_authority: Arc<dyn PluginConfigurationAuthority>,
     mutation: Arc<Mutex<()>>,
 }
 
@@ -139,6 +147,7 @@ struct WebRuntimeConfig {
 #[serde(rename_all = "camelCase")]
 struct PluginInventoryResponse {
     applied_revision: Option<String>,
+    configuration_authority: Option<PluginConfigurationAuthorityResponse>,
     configuration_status: &'static str,
     desired_revision: Option<String>,
     generation_events: Vec<PluginGenerationEvent>,
@@ -171,7 +180,24 @@ struct PluginGenerationEvent {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct PluginConfigurationAuthorityResponse {
+    kind: String,
+    reference: String,
+}
+
+impl From<PluginConfigurationAuthoritySource> for PluginConfigurationAuthorityResponse {
+    fn from(source: PluginConfigurationAuthoritySource) -> Self {
+        Self {
+            kind: source.kind().to_owned(),
+            reference: source.reference().to_owned(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct PluginManagementResponse {
+    configuration_authority: Option<PluginConfigurationAuthorityResponse>,
     plugins: Vec<ManagedPlugin>,
     revision: String,
     schema: &'static str,
@@ -200,6 +226,7 @@ struct ManagedPluginInstance {
 impl From<&PluginRootAuthoringState> for PluginManagementResponse {
     fn from(state: &PluginRootAuthoringState) -> Self {
         Self {
+            configuration_authority: None,
             plugins: state
                 .plugins()
                 .iter()
@@ -237,12 +264,20 @@ impl From<&PluginRootAuthoringState> for PluginManagementResponse {
     }
 }
 
+impl PluginManagementResponse {
+    fn with_configuration_authority(mut self, source: PluginConfigurationAuthoritySource) -> Self {
+        self.configuration_authority = Some(source.into());
+        self
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginConfigurationProposalResponse {
     application: &'static str,
     base_revision: String,
     candidate_revision: String,
+    configuration_authority: PluginConfigurationAuthorityResponse,
     diagnostics: Vec<PluginConfigurationDiagnosticResponse>,
     instance_key: String,
     plugin_id: String,
@@ -258,12 +293,16 @@ struct PluginConfigurationDiagnosticResponse {
     detail: String,
 }
 
-impl From<&PluginConfigurationProposal> for PluginConfigurationProposalResponse {
-    fn from(proposal: &PluginConfigurationProposal) -> Self {
+impl PluginConfigurationProposalResponse {
+    fn new(
+        proposal: &PluginConfigurationProposal,
+        source: PluginConfigurationAuthoritySource,
+    ) -> Self {
         Self {
             application: proposal_application(proposal.application()),
             base_revision: proposal.base_revision().as_str().to_owned(),
             candidate_revision: proposal.candidate_revision().as_str().to_owned(),
+            configuration_authority: source.into(),
             diagnostics: proposal
                 .diagnostics()
                 .iter()
@@ -307,6 +346,7 @@ fn proposal_application(application: PluginConfigurationApplication) -> &'static
 #[serde(rename_all = "camelCase")]
 struct PluginConfigurationPublicationResponse {
     base_revision: String,
+    configuration_authority: PluginConfigurationAuthorityResponse,
     desired: PluginInventoryResponse,
     proposal_digest: String,
     revision: String,
@@ -336,6 +376,7 @@ impl PluginInventoryResponse {
     fn from_plan(plan: &ResolvedAppPlan) -> Self {
         Self {
             applied_revision: None,
+            configuration_authority: None,
             configuration_status: "unavailable",
             desired_revision: None,
             generation_events: Vec::new(),
@@ -367,10 +408,23 @@ impl PluginInventoryResponse {
         }
     }
 
-    fn with_initial_configuration_revision(mut self, revision: String) -> Self {
-        self.applied_revision = Some(revision.clone());
-        self.desired_revision = Some(revision);
-        self.configuration_status = "applied";
+    fn with_initial_configuration_revisions(
+        mut self,
+        applied_revision: String,
+        desired_revision: String,
+    ) -> Self {
+        self.configuration_status = if applied_revision == desired_revision {
+            "applied"
+        } else {
+            "pending"
+        };
+        self.applied_revision = Some(applied_revision);
+        self.desired_revision = Some(desired_revision);
+        self
+    }
+
+    fn with_configuration_authority(mut self, source: PluginConfigurationAuthoritySource) -> Self {
+        self.configuration_authority = Some(source.into());
         self
     }
 
@@ -814,6 +868,7 @@ impl AgentWebSurface {
             tool_policy,
             control,
             plugin_control,
+            plugin_configuration_authority,
             plugins,
         } = config;
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
@@ -851,12 +906,17 @@ impl AgentWebSurface {
         let app = host.run(selected_profile).await?;
         let plugin_control = resolve_plugin_control(
             plugin_control,
+            plugin_configuration_authority,
             managed_app_root.as_deref(),
             directories.home(),
-        );
+        )?;
         let plugin_inventory = match plugin_control.as_ref() {
             Some(control) => PluginInventoryResponse::from_plan(app.resolved_plan())
-                .with_initial_configuration_revision(control.desired_revision()?),
+                .with_initial_configuration_revisions(
+                    control.materialized_revision()?,
+                    control.desired_revision()?,
+                )
+                .with_configuration_authority(control.configuration_source()),
             None => PluginInventoryResponse::from_plan(app.resolved_plan()),
         };
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
@@ -1523,18 +1583,37 @@ fn validate_managed_app_root(app_root: &FsPath) -> Result<(), String> {
 
 fn resolve_plugin_control(
     enabled: bool,
+    configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     managed_app_root: Option<&FsPath>,
     agent_home: &FsPath,
-) -> Option<PluginControl> {
-    enabled.then(|| PluginControl::new(managed_app_root.unwrap_or(agent_home)))
+) -> Result<Option<PluginControl>, String> {
+    if !enabled {
+        if configuration_authority.is_some() {
+            return Err("a Plugin configuration authority requires Plugin Root control".to_owned());
+        }
+        return Ok(None);
+    }
+    let app_root = managed_app_root.unwrap_or(agent_home);
+    let configuration_authority = configuration_authority.unwrap_or_else(|| {
+        Arc::new(LocalPluginRootAuthority::new(app_root)) as Arc<dyn PluginConfigurationAuthority>
+    });
+    Ok(Some(PluginControl::new(app_root, configuration_authority)))
 }
 
 impl PluginControl {
-    fn new(app_root: &FsPath) -> Self {
+    fn new(
+        app_root: &FsPath,
+        configuration_authority: Arc<dyn PluginConfigurationAuthority>,
+    ) -> Self {
         Self {
             app_root: app_root.to_path_buf(),
+            configuration_authority,
             mutation: Arc::new(Mutex::new(())),
         }
+    }
+
+    fn configuration_source(&self) -> PluginConfigurationAuthoritySource {
+        self.configuration_authority.source()
     }
 
     fn install(&self, bundle: &FsPath) -> Result<PluginInventoryResponse, String> {
@@ -1546,21 +1625,25 @@ impl PluginControl {
     }
 
     fn inspect(&self) -> Result<PluginManagementResponse, String> {
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
-        inspect_plugin_root(&self.app_root)
-            .map(|state| PluginManagementResponse::from(&state))
+        self.configuration_authority
+            .inspect()
+            .map(|state| {
+                PluginManagementResponse::from(&state)
+                    .with_configuration_authority(self.configuration_source())
+            })
             .map_err(|error| error.to_string())
     }
 
     fn desired_revision(&self) -> Result<String, String> {
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
-        inspect_plugin_root(&self.app_root)
+        self.configuration_authority
+            .inspect()
+            .map(|state| state.revision().as_str().to_owned())
+            .map_err(|error| error.to_string())
+    }
+
+    fn materialized_revision(&self) -> Result<String, String> {
+        LocalPluginRootAuthority::new(&self.app_root)
+            .inspect()
             .map(|state| state.revision().as_str().to_owned())
             .map_err(|error| error.to_string())
     }
@@ -1572,19 +1655,12 @@ impl PluginControl {
         expected_revision: &PluginRootRevision,
         bytes: &[u8],
     ) -> Result<PluginConfigurationProposalResponse, String> {
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
-        propose_instance_configuration(
-            &self.app_root,
-            expected_revision,
-            plugin_id,
-            instance,
-            bytes,
-        )
-        .map(|proposal| PluginConfigurationProposalResponse::from(&proposal))
-        .map_err(|error| error.to_string())
+        self.configuration_authority
+            .propose(expected_revision, plugin_id, instance, bytes)
+            .map(|proposal| {
+                PluginConfigurationProposalResponse::new(&proposal, self.configuration_source())
+            })
+            .map_err(|error| error.to_string())
     }
 
     fn publish_configuration(
@@ -1595,31 +1671,28 @@ impl PluginControl {
         expected_proposal_digest: &str,
         bytes: &[u8],
     ) -> Result<PluginConfigurationPublicationResponse, String> {
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
-        let proposal = propose_instance_configuration(
-            &self.app_root,
-            expected_revision,
-            plugin_id,
-            instance,
-            bytes,
-        )
-        .map_err(|error| error.to_string())?;
+        let proposal = self
+            .configuration_authority
+            .propose(expected_revision, plugin_id, instance, bytes)
+            .map_err(|error| error.to_string())?;
         if proposal.digest() != expected_proposal_digest {
             return Err(
                 "Plugin configuration proposal digest does not match the reviewed proposal"
                     .to_owned(),
             );
         }
-        let publication = publish_instance_configuration(&self.app_root, &proposal)
+        let publication = self
+            .configuration_authority
+            .publish(&proposal)
             .map_err(|error| error.to_string())?;
         let revision = publication.revision().as_str().to_owned();
+        let source = self.configuration_source();
         Ok(PluginConfigurationPublicationResponse {
             base_revision: publication.base_revision().as_str().to_owned(),
+            configuration_authority: source.clone().into(),
             desired: PluginInventoryResponse::from_plan(publication.resolved().plan())
-                .with_desired_configuration_revision(&revision),
+                .with_desired_configuration_revision(&revision)
+                .with_configuration_authority(source),
             proposal_digest: publication.proposal_digest().to_owned(),
             revision,
             schema: publication.schema().to_owned(),
@@ -1666,7 +1739,8 @@ impl PluginControl {
             .lock()
             .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
         let app = operation(&self.app_root)?;
-        Ok(PluginInventoryResponse::from_plan(app.plan()))
+        Ok(PluginInventoryResponse::from_plan(app.plan())
+            .with_configuration_authority(self.configuration_source()))
     }
 }
 
@@ -2353,7 +2427,45 @@ async fn send_stream_event(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
+
+    #[derive(Debug)]
+    struct RecordingConfigurationAuthority {
+        inspections: Arc<AtomicUsize>,
+        local: LocalPluginRootAuthority,
+        source: PluginConfigurationAuthoritySource,
+    }
+
+    impl PluginConfigurationAuthority for RecordingConfigurationAuthority {
+        fn source(&self) -> PluginConfigurationAuthoritySource {
+            self.source.clone()
+        }
+
+        fn inspect(&self) -> anyhow::Result<PluginRootAuthoringState> {
+            self.inspections.fetch_add(1, Ordering::Relaxed);
+            self.local.inspect()
+        }
+
+        fn propose(
+            &self,
+            expected_revision: &PluginRootRevision,
+            plugin_id: &str,
+            instance: &str,
+            bytes: &[u8],
+        ) -> anyhow::Result<PluginConfigurationProposal> {
+            self.local
+                .propose(expected_revision, plugin_id, instance, bytes)
+        }
+
+        fn publish(
+            &self,
+            proposal: &PluginConfigurationProposal,
+        ) -> anyhow::Result<lenso_app_authoring::PluginConfigurationPublication> {
+            self.local.publish(proposal)
+        }
+    }
 
     #[test]
     fn console_tool_policy_is_explicit_sorted_and_deduplicated() {
@@ -2413,13 +2525,49 @@ mod tests {
         assert!(error.contains("default authoring-managed App"));
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn plugin_control_dispatches_through_a_host_supplied_configuration_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let inspections = Arc::new(AtomicUsize::new(0));
+        let authority = RecordingConfigurationAuthority {
+            inspections: Arc::clone(&inspections),
+            local: LocalPluginRootAuthority::new(root.path()),
+            source: PluginConfigurationAuthoritySource::new("remote_fixture", "tenant/app")
+                .unwrap(),
+        };
+        let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+        config.agent_home = Some(root.path().to_path_buf());
+        config.control = AgentWebControl::HostAuthorized;
+        config.plugin_control = true;
+        config.plugin_configuration_authority = Some(Arc::new(authority));
+
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let surface = AgentWebSurface::start(config).await.unwrap();
+                let inventory = plugin_inventory(State(surface.runtime.clone()))
+                    .await
+                    .unwrap()
+                    .0;
+
+                assert!(inspections.load(Ordering::Relaxed) >= 2);
+                let source = inventory.configuration_authority.unwrap();
+                assert_eq!(source.kind, "remote_fixture");
+                assert_eq!(source.reference, "tenant/app");
+                surface.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
     #[test]
     fn plugin_control_can_manage_an_app_root_separate_from_agent_home() {
         let agent_home = tempfile::tempdir().unwrap();
         let managed_app = tempfile::tempdir().unwrap();
 
         let control =
-            resolve_plugin_control(true, Some(managed_app.path()), agent_home.path()).unwrap();
+            resolve_plugin_control(true, None, Some(managed_app.path()), agent_home.path())
+                .unwrap()
+                .unwrap();
 
         assert_eq!(control.app_root, managed_app.path());
     }
