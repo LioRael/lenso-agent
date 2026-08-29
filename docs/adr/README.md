@@ -61,3 +61,4 @@
 - [0059 — Compose named child Agents by Profile](0059-compose-named-child-agents-by-profile.md)
 - [0060 — Project bounded child-task supervision](0060-project-bounded-child-task-supervision.md)
 - [0061 — Abstract Plugin configuration authority](0061-abstract-plugin-configuration-authority.md)
+- [0062 — Compose isolated child worktrees](0062-compose-isolated-child-worktrees.md)

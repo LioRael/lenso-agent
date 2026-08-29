@@ -12,6 +12,7 @@ use std::{
 
 use futures::future::ready;
 use lenso::prelude::*;
+use lenso_agent_native_support::WorkspaceScope;
 use lenso_capability_agent_process::{
     self as process_contract, CatalogRequest, CatalogResponse, CatalogResponseProgramsItem,
     ProcessProvider, ProcessRun, ProcessRunStreamInvocationError, RunError, RunRequest,
@@ -46,6 +47,8 @@ impl ProgramPreset {
 #[serde(deny_unknown_fields)]
 struct ProcessConfig {
     root: PathBuf,
+    #[serde(default)]
+    delegated_root: Option<PathBuf>,
     allowed_programs: Vec<String>,
     #[serde(default)]
     program_presets: Vec<ProgramPreset>,
@@ -319,6 +322,50 @@ impl Lifecycle for NativeProcessPlugin {
 }
 
 impl NativeProcessProvider {
+    fn invocation_root(&self, context: &InvocationContext) -> Result<PathBuf, RuntimeFailure> {
+        let root = fs::canonicalize(&self.root).map_err(|error| RuntimeFailure::PluginFailure {
+            detail: format!("process root is unavailable: {error}"),
+        })?;
+        if root != self.root {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "process root identity changed after startup".to_owned(),
+            });
+        }
+        let Some(scope) = context
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("Workspace scope is invalid: {error}"),
+            })?
+        else {
+            return Ok(root);
+        };
+        let scoped = fs::canonicalize(&scope.absolute_path).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("scoped Workspace is unavailable: {error}"),
+            }
+        })?;
+        if scoped == root {
+            return Ok(root);
+        }
+        let delegated =
+            self.config
+                .delegated_root
+                .as_ref()
+                .ok_or_else(|| RuntimeFailure::PluginFailure {
+                    detail: "Workspace scope is outside the configured process root".to_owned(),
+                })?;
+        let delegated =
+            fs::canonicalize(delegated).map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("delegated Workspace root is unavailable: {error}"),
+            })?;
+        if !scoped.starts_with(&delegated) || !scoped.join(".git").exists() {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "Workspace scope is not an authorized delegated Git worktree".to_owned(),
+            });
+        }
+        Ok(scoped)
+    }
+
     async fn run_process(
         &self,
         context: InvocationContext,
@@ -369,15 +416,8 @@ impl NativeProcessProvider {
         {
             return Ok(Err(RunError::InvalidRequest));
         }
-        let root = fs::canonicalize(&self.root).map_err(|error| RuntimeFailure::PluginFailure {
-            detail: format!("process root is unavailable: {error}"),
-        })?;
-        if root != self.root {
-            return Err(RuntimeFailure::PluginFailure {
-                detail: "process root identity changed after startup".to_owned(),
-            });
-        }
-        let Some(cwd) = resolve_cwd(&self.root, &request.cwd) else {
+        let root = self.invocation_root(&context)?;
+        let Some(cwd) = resolve_cwd(&root, &request.cwd) else {
             return Ok(Err(RunError::InvalidWorkingDirectory));
         };
 
@@ -453,17 +493,10 @@ impl NativeProcessProvider {
         if !valid {
             return Err(PluginError::domain(RunStreamError::InvalidRequest));
         }
-        let root = fs::canonicalize(&self.root).map_err(|error| {
-            PluginError::runtime(RuntimeFailure::PluginFailure {
-                detail: format!("process root is unavailable: {error}"),
-            })
-        })?;
-        if root != self.root {
-            return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
-                detail: "process root identity changed after startup".to_owned(),
-            }));
-        }
-        let Some(cwd) = resolve_cwd(&self.root, &request.cwd) else {
+        let root = self
+            .invocation_root(&context)
+            .map_err(PluginError::runtime)?;
+        let Some(cwd) = resolve_cwd(&root, &request.cwd) else {
             return Err(PluginError::domain(RunStreamError::InvalidWorkingDirectory));
         };
         let mut command = tokio::process::Command::new(&program.invocation_path);
@@ -830,6 +863,7 @@ mod tests {
         NativeProcessProvider {
             config: ProcessConfig {
                 root: root.clone(),
+                delegated_root: None,
                 allowed_programs: vec!["test".to_owned()],
                 program_presets: Vec::new(),
                 environment_allowlist: Vec::new(),

@@ -10,7 +10,7 @@ rust-version.workspace = true
 
 [package.metadata.lenso]
 plugin-id = "lenso.agent.tools"
-root-slot = "root-tools-runtime"
+root-slot = "tools-runtimes"
 
 [dependencies]
 futures.workspace = true

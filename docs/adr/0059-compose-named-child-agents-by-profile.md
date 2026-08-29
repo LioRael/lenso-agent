@@ -39,9 +39,9 @@ existing task to a different child.
 - the model sees only child identities present in the immutable resolved Plan;
 - concurrent tasks may target different Agent Instances while retaining their
   own Sessions and cancellation; and
-- the two official children currently share read-only Tool authority. Distinct
-  worktrees and mutation authority remain owned by the later Worktree Provider
-  slice.
+- the two read-only children retain restricted Tool authority, while ADR-0062
+  composes separate `worker-a` and `worker-b` mutation lanes through the
+  Worktree Provider.
 
 ## Proof
 

@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.worktree@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "allocate",
+      "interaction": "request",
+      "request_schema": "schemas/allocate-request.schema.json",
+      "response_schema": "schemas/allocate-response.schema.json",
+      "domain_error_schema": "schemas/allocate-error.schema.json"
+    }
+  ]
+}

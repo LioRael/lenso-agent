@@ -12,6 +12,7 @@
   ],
   "properties": {
     "root": { "type": "string" },
+    "delegated_root": { "type": "string" },
     "allowed_programs": {
       "type": "array",
       "items": { "type": "string" }

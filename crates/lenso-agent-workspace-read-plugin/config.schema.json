@@ -12,6 +12,7 @@
   ],
   "properties": {
     "root": { "type": "string" },
+    "delegated_root": { "type": "string" },
     "max_output_bytes": { "type": "integer" },
     "max_list_entries": { "type": "integer" },
     "max_search_entries": { "type": "integer" },

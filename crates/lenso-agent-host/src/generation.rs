@@ -2065,7 +2065,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::optional("process"),
         HostSlot::many("prompt-providers"),
         HostSlot::one("prompt-runtime"),
-        HostSlot::one("root-tools-runtime"),
+        HostSlot::many("tools-runtimes"),
         HostSlot::optional("secrets"),
         HostSlot::one("session").replaceable(),
         HostSlot::optional("session-presentation").replaceable(),
@@ -2173,7 +2173,8 @@ fn host_catalog_defaults(
             "lenso.agent.workspace-read",
             "workspace-read",
             serde_json::json!({
-                "root": "."
+                "root": ".",
+                "delegated_root": directories.runtime().join("child-worktrees")
             }),
         ),
         HostDefaultPlugin::new("lenso.agent.workspace-read-tools", "restricted-read-tools"),
@@ -2311,6 +2312,23 @@ fn default_skills_plugin() -> HostDefaultPlugin {
 fn host_catalog_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
     let mut configurations = local_tool_configurations(directories);
     configurations.extend(model_and_auth_configurations(directories));
+    configurations.extend(["worker-a", "worker-b"].into_iter().map(|instance| {
+        HostPluginConfiguration::new(
+            "lenso.agent.loop",
+            instance,
+            serde_json::json!({
+                "model": DEFAULT_MODEL,
+                "max_steps": 8,
+                "max_tool_calls": 4,
+                "max_parallel_tool_calls": 4,
+                "max_output_tokens": 1024,
+                "max_history_events": 200,
+                "max_compaction_summary_characters": 8192,
+                "max_memory_items": 8,
+                "max_memory_characters": 16384
+            }),
+        )
+    }));
     configurations.push(host_plugin_configuration(
         "lenso.agent.session-presentation.model",
         serde_json::json!({
@@ -2357,6 +2375,10 @@ fn model_and_auth_configurations(directories: &AgentDirectories) -> Vec<HostPlug
     ]
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one catalog function keeps every local Tool default auditable together"
+)]
 fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
     vec![
         host_plugin_configuration(
@@ -2376,6 +2398,7 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
                 "allow_tools": [
                     "read_text", "skill_list", "skill", "skill_resources", "skill_resource",
                     "ask_user", "git_status", "git_diff", "git_log", "list_subagents",
+                    "list_worktrees", "review_worktree",
                     "checkpoint_create", "checkpoint_review"
                 ],
                 "ask_tools": [],
@@ -2414,7 +2437,8 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
                 "max_argument_bytes": 131_072,
                 "max_output_bytes": 262_144,
                 "max_timeout_ms": 600_000,
-                "root": "."
+                "root": ".",
+                "delegated_root": directories.runtime().join("child-worktrees")
             }),
         ),
         sandbox_process_configuration(directories),
@@ -2427,7 +2451,32 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
             serde_json::json!({
                 "max_output_bytes": 1_048_576,
                 "max_task_bytes": 262_144,
-                "max_tasks": 8
+                "max_tasks": 8,
+                "require_worktree_provider": false
+            }),
+        ),
+        HostPluginConfiguration::new(
+            "lenso.agent.subagent-tools",
+            "worktree",
+            serde_json::json!({
+                "max_output_bytes": 1_048_576,
+                "max_task_bytes": 262_144,
+                "max_tasks": 8,
+                "require_worktree_provider": true
+            }),
+        ),
+        host_plugin_configuration(
+            "lenso.agent.worktree-provider",
+            serde_json::json!({
+                "repository_root": ".",
+                "worktree_root": directories.runtime().join("child-worktrees"),
+                "mutation_agents": [
+                    "lenso.agent.loop/worker-a",
+                    "lenso.agent.loop/worker-b"
+                ],
+                "max_worktrees": 8,
+                "timeout_ms": 120_000,
+                "max_review_bytes": 1_048_576
             }),
         ),
         host_plugin_configuration(
@@ -2439,7 +2488,8 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
                 "max_file_bytes": 1_048_576,
                 "max_review_bytes": 262_144,
                 "require_checkpoint": false,
-                "root": "."
+                "root": ".",
+                "delegated_root": directories.runtime().join("child-worktrees")
             }),
         ),
         host_plugin_configuration(
@@ -2470,6 +2520,7 @@ fn sandbox_process_configuration(directories: &AgentDirectories) -> HostPluginCo
             "max_timeout_ms": 600_000,
             "program_presets": ["rust", "javascript", "python", "go", "build"],
             "root": ".",
+            "delegated_root": directories.runtime().join("child-worktrees"),
             "temporary_directory": directories.runtime().join("process-sandbox")
         }),
     )
@@ -2482,6 +2533,10 @@ fn host_plugin_configuration(
     HostPluginConfiguration::new(plugin_id, "default", configuration)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one Host Catalog function keeps immutable Agent and Tool authority wiring auditable together"
+)]
 fn host_catalog_bindings(
     selected_agent: &PluginInstanceId,
     available: &BTreeSet<String>,
@@ -2494,10 +2549,18 @@ fn host_catalog_bindings(
         PluginInstanceId::new("lenso.agent.loop", "researcher"),
         PluginInstanceId::new("lenso.agent.loop", "reviewer"),
     ];
+    let mutation_agents = [
+        PluginInstanceId::new("lenso.agent.loop", "worker-a"),
+        PluginInstanceId::new("lenso.agent.loop", "worker-b"),
+    ];
     let tool_admission = RequestAdmissionPlan::new(0, 4);
     let mut bindings = vec![
-        HostBinding::to_instance(root_agent.clone(), "lenso.agent.tools@2", root_tools)
-            .with_admission(tool_admission),
+        HostBinding::to_instance(
+            root_agent.clone(),
+            "lenso.agent.tools@2",
+            root_tools.clone(),
+        )
+        .with_admission(tool_admission),
     ];
     if available.contains("lenso.agent.subagent-tools")
         && available.contains("lenso.agent.workspace-read-tools")
@@ -2505,6 +2568,16 @@ fn host_catalog_bindings(
         bindings.extend(child_agents.iter().cloned().map(|child_agent| {
             HostBinding::to_instance(child_agent, "lenso.agent.tools@2", restricted_tools.clone())
                 .with_admission(tool_admission)
+        }));
+    }
+    if available.contains("lenso.agent.worktree-provider") {
+        bindings.extend(mutation_agents.iter().cloned().map(|child_agent| {
+            HostBinding::to_instance(
+                child_agent,
+                "lenso.agent.tools@2",
+                PluginInstanceId::new("lenso.agent.tools", "worker-tools"),
+            )
+            .with_admission(tool_admission)
         }));
     }
     if selected_agent != &root_agent {
@@ -2552,8 +2625,74 @@ fn host_catalog_bindings(
         bindings.push(HostBinding::to_instances(
             subagent_tools,
             "lenso.agent.turn-input@1",
-            child_agents,
+            child_agents.iter().cloned(),
         ));
+    }
+    if available.contains("lenso.agent.subagent-tools")
+        && available.contains("lenso.agent.worktree-provider")
+    {
+        let subagent_tools = PluginInstanceId::new("lenso.agent.subagent-tools", "worktree");
+        let worktree_children = child_agents
+            .iter()
+            .chain(mutation_agents.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        bindings.push(HostBinding::to_instances(
+            subagent_tools.clone(),
+            "lenso.agent@3",
+            worktree_children.iter().cloned(),
+        ));
+        bindings.push(HostBinding::to_instances(
+            subagent_tools.clone(),
+            "lenso.agent.turn-input@1",
+            worktree_children,
+        ));
+        bindings.push(HostBinding::to_instance(
+            subagent_tools,
+            "lenso.agent.worktree@1",
+            PluginInstanceId::new("lenso.agent.worktree-provider", "default"),
+        ));
+        let worker_tools = PluginInstanceId::new("lenso.agent.tools", "worker-tools");
+        bindings.push(
+            HostBinding::to_instances(
+                worker_tools.clone(),
+                "lenso.agent.tool-provider@2",
+                [
+                    PluginInstanceId::new("lenso.agent.workspace-read", "workspace-read"),
+                    PluginInstanceId::new("lenso.agent.skills.filesystem", "skills"),
+                    PluginInstanceId::new("lenso.agent.ask-user-tools", "ask-user"),
+                    PluginInstanceId::new("lenso.agent.workspace-edit", "default"),
+                    PluginInstanceId::new("lenso.agent.process-tools", "default"),
+                    PluginInstanceId::new("lenso.agent.git-tools", "default"),
+                ],
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 4)),
+        );
+        bindings.push(HostBinding::to_instance(
+            worker_tools,
+            "lenso.agent.tool-hook@1",
+            PluginInstanceId::new("lenso.agent.interactive-approval-hook", "default"),
+        ));
+    }
+    if available.contains("lenso.agent.process-tools") {
+        bindings.push(
+            HostBinding::new(
+                PluginInstanceId::new("lenso.agent.process-tools", "default"),
+                "lenso.agent.process@1",
+                "process",
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 4)),
+        );
+    }
+    if available.contains("lenso.agent.git-tools") {
+        bindings.push(
+            HostBinding::new(
+                PluginInstanceId::new("lenso.agent.git-tools", "default"),
+                "lenso.agent.process@1",
+                "process",
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 4)),
+        );
     }
     bindings
 }
@@ -3120,7 +3259,8 @@ mod tests {
             serde_json::json!({
                 "max_output_bytes": 1_048_576,
                 "max_task_bytes": 262_144,
-                "max_tasks": 8
+                "max_tasks": 8,
+                "require_worktree_provider": false
             })
         );
         let plan_json = serde_json::to_value(&configured).unwrap();

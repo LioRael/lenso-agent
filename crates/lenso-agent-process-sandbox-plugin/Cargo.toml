@@ -16,6 +16,7 @@ root-slot = "process"
 futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
+lenso-agent-native-support = { path = "../lenso-agent-native-support" }
 lenso-kernel.workspace = true
 nix.workspace = true
 serde.workspace = true

@@ -46,6 +46,7 @@ lenso-agent-workspace-edit-plugin = { path = "../lenso-agent-workspace-edit-plug
 lenso-agent-workspace-import-read-plugin = { path = "../lenso-agent-workspace-import-read-plugin" }
 lenso-agent-workspace-read-plugin = { path = "../lenso-agent-workspace-read-plugin" }
 lenso-agent-workspace-read-tools-plugin = { path = "../lenso-agent-workspace-read-tools-plugin" }
+lenso-agent-worktree-provider-plugin = { path = "../lenso-agent-worktree-provider-plugin" }
 lenso-agent-workspace-instructions-plugin = { path = "../lenso-agent-workspace-instructions-plugin" }
 lenso-secrets-command-plugin.workspace = true
 lenso-secrets-encrypted-file-plugin.workspace = true
