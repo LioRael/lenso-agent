@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Child-Agent composition is amended by ADR-0059.
 
 ## Context
 

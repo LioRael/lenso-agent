@@ -1688,6 +1688,7 @@ fn delegated_child_records_versioned_result_metadata_and_durable_session() {
     let metadata: serde_json::Value =
         serde_json::from_str(delegate_result["metadata_json"].as_str().unwrap()).unwrap();
     assert_eq!(metadata["schema"], "lenso.agent.subagent-result@1");
+    assert_eq!(metadata["agent"], "lenso.agent.loop/researcher");
     assert_eq!(metadata["status"], "completed");
     assert_eq!(metadata["context_mode"], "fresh");
     assert_eq!(metadata["task_bytes"], 41);
@@ -1754,6 +1755,7 @@ fn spawned_child_can_be_joined_by_task_id_without_losing_session_provenance() {
     let spawn_metadata: serde_json::Value =
         serde_json::from_str(spawned["metadata_json"].as_str().unwrap()).unwrap();
     assert_eq!(spawn_metadata["schema"], "lenso.agent.subagent-task@1");
+    assert_eq!(spawn_metadata["agent"], "lenso.agent.loop/researcher");
     assert_eq!(spawn_metadata["status"], "running");
     let task_id = spawn_metadata["task_id"].as_str().unwrap();
 
@@ -1764,6 +1766,7 @@ fn spawned_child_can_be_joined_by_task_id_without_losing_session_provenance() {
     let wait_metadata: serde_json::Value =
         serde_json::from_str(waited["metadata_json"].as_str().unwrap()).unwrap();
     assert_eq!(wait_metadata["schema"], "lenso.agent.subagent-result@1");
+    assert_eq!(wait_metadata["agent"], "lenso.agent.loop/researcher");
     assert_eq!(wait_metadata["status"], "completed");
     assert_eq!(wait_metadata["task_id"], task_id);
     let child_session_id = wait_metadata["child_session_id"].as_str().unwrap();
@@ -1881,6 +1884,7 @@ fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
     let cancel_metadata: serde_json::Value =
         serde_json::from_str(cancelled["metadata_json"].as_str().unwrap()).unwrap();
     assert_eq!(cancel_metadata["status"], "cancellation_requested");
+    assert_eq!(cancel_metadata["agent"], "lenso.agent.loop/reviewer");
     let listed = tool_results
         .iter()
         .find(|result| result["name"] == "list_subagents")
@@ -1896,6 +1900,10 @@ fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
     assert_eq!(listed_metadata["task_count"], 1);
     assert_eq!(listed_content["task_count"], 1);
     assert_eq!(listed_content["tasks"][0]["status"], "running");
+    assert_eq!(
+        listed_content["tasks"][0]["agent"],
+        "lenso.agent.loop/reviewer"
+    );
     assert_eq!(
         listed_content["tasks"][0]["task_id"],
         cancel_metadata["task_id"]

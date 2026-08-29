@@ -12,6 +12,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "adler2"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+
+[[package]]
 name = "aead"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -162,7 +168,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -173,7 +179,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -196,6 +202,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arc-swap"
@@ -825,6 +834,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crossbeam-utils"
+version = "0.8.22"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
+
+[[package]]
 name = "crossterm"
 version = "0.29.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -976,6 +991,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "derive_more"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1037,7 +1063,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1151,7 +1177,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1220,6 +1246,8 @@ version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
 dependencies = [
+ "crc32fast",
+ "miniz_oxide",
  "zlib-rs",
 ]
 
@@ -2352,7 +2380,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lenso"
 version = "0.5.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "lenso-kernel",
@@ -2464,7 +2492,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "zip",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -2649,7 +2677,7 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "uuid",
- "zip",
+ "zip 8.6.0",
 ]
 
 [[package]]
@@ -3283,7 +3311,7 @@ dependencies = [
 [[package]]
 name = "lenso-app-plan"
 version = "0.3.0"
-source = "git+https://github.com/LioRael/lenso?rev=b8c7d3bfd7b900965f7782016b92f6c891fa98e5#b8c7d3bfd7b900965f7782016b92f6c891fa98e5"
+source = "git+https://github.com/LioRael/lenso?rev=8599db7e4a214ed92f32089f81d14c833d4becf6#8599db7e4a214ed92f32089f81d14c833d4becf6"
 dependencies = [
  "serde",
  "serde_json",
@@ -3292,7 +3320,7 @@ dependencies = [
 [[package]]
 name = "lenso-bun-adapter"
 version = "0.1.3"
-source = "git+https://github.com/LioRael/lenso-bun-adapter?rev=a3676e754d0447f6407df57af04baafaac538e1b#a3676e754d0447f6407df57af04baafaac538e1b"
+source = "git+https://github.com/LioRael/lenso-bun-adapter?rev=1d9cee8f7296ddd237a7fa9f054c8078adb5e0f2#1d9cee8f7296ddd237a7fa9f054c8078adb5e0f2"
 dependencies = [
  "futures",
  "jsonrpsee",
@@ -3667,7 +3695,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-secrets"
 version = "0.1.2"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=8cc3847f63bf0330e689c1c42a6773c4e17446fe#8cc3847f63bf0330e689c1c42a6773c4e17446fe"
+source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
 dependencies = [
  "futures",
  "lenso-contract-codegen",
@@ -3681,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "lenso-cli"
 version = "0.4.8"
-source = "git+https://github.com/LioRael/lenso-cli?rev=c65f35f3f664b0cb127d5c33108978844aedf0e2#c65f35f3f664b0cb127d5c33108978844aedf0e2"
+source = "git+https://github.com/LioRael/lenso-cli?rev=13e09e052e83ab2226307d79d5c673612d61ec98#13e09e052e83ab2226307d79d5c673612d61ec98"
 dependencies = [
  "anyhow",
  "lenso-app-plan",
@@ -3689,7 +3717,9 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
+ "ureq",
  "uuid",
+ "zip 2.4.2",
 ]
 
 [[package]]
@@ -3736,7 +3766,7 @@ dependencies = [
 [[package]]
 name = "lenso-dylib-adapter"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -3750,7 +3780,7 @@ dependencies = [
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3759,7 +3789,7 @@ dependencies = [
 [[package]]
 name = "lenso-kernel"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso?rev=b8c7d3bfd7b900965f7782016b92f6c891fa98e5#b8c7d3bfd7b900965f7782016b92f6c891fa98e5"
+source = "git+https://github.com/LioRael/lenso?rev=8599db7e4a214ed92f32089f81d14c833d4becf6#8599db7e4a214ed92f32089f81d14c833d4becf6"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -3768,7 +3798,7 @@ dependencies = [
 [[package]]
 name = "lenso-native-adapter"
 version = "0.3.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "inventory",
@@ -3782,7 +3812,7 @@ dependencies = [
 [[package]]
 name = "lenso-native-adapter-macros"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -3800,7 +3830,7 @@ source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc6
 [[package]]
 name = "lenso-plugin-bundle"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "hex",
  "lenso-app-plan",
@@ -3817,7 +3847,7 @@ dependencies = [
 [[package]]
 name = "lenso-plugin-control-plane"
 version = "0.3.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "fs2",
  "futures",
@@ -3842,7 +3872,7 @@ dependencies = [
 [[package]]
 name = "lenso-process-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -3856,7 +3886,7 @@ dependencies = [
 [[package]]
 name = "lenso-process-sdk"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3865,7 +3895,7 @@ dependencies = [
 [[package]]
 name = "lenso-quickjs-adapter"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -3878,7 +3908,7 @@ dependencies = [
 [[package]]
 name = "lenso-remote-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -3893,7 +3923,7 @@ dependencies = [
 [[package]]
 name = "lenso-runner"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "cpu-time",
  "futures",
@@ -3905,7 +3935,7 @@ dependencies = [
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "hex",
@@ -3919,7 +3949,7 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-command-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=8cc3847f63bf0330e689c1c42a6773c4e17446fe#8cc3847f63bf0330e689c1c42a6773c4e17446fe"
+source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
 dependencies = [
  "futures",
  "lenso",
@@ -3934,7 +3964,7 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-encrypted-file-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=8cc3847f63bf0330e689c1c42a6773c4e17446fe#8cc3847f63bf0330e689c1c42a6773c4e17446fe"
+source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
 dependencies = [
  "age",
  "futures",
@@ -3949,7 +3979,7 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-env-plugin"
 version = "0.1.2"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=8cc3847f63bf0330e689c1c42a6773c4e17446fe#8cc3847f63bf0330e689c1c42a6773c4e17446fe"
+source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
 dependencies = [
  "futures",
  "lenso-capability-secrets",
@@ -3962,7 +3992,7 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-keychain-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=8cc3847f63bf0330e689c1c42a6773c4e17446fe#8cc3847f63bf0330e689c1c42a6773c4e17446fe"
+source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
 dependencies = [
  "futures",
  "lenso",
@@ -3977,7 +4007,7 @@ dependencies = [
 [[package]]
 name = "lenso-wasm-component-adapter"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=6bd5b88f3c6610581fcc4306c6cf356f71f7c611#6bd5b88f3c6610581fcc4306c6cf356f71f7c611"
+source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -4152,6 +4182,16 @@ checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
 dependencies = [
  "mime",
  "unicase",
+]
+
+[[package]]
+name = "miniz_oxide"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+dependencies = [
+ "adler2",
+ "simd-adler32",
 ]
 
 [[package]]
@@ -4715,7 +4755,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5182,7 +5222,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5262,7 +5302,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs 1.0.9",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5624,6 +5664,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "simd-adler32"
+version = "0.3.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
 name = "simd_cesu8"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5661,7 +5707,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5795,7 +5841,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6258,6 +6304,21 @@ name = "untrusted"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
+
+[[package]]
+name = "ureq"
+version = "2.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02d1a66277ed75f640d608235660df48c8e3c19f3b4edb6a263315626cc3c01d"
+dependencies = [
+ "base64",
+ "log",
+ "once_cell",
+ "rustls",
+ "rustls-pki-types",
+ "url",
+ "webpki-roots 0.26.11",
+]
 
 [[package]]
 name = "url"
@@ -6763,7 +6824,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7206,6 +7267,23 @@ dependencies = [
 
 [[package]]
 name = "zip"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+dependencies = [
+ "arbitrary",
+ "crc32fast",
+ "crossbeam-utils",
+ "displaydoc",
+ "flate2",
+ "indexmap",
+ "memchr",
+ "thiserror 2.0.20",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
 version = "8.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
@@ -7228,3 +7306,15 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zopfli"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+dependencies = [
+ "bumpalo",
+ "crc32fast",
+ "log",
+ "simd-adler32",
+]

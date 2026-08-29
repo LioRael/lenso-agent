@@ -458,7 +458,7 @@ fn subagent_root_response(
         [] => Ok(named_tool_request(
             "call-delegate-readme",
             "delegate",
-            r#"{"task":"Summarize README.md for the parent Agent."}"#,
+            r#"{"agent":"lenso.agent.loop/researcher","task":"Summarize README.md for the parent Agent."}"#,
         )),
         [result] if result.content == "Child summary: # Plugin Fixture" => Ok(vec![
             response(
@@ -499,7 +499,7 @@ fn asynchronous_subagent_response(
         [] => Ok(named_tool_request(
             "call-spawn-subagent-readme",
             "spawn_subagent",
-            r#"{"task":"Summarize README.md for the parent Agent."}"#,
+            r#"{"agent":"lenso.agent.loop/researcher","task":"Summarize README.md for the parent Agent."}"#,
         )),
         [spawned] => {
             let spawned: serde_json::Value = serde_json::from_str(&spawned.content)
@@ -564,7 +564,7 @@ fn cancelled_subagent_response(
         ([], None) => Ok(named_tool_request(
             "call-spawn-pending-subagent",
             "spawn_subagent",
-            r#"{"task":"Remain pending until cancelled."}"#,
+            r#"{"agent":"lenso.agent.loop/reviewer","task":"Remain pending until cancelled."}"#,
         )),
         ([_], Some(Ok(_))) => Ok(named_tool_request(
             "call-list-subagents",
@@ -643,7 +643,7 @@ fn steered_subagent_response(
         ([], None) => Ok(named_tool_request(
             "call-spawn-steered-subagent",
             "spawn_subagent",
-            r#"{"task":"Draft a README.md summary."}"#,
+            r#"{"agent":"lenso.agent.loop/researcher","task":"Draft a README.md summary."}"#,
         )),
         ([_], Some(Ok(task_id))) => {
             let arguments = serde_json::json!({

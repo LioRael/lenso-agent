@@ -571,7 +571,7 @@ impl AgentApp {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        instances.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+        instances.sort_by_key(ToString::to_string);
         Ok(instances)
     }
 
@@ -2217,7 +2217,12 @@ fn agent_defaults(available: &BTreeSet<String>) -> Vec<HostDefaultPlugin> {
         .chain(
             available
                 .contains("lenso.agent.subagent-tools")
-                .then_some("subagent-agent"),
+                .then_some("researcher"),
+        )
+        .chain(
+            available
+                .contains("lenso.agent.subagent-tools")
+                .then_some("reviewer"),
         )
         .map(|instance_key| {
             default_plugin(
@@ -2441,7 +2446,10 @@ fn host_catalog_bindings(
     let restricted_tools =
         PluginInstanceId::new("lenso.agent.workspace-read-tools", "restricted-read-tools");
     let root_agent = PluginInstanceId::new("lenso.agent.loop", "agent");
-    let child_agent = PluginInstanceId::new("lenso.agent.loop", "subagent-agent");
+    let child_agents = [
+        PluginInstanceId::new("lenso.agent.loop", "researcher"),
+        PluginInstanceId::new("lenso.agent.loop", "reviewer"),
+    ];
     let tool_admission = RequestAdmissionPlan::new(0, 4);
     let mut bindings = vec![
         HostBinding::to_instance(root_agent.clone(), "lenso.agent.tools@2", root_tools)
@@ -2450,14 +2458,10 @@ fn host_catalog_bindings(
     if available.contains("lenso.agent.subagent-tools")
         && available.contains("lenso.agent.workspace-read-tools")
     {
-        bindings.push(
-            HostBinding::to_instance(
-                child_agent.clone(),
-                "lenso.agent.tools@2",
-                restricted_tools.clone(),
-            )
-            .with_admission(tool_admission),
-        );
+        bindings.extend(child_agents.iter().cloned().map(|child_agent| {
+            HostBinding::to_instance(child_agent, "lenso.agent.tools@2", restricted_tools.clone())
+                .with_admission(tool_admission)
+        }));
     }
     if selected_agent != &root_agent {
         bindings.push(
@@ -2496,15 +2500,15 @@ fn host_catalog_bindings(
     }
     if available.contains("lenso.agent.subagent-tools") {
         let subagent_tools = PluginInstanceId::new("lenso.agent.subagent-tools", "default");
-        bindings.push(HostBinding::to_instance(
+        bindings.push(HostBinding::to_instances(
             subagent_tools.clone(),
             "lenso.agent@3",
-            child_agent.clone(),
+            child_agents.iter().cloned(),
         ));
-        bindings.push(HostBinding::to_instance(
+        bindings.push(HostBinding::to_instances(
             subagent_tools,
             "lenso.agent.turn-input@1",
-            child_agent,
+            child_agents,
         ));
     }
     bindings
@@ -3034,7 +3038,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_tasks_are_optional_bounded_and_bound_to_the_child_agent() {
+    fn subagent_tasks_are_optional_bounded_and_bound_to_named_child_agents() {
         let empty = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
         assert!(
             !empty
@@ -3063,28 +3067,16 @@ mod tests {
             })
         );
         let plan_json = serde_json::to_value(&configured).unwrap();
-        assert!(
-            plan_json["capability_bindings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|binding| {
+        let bindings = plan_json["capability_bindings"].as_array().unwrap();
+        for child in ["researcher", "reviewer"] {
+            for capability in ["lenso.agent@3", "lenso.agent.turn-input@1"] {
+                assert!(bindings.iter().any(|binding| {
                     binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
-                        && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
-                        && binding["capability_id"] == "lenso.agent@3"
-                })
-        );
-        assert!(
-            plan_json["capability_bindings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|binding| {
-                    binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
-                        && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
-                        && binding["capability_id"] == "lenso.agent.turn-input@1"
-                })
-        );
+                        && binding["provider_instance"] == format!("lenso.agent.loop/{child}")
+                        && binding["capability_id"] == capability
+                }));
+            }
+        }
     }
 
     #[test]
