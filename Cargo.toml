@@ -104,7 +104,7 @@ proc-macro2 = "1"
 quote = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
 lenso-capability-secrets = { version = "0.1.2", git = "https://github.com/LioRael/lenso-secrets-plugin", rev = "967fa0d2908b58c24a4b1ad26103a3d9173bbac0" }
-lenso-app-authoring = { package = "lenso-cli", version = "0.4.8", git = "https://github.com/LioRael/lenso-cli", rev = "ada47899652d162db46611e650a234fabd9e4293", default-features = false }
+lenso-app-authoring = { package = "lenso-cli", version = "0.4.8", git = "https://github.com/LioRael/lenso-cli", rev = "a0a9653b4581d3a9bed7c0282fee18edc9964de6", default-features = false }
 lenso-app-plan = { version = "0.3.0", git = "https://github.com/LioRael/lenso", rev = "8599db7e4a214ed92f32089f81d14c833d4becf6" }
 lenso-bun-adapter = { version = "0.1.3", git = "https://github.com/LioRael/lenso-bun-adapter", rev = "1d9cee8f7296ddd237a7fa9f054c8078adb5e0f2" }
 lenso = { version = "0.5.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "89815107385475c8b5be378bdcf5e21aa74e02f0" }
