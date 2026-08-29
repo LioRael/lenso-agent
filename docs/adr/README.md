@@ -63,3 +63,5 @@
 - [0061 — Abstract Plugin configuration authority](0061-abstract-plugin-configuration-authority.md)
 - [0062 — Compose isolated child worktrees](0062-compose-isolated-child-worktrees.md)
 - [0063 — Persist managed Plugin configuration publications](0063-persist-managed-plugin-configuration-publications.md)
+- [0064 — Adapt one remote Plugin configuration resource](0064-adapt-remote-plugin-configuration-resource.md)
+- [0065 — Serve one durable Plugin configuration resource](0065-serve-one-durable-plugin-configuration-resource.md)

@@ -3,8 +3,11 @@ use std::{net::SocketAddr, path::PathBuf, process::ExitCode};
 use clap::{ArgAction, Parser};
 use lenso_agent_web::{
     AgentWebConfig, AgentWebControl, AgentWebSurface, CONTROL_TOKEN_ENV,
-    PluginConfigurationStoreConfig,
+    PluginConfigurationStoreConfig, RemotePluginConfigurationConfig,
+    RemotePluginConfigurationResource,
 };
+
+const REMOTE_CONFIGURATION_TOKEN_ENV: &str = "LENSO_PLUGIN_CONFIGURATION_REMOTE_TOKEN";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -40,6 +43,27 @@ struct Args {
     /// SQLite store for managed Plugin configuration proposals and publications.
     #[arg(long, value_name = "PATH", requires = "plugin_control")]
     plugin_configuration_store: Option<PathBuf>,
+
+    /// Remote Plugin configuration service base URL.
+    #[arg(
+        long,
+        value_name = "URL",
+        requires_all = ["plugin_control", "plugin_configuration_app", "plugin_configuration_environment"],
+        conflicts_with = "plugin_configuration_store"
+    )]
+    plugin_configuration_remote: Option<String>,
+
+    /// Stable App identity in the remote configuration service.
+    #[arg(long, value_name = "APP", requires = "plugin_configuration_remote")]
+    plugin_configuration_app: Option<String>,
+
+    /// Stable environment identity in the remote configuration service.
+    #[arg(
+        long,
+        value_name = "ENVIRONMENT",
+        requires = "plugin_configuration_remote"
+    )]
+    plugin_configuration_environment: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -64,6 +88,28 @@ async fn run(args: Args) -> Result<(), String> {
     config.plugin_configuration_store = args
         .plugin_configuration_store
         .map(|database| PluginConfigurationStoreConfig::new(database, "agent"));
+    config.plugin_configuration_remote = match (
+        args.plugin_configuration_remote,
+        args.plugin_configuration_app,
+        args.plugin_configuration_environment,
+    ) {
+        (Some(service_url), Some(app), Some(environment)) => {
+            let token = std::env::var(REMOTE_CONFIGURATION_TOKEN_ENV)
+                .map_err(|_| format!("{REMOTE_CONFIGURATION_TOKEN_ENV} is required for a remote Plugin configuration authority"))?;
+            let resource = RemotePluginConfigurationResource::new(service_url, app, environment)
+                .map_err(|error| error.to_string())?;
+            Some(
+                RemotePluginConfigurationConfig::new(resource, token)
+                    .map_err(|error| error.to_string())?,
+            )
+        }
+        (None, None, None) => None,
+        _ => {
+            return Err(
+                "remote Plugin configuration requires URL, App, and environment".to_owned(),
+            );
+        }
+    };
     config.control = std::env::var(CONTROL_TOKEN_ENV)
         .ok()
         .filter(|value| !value.is_empty())

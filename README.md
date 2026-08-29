@@ -110,6 +110,57 @@ The store path must be absolute. Omitting it preserves direct local Plugin Root
 authority. This SQLite adapter is a single-Host persistence boundary, not a
 remote configuration service or distributed rollout coordinator.
 
+A Host can instead select one remote configuration resource. The resource
+identity is explicit and the bearer token is read separately from the command
+line so it is not exposed in process arguments:
+
+First prepare a dedicated service root with the exact Host Catalog from a
+compatible Host build, then start the single-resource service:
+
+```sh
+LENSO_PLUGIN_CONFIGURATION_SERVICE_READ_TOKEN=replace-with-a-read-token \
+LENSO_PLUGIN_CONFIGURATION_SERVICE_WRITE_TOKEN=replace-with-a-write-token \
+  cargo run -p lenso-agent-web \
+  --no-default-features \
+  --bin lenso-plugin-configuration-service -- \
+  --listen 127.0.0.1:8790 \
+  --root /var/lib/lenso-config/agent-production \
+  --database /var/lib/lenso-config/agent-production/configuration.sqlite3 \
+  --app agent \
+  --environment production
+```
+
+The service root is its own durable desired-state materialization and must not
+be shared with a running Host. The read credential permits inspection,
+history, and change watching. The distinct write credential additionally
+permits proposal, publication, and rollback operations. Put TLS in front of
+non-loopback deployments; credentials and TLS secret distribution remain
+deployment responsibilities.
+
+Then configure a Console-capable Host with the service write credential, or a
+read-only Host with the read credential:
+
+```sh
+LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
+LENSO_PLUGIN_CONFIGURATION_REMOTE_TOKEN=replace-with-a-service-token \
+  cargo run -p lenso-agent-web -- \
+  --listen 127.0.0.1:8788 \
+  --plugin-control \
+  --plugin-configuration-remote https://config.example.com/ \
+  --plugin-configuration-app agent \
+  --plugin-configuration-environment production
+```
+
+The adapter addresses
+`/v1/apps/{app}/environments/{environment}` beneath the service URL. HTTPS is
+required except for loopback development. Before the first App Generation it
+recovers ordered remote changes from the visible semantic Plugin Root revision.
+It then long-polls the same bounded change feed and materializes each transition
+through the local Plugin Root, existing reconciler, and Ready Gate. Missing or
+reordered history fails closed; there is no whole-root overwrite fallback. The
+remote service remains desired-state CAS and audit authority, while each Host
+continues to resolve the immutable Plan and Generation it actually runs.
+
 An embedding Host composes the library Surface with its own explicitly linked
 Plugin inventory. `lenso-agent-web` does not select Console, workspace, process,
 or other product behavior for the Host:

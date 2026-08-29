@@ -200,6 +200,16 @@ pub struct ConfiguredAgentHost<S> {
 }
 
 impl<S: AgentSurface> ConfiguredAgentHost<S> {
+    /// Publishes this exact Host Build Catalog before external authoring reconciliation.
+    ///
+    /// This does not resolve a Plan or start a Generation. Hosts with an
+    /// external Plugin configuration authority use it to validate and
+    /// materialize desired configuration before `run` performs initial App
+    /// resolution.
+    pub fn prepare_authoring(&self) -> Result<(), String> {
+        crate::ensure_host_catalog(&self.directories)
+    }
+
     /// Resolves the selected Profile and starts one immutable App Generation.
     pub async fn run(self, profile: Profile) -> Result<AgentApp, String> {
         let (plan, profile_name) = match profile {
