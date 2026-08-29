@@ -28,7 +28,20 @@ pub struct TaskSnapshot {
     pub generation_spec_digest: String,
     #[schemars(length(min = 1, max = 4_096))]
     pub workspace: String,
+    pub progress: Option<TaskProgress>,
     pub terminal_result: Option<TerminalResult>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct TaskProgress {
+    pub revision: u32,
+    pub message_count: u32,
+    pub text_delta_count: u32,
+    pub tool_call_count: u32,
+    #[schemars(length(max = 4_096))]
+    pub content: String,
+    pub content_truncated: bool,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -70,8 +83,8 @@ pub enum SnapshotError {
 
 #[lenso::capability(
     id = "lenso.agent.task-supervisor",
-    major = 1,
-    version = "1.0.0",
+    major = 2,
+    version = "2.0.0",
     portable = false,
     cross_lane_transfer = false
 )]

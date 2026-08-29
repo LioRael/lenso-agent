@@ -564,7 +564,7 @@ fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "plugins/lenso.agent.process-tools/default.toml",
-            "default_timeout_ms = 120000\n",
+            "default_timeout_ms = 120000\nmax_background_processes = 8\nmax_background_log_bytes = 262144\n",
         ),
         (
             "plugins/lenso.agent.git-tools/default.toml",

@@ -27,7 +27,8 @@ scope inside this slice.
 ## Slice 2: Parallel coding supervision
 
 Build on the existing bounded subagent task registry and durable child
-Sessions. Items 1–3 are delivered by ADR-0059, ADR-0060, and ADR-0062:
+Sessions. Items 1–5 and the end-to-end acceptance gate are delivered by
+ADR-0059 through ADR-0066:
 
 1. introduce named child Agent Instances selected by Profile rather than one
    shared child binding;
@@ -40,9 +41,11 @@ Sessions. Items 1–3 are delivered by ADR-0059, ADR-0060, and ADR-0062:
 5. render the same typed task snapshot in TUI and Web without making either
    surface the scheduler.
 
-Acceptance requires two child tasks to edit separate worktrees concurrently,
-survive surface reconnect, stream bounded progress, and merge only through an
-explicit reviewed parent action.
+The parallel coding supervision slice is complete at this boundary. Its
+end-to-end proof runs two mutation children in separate worktrees, keeps their
+bounded progress visible to a reconnected Web client while the parent Workspace
+remains unchanged, and integrates both exact reviewed commits only after an
+explicit parent approval.
 
 ## Slice 3: Entrypoints and ecosystem
 

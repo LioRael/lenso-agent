@@ -27,19 +27,24 @@ Status: implementation baseline for the higher-authority local-coding profile.
 
 ## `lenso.agent.process-tools`
 
-- **Deletion boundary:** removes `run_process` from the Tool catalog while the
-  underlying Process Capability can remain usable by another explicitly bound
-  consumer.
-- **Owned facts:** Tool name, Model-facing JSON schema, default timeout, output
-  presentation, metadata, and Process-to-Tool Domain Error mapping.
+- **Deletion boundary:** removes `run_process`, `start_process`, `read_process`,
+  `cancel_process`, `list_processes`, and every Generation-local background
+  handle while the underlying Process and Session Capabilities remain usable by
+  other explicitly bound consumers.
+- **Owned facts:** Tool names, Model-facing JSON schemas, default timeout,
+  background handle registry, combined-log and handle limits, output
+  presentation, terminal-fact payloads, metadata, and Process-to-Tool Domain
+  Error mapping.
 - **Provides:** `lenso.agent.tool-provider@2` (`catalog`, `execute`).
-- **Requires:** exactly one private `lenso.agent.process@1` provider.
+- **Requires:** exactly one private `lenso.agent.process@1` provider and the
+  selected `lenso.agent.session@1` provider.
 - **Final authorization:** none beyond argument decoding; it cannot expand the
   authoritative catalog returned by its bound Process Provider.
-- **Lifecycle/resources:** activation obtains the generated Process client and
-  snapshots its catalog; deactivation drops the client and Tool catalog.
-- **First behavior:** project one provider-authorized process request into one
-  `run_process` Tool call while forwarding the Kernel Invocation Context.
+- **Lifecycle/resources:** activation snapshots the Process catalog. Background
+  calls own detached cancellation, retained bounded logs, and one managed task;
+  deactivation cancels them before dropping the Tool catalog.
+- **First behavior:** project provider-authorized foreground and background
+  process requests while forwarding sealed Generation and Workspace authority.
 
 ## Selection and trust
 

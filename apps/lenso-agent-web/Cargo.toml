@@ -36,6 +36,7 @@ lenso-app-authoring.workspace = true
 lenso-app-plan.workspace = true
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
+lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
 rusqlite.workspace = true

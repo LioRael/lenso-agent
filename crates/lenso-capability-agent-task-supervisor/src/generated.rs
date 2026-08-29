@@ -4,8 +4,8 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
-pub const CAPABILITY_ID: &str = "lenso.agent.task-supervisor@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const CAPABILITY_ID: &str = "lenso.agent.task-supervisor@2";
+pub const DESCRIPTOR_VERSION: &str = "2.0.0";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TASK_SUPERVISOR_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const TASK_SUPERVISOR_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_task_supervisor { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"snapshot\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_task_supervisor { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"operations\":[\"snapshot\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_task_supervisor_client { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_task_supervisor_client { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_task_supervisor_client { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_task_supervisor_client { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const SNAPSHOT_OPERATION: &str = "snapshot";
 
@@ -56,6 +56,11 @@ pub struct TaskSnapshot {
     #[serde(rename = "owner")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub owner: TaskOwner,
+    #[serde(rename = "progress")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub progress: OptionalValue<TaskProgress>,
     #[serde(rename = "status")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub status: TaskStatus,
@@ -83,6 +88,28 @@ pub struct TaskOwner {
     #[serde(rename = "turn_id")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub turn_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct TaskProgress {
+    #[serde(rename = "content")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub content: String,
+    #[serde(rename = "content_truncated")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub content_truncated: bool,
+    #[serde(rename = "message_count")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub message_count: i64,
+    #[serde(rename = "revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub revision: i64,
+    #[serde(rename = "text_delta_count")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub text_delta_count: i64,
+    #[serde(rename = "tool_call_count")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub tool_call_count: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -45,6 +45,11 @@ use lenso_capability_agent_session::{
     SessionRename,
 };
 use lenso_capability_agent_session_presentation::SessionPresentationJsonCodec;
+use lenso_capability_agent_task_supervisor::{
+    SNAPSHOT_OPERATION as TASK_SNAPSHOT_OPERATION, SnapshotError as TaskSnapshotError,
+    SnapshotRequest as TaskSnapshotRequest, SnapshotResponse as TaskSnapshotResponse,
+    TaskSupervisor,
+};
 use lenso_capability_agent_tool_hook::ToolHookJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::{
@@ -610,6 +615,21 @@ impl AgentApp {
     /// Snapshots Prompt and Resource metadata explicitly visible to the TUI surface.
     pub async fn tui_context_sources(&self) -> Result<ContextSnapshotResponse, String> {
         self.context_sources("lenso.agent.tui/tui").await
+    }
+
+    /// Reads the typed child-task projection visible to the TUI surface.
+    pub async fn tui_task_snapshot(&self) -> Result<TaskSnapshotResponse, String> {
+        self.task_snapshot("lenso.agent.tui/tui").await
+    }
+
+    /// Reads the typed child-task projection visible to the Web surface.
+    pub async fn web_task_snapshot(&self) -> Result<TaskSnapshotResponse, String> {
+        self.task_snapshot("lenso.agent.web/web").await
+    }
+
+    async fn task_snapshot(&self, consumer_instance: &str) -> Result<TaskSnapshotResponse, String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        task_snapshot_on_route(&route, consumer_instance).await
     }
 
     /// Renders one user-selected Context Prompt for the CLI surface.
@@ -1355,6 +1375,55 @@ fn report_watcher_errors(
     }
 }
 
+async fn task_snapshot_on_route(
+    route: &DurableGenerationRoute<NativeApp>,
+    consumer_instance: &str,
+) -> Result<TaskSnapshotResponse, String> {
+    let handle = route
+        .target()
+        .many_handle::<TaskSupervisor>(consumer_instance)
+        .map_err(|error| format!("Task Supervisor snapshot route is unavailable: {error:?}"))?;
+    let cancellation = CancellationToken::new();
+    let context = route
+        .target()
+        .invocation_context_after(TUI_SNAPSHOT_TIMEOUT, cancellation.clone());
+    let invocation =
+        handle.invoke_many_with_context(TASK_SNAPSHOT_OPERATION, context, TaskSnapshotRequest {});
+    let responses = match tokio::time::timeout(TUI_SNAPSHOT_TIMEOUT, invocation).await {
+        Ok(result) => {
+            result.map_err(|error| format!("Task Supervisor snapshot failed: {error:?}"))?
+        }
+        Err(_) => {
+            cancellation.cancel();
+            return Err("Task Supervisor snapshot timed out".to_owned());
+        }
+    };
+    let mut tasks = Vec::new();
+    let mut task_ids = BTreeSet::new();
+    for response in responses {
+        let response = match response {
+            Ok(response) => response,
+            Err(TaskSnapshotError::SnapshotInvalid) => {
+                return Err("Task Supervisor rejected its snapshot".to_owned());
+            }
+            Err(TaskSnapshotError::Unknown(error)) => {
+                return Err(format!("Task Supervisor rejected its snapshot: {error:?}"));
+            }
+        };
+        for task in response.tasks {
+            if !task_ids.insert(task.task_id.clone()) {
+                return Err(format!("duplicate supervised task id `{}`", task.task_id));
+            }
+            tasks.push(task);
+        }
+    }
+    if tasks.len() > 64 {
+        return Err("Task Supervisor aggregate exceeded its 64-task limit".to_owned());
+    }
+    tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+    Ok(TaskSnapshotResponse { tasks })
+}
+
 fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), String> {
     if panels.len() > MAX_TUI_PANELS {
         return Err(format!(
@@ -1425,6 +1494,11 @@ struct UserInteractionSurfaceHandles {
 }
 
 impl TurnGeneration {
+    /// Reads child-task facts from this Turn's immutable Generation lease.
+    pub async fn task_snapshot(&self) -> Result<TaskSnapshotResponse, String> {
+        task_snapshot_on_route(&self.route, &self.consumer_instance).await
+    }
+
     pub fn handle(&self) -> &NativeStreamHandle<Agent> {
         &self.handle
     }
@@ -2446,7 +2520,11 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
         sandbox_process_configuration(directories),
         host_plugin_configuration(
             "lenso.agent.process-tools",
-            serde_json::json!({"default_timeout_ms": 120_000}),
+            serde_json::json!({
+                "default_timeout_ms": 120_000,
+                "max_background_processes": 8,
+                "max_background_log_bytes": 262_144
+            }),
         ),
         host_plugin_configuration(
             "lenso.agent.subagent-tools",
@@ -2607,6 +2685,20 @@ fn host_catalog_bindings(
             "lenso.agent@3",
             selected_agent.clone(),
         ));
+    }
+    if available.contains("lenso.agent.subagent-tools") {
+        for surface in [
+            PluginInstanceId::new("lenso.agent.tui", "tui"),
+            PluginInstanceId::new("lenso.agent.web", "web"),
+        ]
+        .into_iter()
+        .filter(|surface| available.contains(surface.plugin_id()))
+        {
+            bindings.push(
+                HostBinding::new(surface, "lenso.agent.task-supervisor@2", "tool-providers")
+                    .with_admission(RequestAdmissionPlan::new(8, 4)),
+            );
+        }
     }
     if available.contains("lenso.agent.code-mode-tools")
         && available.contains("lenso.agent.workspace-read-tools")
@@ -3276,6 +3368,30 @@ mod tests {
                         && binding["capability_id"] == capability
                 }));
             }
+        }
+    }
+
+    #[test]
+    fn interactive_surfaces_bind_task_snapshots_through_the_tool_provider_slot() {
+        let available = [
+            "lenso.agent.subagent-tools",
+            "lenso.agent.tui",
+            "lenso.agent.web",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let bindings = host_catalog_bindings(
+            &PluginInstanceId::new("lenso.agent.loop", "agent"),
+            &available,
+        );
+
+        for surface in ["lenso.agent.tui/tui", "lenso.agent.web/web"] {
+            assert!(bindings.iter().any(|binding| {
+                binding.consumer().to_string() == surface
+                    && binding.capability_id() == "lenso.agent.task-supervisor@2"
+                    && binding.provider_slot() == Some("tool-providers")
+            }));
         }
     }
 

@@ -2276,7 +2276,7 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
     configure_plugin_with(
         temporary.path(),
         "lenso.agent.process-tools",
-        "default_timeout_ms = 120000\n",
+        "default_timeout_ms = 120000\nmax_background_processes = 8\nmax_background_log_bytes = 262144\n",
     );
     configure_plugin_with(
         temporary.path(),
@@ -2332,6 +2332,106 @@ fn local_coding_profile_edits_checks_and_reads_back_a_rust_project() {
     assert_eq!(metadata["exit_code"], "0");
 }
 
+#[test]
+fn background_process_handles_retain_logs_and_append_a_durable_terminal_fact() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Background fixture\n").unwrap();
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process.native",
+        "root = \".\"\nallowed_programs = [\"sh\"]\nenvironment_allowlist = [\"PATH\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process-tools",
+        "default_timeout_ms = 120000\nmax_background_processes = 2\nmax_background_log_bytes = 4096\n",
+    );
+
+    let output = run_derived(
+        temporary.path(),
+        "Run and observe one background process.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Background process completed with durable terminal facts.\n"
+    );
+
+    let state = stored_session(temporary.path());
+    let terminal = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "tool_result")
+        .filter_map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str()?).ok()
+        })
+        .find(|payload| payload["name"] == "background_process")
+        .expect("background terminal fact must be durable");
+    assert_eq!(terminal["status"], "completed");
+    assert!(
+        terminal["content"]
+            .as_str()
+            .unwrap()
+            .contains("background-output")
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_str(terminal["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["schema"], "lenso.agent.background-process@1");
+    assert_eq!(metadata["process"]["logs_truncated"], false);
+}
+
+#[test]
+fn background_process_cancellation_is_detached_and_durable() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Cancel fixture\n").unwrap();
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process.native",
+        "root = \".\"\nallowed_programs = [\"sh\"]\nenvironment_allowlist = [\"PATH\"]\nmax_timeout_ms = 600000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+    );
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.process-tools",
+        "default_timeout_ms = 120000\nmax_background_processes = 2\nmax_background_log_bytes = 4096\n",
+    );
+
+    let output = run_derived(temporary.path(), "Cancel one background process.", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Background process cancellation became durable.\n"
+    );
+
+    let state = stored_session(temporary.path());
+    let terminal = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "tool_result")
+        .filter_map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str()?).ok()
+        })
+        .find(|payload| payload["name"] == "background_process" && payload["status"] == "cancelled")
+        .expect("cancelled process terminal fact must be durable");
+    let metadata: serde_json::Value =
+        serde_json::from_str(terminal["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["process"]["cancel_requested"], true);
+    assert!(matches!(
+        metadata["process"]["reason_code"].as_str(),
+        Some("terminated" | "runtime_cancelled" | "runtime_admission_closed")
+    ));
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn sandbox_coding_profile_runs_a_real_cargo_check_inside_seatbelt() {
@@ -2355,7 +2455,7 @@ fn sandbox_coding_profile_runs_a_real_cargo_check_inside_seatbelt() {
     configure_plugin_with(
         temporary.path(),
         "lenso.agent.process-tools",
-        "default_timeout_ms = 120000\n",
+        "default_timeout_ms = 120000\nmax_background_processes = 8\nmax_background_log_bytes = 262144\n",
     );
     configure_plugin_with(
         temporary.path(),

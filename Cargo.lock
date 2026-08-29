@@ -2658,6 +2658,7 @@ dependencies = [
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-presentation",
+ "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tools",
@@ -2906,13 +2907,17 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent-process",
+ "lenso-capability-agent-session",
  "lenso-capability-agent-tool-progress",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "lenso-native-adapter",
  "serde",
  "serde_json",
+ "time",
+ "uuid",
 ]
 
 [[package]]
@@ -3134,6 +3139,7 @@ dependencies = [
  "lenso-agent-tui-workspace-suggestions-plugin",
  "lenso-capability-agent",
  "lenso-capability-agent-context-source",
+ "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-progress",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
@@ -3165,6 +3171,7 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
  "lenso-capability-agent-user-interaction",
@@ -3223,6 +3230,7 @@ dependencies = [
  "lenso-app-plan",
  "lenso-capability-agent",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-user-interaction",
  "lenso-cli",
  "lenso-kernel",
@@ -3242,6 +3250,7 @@ dependencies = [
  "lenso",
  "lenso-capability-agent",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-user-interaction",
  "serde_json",
 ]

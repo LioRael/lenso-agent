@@ -35,6 +35,43 @@
       },
       "additionalProperties": false
     },
+    "TaskProgress": {
+      "type": "object",
+      "required": [
+        "revision",
+        "message_count",
+        "text_delta_count",
+        "tool_call_count",
+        "content",
+        "content_truncated"
+      ],
+      "properties": {
+        "revision": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "text_delta_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tool_call_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "content_truncated": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "TaskSnapshot": {
       "type": "object",
       "required": [
@@ -76,6 +113,16 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4096
+        },
+        "progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskProgress"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "terminal_result": {
           "anyOf": [

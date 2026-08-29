@@ -15,13 +15,17 @@ root-slot = "tool-providers"
 [dependencies]
 futures.workspace = true
 lenso.workspace = true
+lenso-agent-native-support = { path = "../lenso-agent-native-support" }
 lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
+lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-capability-agent-tool-progress = { path = "../lenso-capability-agent-tool-progress" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+time.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

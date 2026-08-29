@@ -1,8 +1,9 @@
 use std::{
     fs,
     net::{SocketAddr, TcpListener},
+    path::Path,
     process::{Child, Command, Stdio},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -42,6 +43,18 @@ async fn streams_lists_and_branches_a_durable_session() {
             .any(|tool| tool["name"] == "read")
     );
     assert_eq!(bootstrap["trajectory"], "lenso.agent.trajectory@1");
+    assert_eq!(bootstrap["capabilities"]["taskSnapshot"], true);
+    let tasks = client
+        .get(format!("http://{address}/api/console/v1/agent/tasks"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(tasks, serde_json::json!({"tasks": []}));
 
     let response = client
         .post(format!("http://{address}/api/console/v1/agent/turns"))
@@ -193,6 +206,7 @@ async fn answers_a_pending_web_interaction_and_resumes_the_same_turn() {
         interaction["questions"][0]["options"][0]["preview"],
         "mode = \"safe\""
     );
+    assert_tasks_readable_while_turn_runs(&client, address).await;
 
     client
         .post(format!(
@@ -221,6 +235,240 @@ async fn answers_a_pending_web_interaction_and_resumes_the_same_turn() {
         "unexpected stream: {body}"
     );
     assert!(body.contains("turn_completed"), "unexpected stream: {body}");
+}
+
+async fn assert_tasks_readable_while_turn_runs(client: &reqwest::Client, address: SocketAddr) {
+    let response = tokio::time::timeout(
+        Duration::from_secs(1),
+        client
+            .get(format!("http://{address}/api/console/v1/agent/tasks"))
+            .send(),
+    )
+    .await
+    .expect("task snapshots must remain readable while a Turn is blocked")
+    .unwrap()
+    .error_for_status()
+    .unwrap();
+    let tasks = response.json::<serde_json::Value>().await.unwrap();
+    assert_eq!(tasks, serde_json::json!({"tasks": []}));
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one end-to-end proof retains reconnect, isolation, review, and integration evidence"
+)]
+async fn supervises_reconnects_reviews_and_integrates_two_isolated_workers() {
+    let temporary = tempfile::tempdir().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let home = temporary.path().join("agent-home");
+    initialize_git_workspace(&workspace);
+    write_supervised_coding_fixture(&home);
+
+    let address = available_address();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"));
+    command.args(["--listen", &address.to_string(), "--profile", "code"]);
+    for tool in [
+        "spawn_subagent",
+        "wait_subagent",
+        "ask_user",
+        "review_worktree",
+        "integrate_worktree",
+        "create_file",
+        "git_stage",
+        "git_commit",
+    ] {
+        command.args(["--allow-tool", tool]);
+    }
+    let mut server = ChildGuard(
+        command
+            .current_dir(&workspace)
+            .env("LENSO_AGENT_HOME", &home)
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+
+    let response = client
+        .post(format!("http://{address}/api/console/v1/agent/turns"))
+        .header("accept", "text/event-stream")
+        .json(&serde_json::json!({
+            "input": "Supervise and integrate two isolated mutation workers.",
+            "request_id": "request-supervised-integration",
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let stream = tokio::spawn(async move { response.text().await.unwrap() });
+
+    let interaction = wait_for_interaction(
+        &client,
+        address,
+        "request-supervised-integration",
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(interaction["questions"][0]["header"], "Review");
+
+    let before_reconnect = wait_for_completed_task_progress(&client, address).await;
+    assert_eq!(before_reconnect["tasks"].as_array().unwrap().len(), 2);
+    assert!(!workspace.join("worker-a.txt").exists());
+    assert!(!workspace.join("worker-b.txt").exists());
+    let workspaces = before_reconnect["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|task| task["workspace"].as_str().unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(workspaces.len(), 2);
+    assert!(workspaces.iter().all(|path| Path::new(path).is_dir()));
+
+    let reconnected = reqwest::Client::new()
+        .get(format!("http://{address}/api/console/v1/agent/tasks"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(reconnected, before_reconnect);
+
+    client
+        .post(format!(
+            "http://{address}/api/console/v1/agent/turns/request-supervised-integration/interactions/{}/answer",
+            interaction["interactionId"].as_str().unwrap()
+        ))
+        .json(&serde_json::json!({
+            "answers": [{
+                "questionId": "integration",
+                "selectedOptionIds": ["integrate"],
+                "other": null,
+            }]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+
+    let body = tokio::time::timeout(Duration::from_secs(20), stream)
+        .await
+        .expect("reviewed integration Turn should complete")
+        .unwrap();
+    assert!(
+        body.contains("Both reviewed worker commits were integrated."),
+        "unexpected stream: {body}"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("worker-a.txt")).unwrap(),
+        "worker-a\n"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("worker-b.txt")).unwrap(),
+        "worker-b\n"
+    );
+
+    let session = client
+        .get(format!(
+            "http://{address}/api/console/v1/agent/sessions/{}",
+            stream_session_id(&body)
+        ))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let review = session.find("call-review-supervised-worker-a").unwrap();
+    let integrate = session.find("call-integrate-supervised-worker-a").unwrap();
+    assert!(
+        review < integrate,
+        "worktrees must be reviewed before integration"
+    );
+    assert!(session.contains("reviewed_commit="));
+    assert!(session.contains("diff_sha256="));
+}
+
+async fn wait_for_interaction(
+    client: &reqwest::Client,
+    address: SocketAddr,
+    request_id: &str,
+    timeout: Duration,
+) -> serde_json::Value {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let response = client
+                .get(format!(
+                    "http://{address}/api/console/v1/agent/turns/{request_id}/interactions"
+                ))
+                .send()
+                .await
+                .unwrap();
+            if response.status().is_success() {
+                let body = response.json::<serde_json::Value>().await.unwrap();
+                if let Some(interaction) = body["interactions"].as_array().unwrap().first() {
+                    break interaction.clone();
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("interaction should become visible")
+}
+
+async fn wait_for_completed_task_progress(
+    client: &reqwest::Client,
+    address: SocketAddr,
+) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let tasks = client
+            .get(format!("http://{address}/api/console/v1/agent/tasks"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap();
+        let complete = tasks["tasks"].as_array().is_some_and(|items| {
+            items.len() == 2
+                && items.iter().all(|task| {
+                    task["status"] == "completed"
+                        && task["progress"]["revision"]
+                            .as_i64()
+                            .is_some_and(|value| value > 0)
+                        && task["progress"]["message_count"]
+                            .as_i64()
+                            .is_some_and(|value| value > 0)
+                        && task["progress"]["tool_call_count"]
+                            .as_i64()
+                            .is_some_and(|value| value > 0)
+                        && task["progress"]["content"]
+                            .as_str()
+                            .is_some_and(|value| value.len() <= 4096)
+                })
+        });
+        if complete {
+            return tasks;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "both isolated workers should expose bounded terminal progress: {tasks}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -968,6 +1216,120 @@ fn write_web_fixture(root: &std::path::Path) {
         ),
     )
     .unwrap();
+}
+
+fn initialize_git_workspace(workspace: &Path) {
+    fs::create_dir_all(workspace).unwrap();
+    fs::write(workspace.join("README.md"), "# Supervised Integration\n").unwrap();
+    let git = |arguments: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(workspace)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "--quiet"]);
+    git(&["config", "user.name", "Lenso Test"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["add", "README.md"]);
+    git(&["commit", "--quiet", "-m", "initial"]);
+}
+
+fn write_supervised_coding_fixture(root: &Path) {
+    let files = [
+        (
+            "plugins/lenso.agent.workspace-instructions/default.toml",
+            "working_directory = \".\"\nfile_name = \"AGENTS.md\"\nmax_ancestor_depth = 32\nmax_file_bytes = 262144\nmax_total_bytes = 1048576\n",
+        ),
+        (
+            "plugins/lenso.agent.workspace-edit/default.toml",
+            "root = \".\"\nmax_file_bytes = 1048576\nmax_edit_bytes = 131072\nrequire_checkpoint = false\n",
+        ),
+        (
+            "plugins/lenso.agent.process.native/default.toml",
+            "root = \".\"\nallowed_programs = [\"git\"]\nprogram_presets = []\nenvironment_allowlist = [\"PATH\", \"HOME\", \"TMPDIR\"]\nmax_timeout_ms = 120000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+        ),
+        (
+            "plugins/lenso.agent.process-tools/default.toml",
+            "default_timeout_ms = 120000\nmax_background_processes = 8\nmax_background_log_bytes = 262144\n",
+        ),
+        (
+            "plugins/lenso.agent.git-tools/default.toml",
+            "default_timeout_ms = 30000\nmax_log_entries = 50\nmax_commit_message_bytes = 4096\nenable_branch_management = false\nenable_history_integration = false\nallowed_network_remotes = []\n",
+        ),
+        (
+            "plugins/lenso.agent.code-mode-tools/default.toml",
+            "max_code_bytes = 32768\nmax_instructions = 1000000\nmax_memory_bytes = 8388608\nmax_output_bytes = 262144\nmax_parallel_subcalls = 4\nmax_subcalls = 16\n",
+        ),
+        (
+            "plugins/lenso.agent.subagent-tools/worktree.toml",
+            "max_output_bytes = 1048576\nmax_task_bytes = 262144\nmax_tasks = 8\nrequire_worktree_provider = true\n",
+        ),
+        (
+            "plugins/lenso.agent.worktree-provider/default.toml",
+            "mutation_agents = [\"lenso.agent.loop/worker-a\", \"lenso.agent.loop/worker-b\"]\nmax_worktrees = 8\ntimeout_ms = 120000\nmax_review_bytes = 1048576\n",
+        ),
+        (
+            "plugins/lenso.agent.tools/worker-tools.toml",
+            "# Private Tool runtime for mutation-capable child Agents.\n",
+        ),
+        (
+            "plugins/lenso.agent.interactive-approval-hook/default.toml",
+            "default_decision = \"ask\"\nallow_tools = [\"spawn_subagent\", \"wait_subagent\", \"ask_user\", \"review_worktree\", \"integrate_worktree\", \"create_file\", \"git_stage\", \"git_commit\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n",
+        ),
+        (
+            "plugins/lenso.agent.prompt.static/coding.toml",
+            "[[contributions]]\nid = \"test.supervised-coding\"\nversion = \"1.0.0\"\nkind = \"instruction\"\ncontent = \"Use isolated workers and integrate only after explicit review approval.\"\n",
+        ),
+        (
+            "plugins/lenso.agent.model.fixture/default.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+        (
+            "plugins/lenso.agent.loop/agent.toml",
+            "model = \"fixture/readme-summary-v1\"\nmax_steps = 8\nmax_tool_calls = 12\nmax_parallel_tool_calls = 4\nmax_output_tokens = 128\n",
+        ),
+        (
+            "plugins/lenso.agent.loop/worker-a.toml",
+            "model = \"fixture/readme-summary-v1\"\nmax_steps = 4\nmax_tool_calls = 4\nmax_parallel_tool_calls = 1\nmax_output_tokens = 128\n",
+        ),
+        (
+            "plugins/lenso.agent.loop/worker-b.toml",
+            "model = \"fixture/readme-summary-v1\"\nmax_steps = 4\nmax_tool_calls = 4\nmax_parallel_tool_calls = 1\nmax_output_tokens = 128\n",
+        ),
+        (
+            "profiles/code.toml",
+            concat!(
+                "description = \"Supervised coding fixture\"\n",
+                "instances = [\n",
+                "  \"lenso.agent.workspace-instructions/default\",\n",
+                "  \"lenso.agent.workspace-edit/default\",\n",
+                "  \"lenso.agent.process.native/default\",\n",
+                "  \"lenso.agent.process-tools/default\",\n",
+                "  \"lenso.agent.git-tools/default\",\n",
+                "  \"lenso.agent.code-mode-tools/default\",\n",
+                "  \"lenso.agent.worktree-provider/default\",\n",
+                "  \"lenso.agent.subagent-tools/worktree\",\n",
+                "  \"lenso.agent.tools/worker-tools\",\n",
+                "  \"lenso.agent.loop/worker-a\",\n",
+                "  \"lenso.agent.loop/worker-b\",\n",
+                "  \"lenso.agent.interactive-approval-hook/default\",\n",
+                "  \"lenso.agent.prompt.static/coding\",\n",
+                "  \"lenso.agent.model.fixture/default\",\n",
+                "]\n",
+            ),
+        ),
+    ];
+    for (relative, content) in files {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
 }
 
 fn active_generation_digest(root: &std::path::Path) -> String {
