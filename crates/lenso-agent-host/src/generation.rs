@@ -12,6 +12,7 @@ use tokio::sync::oneshot;
 
 use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
+use lenso_agent_loop_plugin::AgentBehaviorProvenance;
 use lenso_agent_native_support::WorkspaceScope;
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
@@ -448,6 +449,7 @@ async fn recover_or_open_host<F: CatalogFactory>(
 pub struct AgentApp {
     host: FrameworkHost<NativeApp>,
     resolved_plan: ResolvedAppPlan,
+    generation_plans: Rc<RefCell<BTreeMap<String, ResolvedAppPlan>>>,
     runtime: RuntimeAttachment,
     session_database: PathBuf,
     profile_name: Option<String>,
@@ -478,6 +480,7 @@ impl AgentApp {
         let _authority_fence = runtime_attachment.authority_snapshot()?;
         let (generation, _resolution_authority_digest) =
             resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
+        let initial_generation_digest = generation.spec.digest().to_owned();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
@@ -514,6 +517,10 @@ impl AgentApp {
         }
         let client = host.controller();
         let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
+        let generation_plans = Rc::new(RefCell::new(BTreeMap::from([(
+            initial_generation_digest,
+            resolved_plan.clone(),
+        )])));
         let authoring_managed =
             plan_is_authoring_managed(plan_bytes, store_root, profile_name.as_deref());
         let reconciler = start_generation_reconciler(
@@ -523,10 +530,12 @@ impl AgentApp {
             profile_name.clone(),
             authoring_managed,
             reconcile_events.clone(),
+            generation_plans.clone(),
         );
         Ok(Self {
             host,
             resolved_plan,
+            generation_plans,
             runtime: runtime_attachment,
             session_database,
             profile_name,
@@ -557,6 +566,25 @@ impl AgentApp {
         } else {
             resolve_host_plan_in(&directories, &root)
         }
+    }
+
+    /// Projects the linked Model Providers and the exact selection in this App.
+    pub async fn provider_model_catalog(&self) -> Result<crate::ProviderModelCatalog, String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        let plan = self
+            .generation_plans
+            .borrow()
+            .get(route.generation_spec_digest())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "active Generation `{}` has no retained Provider/Model catalog authority",
+                    route.generation_spec_digest()
+                )
+            })?;
+        let directories = directories_for_store_root(self.runtime.state().root())?;
+        let host = linked_host_catalog_in(&directories)?;
+        crate::provider_catalog::project(&host, &plan)
     }
 
     /// Snapshots explicit disabled Instance markers for management surfaces.
@@ -826,6 +854,16 @@ impl AgentApp {
             .find(|binding| binding.capability_id() == AGENT_CAPABILITY_ID)
             .map(|binding| binding.provider_instance().to_owned())
             .ok_or_else(|| "leased Generation Surface has no Agent provider binding".to_owned())?;
+        let behavior_digest = {
+            let plans = self.generation_plans.borrow();
+            let plan = plans.get(route.generation_spec_digest()).ok_or_else(|| {
+                format!(
+                    "active Generation `{}` has no retained Agent behavior authority",
+                    route.generation_spec_digest()
+                )
+            })?;
+            agent_behavior_digest(plan, &agent_provider)?
+        };
         let tools_catalog = route
             .target()
             .handle::<ToolsCatalog>(&agent_provider)
@@ -863,6 +901,7 @@ impl AgentApp {
             interaction,
             interactive,
             tools_catalog: Rc::new(tools_catalog),
+            behavior_digest,
         })
     }
 
@@ -1011,6 +1050,7 @@ fn start_generation_reconciler(
     profile_name: Option<String>,
     authoring_managed: bool,
     events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+    generation_plans: Rc<RefCell<BTreeMap<String, ResolvedAppPlan>>>,
 ) -> GenerationReconciler {
     let (stop, mut stopped) = oneshot::channel();
     let mut controller_events = client.subscribe();
@@ -1065,6 +1105,7 @@ fn start_generation_reconciler(
                         &host_build,
                         profile_name.as_deref(),
                         &mut last_attempted_desired_state_digest,
+                        &generation_plans,
                     ).await {
                         if matches!(event, OnlineGenerationEvent::Switched { .. })
                             || last_rejection.as_ref() != Some(&event)
@@ -1085,6 +1126,7 @@ fn start_generation_reconciler(
                         &host_build,
                         profile_name.as_deref(),
                         &mut last_attempted_desired_state_digest,
+                        &generation_plans,
                     ).await {
                         if matches!(event, OnlineGenerationEvent::Switched { .. })
                             || last_rejection.as_ref() != Some(&event)
@@ -1205,6 +1247,7 @@ async fn reconcile_online_generation(
     host_build: &HostBuildIdentity,
     profile_name: Option<&str>,
     last_attempted_desired_state_digest: &mut Option<String>,
+    generation_plans: &Rc<RefCell<BTreeMap<String, ResolvedAppPlan>>>,
 ) -> Option<OnlineGenerationEvent> {
     let coordinator = match crate::authority::AuthorityCoordinator::prepare(store_root) {
         Ok(coordinator) => coordinator,
@@ -1267,16 +1310,23 @@ async fn reconcile_online_generation(
             detail,
         });
     }
+    let candidate_plan = candidate.plan.clone();
     match activate_online_candidate(client, &state, previous_generation_spec_digest, candidate)
         .await
     {
-        Ok(Some(outcome)) => Some(OnlineGenerationEvent::Switched {
-            plugin_root_revision,
-            resolution_authority_digest,
-            generation_spec_digest: outcome.active_generation_spec_digest,
-            previous_generation_spec_digest: previous_generation_spec_digest.to_owned(),
-            routing_epoch: outcome.routing_epoch,
-        }),
+        Ok(Some(outcome)) => {
+            generation_plans.borrow_mut().insert(
+                outcome.active_generation_spec_digest.clone(),
+                candidate_plan,
+            );
+            Some(OnlineGenerationEvent::Switched {
+                plugin_root_revision,
+                resolution_authority_digest,
+                generation_spec_digest: outcome.active_generation_spec_digest,
+                previous_generation_spec_digest: previous_generation_spec_digest.to_owned(),
+                routing_epoch: outcome.routing_epoch,
+            })
+        }
         Ok(None) => {
             *last_attempted_desired_state_digest = None;
             None
@@ -1491,6 +1541,7 @@ pub struct TurnGeneration {
     interaction: Option<UserInteractionSurfaceHandles>,
     interactive: bool,
     tools_catalog: Rc<NativeRequestHandle<ToolsCatalog>>,
+    behavior_digest: String,
 }
 
 #[derive(Debug)]
@@ -1565,7 +1616,9 @@ impl TurnGeneration {
             .with_typed_extension(&WorkspaceScope {
                 absolute_path: workspace,
             })
-            .map_err(|error| format!("failed to attach Workspace scope: {error}"))?;
+            .map_err(|error| format!("failed to attach Workspace scope: {error}"))?
+            .with_typed_extension(&AgentBehaviorProvenance::new(self.behavior_digest.clone())?)
+            .map_err(|error| format!("failed to attach Agent behavior provenance: {error}"))?;
         if self.interactive {
             context
                 .with_typed_extension(&InteractiveSurface)
@@ -1805,6 +1858,45 @@ impl TurnGeneration {
     fn generation_spec_digest(&self) -> &str {
         self.route.generation_spec_digest()
     }
+}
+
+fn agent_behavior_digest(plan: &ResolvedAppPlan, agent: &str) -> Result<String, String> {
+    let mut closure = BTreeSet::from([agent.to_owned()]);
+    loop {
+        let before = closure.len();
+        for binding in plan.capability_bindings() {
+            if closure.contains(binding.consumer_instance()) {
+                closure.insert(binding.provider_instance().to_owned());
+            }
+        }
+        if closure.len() == before {
+            break;
+        }
+    }
+    let instances = plan
+        .plugin_instances()
+        .iter()
+        .filter(|instance| closure.contains(instance.instance_key()))
+        .collect::<Vec<_>>();
+    let bindings = plan
+        .capability_bindings()
+        .iter()
+        .filter(|binding| {
+            closure.contains(binding.consumer_instance())
+                && closure.contains(binding.provider_instance())
+        })
+        .collect::<Vec<_>>();
+    if !instances
+        .iter()
+        .any(|instance| instance.instance_key() == agent)
+    {
+        return Err(format!(
+            "Agent behavior root `{agent}` is absent from the active Plan"
+        ));
+    }
+    serde_json::to_vec(&(agent, instances, bindings))
+        .map(|bytes| sha256_digest(&bytes))
+        .map_err(|error| format!("failed to identify Agent behavior: {error}"))
 }
 
 fn append_event_kind(
@@ -2796,6 +2888,36 @@ fn host_catalog_bindings(
             .with_admission(RequestAdmissionPlan::new(8, 4)),
         );
     }
+    if available.contains("lenso.agent.github-workflows") {
+        bindings.push(
+            HostBinding::new(
+                PluginInstanceId::new("lenso.agent.github-workflows", "default"),
+                "lenso.agent.process@1",
+                "process",
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 4)),
+        );
+    }
+    if available.contains("lenso.agent.browser.playwright") {
+        bindings.push(
+            HostBinding::new(
+                PluginInstanceId::new("lenso.agent.browser.playwright", "default"),
+                "lenso.agent.process@1",
+                "process",
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 1)),
+        );
+    }
+    if available.contains("lenso.agent.multimodal-tools") {
+        bindings.push(
+            HostBinding::new(
+                PluginInstanceId::new("lenso.agent.multimodal-tools", "default"),
+                "lenso.secrets@1",
+                "secrets",
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 4)),
+        );
+    }
     bindings
 }
 
@@ -2988,6 +3110,42 @@ mod tests {
                         && binding["provider_instance"] == "lenso.agent.memory.sqlite/memory"
                         && binding["capability_id"] == "lenso.agent.memory@1"
                 })
+        );
+    }
+
+    #[test]
+    fn agent_behavior_digest_ignores_surface_only_plan_changes() {
+        let plan = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        let baseline = agent_behavior_digest(&plan, "lenso.agent.loop/agent").unwrap();
+        let mut surface_json = serde_json::to_value(&plan).unwrap();
+        let surface = surface_json["plugin_instances"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|plugin| plugin["instance_key"] == "lenso.agent.cli/cli")
+            .unwrap();
+        surface["configuration"] =
+            serde_json::Value::String(serde_json::json!({"surface_only": true}).to_string());
+        let surface_plan: ResolvedAppPlan = serde_json::from_value(surface_json).unwrap();
+        assert_eq!(
+            agent_behavior_digest(&surface_plan, "lenso.agent.loop/agent").unwrap(),
+            baseline
+        );
+
+        let mut behavior_json = serde_json::to_value(&plan).unwrap();
+        let agent = behavior_json["plugin_instances"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|plugin| plugin["instance_key"] == "lenso.agent.loop/agent")
+            .unwrap();
+        agent["configuration"] = serde_json::Value::String(
+            serde_json::json!({"agent_behavior_changed": true}).to_string(),
+        );
+        let behavior_plan: ResolvedAppPlan = serde_json::from_value(behavior_json).unwrap();
+        assert_ne!(
+            agent_behavior_digest(&behavior_plan, "lenso.agent.loop/agent").unwrap(),
+            baseline
         );
     }
 
@@ -3536,6 +3694,124 @@ mod tests {
         let root = crate::plugin_root::snapshot(git_only_directory.path()).unwrap();
         let error = resolve_host_plan(&root).unwrap_err();
         assert!(error.contains("lenso.agent.process@1"), "{error}");
+    }
+
+    #[test]
+    fn github_workflows_are_opt_in_and_bind_to_process_and_tools() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.process.native",
+                    "default",
+                )
+                .with_configuration(serde_json::json!({
+                    "allowed_programs": ["gh"],
+                    "program_presets": [],
+                    "environment_allowlist": ["PATH", "HOME", "GH_TOKEN"],
+                    "max_argument_bytes": 131_072,
+                    "max_output_bytes": 262_144,
+                    "max_timeout_ms": 300_000,
+                    "root": "."
+                })),
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.github-workflows",
+                    "default",
+                )
+                .with_configuration(serde_json::json!({
+                    "allowed_repositories": ["LioRael/lenso-agent-harness"],
+                    "default_timeout_ms": 30_000,
+                    "enable_mutations": false,
+                    "max_body_bytes": 16_384
+                })),
+            ],
+            [],
+        );
+        let plan = resolve_host_plan(&root).unwrap();
+        let plan_json = serde_json::to_value(&plan).unwrap();
+        let bindings = plan_json["capability_bindings"].as_array().unwrap();
+        assert!(bindings.iter().any(|binding| {
+            binding["consumer_instance"] == "lenso.agent.github-workflows/default"
+                && binding["provider_instance"] == "lenso.agent.process.native/default"
+                && binding["capability_id"] == "lenso.agent.process@1"
+        }));
+        assert!(bindings.iter().any(|binding| {
+            binding["provider_instance"] == "lenso.agent.github-workflows/default"
+                && binding["capability_id"] == "lenso.agent.tool-provider@2"
+        }));
+    }
+
+    #[test]
+    fn browser_and_multimodal_tools_are_opt_in_with_explicit_grants() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.process.native",
+                    "default",
+                )
+                .with_configuration(serde_json::json!({
+                    "allowed_programs": ["node"],
+                    "program_presets": [],
+                    "environment_allowlist": ["PATH", "HOME"],
+                    "max_argument_bytes": 131_072,
+                    "max_output_bytes": 1_048_576,
+                    "max_timeout_ms": 120_000,
+                    "root": "."
+                })),
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.browser.playwright",
+                    "default",
+                )
+                .with_configuration(serde_json::json!({
+                    "allowed_origins": ["https://example.com"],
+                    "cdp_endpoint": "http://127.0.0.1:9222",
+                    "max_snapshot_bytes": 65_536,
+                    "screenshot_directory": ".lenso/browser",
+                    "timeout_ms": 30_000
+                })),
+                lenso_app_plan::authoring::PluginRootInstance::new("lenso.secrets.env", "media")
+                    .with_configuration(serde_json::json!({
+                        "references": {"media/openai-api-key": "OPENAI_API_KEY"}
+                    })),
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.multimodal-tools",
+                    "default",
+                )
+                .with_configuration(serde_json::json!({
+                    "api_key_ref": "media/openai-api-key",
+                    "audio_model": "gpt-audio",
+                    "base_url": "https://api.openai.com/v1",
+                    "image_model": "gpt-vision",
+                    "max_file_bytes": 10_485_760,
+                    "root": ".",
+                    "timeout_ms": 60_000
+                })),
+            ],
+            [],
+        );
+        let plan = resolve_host_plan(&root).unwrap();
+        let plan_json = serde_json::to_value(&plan).unwrap();
+        let bindings = plan_json["capability_bindings"].as_array().unwrap();
+        assert!(bindings.iter().any(|binding| {
+            binding["consumer_instance"] == "lenso.agent.browser.playwright/default"
+                && binding["provider_instance"] == "lenso.agent.process.native/default"
+                && binding["capability_id"] == "lenso.agent.process@1"
+        }));
+        assert!(bindings.iter().any(|binding| {
+            binding["consumer_instance"] == "lenso.agent.multimodal-tools/default"
+                && binding["provider_instance"] == "lenso.secrets.env/media"
+                && binding["capability_id"] == "lenso.secrets@1"
+        }));
+        for provider in [
+            "lenso.agent.browser.playwright/default",
+            "lenso.agent.multimodal-tools/default",
+        ] {
+            assert!(bindings.iter().any(|binding| {
+                binding["provider_instance"] == provider
+                    && binding["capability_id"] == "lenso.agent.tool-provider@2"
+            }));
+        }
     }
 
     #[test]

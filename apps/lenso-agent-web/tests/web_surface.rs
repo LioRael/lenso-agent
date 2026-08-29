@@ -7,6 +7,10 @@ use std::{
 };
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one end-to-end scenario keeps stream, history, branch, and provenance proof together"
+)]
 async fn streams_lists_and_branches_a_durable_session() {
     let root = tempfile::tempdir().unwrap();
     write_web_fixture(root.path());
@@ -44,6 +48,80 @@ async fn streams_lists_and_branches_a_durable_session() {
     );
     assert_eq!(bootstrap["trajectory"], "lenso.agent.trajectory@1");
     assert_eq!(bootstrap["capabilities"]["taskSnapshot"], true);
+    let models = client
+        .get(format!("http://{address}/api/console/v1/agent/models"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v1");
+    let fixture = models["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|provider| provider["provider_id"] == "fixture")
+        .unwrap();
+    assert_eq!(fixture["authentication"]["kind"], "none");
+    assert_eq!(
+        fixture["selected_instance"],
+        "lenso.agent.model.fixture/web"
+    );
+    assert_eq!(fixture["capabilities"]["image_input"], false);
+    assert_eq!(fixture["capabilities"]["audio_input"], false);
+    assert!(
+        fixture["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|model| model["id"] == "fixture/readme-summary-v1" && model["selected"] == true)
+    );
+    assert!(!models.to_string().contains("credential"));
+    fs::write(
+        root.path()
+            .join("plugins/lenso.agent.model.fixture/web.toml"),
+        concat!(
+            "model = \"fixture/readme-summary-v1\"\n",
+            "allowed_models = [\"fixture/catalog-auxiliary-v1\"]\n",
+        ),
+    )
+    .unwrap();
+    let models_endpoint = format!("http://{address}/api/console/v1/agent/models");
+    let switched_models = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let models = client
+                .get(&models_endpoint)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            let fixture = models["providers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|provider| provider["provider_id"] == "fixture")
+                .unwrap();
+            if fixture["models"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|model| model["id"] == "fixture/catalog-auxiliary-v1")
+            {
+                break models;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("Provider/Model catalog should follow the active Generation");
+    assert!(!switched_models.to_string().contains("credential"));
     let tasks = client
         .get(format!("http://{address}/api/console/v1/agent/tasks"))
         .send()
@@ -636,6 +714,8 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     );
     let proposals_endpoint = format!("{endpoint}/proposals");
     let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
+    let catalog_endpoint =
+        format!("http://{address}/api/console/v1/agent/control/plugins/catalog?query=fixture");
     let inventory_endpoint = format!("http://{address}/api/console/v1/agent/plugins");
     let configuration = root.path().join("plugins/lenso.agent.loop/agent.toml");
     assert!(!configuration.exists());
@@ -645,6 +725,32 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let initial_management =
         read_plugin_management(&client, &management_endpoint, &control_token).await;
     assert_initial_plugin_management(&initial_management);
+    assert_eq!(
+        client.get(&catalog_endpoint).send().await.unwrap().status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    let catalog = client
+        .get(&catalog_endpoint)
+        .bearer_auth(&control_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(catalog["schema"], "lenso.agent.plugin-catalog.v1");
+    assert_eq!(catalog["query"], "fixture");
+    assert_eq!(catalog["installation"]["kind"], "local_bundle");
+    assert_eq!(catalog["installation"]["requiresAbsolutePath"], true);
+    assert!(
+        catalog["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|plugin| plugin["packageId"].as_str().unwrap().contains("fixture"))
+    );
     assert_eq!(
         initial_management["configurationAuthority"]["kind"],
         "local_plugin_root"
@@ -1381,6 +1487,22 @@ async fn verify_history_and_branch(
         .and_then(|event| event["turn_id"].as_str())
         .unwrap()
         .to_owned();
+    let first_turn_payload: serde_json::Value = serde_json::from_str(
+        session["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["kind"] == "turn_started")
+            .unwrap()["payload_json"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        first_turn_payload["agent_behavior_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:"))
+    );
 
     let listed = client
         .get(format!("http://{address}/api/console/v1/agent/sessions"))

@@ -8,7 +8,8 @@ use std::{
 use lenso_agent_loop_plugin::inspect_turn_generation_provenance;
 use lenso_agent_session_file_plugin::{FileSessionImporter, FileSessionInspector};
 use lenso_agent_session_inspection::{
-    SessionArchive, SessionImporter, SessionInspector, inspect_turn_started,
+    EvaluationCriteria, SessionArchive, SessionImporter, SessionInspector, evaluate_trajectory,
+    inspect_turn_started, project_otlp_trace, project_trajectory,
 };
 use lenso_agent_session_sqlite_plugin::{SqliteSessionImporter, SqliteSessionInspector};
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
@@ -67,6 +68,22 @@ pub enum SessionCommand {
         session_id: Option<String>,
         source: SessionStore,
         destination: SessionStore,
+    },
+    Replay {
+        session_id: String,
+        store: SessionStore,
+    },
+    Evaluate {
+        session_id: String,
+        store: SessionStore,
+        criteria: Option<PathBuf>,
+    },
+    Otlp {
+        session_id: String,
+        store: SessionStore,
+        service_name: String,
+        output: Option<PathBuf>,
+        endpoint: Option<String>,
     },
 }
 
@@ -131,6 +148,10 @@ pub fn parse_generation_command(arguments: &[String]) -> Result<GenerationComman
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one parser keeps the complete sessions CLI grammar in a single reviewable boundary"
+)]
 pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, String> {
     let [command, rest @ ..] = arguments else {
         return Err(session_usage());
@@ -147,6 +168,10 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     let mut runtime_root = directories.runtime();
     let mut runtime_root_explicit = false;
     let mut archive = None;
+    let mut criteria = None;
+    let mut output = None;
+    let mut endpoint = None;
+    let mut service_name = "lenso-agent".to_owned();
     let mut arguments = rest.iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -166,6 +191,18 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
             }
             "--archive" => {
                 archive = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
+            }
+            "--criteria" => {
+                criteria = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
+            }
+            "--output" => {
+                output = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
+            }
+            "--endpoint" => {
+                endpoint = Some(arguments.next().ok_or_else(session_usage)?.clone());
+            }
+            "--service-name" => {
+                service_name.clone_from(arguments.next().ok_or_else(session_usage)?);
             }
             _ => return Err(session_usage()),
         }
@@ -189,6 +226,44 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
             Ok(SessionCommand::Import {
                 archive: archive.expect("checked"),
                 store,
+            })
+        }
+        "replay"
+            if archive.is_none()
+                && criteria.is_none()
+                && output.is_none()
+                && endpoint.is_none()
+                && !runtime_root_explicit =>
+        {
+            Ok(SessionCommand::Replay {
+                session_id: session_id.ok_or_else(session_usage)?,
+                store,
+            })
+        }
+        "evaluate"
+            if archive.is_none()
+                && output.is_none()
+                && endpoint.is_none()
+                && !runtime_root_explicit =>
+        {
+            Ok(SessionCommand::Evaluate {
+                session_id: session_id.ok_or_else(session_usage)?,
+                store,
+                criteria,
+            })
+        }
+        "otlp"
+            if archive.is_none()
+                && criteria.is_none()
+                && (output.is_some() || endpoint.is_some())
+                && !runtime_root_explicit =>
+        {
+            Ok(SessionCommand::Otlp {
+                session_id: session_id.ok_or_else(session_usage)?,
+                store,
+                service_name,
+                output,
+                endpoint,
             })
         }
         _ => Err(session_usage()),
@@ -481,7 +556,11 @@ fn retained_resolution_authority_roots(root: &Path, authority_fenced: bool) -> B
     }
 }
 
-pub fn run_session(command: SessionCommand) -> Result<(), String> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "one dispatcher keeps all session maintenance commands on the same store boundary"
+)]
+pub async fn run_session(command: SessionCommand) -> Result<(), String> {
     match command {
         SessionCommand::Provenance {
             session_id,
@@ -506,9 +585,13 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
             }
             for turn in provenance {
                 let status = generation_status(&runtime_root, &turn.generation_spec_digest);
+                let behavior = turn
+                    .agent_behavior_digest
+                    .as_deref()
+                    .unwrap_or("unavailable");
                 println!(
-                    "turn: {} revision={} generation={} spec={status}",
-                    turn.turn_id, turn.revision, turn.generation_spec_digest
+                    "turn: {} revision={} generation={} behavior={} spec={status}",
+                    turn.turn_id, turn.revision, turn.generation_spec_digest, behavior
                 );
             }
             Ok(())
@@ -573,7 +656,119 @@ pub fn run_session(command: SessionCommand) -> Result<(), String> {
             println!("migrated: {} sessions", archive.sessions.len());
             Ok(())
         }
+        SessionCommand::Replay { session_id, store } => {
+            let session = session_inspector(&store).inspect_one(&session_id)?;
+            let trajectory = project_trajectory(&session)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&trajectory)
+                    .map_err(|error| format!("failed to encode replay: {error}"))?
+            );
+            Ok(())
+        }
+        SessionCommand::Evaluate {
+            session_id,
+            store,
+            criteria,
+        } => {
+            let session = session_inspector(&store).inspect_one(&session_id)?;
+            let trajectory = project_trajectory(&session)?;
+            let criteria = criteria.map_or_else(
+                || Ok(EvaluationCriteria::default()),
+                |path| read_json_file(&path, "evaluation criteria"),
+            )?;
+            let report = evaluate_trajectory(&trajectory, &criteria);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| format!("failed to encode evaluation: {error}"))?
+            );
+            if report.passed {
+                Ok(())
+            } else {
+                Err("Session evaluation failed".to_owned())
+            }
+        }
+        SessionCommand::Otlp {
+            session_id,
+            store,
+            service_name,
+            output,
+            endpoint,
+        } => {
+            let session = session_inspector(&store).inspect_one(&session_id)?;
+            let trajectory = project_trajectory(&session)?;
+            let payload = project_otlp_trace(&trajectory, &service_name)?;
+            if let Some(path) = output {
+                write_new_json_file(&path, &payload, "OTLP trace")?;
+                println!("otlp-written: {}", path.display());
+            }
+            if let Some(endpoint) = endpoint {
+                let endpoint = validated_otlp_endpoint(&endpoint)?;
+                let client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .map_err(|error| format!("failed to build OTLP client: {error}"))?;
+                let response = client
+                    .post(endpoint)
+                    .header("content-type", "application/json")
+                    .json(&payload)
+                    .send()
+                    .await
+                    .map_err(|error| format!("failed to export OTLP trace: {error}"))?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "OTLP endpoint rejected the trace with {}",
+                        response.status()
+                    ));
+                }
+                println!("otlp-exported: {session_id}");
+            }
+            Ok(())
+        }
     }
+}
+
+fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path, label: &str) -> Result<T, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {label}: {error}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(format!("{label} is not a regular file"));
+    }
+    let bytes = fs::read(path).map_err(|error| format!("failed to read {label}: {error}"))?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("{label} is invalid JSON: {error}"))
+}
+
+fn write_new_json_file(path: &Path, value: &serde_json::Value, label: &str) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("failed to encode {label}: {error}"))?;
+    let mut file = fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| format!("failed to create {label}: {error}"))?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| format!("failed to persist {label}: {error}"))
+}
+
+fn validated_otlp_endpoint(value: &str) -> Result<reqwest::Url, String> {
+    let endpoint = reqwest::Url::parse(value).map_err(|_| "OTLP endpoint is invalid".to_owned())?;
+    let secure = endpoint.scheme() == "https";
+    let loopback = endpoint.scheme() == "http"
+        && endpoint
+            .host_str()
+            .is_some_and(|host| matches!(host, "127.0.0.1" | "localhost" | "::1"));
+    if (!secure && !loopback)
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err("OTLP endpoint must use HTTPS or loopback HTTP without credentials".to_owned());
+    }
+    Ok(endpoint)
 }
 
 fn session_inspector(store: &SessionStore) -> Box<dyn SessionInspector> {
@@ -636,5 +831,5 @@ fn generation_usage() -> String {
 }
 
 fn session_usage() -> String {
-    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]\n       lenso-agent-cli sessions export --archive <json-path> [--session <id>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions import --archive <json-path> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions migrate [--session <id>] <--from-directory <path>|--from-database <path>> <--to-directory <path>|--to-database <path>>".to_owned()
+    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]\n       lenso-agent-cli sessions replay --session <id> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions evaluate --session <id> [--criteria <json-path>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions otlp --session <id> [--service-name <name>] <--output <json-path>|--endpoint <url>|both> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions export --archive <json-path> [--session <id>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions import --archive <json-path> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions migrate [--session <id>] <--from-directory <path>|--from-database <path>> <--to-directory <path>|--to-database <path>>".to_owned()
 }

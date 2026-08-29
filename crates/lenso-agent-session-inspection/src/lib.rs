@@ -2,7 +2,12 @@
 
 use std::collections::BTreeSet;
 
+mod evaluation;
+mod otlp;
 mod trajectory;
+
+pub use evaluation::{EvaluationCheck, EvaluationCriteria, EvaluationReport, evaluate_trajectory};
+pub use otlp::project_otlp_trace;
 
 pub use trajectory::{
     Trajectory, TrajectoryDetail, TrajectoryKind, TrajectoryRecord, TrajectoryStatus,

@@ -1,0 +1,25 @@
+[package]
+name = "lenso-agent-github-workflows-plugin"
+version = "0.1.0"
+description = "Bounded GitHub Issue, pull-request, and CI workflow tools for Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.github-workflows"
+root-slot = "tool-providers"
+
+[dependencies]
+futures.workspace = true
+lenso.workspace = true
+lenso-capability-agent-process = { path = "../lenso-capability-agent-process" }
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

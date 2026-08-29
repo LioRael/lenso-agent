@@ -11,6 +11,7 @@ mod host;
 mod plugin_root;
 mod profile;
 pub mod provenance;
+mod provider_catalog;
 mod runtime_state;
 #[cfg(test)]
 mod test_support;
@@ -20,6 +21,10 @@ pub use host::{
     AcpSurface, AgentHost, AgentHostBuilder, AgentSurface, AgentSurfaceKind, ChannelSurface,
     ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,
     WebSurface,
+};
+pub use provider_catalog::{
+    ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelProviderCatalogEntry,
+    ProviderModelCatalog,
 };
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.

@@ -1,4 +1,10 @@
-use std::{fs, path::Path, process::Command};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener,
+    path::Path,
+    process::Command,
+};
 
 use lenso_agent_cli_plugin as _;
 use lenso_agent_session_inspection::SessionInspector;
@@ -315,6 +321,23 @@ fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {
             let payload: serde_json::Value =
                 serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
             payload["generation_spec_digest"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+fn turn_behavior_digests(session: &serde_json::Value) -> Vec<String> {
+    session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "turn_started")
+        .map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            payload["agent_behavior_digest"]
                 .as_str()
                 .unwrap()
                 .to_owned()
@@ -973,16 +996,21 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
 
     let session = stored_session(temporary.path());
     let digests = turn_generation_digests(&session);
+    let behavior_digests = turn_behavior_digests(&session);
     assert_eq!(digests.len(), 2);
+    assert_eq!(behavior_digests.len(), 2);
     assert_ne!(digests[0], digests[1]);
+    assert_ne!(behavior_digests[0], behavior_digests[1]);
     let provenance = command(temporary.path())
         .args(["sessions", "provenance", "--session", session_id])
         .output()
         .unwrap();
     assert!(provenance.status.success());
     let provenance_stdout = String::from_utf8(provenance.stdout).unwrap();
-    for digest in &digests {
-        assert!(provenance_stdout.contains(&format!("generation={digest} spec=available")));
+    for (digest, behavior_digest) in digests.iter().zip(&behavior_digests) {
+        assert!(provenance_stdout.contains(&format!("generation={digest}")));
+        assert!(provenance_stdout.contains(&format!("behavior={behavior_digest}")));
+        assert!(provenance_stdout.contains("spec=available"));
         let inspect = command(temporary.path())
             .args(["generations", "inspect", "--digest", digest])
             .output()
@@ -994,6 +1022,109 @@ fn resumed_session_records_each_host_generation_and_keeps_its_specs() {
         assert!(inspect_stdout.contains("resolution-authority: sha256:"));
     }
     assert_eq!(runtime_generation_count(temporary.path()), 2);
+}
+
+#[test]
+fn session_facts_support_replay_evaluation_and_otlp_export() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Replay Fixture\n").unwrap();
+    let run = run_derived(temporary.path(), "Answer directly: hello", None);
+    assert!(run.status.success());
+    let session_id = String::from_utf8(run.stderr)
+        .unwrap()
+        .trim()
+        .strip_prefix("session: ")
+        .unwrap()
+        .to_owned();
+
+    let replay = command(temporary.path())
+        .args(["sessions", "replay", "--session", &session_id])
+        .output()
+        .unwrap();
+    assert!(replay.status.success());
+    let replay: serde_json::Value = serde_json::from_slice(&replay.stdout).unwrap();
+    assert_eq!(replay["schema"], "lenso.agent.trajectory@1");
+    assert_eq!(replay["sessionId"], session_id);
+    assert_eq!(replay["summary"]["status"], "completed");
+
+    let evaluation = command(temporary.path())
+        .args(["sessions", "evaluate", "--session", &session_id])
+        .output()
+        .unwrap();
+    assert!(evaluation.status.success());
+    let evaluation: serde_json::Value = serde_json::from_slice(&evaluation.stdout).unwrap();
+    assert_eq!(evaluation["schema"], "lenso.agent.evaluation@1");
+    assert_eq!(evaluation["passed"], true);
+
+    let otlp_path = temporary.path().join("session.otlp.json");
+    let otlp = command(temporary.path())
+        .args([
+            "sessions",
+            "otlp",
+            "--session",
+            &session_id,
+            "--output",
+            otlp_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(otlp.status.success());
+    let otlp: serde_json::Value = serde_json::from_slice(&fs::read(otlp_path).unwrap()).unwrap();
+    let spans = otlp["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .unwrap();
+    assert!(spans.len() >= 2);
+    assert_eq!(spans[0]["traceId"].as_str().unwrap().len(), 32);
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let collector = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).unwrap();
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..read]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap();
+            if bytes.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        String::from_utf8(bytes).unwrap()
+    });
+    let endpoint = format!("http://{address}/v1/traces");
+    let export = command(temporary.path())
+        .args([
+            "sessions",
+            "otlp",
+            "--session",
+            &session_id,
+            "--endpoint",
+            &endpoint,
+        ])
+        .output()
+        .unwrap();
+    assert!(export.status.success());
+    let request = collector.join().unwrap();
+    assert!(request.starts_with("POST /v1/traces HTTP/1.1"));
+    assert!(request.contains("resourceSpans"));
 }
 
 #[test]

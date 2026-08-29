@@ -2887,6 +2887,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-browser-playwright-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-process",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-channel"
 version = "0.1.0"
 dependencies = [
@@ -3010,10 +3024,12 @@ dependencies = [
  "lenso-agent-approval-hook-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
+ "lenso-agent-browser-playwright-plugin",
  "lenso-agent-code-mode-tools-plugin",
  "lenso-agent-context-compaction-command-plugin",
  "lenso-agent-context-compaction-plugin",
  "lenso-agent-git-tools-plugin",
+ "lenso-agent-github-workflows-plugin",
  "lenso-agent-http-fetch-plugin",
  "lenso-agent-interactive-approval-hook-plugin",
  "lenso-agent-lifecycle-audit-plugin",
@@ -3025,6 +3041,7 @@ dependencies = [
  "lenso-agent-model-fixture-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
  "lenso-agent-model-openai-compatible-plugin",
+ "lenso-agent-multimodal-tools-plugin",
  "lenso-agent-process-native-plugin",
  "lenso-agent-process-sandbox-plugin",
  "lenso-agent-process-tools-plugin",
@@ -3063,6 +3080,19 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-git-tools-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-process",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-github-workflows-plugin"
 version = "0.1.0"
 dependencies = [
  "futures",
@@ -3116,6 +3146,7 @@ dependencies = [
  "lenso-plugin-control-plane",
  "lenso-runtime-codec",
  "notify",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3300,6 +3331,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-multimodal-tools-plugin"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures",
+ "lenso",
+ "lenso-capability-agent-tool-provider",
+ "lenso-capability-secrets",
+ "lenso-kernel",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-native-support"
 version = "0.1.0"
 dependencies = [
@@ -3429,6 +3475,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "time",
 ]
 

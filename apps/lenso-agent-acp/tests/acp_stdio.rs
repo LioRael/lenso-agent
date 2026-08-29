@@ -159,6 +159,12 @@ async fn acp_stdio_preserves_generation_tool_and_approval_policy() {
             .is_some_and(|digest| digest.starts_with("sha256:")),
         "ACP Turn must retain immutable Generation provenance"
     );
+    assert!(
+        payload["agent_behavior_digest"]
+            .as_str()
+            .is_some_and(|digest| digest.starts_with("sha256:")),
+        "ACP Turn must retain surface-neutral Agent behavior provenance"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

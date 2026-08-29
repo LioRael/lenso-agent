@@ -57,6 +57,7 @@ enum CliCommand {
     Approvals(ApprovalCommand),
     Profiles(ProfileCommand),
     Contexts { profile: Option<String> },
+    Models { profile: Option<String> },
 }
 
 #[derive(Debug)]
@@ -100,10 +101,11 @@ async fn run() -> Result<(), String> {
         CliCommand::Auth(command) => return run_auth(&command).await,
         CliCommand::Generations(command) => return provenance::run_generation(command),
         CliCommand::RuntimeStatus { root } => return provenance::run_runtime_status(&root),
-        CliCommand::Sessions(command) => return provenance::run_session(command),
+        CliCommand::Sessions(command) => return provenance::run_session(command).await,
         CliCommand::Approvals(command) => return run_approval(command),
         CliCommand::Profiles(command) => return run_profile(&command),
         CliCommand::Contexts { profile } => return run_contexts(profile).await,
+        CliCommand::Models { profile } => return run_models(profile).await,
     };
     let profile = selected_profile(args.plan.clone(), args.profile.clone());
     let host = AgentHost::builder()
@@ -135,6 +137,24 @@ async fn run_contexts(profile: Option<String>) -> Result<(), String> {
         "{}",
         serde_json::to_string_pretty(&snapshot)
             .map_err(|error| format!("failed to encode Context Sources: {error}"))?
+    );
+    app.shutdown().await
+}
+
+async fn run_models(profile: Option<String>) -> Result<(), String> {
+    let host = AgentHost::builder()
+        .plugins(lenso_agent_default_plugins::link)
+        .surface(HeadlessSurface::stdio())
+        .build()
+        .map_err(|error| format!("Host composition failed: {error}"))?;
+    let mut app = host
+        .run(profile.map_or(Profile::Default, Profile::named))
+        .await?;
+    let catalog = app.provider_model_catalog().await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&catalog)
+            .map_err(|error| format!("failed to encode Provider/Model Catalog: {error}"))?
     );
     app.shutdown().await
 }
@@ -297,6 +317,9 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "contexts") {
         return parse_contexts(&raw[1..]);
     }
+    if raw.first().is_some_and(|value| value == "models") {
+        return parse_models(&raw[1..]);
+    }
     parse_run_args(raw)
 }
 
@@ -322,6 +345,16 @@ fn parse_contexts(arguments: &[String]) -> Result<CliCommand, String> {
             profile: Some(profile.clone()),
         }),
         _ => Err("usage: lenso-agent-cli contexts [--profile <name>]".to_owned()),
+    }
+}
+
+fn parse_models(arguments: &[String]) -> Result<CliCommand, String> {
+    match arguments {
+        [] => Ok(CliCommand::Models { profile: None }),
+        [flag, profile] if flag == "--profile" && !profile.is_empty() => Ok(CliCommand::Models {
+            profile: Some(profile.clone()),
+        }),
+        _ => Err("usage: lenso-agent-cli models [--profile <name>]".to_owned()),
     }
 }
 
@@ -474,7 +507,7 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli contexts [--profile <name>]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent-cli profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli <contexts|models> [--profile <name>]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent-cli profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 fn parse_profile(arguments: &[String]) -> Result<ProfileCommand, String> {
@@ -836,5 +869,24 @@ mod profile_tests {
             Ok(ProfileCommand::InstallCoding)
         ));
         assert!(parse_profile(&["install".to_owned(), "unknown".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn models_command_accepts_an_optional_profile() {
+        assert!(matches!(
+            parse_command(vec!["models".to_owned()]),
+            Ok(CliCommand::Models { profile: None })
+        ));
+        assert!(matches!(
+            parse_command(vec![
+                "models".to_owned(),
+                "--profile".to_owned(),
+                "code".to_owned(),
+            ]),
+            Ok(CliCommand::Models {
+                profile: Some(profile)
+            }) if profile == "code"
+        ));
+        assert!(parse_command(vec!["models".to_owned(), "--profile".to_owned()]).is_err());
     }
 }
