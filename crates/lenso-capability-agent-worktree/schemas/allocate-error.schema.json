@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_request" },
+    { "const": "source_workspace_mismatch" },
+    { "const": "capacity_exceeded" },
+    { "const": "task_already_allocated" },
+    { "const": "git_operation_failed" }
+  ]
+}

@@ -10,6 +10,7 @@ use std::{
 use fs2::FileExt;
 use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
+use lenso_agent_native_support::WorkspaceScope;
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
     ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolExecutionClass,
@@ -35,6 +36,8 @@ pub const CHECKPOINT_RESTORE_TOOL: &str = "checkpoint_restore";
 #[serde(deny_unknown_fields)]
 struct WorkspaceEditConfig {
     root: PathBuf,
+    #[serde(default)]
+    delegated_root: Option<PathBuf>,
     max_file_bytes: usize,
     max_edit_bytes: usize,
     checkpoint_directory: PathBuf,
@@ -113,6 +116,43 @@ impl WorkspaceEditProvider {
             });
         }
         Ok(root)
+    }
+
+    fn invocation_root(&self, context: &InvocationContext) -> Result<PathBuf, RuntimeFailure> {
+        let root = self.canonical_root()?;
+        let Some(scope) = context
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("Workspace scope is invalid: {error}"),
+            })?
+        else {
+            return Ok(root);
+        };
+        let scoped = fs::canonicalize(&scope.absolute_path).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("scoped Workspace is unavailable: {error}"),
+            }
+        })?;
+        if scoped == root {
+            return Ok(root);
+        }
+        let delegated =
+            self.config
+                .delegated_root
+                .as_ref()
+                .ok_or_else(|| RuntimeFailure::PluginFailure {
+                    detail: "Workspace scope is outside the configured edit root".to_owned(),
+                })?;
+        let delegated =
+            fs::canonicalize(delegated).map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("delegated Workspace root is unavailable: {error}"),
+            })?;
+        if !scoped.starts_with(&delegated) || !scoped.join(".git").exists() {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "Workspace scope is not an authorized delegated Git worktree".to_owned(),
+            });
+        }
+        Ok(scoped)
     }
 
     fn resolve_target(root: &Path, path: &str) -> Result<PathBuf, ExecuteError> {
@@ -222,10 +262,7 @@ impl WorkspaceEditProvider {
         Ok((store, lock))
     }
 
-    fn create_checkpoint(&self) -> Result<ExecuteResponse, WorkspaceEditFailure> {
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceEditFailure::Runtime)?;
+    fn create_checkpoint_at(&self, root: &Path) -> Result<ExecuteResponse, WorkspaceEditFailure> {
         let root = root.to_str().ok_or_else(|| {
             WorkspaceEditFailure::Runtime(RuntimeFailure::PluginFailure {
                 detail: "Workspace root must be valid UTF-8 for checkpointing".to_owned(),
@@ -344,25 +381,23 @@ impl WorkspaceEditProvider {
         Ok(())
     }
 
-    fn review_checkpoint(
+    fn review_checkpoint_at(
         &self,
+        root: &Path,
         checkpoint_id: &str,
     ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
         validate_checkpoint_id(checkpoint_id)?;
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceEditFailure::Runtime)?;
         let (store, lock) = self
             .lock_checkpoint_store()
             .map_err(WorkspaceEditFailure::Runtime)?;
         let checkpoint = read_checkpoint(&store, checkpoint_id)?;
-        ensure_checkpoint_root(&checkpoint, &root)?;
+        ensure_checkpoint_root(&checkpoint, root)?;
         let mut review = String::new();
         let mut conflicts = 0_usize;
         let mut changes = 0_usize;
         for file in &checkpoint.files {
             let current =
-                read_optional_checkpoint_target(&root, &file.path, self.config.max_file_bytes)?;
+                read_optional_checkpoint_target(root, &file.path, self.config.max_file_bytes)?;
             if current == file.original {
                 continue;
             }
@@ -404,25 +439,23 @@ impl WorkspaceEditProvider {
         })
     }
 
-    fn finish_checkpoint(
+    fn finish_checkpoint_at(
         &self,
+        root: &Path,
         checkpoint_id: &str,
         restore: bool,
     ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
         validate_checkpoint_id(checkpoint_id)?;
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceEditFailure::Runtime)?;
         let (store, lock) = self
             .lock_checkpoint_store()
             .map_err(WorkspaceEditFailure::Runtime)?;
         let checkpoint = read_checkpoint(&store, checkpoint_id)?;
-        ensure_checkpoint_root(&checkpoint, &root)?;
+        ensure_checkpoint_root(&checkpoint, root)?;
         if restore {
             let mut current_files = Vec::with_capacity(checkpoint.files.len());
             for file in &checkpoint.files {
                 let current =
-                    read_optional_checkpoint_target(&root, &file.path, self.config.max_file_bytes)?;
+                    read_optional_checkpoint_target(root, &file.path, self.config.max_file_bytes)?;
                 let safe = current == file.original
                     || current
                         .as_deref()
@@ -438,7 +471,7 @@ impl WorkspaceEditProvider {
                 current_files.push(current);
             }
             for (file, current) in checkpoint.files.iter().zip(current_files) {
-                restore_checkpoint_file(&root, file, current.as_deref())?;
+                restore_checkpoint_file(root, file, current.as_deref())?;
             }
         }
         fs::remove_file(checkpoint_path(&store, checkpoint_id))
@@ -465,7 +498,11 @@ impl WorkspaceEditProvider {
         })
     }
 
-    fn write_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+    fn write_text_at(
+        &self,
+        root: &Path,
+        arguments_json: &str,
+    ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -480,10 +517,7 @@ impl WorkspaceEditProvider {
         if arguments.content.len() > self.config.max_file_bytes {
             return Err(ExecuteError::OutputLimitExceeded.into());
         }
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceEditFailure::Runtime)?;
-        let target = Self::resolve_target(&root, &arguments.path)?;
+        let target = Self::resolve_target(root, &arguments.path)?;
         match fs::symlink_metadata(&target) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(ExecuteError::PermissionDenied.into());
@@ -495,7 +529,7 @@ impl WorkspaceEditProvider {
         let parent = target.parent().ok_or(ExecuteError::PermissionDenied)?;
         self.record_checkpoint(
             arguments.checkpoint_id.as_deref(),
-            &root,
+            root,
             &arguments.path,
             None,
             &arguments.content,
@@ -510,7 +544,11 @@ impl WorkspaceEditProvider {
         ))
     }
 
-    fn edit_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+    fn edit_text_at(
+        &self,
+        root: &Path,
+        arguments_json: &str,
+    ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -535,10 +573,7 @@ impl WorkspaceEditProvider {
             return Err(ExecuteError::OutputLimitExceeded.into());
         }
 
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceEditFailure::Runtime)?;
-        let target = Self::resolve_target(&root, &arguments.path)?;
+        let target = Self::resolve_target(root, &arguments.path)?;
         let metadata = fs::symlink_metadata(&target).map_err(|error| map_path_error(&error))?;
         if metadata.file_type().is_symlink() || !metadata.is_file() {
             return Err(ExecuteError::PermissionDenied.into());
@@ -575,7 +610,7 @@ impl WorkspaceEditProvider {
         let parent = target.parent().ok_or(ExecuteError::PermissionDenied)?;
         self.record_checkpoint(
             arguments.checkpoint_id.as_deref(),
-            &root,
+            root,
             &arguments.path,
             Some(&original),
             &updated,
@@ -594,6 +629,53 @@ impl WorkspaceEditProvider {
                     + 1,
             ),
         ))
+    }
+
+    #[cfg(test)]
+    fn create_checkpoint(&self) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        self.create_checkpoint_at(&root)
+    }
+
+    #[cfg(test)]
+    fn review_checkpoint(
+        &self,
+        checkpoint_id: &str,
+    ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        self.review_checkpoint_at(&root, checkpoint_id)
+    }
+
+    #[cfg(test)]
+    fn finish_checkpoint(
+        &self,
+        checkpoint_id: &str,
+        restore: bool,
+    ) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        self.finish_checkpoint_at(&root, checkpoint_id, restore)
+    }
+
+    #[cfg(test)]
+    fn write_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        self.write_text_at(&root, arguments_json)
+    }
+
+    #[cfg(test)]
+    fn edit_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceEditFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceEditFailure::Runtime)?;
+        self.edit_text_at(&root, arguments_json)
     }
 
     fn persist_new(
@@ -890,31 +972,38 @@ impl ToolProviderProvider for WorkspaceEditProvider {
 
     fn execute(
         &self,
-        _context: InvocationContext,
+        context: InvocationContext,
         request: ExecuteRequest,
     ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
     {
-        let result = match request.name.as_str() {
-            EDIT_TOOL => self.edit_text(request.arguments_json.as_str()),
-            CREATE_FILE_TOOL => self.write_text(request.arguments_json.as_str()),
-            CHECKPOINT_CREATE_TOOL => serde_json::from_str::<
-                serde_json::Map<String, serde_json::Value>,
-            >(request.arguments_json.as_str())
-            .map_err(|_| ExecuteError::InvalidArguments.into())
-            .and_then(|arguments| {
-                if arguments.is_empty() {
-                    self.create_checkpoint()
-                } else {
-                    Err(ExecuteError::InvalidArguments.into())
-                }
-            }),
-            CHECKPOINT_REVIEW_TOOL => checkpoint_argument(request.arguments_json.as_str())
-                .and_then(|checkpoint_id| self.review_checkpoint(&checkpoint_id)),
-            CHECKPOINT_ACCEPT_TOOL => checkpoint_argument(request.arguments_json.as_str())
-                .and_then(|checkpoint_id| self.finish_checkpoint(&checkpoint_id, false)),
-            CHECKPOINT_RESTORE_TOOL => checkpoint_argument(request.arguments_json.as_str())
-                .and_then(|checkpoint_id| self.finish_checkpoint(&checkpoint_id, true)),
-            _ => Err(ExecuteError::NotFound.into()),
+        let result = match self.invocation_root(&context) {
+            Ok(root) => match request.name.as_str() {
+                EDIT_TOOL => self.edit_text_at(&root, request.arguments_json.as_str()),
+                CREATE_FILE_TOOL => self.write_text_at(&root, request.arguments_json.as_str()),
+                CHECKPOINT_CREATE_TOOL => serde_json::from_str::<
+                    serde_json::Map<String, serde_json::Value>,
+                >(request.arguments_json.as_str())
+                .map_err(|_| ExecuteError::InvalidArguments.into())
+                .and_then(|arguments| {
+                    if arguments.is_empty() {
+                        self.create_checkpoint_at(&root)
+                    } else {
+                        Err(ExecuteError::InvalidArguments.into())
+                    }
+                }),
+                CHECKPOINT_REVIEW_TOOL => checkpoint_argument(request.arguments_json.as_str())
+                    .and_then(|checkpoint_id| self.review_checkpoint_at(&root, &checkpoint_id)),
+                CHECKPOINT_ACCEPT_TOOL => checkpoint_argument(request.arguments_json.as_str())
+                    .and_then(|checkpoint_id| {
+                        self.finish_checkpoint_at(&root, &checkpoint_id, false)
+                    }),
+                CHECKPOINT_RESTORE_TOOL => checkpoint_argument(request.arguments_json.as_str())
+                    .and_then(|checkpoint_id| {
+                        self.finish_checkpoint_at(&root, &checkpoint_id, true)
+                    }),
+                _ => Err(ExecuteError::NotFound.into()),
+            },
+            Err(error) => Err(WorkspaceEditFailure::Runtime(error)),
         };
         Box::pin(ready(match result {
             Ok(response) => Ok(Ok(response)),
@@ -1032,6 +1121,7 @@ mod tests {
         WorkspaceEditProvider {
             config: WorkspaceEditConfig {
                 root,
+                delegated_root: None,
                 max_file_bytes: 4096,
                 max_edit_bytes: 2048,
                 checkpoint_directory,

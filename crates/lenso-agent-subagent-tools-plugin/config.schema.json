@@ -11,6 +11,9 @@
     },
     "max_tasks": {
       "type": "integer"
+    },
+    "require_worktree_provider": {
+      "type": "boolean"
     }
   },
   "required": ["max_output_bytes", "max_task_bytes", "max_tasks"]

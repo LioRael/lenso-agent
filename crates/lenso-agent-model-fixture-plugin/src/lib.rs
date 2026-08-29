@@ -199,6 +199,15 @@ impl FixtureModel {
         if current_user == "Inspect and commit the prepared Git change." {
             return git_workflow_response(request, &tool_results);
         }
+        if current_user == "Spawn two isolated mutation workers." {
+            return isolated_workers_root_response(request, &tool_results);
+        }
+        if current_user == "Create worker-a.txt and commit it." {
+            return isolated_worker_response(request, &tool_results, "worker-a.txt", "worker-a");
+        }
+        if current_user == "Create worker-b.txt and commit it." {
+            return isolated_worker_response(request, &tool_results, "worker-b.txt", "worker-b");
+        }
         if current_user == "Use the text Plugin to uppercase Lenso plugin." {
             return text_plugin_response(request, &tool_results);
         }
@@ -1270,6 +1279,173 @@ fn git_workflow_response(
                 "12",
             ),
         ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one deterministic fixture state machine keeps the two-worker transcript explicit"
+)]
+fn isolated_workers_root_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["spawn_subagent", "wait_subagent"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    match tool_results {
+        [] => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::ReasoningSummaryDelta,
+                "I’ll start two isolated mutation workers.",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::ToolCall,
+                "",
+                "call-spawn-worker-a",
+                "spawn_subagent",
+                r#"{"agent":"lenso.agent.loop/worker-a","task":"Create worker-a.txt and commit it."}"#,
+                "0",
+                "0",
+            ),
+            response(
+                "3",
+                CompleteMessageKind::ToolCall,
+                "",
+                "call-spawn-worker-b",
+                "spawn_subagent",
+                r#"{"agent":"lenso.agent.loop/worker-b","task":"Create worker-b.txt and commit it."}"#,
+                "0",
+                "0",
+            ),
+            response("4", CompleteMessageKind::Usage, "", "", "", "{}", "32", "8"),
+        ]),
+        [worker_a, worker_b] => {
+            let task_id = |result: &&CompleteMessageInput| {
+                serde_json::from_str::<serde_json::Value>(&result.content)
+                    .ok()
+                    .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+                    .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+            };
+            let worker_a = serde_json::json!({"task_id": task_id(worker_a)?}).to_string();
+            let worker_b = serde_json::json!({"task_id": task_id(worker_b)?}).to_string();
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::ReasoningSummaryDelta,
+                    "Both workers are running; I’ll collect both results.",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::ToolCall,
+                    "",
+                    "call-wait-worker-a",
+                    "wait_subagent",
+                    &worker_a,
+                    "0",
+                    "0",
+                ),
+                response(
+                    "3",
+                    CompleteMessageKind::ToolCall,
+                    "",
+                    "call-wait-worker-b",
+                    "wait_subagent",
+                    &worker_b,
+                    "0",
+                    "0",
+                ),
+                response("4", CompleteMessageKind::Usage, "", "", "", "{}", "32", "8"),
+            ])
+        }
+        [_, _, first, second]
+            if [first.content.as_str(), second.content.as_str()]
+                .contains(&"worker-a committed")
+                && [first.content.as_str(), second.content.as_str()]
+                    .contains(&"worker-b committed") =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Both isolated workers committed their changes.",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response("2", CompleteMessageKind::Usage, "", "", "", "{}", "32", "8"),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn isolated_worker_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+    path: &str,
+    worker: &str,
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["create_file", "git_stage", "git_commit"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            &format!("call-create-{worker}"),
+            "create_file",
+            &serde_json::json!({"path": path, "content": format!("{worker}\n")}).to_string(),
+        )),
+        [created] if created.content == format!("created {path}") => Ok(named_tool_request(
+            &format!("call-stage-{worker}"),
+            "git_stage",
+            &serde_json::json!({"paths": [path]}).to_string(),
+        )),
+        [_, staged] if staged.content == "Git operation completed successfully." => {
+            Ok(named_tool_request(
+                &format!("call-commit-{worker}"),
+                "git_commit",
+                &serde_json::json!({"message": format!("test: {worker} isolated change")})
+                    .to_string(),
+            ))
+        }
+        [_, _, committed]
+            if committed
+                .content
+                .contains(&format!("{worker} isolated change")) =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    format!("{worker} committed"),
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
+            ])
+        }
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }

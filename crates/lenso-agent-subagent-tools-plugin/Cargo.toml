@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-subagent-tools-plugin"
-version = "0.6.0"
+version = "0.7.0"
 description = "Bounded subagent Tool Provider Plugin for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true
@@ -19,6 +19,7 @@ lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-capability-agent-task-supervisor = { path = "../lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-turn-input = { path = "../lenso-capability-agent-turn-input" }
+lenso-capability-agent-worktree = { path = "../lenso-capability-agent-worktree" }
 lenso-agent-native-support = { path = "../lenso-agent-native-support" }
 lenso-kernel.workspace = true
 serde.workspace = true

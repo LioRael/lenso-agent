@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repository_root",
+    "worktree_root",
+    "mutation_agents",
+    "max_worktrees",
+    "timeout_ms",
+    "max_review_bytes"
+  ],
+  "properties": {
+    "repository_root": { "type": "string" },
+    "worktree_root": { "type": "string" },
+    "mutation_agents": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "max_worktrees": { "type": "integer" },
+    "timeout_ms": { "type": "integer" },
+    "max_review_bytes": { "type": "integer" }
+  }
+}

@@ -2,6 +2,7 @@
 
 use futures::future::{LocalBoxFuture, ready};
 use lenso::prelude::*;
+use lenso_agent_native_support::WorkspaceScope;
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogError, CatalogRequest, CatalogResponse, ContentType,
     ExecuteError, ExecuteRequest, ExecuteResponse, ToolDefinition, ToolExecutionClass,
@@ -24,6 +25,8 @@ pub const READ_TOOL: &str = "read";
 #[serde(deny_unknown_fields)]
 struct WorkspaceConfig {
     root: PathBuf,
+    #[serde(default)]
+    delegated_root: Option<PathBuf>,
     max_output_bytes: usize,
     max_list_entries: usize,
     max_search_entries: usize,
@@ -112,6 +115,43 @@ impl WorkspaceProvider {
         Ok(root)
     }
 
+    fn invocation_root(&self, context: &InvocationContext) -> Result<PathBuf, RuntimeFailure> {
+        let root = self.canonical_root()?;
+        let Some(scope) = context
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("Workspace scope is invalid: {error}"),
+            })?
+        else {
+            return Ok(root);
+        };
+        let scoped = fs::canonicalize(&scope.absolute_path).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("scoped Workspace is unavailable: {error}"),
+            }
+        })?;
+        if scoped == root {
+            return Ok(root);
+        }
+        let delegated =
+            self.config
+                .delegated_root
+                .as_ref()
+                .ok_or_else(|| RuntimeFailure::PluginFailure {
+                    detail: "Workspace scope is outside the configured root".to_owned(),
+                })?;
+        let delegated =
+            fs::canonicalize(delegated).map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("delegated Workspace root is unavailable: {error}"),
+            })?;
+        if !scoped.starts_with(&delegated) || !scoped.join(".git").exists() {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "Workspace scope is not an authorized delegated Git worktree".to_owned(),
+            });
+        }
+        Ok(scoped)
+    }
+
     fn resolve(root: &Path, path: &str) -> Result<PathBuf, ExecuteError> {
         if path.is_empty() {
             return Err(ExecuteError::InvalidArguments);
@@ -140,7 +180,11 @@ impl WorkspaceProvider {
         Ok(resolved)
     }
 
-    fn list(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+    fn list_at(
+        &self,
+        root: &Path,
+        arguments_json: &str,
+    ) -> Result<ExecuteResponse, WorkspaceReadFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -149,10 +193,7 @@ impl WorkspaceProvider {
         }
         let arguments = serde_json::from_str::<Arguments>(arguments_json)
             .map_err(|_| ExecuteError::InvalidArguments)?;
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceReadFailure::Runtime)?;
-        let directory = Self::resolve(&root, &arguments.path)?;
+        let directory = Self::resolve(root, &arguments.path)?;
         if !directory.is_dir() {
             return Err(ExecuteError::PermissionDenied.into());
         }
@@ -173,7 +214,7 @@ impl WorkspaceProvider {
             }
             let path = entry
                 .path()
-                .strip_prefix(&root)
+                .strip_prefix(root)
                 .map_err(|_| ExecuteError::PermissionDenied)?
                 .to_string_lossy()
                 .into_owned();
@@ -205,7 +246,11 @@ impl WorkspaceProvider {
         )
     }
 
-    fn search(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+    fn search_at(
+        &self,
+        root: &Path,
+        arguments_json: &str,
+    ) -> Result<ExecuteResponse, WorkspaceReadFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -218,13 +263,10 @@ impl WorkspaceProvider {
         if arguments.query.is_empty() {
             return Err(ExecuteError::InvalidArguments.into());
         }
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceReadFailure::Runtime)?;
-        let requested = Self::resolve(&root, &arguments.path)?;
+        let requested = Self::resolve(root, &arguments.path)?;
         let mut files = Vec::new();
         let mut visited_entries = 0;
-        self.collect_files(&root, &requested, &mut visited_entries, &mut files)?;
+        self.collect_files(root, &requested, &mut visited_entries, &mut files)?;
         files.sort();
         let mut scanned_bytes = 0usize;
         let mut matches = Vec::new();
@@ -246,7 +288,7 @@ impl WorkspaceProvider {
                 continue;
             };
             let path = file
-                .strip_prefix(&root)
+                .strip_prefix(root)
                 .map_err(|_| ExecuteError::PermissionDenied)?
                 .to_string_lossy()
                 .into_owned();
@@ -318,7 +360,11 @@ impl WorkspaceProvider {
         Ok(())
     }
 
-    fn read_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+    fn read_text_at(
+        &self,
+        root: &Path,
+        arguments_json: &str,
+    ) -> Result<ExecuteResponse, WorkspaceReadFailure> {
         #[derive(serde::Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Arguments {
@@ -326,10 +372,7 @@ impl WorkspaceProvider {
         }
         let arguments = serde_json::from_str::<Arguments>(arguments_json)
             .map_err(|_| ExecuteError::InvalidArguments)?;
-        let root = self
-            .canonical_root()
-            .map_err(WorkspaceReadFailure::Runtime)?;
-        let resolved = Self::resolve(&root, &arguments.path)?;
+        let resolved = Self::resolve(root, &arguments.path)?;
         if !resolved.is_file() {
             return Err(ExecuteError::PermissionDenied.into());
         }
@@ -350,6 +393,30 @@ impl WorkspaceProvider {
                 .try_into()
                 .expect("serde_json values must produce valid JSON"),
         })
+    }
+
+    #[cfg(test)]
+    fn list(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceReadFailure::Runtime)?;
+        self.list_at(&root, arguments_json)
+    }
+
+    #[cfg(test)]
+    fn search(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceReadFailure::Runtime)?;
+        self.search_at(&root, arguments_json)
+    }
+
+    #[cfg(test)]
+    fn read_text(&self, arguments_json: &str) -> Result<ExecuteResponse, WorkspaceReadFailure> {
+        let root = self
+            .canonical_root()
+            .map_err(WorkspaceReadFailure::Runtime)?;
+        self.read_text_at(&root, arguments_json)
     }
 
     fn json_response<T: serde::Serialize>(
@@ -407,15 +474,18 @@ impl ToolProviderProvider for WorkspaceProvider {
     }
     fn execute(
         &self,
-        _context: InvocationContext,
+        context: InvocationContext,
         request: ExecuteRequest,
     ) -> LocalBoxFuture<'static, Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>>
     {
-        let result = match request.name.as_str() {
-            LIST_TOOL => self.list(request.arguments_json.as_str()),
-            SEARCH_TOOL => self.search(request.arguments_json.as_str()),
-            READ_TOOL => self.read_text(request.arguments_json.as_str()),
-            _ => Err(ExecuteError::NotFound.into()),
+        let result = match self.invocation_root(&context) {
+            Ok(root) => match request.name.as_str() {
+                LIST_TOOL => self.list_at(&root, request.arguments_json.as_str()),
+                SEARCH_TOOL => self.search_at(&root, request.arguments_json.as_str()),
+                READ_TOOL => self.read_text_at(&root, request.arguments_json.as_str()),
+                _ => Err(ExecuteError::NotFound.into()),
+            },
+            Err(error) => Err(WorkspaceReadFailure::Runtime(error)),
         };
         Box::pin(ready(match result {
             Ok(response) => Ok(Ok(response)),
@@ -428,7 +498,8 @@ impl ToolProviderProvider for WorkspaceProvider {
 impl Lifecycle for WorkspaceProvider {
     #[allow(clippy::unused_async_trait_impl)]
     async fn prepare(&self, _context: PrepareContext) -> Result<(), RuntimeFailure> {
-        self.canonical_root().map(|_| ())
+        self.canonical_root()?;
+        Ok(())
     }
 }
 
@@ -471,6 +542,7 @@ mod tests {
         WorkspaceProvider {
             config: WorkspaceConfig {
                 root,
+                delegated_root: None,
                 max_output_bytes: 4096,
                 max_list_entries: 16,
                 max_search_entries: 64,

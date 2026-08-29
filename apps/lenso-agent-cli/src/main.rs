@@ -575,8 +575,12 @@ fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
             "max_code_bytes = 32768\nmax_instructions = 1000000\nmax_memory_bytes = 8388608\nmax_output_bytes = 262144\nmax_parallel_subcalls = 4\nmax_subcalls = 16\n",
         ),
         (
-            "plugins/lenso.agent.subagent-tools/default.toml",
-            "max_output_bytes = 1048576\nmax_task_bytes = 262144\nmax_tasks = 8\n",
+            "plugins/lenso.agent.subagent-tools/worktree.toml",
+            "max_output_bytes = 1048576\nmax_task_bytes = 262144\nmax_tasks = 8\nrequire_worktree_provider = true\n",
+        ),
+        (
+            "plugins/lenso.agent.worktree-provider/default.toml",
+            "mutation_agents = [\"lenso.agent.loop/worker-a\", \"lenso.agent.loop/worker-b\"]\nmax_worktrees = 8\ntimeout_ms = 120000\nmax_review_bytes = 1048576\n",
         ),
         (
             "plugins/lenso.agent.loop/researcher.toml",
@@ -587,8 +591,20 @@ fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
             "# Named read-only child Agent selected by the coding Profiles.\n",
         ),
         (
+            "plugins/lenso.agent.loop/worker-a.toml",
+            "# Named mutation-capable child Agent isolated in its own Git worktree.\n",
+        ),
+        (
+            "plugins/lenso.agent.loop/worker-b.toml",
+            "# Second mutation-capable child lane for concurrent isolated work.\n",
+        ),
+        (
+            "plugins/lenso.agent.tools/worker-tools.toml",
+            "# Private Tool runtime for mutation-capable child Agents.\n",
+        ),
+        (
             "plugins/lenso.agent.interactive-approval-hook/default.toml",
-            "default_decision = \"ask\"\nallow_tools = [\"read_text\", \"skill_list\", \"skill\", \"skill_resources\", \"skill_resource\", \"ask_user\", \"git_status\", \"git_diff\", \"git_log\", \"list_subagents\", \"checkpoint_create\", \"checkpoint_review\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n",
+            "default_decision = \"ask\"\nallow_tools = [\"read_text\", \"skill_list\", \"skill\", \"skill_resources\", \"skill_resource\", \"ask_user\", \"git_status\", \"git_diff\", \"git_log\", \"list_subagents\", \"list_worktrees\", \"review_worktree\", \"checkpoint_create\", \"checkpoint_review\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n",
         ),
         (
             "plugins/lenso.agent.prompt.static/coding.toml",
@@ -604,11 +620,11 @@ fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
         ),
         (
             "profiles/code.toml",
-            "description = \"Official coding agent with workspace instructions and inline approval\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.native/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.subagent-tools/default\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/coding\",\n]\n",
+            "description = \"Official coding agent with workspace instructions, isolated child worktrees, and inline approval\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.native/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/coding\",\n]\n",
         ),
         (
             "profiles/code-sandbox.toml",
-            "description = \"Official coding agent with OS-isolated process execution\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.sandbox/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.subagent-tools/default\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/sandbox-coding\",\n]\n",
+            "description = \"Official coding agent with OS-isolated process execution and isolated child worktrees\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.sandbox/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/sandbox-coding\",\n]\n",
         ),
         (
             "profiles/plan.toml",
@@ -785,6 +801,10 @@ mod profile_tests {
         assert!(code.contains("lenso.agent.interactive-approval-hook/default"));
         assert!(code.contains("lenso.agent.loop/researcher"));
         assert!(code.contains("lenso.agent.loop/reviewer"));
+        assert!(code.contains("lenso.agent.loop/worker-a"));
+        assert!(code.contains("lenso.agent.loop/worker-b"));
+        assert!(code.contains("lenso.agent.worktree-provider/default"));
+        assert!(code.contains("lenso.agent.subagent-tools/worktree"));
         assert!(sandbox.contains("lenso.agent.process.sandbox/default"));
         assert!(!sandbox.contains("lenso.agent.process.native/default"));
         assert!(!plan.contains("workspace-edit"));

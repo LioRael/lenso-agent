@@ -2601,6 +2601,7 @@ dependencies = [
  "lenso-agent-workspace-instructions-plugin",
  "lenso-agent-workspace-read-plugin",
  "lenso-agent-workspace-read-tools-plugin",
+ "lenso-agent-worktree-provider-plugin",
  "lenso-secrets-command-plugin",
  "lenso-secrets-encrypted-file-plugin",
  "lenso-secrets-env-plugin",
@@ -2871,6 +2872,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent-process",
  "lenso-kernel",
  "lenso-native-adapter",
@@ -2887,6 +2889,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent-process",
  "lenso-kernel",
  "nix",
@@ -3036,7 +3039,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-subagent-tools-plugin"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "futures",
  "lenso",
@@ -3045,6 +3048,7 @@ dependencies = [
  "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-turn-input",
+ "lenso-capability-agent-worktree",
  "lenso-kernel",
  "serde",
  "serde_json",
@@ -3247,6 +3251,7 @@ dependencies = [
  "fs2",
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "lenso-native-adapter",
@@ -3291,6 +3296,7 @@ version = "0.2.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "lenso-native-adapter",
@@ -3312,6 +3318,22 @@ dependencies = [
  "lenso-kernel",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-worktree-provider-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-worktree",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -3711,6 +3733,23 @@ dependencies = [
  "lenso-kernel",
  "lenso-plugin-authoring",
  "lenso-runtime-codec",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-worktree"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
  "serde",
  "serde_json",
 ]

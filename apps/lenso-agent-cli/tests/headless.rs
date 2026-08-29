@@ -136,7 +136,32 @@ fn configure_file_sessions(root: &Path) {
 #[test]
 fn official_coding_sandbox_and_plan_profiles_install_and_resolve() {
     let temporary = tempfile::tempdir().unwrap();
-    let install = command(temporary.path())
+    let workspace = temporary.path().join("workspace");
+    let home = temporary.path().join("agent-home");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::write(workspace.join("README.md"), "# Coding Profile\n").unwrap();
+    for arguments in [
+        vec!["init"],
+        vec!["add", "README.md"],
+        vec![
+            "-c",
+            "user.name=Lenso Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "initial",
+        ],
+    ] {
+        let status = Command::new("git")
+            .current_dir(&workspace)
+            .args(arguments)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+    let install = command_with_home(&workspace, &home)
         .args(["profiles", "install", "coding"])
         .output()
         .unwrap();
@@ -147,7 +172,7 @@ fn official_coding_sandbox_and_plan_profiles_install_and_resolve() {
     );
 
     for profile in ["code", "code-sandbox", "plan"] {
-        let output = command(temporary.path())
+        let output = command_with_home(&workspace, &home)
             .args(["contexts", "--profile", profile])
             .output()
             .unwrap();
@@ -157,6 +182,127 @@ fn official_coding_sandbox_and_plan_profiles_install_and_resolve() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one headless proof retains profile installation, concurrent execution, and Git isolation evidence"
+)]
+fn coding_profile_runs_two_mutation_children_in_separate_worktrees() {
+    let temporary = tempfile::tempdir().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let home = temporary.path().join("agent-home");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::write(workspace.join("README.md"), "# Isolated Workers\n").unwrap();
+    let git = |cwd: &Path, arguments: &[&str]| {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    };
+    git(&workspace, &["init", "--quiet"]);
+    git(&workspace, &["config", "user.name", "Lenso Test"]);
+    git(
+        &workspace,
+        &["config", "user.email", "test@example.invalid"],
+    );
+    git(&workspace, &["add", "README.md"]);
+    git(&workspace, &["commit", "--quiet", "-m", "initial"]);
+
+    let install = command_with_home(&workspace, &home)
+        .args(["profiles", "install", "coding"])
+        .output()
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    for instance in ["agent", "worker-a", "worker-b"] {
+        let path = home
+            .join("plugins/lenso.agent.loop")
+            .join(format!("{instance}.toml"));
+        fs::write(path, "model = \"fixture/readme-summary-v1\"\n").unwrap();
+    }
+    configure_plugin_with(
+        &home,
+        "lenso.agent.model.fixture",
+        "model = \"fixture/readme-summary-v1\"\nallowed_models = [\"gpt-5.6-luna\", \"gpt-4o-mini\", \"fixture/session-presentation-v1\"]\n",
+    );
+    let code_profile = home.join("profiles/code.toml");
+    let profile = fs::read_to_string(&code_profile).unwrap();
+    fs::write(
+        &code_profile,
+        profile.replace("]\n", "  \"lenso.agent.model.fixture/default\",\n]\n"),
+    )
+    .unwrap();
+    fs::write(
+        home.join("plugins/lenso.agent.workspace-edit/default.toml"),
+        "root = \".\"\nmax_file_bytes = 1048576\nmax_edit_bytes = 131072\nrequire_checkpoint = false\n",
+    )
+    .unwrap();
+    fs::write(
+        home.join("plugins/lenso.agent.interactive-approval-hook/default.toml"),
+        "default_decision = \"ask\"\nallow_tools = [\"spawn_subagent\", \"wait_subagent\", \"create_file\", \"git_stage\", \"git_commit\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n",
+    )
+    .unwrap();
+
+    let output = command_with_home(&workspace, &home)
+        .args([
+            "--profile",
+            "code",
+            "--prompt",
+            "Spawn two isolated mutation workers.",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Both isolated workers committed their changes.\n"
+    );
+    assert!(!workspace.join("worker-a.txt").exists());
+    assert!(!workspace.join("worker-b.txt").exists());
+
+    let worktree_root = home.join("runtime/child-worktrees");
+    let mut children = fs::read_dir(&worktree_root)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    children.sort();
+    assert_eq!(children.len(), 2);
+    let worker_a = children
+        .iter()
+        .find(|child| child.join("worker-a.txt").is_file())
+        .expect("worker-a change must exist in one retained child worktree");
+    let worker_b = children
+        .iter()
+        .find(|child| child.join("worker-b.txt").is_file())
+        .expect("worker-b change must exist in one retained child worktree");
+    assert_ne!(worker_a, worker_b);
+    assert!(!worker_a.join("worker-b.txt").exists());
+    assert!(!worker_b.join("worker-a.txt").exists());
+    assert_eq!(
+        String::from_utf8_lossy(&git(worker_a, &["log", "-1", "--pretty=%s"]).stdout).trim(),
+        "test: worker-a isolated change"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&git(worker_b, &["log", "-1", "--pretty=%s"]).stdout).trim(),
+        "test: worker-b isolated change"
+    );
 }
 
 fn turn_generation_digests(session: &serde_json::Value) -> Vec<String> {

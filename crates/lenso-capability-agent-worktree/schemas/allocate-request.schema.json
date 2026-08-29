@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task_id", "agent", "source_workspace"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "agent": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "source_workspace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    }
+  },
+  "additionalProperties": false,
+  "title": "AllocateRequest"
+}

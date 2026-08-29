@@ -38,6 +38,7 @@ use lenso_agent_workspace_import_read_plugin as _;
 use lenso_agent_workspace_instructions_plugin as _;
 use lenso_agent_workspace_read_plugin as _;
 use lenso_agent_workspace_read_tools_plugin as _;
+use lenso_agent_worktree_provider_plugin as _;
 use lenso_secrets_command_plugin as _;
 use lenso_secrets_encrypted_file_plugin as _;
 use lenso_secrets_env_plugin as _;

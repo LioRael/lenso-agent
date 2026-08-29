@@ -12,6 +12,7 @@ use std::{
 
 use futures::future::ready;
 use lenso::prelude::*;
+use lenso_agent_native_support::WorkspaceScope;
 use lenso_capability_agent_process::{
     self as process_contract, CatalogRequest, CatalogResponse, CatalogResponseProgramsItem,
     ProcessProvider, ProcessRun, ProcessRunStreamInvocationError, RunError, RunRequest,
@@ -78,6 +79,8 @@ impl ProgramPreset {
 #[serde(deny_unknown_fields)]
 struct SandboxProcessConfig {
     root: PathBuf,
+    #[serde(default)]
+    delegated_root: Option<PathBuf>,
     temporary_directory: PathBuf,
     backend: BackendSelection,
     allow_network: bool,
@@ -119,6 +122,7 @@ enum SandboxBackend {
 struct PreparedRequest {
     program: ResolvedProgram,
     arguments: Vec<String>,
+    workspace_root: PathBuf,
     cwd: PathBuf,
     timeout_ms: u64,
 }
@@ -502,7 +506,8 @@ impl SandboxProcessProvider {
             resolve_program("true")?
         };
         let temporary = self.invocation_temporary_directory()?;
-        let mut command = self.sandbox_command(&target, &[], &self.root, temporary.path())?;
+        let mut command =
+            self.sandbox_command(&target, &[], &self.root, &self.root, temporary.path())?;
         command.stdout(Stdio::null()).stderr(Stdio::piped());
         let output = tokio::time::timeout(Duration::from_secs(5), command.output())
             .await
@@ -523,6 +528,7 @@ impl SandboxProcessProvider {
         request: RunRequest,
     ) -> Result<Result<RunResponse, RunError>, RuntimeFailure> {
         let prepared = match self.prepare_request(
+            &context,
             &request.program,
             request.arguments,
             &request.cwd,
@@ -535,6 +541,7 @@ impl SandboxProcessProvider {
         let mut command = self.sandbox_command(
             &prepared.program,
             &prepared.arguments,
+            &prepared.workspace_root,
             &prepared.cwd,
             temporary.path(),
         )?;
@@ -563,6 +570,7 @@ impl SandboxProcessProvider {
     ) -> PluginResult<(), RunStreamError> {
         let prepared = self
             .prepare_request(
+                &context,
                 &request.program,
                 request.arguments,
                 &request.cwd,
@@ -577,6 +585,7 @@ impl SandboxProcessProvider {
             .sandbox_command(
                 &prepared.program,
                 &prepared.arguments,
+                &prepared.workspace_root,
                 &prepared.cwd,
                 temporary.path(),
             )
@@ -601,6 +610,7 @@ impl SandboxProcessProvider {
 
     fn prepare_request(
         &self,
+        context: &InvocationContext,
         program_name: &str,
         arguments: Vec<String>,
         cwd: &str,
@@ -629,20 +639,14 @@ impl SandboxProcessProvider {
         {
             return Ok(Err(RequestRejection::InvalidRequest));
         }
-        let root = fs::canonicalize(&self.root).map_err(|error| RuntimeFailure::PluginFailure {
-            detail: format!("sandbox root is unavailable: {error}"),
-        })?;
-        if root != self.root {
-            return Err(RuntimeFailure::PluginFailure {
-                detail: "sandbox root identity changed after startup".to_owned(),
-            });
-        }
-        let Some(cwd) = resolve_cwd(&self.root, cwd) else {
+        let root = self.invocation_root(context)?;
+        let Some(cwd) = resolve_cwd(&root, cwd) else {
             return Ok(Err(RequestRejection::InvalidWorkingDirectory));
         };
         Ok(Ok(PreparedRequest {
             program: program.clone(),
             arguments,
+            workspace_root: root,
             cwd,
             timeout_ms,
         }))
@@ -671,6 +675,7 @@ impl SandboxProcessProvider {
         &self,
         target: &ResolvedProgram,
         arguments: &[String],
+        workspace_root: &Path,
         cwd: &Path,
         temporary: &Path,
     ) -> Result<tokio::process::Command, RuntimeFailure> {
@@ -682,7 +687,7 @@ impl SandboxProcessProvider {
                 let mut command = tokio::process::Command::new(&launcher.invocation_path);
                 command
                     .arg("-D")
-                    .arg(format!("WORKSPACE={}", self.root.display()))
+                    .arg(format!("WORKSPACE={}", workspace_root.display()))
                     .arg("-D")
                     .arg(format!("TEMP={}", temporary.display()))
                     .arg("-p")
@@ -708,8 +713,8 @@ impl SandboxProcessProvider {
                     .args(["--dev", "/dev"])
                     .args(["--proc", "/proc"])
                     .arg("--bind")
-                    .arg(&self.root)
-                    .arg(&self.root)
+                    .arg(workspace_root)
+                    .arg(workspace_root)
                     .arg("--bind")
                     .arg(temporary)
                     .arg("/tmp")
@@ -718,7 +723,7 @@ impl SandboxProcessProvider {
                     .arg("--")
                     .arg(&target.invocation_path)
                     .args(arguments)
-                    .current_dir(&self.root);
+                    .current_dir(workspace_root);
                 command
             }
         };
@@ -727,6 +732,50 @@ impl SandboxProcessProvider {
             .envs(&self.environment)
             .env("TMPDIR", sandbox_temporary_environment(temporary));
         Ok(command)
+    }
+
+    fn invocation_root(&self, context: &InvocationContext) -> Result<PathBuf, RuntimeFailure> {
+        let root = fs::canonicalize(&self.root).map_err(|error| RuntimeFailure::PluginFailure {
+            detail: format!("sandbox root is unavailable: {error}"),
+        })?;
+        if root != self.root {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "sandbox root identity changed after startup".to_owned(),
+            });
+        }
+        let Some(scope) = context
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("Workspace scope is invalid: {error}"),
+            })?
+        else {
+            return Ok(root);
+        };
+        let scoped = fs::canonicalize(&scope.absolute_path).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("scoped Workspace is unavailable: {error}"),
+            }
+        })?;
+        if scoped == root {
+            return Ok(root);
+        }
+        let delegated =
+            self.config
+                .delegated_root
+                .as_ref()
+                .ok_or_else(|| RuntimeFailure::PluginFailure {
+                    detail: "Workspace scope is outside the configured sandbox root".to_owned(),
+                })?;
+        let delegated =
+            fs::canonicalize(delegated).map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("delegated Workspace root is unavailable: {error}"),
+            })?;
+        if !scoped.starts_with(&delegated) || !scoped.join(".git").exists() {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: "Workspace scope is not an authorized delegated Git worktree".to_owned(),
+            });
+        }
+        Ok(scoped)
     }
 }
 
@@ -1130,6 +1179,7 @@ mod tests {
         SandboxProcessProvider {
             config: SandboxProcessConfig {
                 root: root.clone(),
+                delegated_root: None,
                 temporary_directory: temporary_directory.clone(),
                 backend: BackendSelection::Seatbelt,
                 allow_network,

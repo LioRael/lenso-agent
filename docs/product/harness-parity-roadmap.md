@@ -27,7 +27,7 @@ scope inside this slice.
 ## Slice 2: Parallel coding supervision
 
 Build on the existing bounded subagent task registry and durable child
-Sessions:
+Sessions. Items 1–3 are delivered by ADR-0059, ADR-0060, and ADR-0062:
 
 1. introduce named child Agent Instances selected by Profile rather than one
    shared child binding;

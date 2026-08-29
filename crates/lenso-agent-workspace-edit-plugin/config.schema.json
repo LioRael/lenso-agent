@@ -5,6 +5,7 @@
   "required": ["root", "max_file_bytes", "max_edit_bytes", "checkpoint_directory", "require_checkpoint", "max_checkpoints", "max_review_bytes"],
   "properties": {
     "root": { "type": "string" },
+    "delegated_root": { "type": "string" },
     "max_file_bytes": { "type": "integer" },
     "max_edit_bytes": { "type": "integer" },
     "checkpoint_directory": { "type": "string" },

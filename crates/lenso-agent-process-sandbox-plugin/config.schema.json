@@ -15,6 +15,7 @@
   ],
   "properties": {
     "root": { "type": "string" },
+    "delegated_root": { "type": "string" },
     "temporary_directory": { "type": "string" },
     "backend": { "type": "string" },
     "allow_network": { "type": "boolean" },

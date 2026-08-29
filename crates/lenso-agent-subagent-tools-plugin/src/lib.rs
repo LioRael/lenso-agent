@@ -9,7 +9,9 @@ use std::{
 
 use futures::future::{Either, ready, select};
 use lenso::prelude::*;
-use lenso_agent_native_support::{TOOL_TASK_OWNER_EXTENSION, ToolTaskOwner, WorkspaceScope};
+use lenso_agent_native_support::{
+    TOOL_TASK_OWNER_EXTENSION, ToolTaskOwner, WORKSPACE_SCOPE_EXTENSION, WorkspaceScope,
+};
 use lenso_capability_agent::{
     self as agent_contract, AgentInvocationError, RunTurnError, RunTurnRequest, RunTurnResponseKind,
 };
@@ -24,6 +26,10 @@ use lenso_capability_agent_tool_provider::{
 };
 use lenso_capability_agent_turn_input::{
     self as turn_input_contract, SubmitError, SubmitRequest, TurnInputInvocationError,
+};
+use lenso_capability_agent_worktree::{
+    self as worktree_contract, AllocateError as WorktreeAllocateError,
+    AllocateRequest as WorktreeAllocateRequest, WorktreeInvocationError,
 };
 use lenso_kernel::{
     CancellationToken, InvocationContext, NativeStream, RuntimeFailure, StreamEvent,
@@ -54,6 +60,8 @@ struct SubagentToolsConfig {
     max_output_bytes: usize,
     max_task_bytes: usize,
     max_tasks: usize,
+    #[serde(default)]
+    require_worktree_provider: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -82,6 +90,12 @@ struct DelegationLimits {
     output_bytes: usize,
 }
 
+struct DelegationExecution {
+    task_id: Option<String>,
+    background: Option<Rc<RefCell<SubagentTask>>>,
+    parent_cancellation: Option<CancellationToken>,
+}
+
 fn validate_config(config: &SubagentToolsConfig) -> Result<(), RuntimeFailure> {
     if config.max_output_bytes == 0
         || config.max_output_bytes > 1_048_576
@@ -107,6 +121,7 @@ struct SubagentToolsPlugin {
     config: SubagentToolsConfig,
     agents: ManyPort<agent_contract::AgentClient>,
     turn_inputs: ManyPort<turn_input_contract::TurnInputClient>,
+    worktrees: ManyPort<worktree_contract::WorktreeClient>,
     registry: Rc<RefCell<SubagentTaskRegistry>>,
     #[tasks]
     managed_tasks: ManagedTasks,
@@ -295,6 +310,86 @@ impl SubagentToolsPlugin {
             .any(|entry| entry.provider_instance() == agent)
     }
 
+    async fn delegate_in_workspace(
+        &self,
+        context: InvocationContext,
+        arguments: DelegateArguments,
+    ) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
+        let parent_cancellation = context.cancellation();
+        let task_id = format!("delegate-{}", uuid::Uuid::new_v4());
+        let child_context = match self
+            .child_workspace_context(&context, &task_id, &arguments.agent)
+            .await
+        {
+            Ok(context) => context,
+            Err(ChildWorkspaceError::Domain(error)) => return Ok(Err(error)),
+            Err(ChildWorkspaceError::Runtime(error)) => return Err(error),
+        };
+        let task_bytes = arguments.task.len();
+        execute_delegation(
+            self.agents.clone(),
+            arguments.agent,
+            child_context,
+            arguments.task,
+            DelegationLimits {
+                task_bytes,
+                output_bytes: self.config.max_output_bytes,
+            },
+            DelegationExecution {
+                task_id: Some(task_id),
+                background: None,
+                parent_cancellation: Some(parent_cancellation),
+            },
+        )
+        .await
+    }
+
+    async fn child_workspace_context(
+        &self,
+        parent: &InvocationContext,
+        task_id: &str,
+        agent: &str,
+    ) -> Result<InvocationContext, ChildWorkspaceError> {
+        let inherited = parent
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| {
+                ChildWorkspaceError::Runtime(RuntimeFailure::PluginFailure {
+                    detail: format!("subagent Workspace scope is invalid: {error}"),
+                })
+            })?
+            .ok_or_else(|| {
+                ChildWorkspaceError::Runtime(RuntimeFailure::PluginFailure {
+                    detail: "subagent task is missing its Workspace scope".to_owned(),
+                })
+            })?;
+        let providers = self.worktrees.iter().collect::<Vec<_>>();
+        if providers.len() > 1 || (self.config.require_worktree_provider && providers.len() != 1) {
+            return Err(ChildWorkspaceError::Runtime(
+                RuntimeFailure::InvalidResolvedPlan {
+                    detail: "subagent Tools require exactly one Worktree provider for isolated child workspaces".to_owned(),
+                },
+            ));
+        }
+        let workspace = if let Some(provider) = providers.first() {
+            let response = provider
+                .client()
+                .allocate_with_context(
+                    parent.clone(),
+                    WorktreeAllocateRequest {
+                        task_id: task_id.to_owned(),
+                        agent: agent.to_owned(),
+                        source_workspace: inherited.absolute_path,
+                    },
+                )
+                .await
+                .map_err(map_worktree_allocation_error)?;
+            response.workspace
+        } else {
+            inherited.absolute_path
+        };
+        detached_child_context(parent, &workspace).map_err(ChildWorkspaceError::Runtime)
+    }
+
     fn execute_delegate(
         &self,
         context: InvocationContext,
@@ -303,19 +398,8 @@ impl SubagentToolsPlugin {
         let Ok(arguments) = self.parse_task(request) else {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         };
-        let task_bytes = arguments.task.len();
-        Box::pin(execute_delegation(
-            self.agents.clone(),
-            arguments.agent,
-            context,
-            arguments.task,
-            DelegationLimits {
-                task_bytes,
-                output_bytes: self.config.max_output_bytes,
-            },
-            None,
-            None,
-        ))
+        let plugin = self.clone();
+        Box::pin(async move { plugin.delegate_in_workspace(context, arguments).await })
     }
 
     fn execute_spawn(
@@ -326,19 +410,50 @@ impl SubagentToolsPlugin {
         let Ok(arguments) = self.parse_task(request) else {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         };
-        let provenance = match TaskProvenance::from_context(context) {
-            Ok(provenance) => provenance,
-            Err(error) => return Box::pin(ready(Err(error))),
-        };
-        let mut registry = self.registry.borrow_mut();
-        if registry.tasks.len() >= self.config.max_tasks {
+        if self.registry.borrow().tasks.len() >= self.config.max_tasks {
             return Box::pin(ready(Ok(Err(execution_failed(
                 "subagent_task_capacity_exceeded",
                 "The bounded subagent task registry is full",
                 &task_metadata(None, Some(&arguments.agent), "rejected"),
             )))));
         }
+        let plugin = self.clone();
+        let context = context.clone();
+        Box::pin(async move { plugin.spawn_in_workspace(context, arguments).await })
+    }
+
+    async fn spawn_in_workspace(
+        &self,
+        context: InvocationContext,
+        arguments: DelegateArguments,
+    ) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
         let task_id = format!("subagent-{}", uuid::Uuid::new_v4());
+        let child_context = match self
+            .child_workspace_context(&context, &task_id, &arguments.agent)
+            .await
+        {
+            Ok(context) => context,
+            Err(ChildWorkspaceError::Domain(error)) => return Ok(Err(error)),
+            Err(ChildWorkspaceError::Runtime(error)) => return Err(error),
+        };
+        let child_workspace = child_context
+            .typed_extension::<WorkspaceScope>()
+            .map_err(|error| RuntimeFailure::PluginFailure {
+                detail: format!("allocated child Workspace scope is invalid: {error}"),
+            })?
+            .ok_or_else(|| RuntimeFailure::PluginFailure {
+                detail: "allocated child Workspace scope is missing".to_owned(),
+            })?;
+        let provenance =
+            TaskProvenance::from_parent_context(&context, child_workspace.absolute_path)?;
+        let mut registry = self.registry.borrow_mut();
+        if registry.tasks.len() >= self.config.max_tasks {
+            return Ok(Err(execution_failed(
+                "subagent_task_capacity_exceeded",
+                "The bounded subagent task registry is full",
+                &task_metadata(None, Some(&arguments.agent), "rejected"),
+            )));
+        }
         let task = Rc::new(RefCell::new(SubagentTask::new(
             arguments.agent.clone(),
             provenance,
@@ -346,13 +461,6 @@ impl SubagentToolsPlugin {
         registry.tasks.insert(task_id.clone(), task.clone());
         drop(registry);
 
-        let child_context = match detached_child_context(context) {
-            Ok(context) => context,
-            Err(error) => {
-                self.registry.borrow_mut().tasks.remove(&task_id);
-                return Box::pin(ready(Err(error)));
-            }
-        };
         task.borrow_mut()
             .attach_cancellation(child_context.cancellation());
         let agents = self.agents.clone();
@@ -361,7 +469,6 @@ impl SubagentToolsPlugin {
         let max_output_bytes = self.config.max_output_bytes;
         let background_task_id = task_id.clone();
         let background_task = task.clone();
-        let parent_cancellation = context.cancellation();
         let spawned = self.managed_tasks.spawn_local(async move {
             let outcome = execute_delegation(
                 agents,
@@ -372,20 +479,23 @@ impl SubagentToolsPlugin {
                     task_bytes,
                     output_bytes: max_output_bytes,
                 },
-                Some(background_task_id),
-                Some((background_task.clone(), parent_cancellation)),
+                DelegationExecution {
+                    task_id: Some(background_task_id),
+                    background: Some(background_task.clone()),
+                    parent_cancellation: None,
+                },
             )
             .await;
             background_task.borrow_mut().complete(outcome);
         });
         if let Err(error) = spawned {
             self.registry.borrow_mut().tasks.remove(&task_id);
-            return Box::pin(ready(Err(RuntimeFailure::PluginFailure {
+            return Err(RuntimeFailure::PluginFailure {
                 detail: format!("subagent task failed to start: {error:?}"),
-            })));
+            });
         }
 
-        Box::pin(ready(Ok(Ok(ExecuteResponse {
+        Ok(Ok(ExecuteResponse {
             content: serde_json::json!({
                 "task_id": task_id,
                 "agent": task.borrow().agent,
@@ -397,7 +507,7 @@ impl SubagentToolsPlugin {
                 .to_string()
                 .try_into()
                 .expect("subagent task metadata must be valid JSON"),
-        }))))
+        }))
     }
 
     fn execute_wait(
@@ -648,7 +758,10 @@ enum SubagentTaskTerminal {
 }
 
 impl TaskProvenance {
-    fn from_context(context: &InvocationContext) -> Result<Self, RuntimeFailure> {
+    fn from_parent_context(
+        context: &InvocationContext,
+        workspace: String,
+    ) -> Result<Self, RuntimeFailure> {
         let owner = context
             .typed_extension::<ToolTaskOwner>()
             .map_err(|error| RuntimeFailure::PluginFailure {
@@ -656,14 +769,6 @@ impl TaskProvenance {
             })?
             .ok_or_else(|| RuntimeFailure::PluginFailure {
                 detail: "subagent task is missing its parent Tool owner".to_owned(),
-            })?;
-        let workspace = context
-            .typed_extension::<WorkspaceScope>()
-            .map_err(|error| RuntimeFailure::PluginFailure {
-                detail: format!("subagent Workspace scope is invalid: {error}"),
-            })?
-            .ok_or_else(|| RuntimeFailure::PluginFailure {
-                detail: "subagent task is missing its Workspace scope".to_owned(),
             })?;
         let generation_spec_digest = context
             .extension(GENERATION_SPEC_DIGEST_EXTENSION)
@@ -676,9 +781,9 @@ impl TaskProvenance {
         if !valid_owner_part(&owner.session_id)
             || !valid_owner_part(&owner.turn_id)
             || !valid_owner_part(&owner.tool_call_id)
-            || workspace.absolute_path.is_empty()
-            || workspace.absolute_path.len() > 4_096
-            || !std::path::Path::new(&workspace.absolute_path).is_absolute()
+            || workspace.is_empty()
+            || workspace.len() > 4_096
+            || !std::path::Path::new(&workspace).is_absolute()
         {
             return Err(RuntimeFailure::PluginFailure {
                 detail: "subagent task ownership or Workspace provenance is invalid".to_owned(),
@@ -691,7 +796,7 @@ impl TaskProvenance {
                 tool_call_id: owner.tool_call_id,
             },
             generation_spec_digest,
-            workspace: workspace.absolute_path,
+            workspace,
         })
     }
 }
@@ -878,14 +983,20 @@ async fn wait_for_child_session(task: Rc<RefCell<SubagentTask>>) -> Option<Strin
     .await
 }
 
-fn detached_child_context(parent: &InvocationContext) -> Result<InvocationContext, RuntimeFailure> {
+fn detached_child_context(
+    parent: &InvocationContext,
+    workspace: &str,
+) -> Result<InvocationContext, RuntimeFailure> {
     let mut child = InvocationContext::new(
         parent.request_id(),
         parent.deadline(),
         CancellationToken::new(),
     );
     for extension in parent.extensions() {
-        if extension.key() == TOOL_TASK_OWNER_EXTENSION {
+        if matches!(
+            extension.key(),
+            TOOL_TASK_OWNER_EXTENSION | WORKSPACE_SCOPE_EXTENSION
+        ) {
             continue;
         }
         child = child
@@ -901,7 +1012,40 @@ fn detached_child_context(parent: &InvocationContext) -> Result<InvocationContex
                 detail: format!("failed to preserve sealed child invocation context: {error}"),
             })?;
     }
-    Ok(child)
+    child
+        .with_typed_extension(&WorkspaceScope {
+            absolute_path: workspace.to_owned(),
+        })
+        .map_err(|error| RuntimeFailure::Internal {
+            detail: format!("failed to attach child Workspace scope: {error}"),
+        })
+}
+
+#[derive(Debug)]
+enum ChildWorkspaceError {
+    Domain(ExecuteError),
+    Runtime(RuntimeFailure),
+}
+
+fn map_worktree_allocation_error(error: WorktreeInvocationError) -> ChildWorkspaceError {
+    match error {
+        WorktreeInvocationError::Runtime(error) => ChildWorkspaceError::Runtime(error),
+        WorktreeInvocationError::Domain(error) => {
+            let reason = match error {
+                WorktreeAllocateError::InvalidRequest => "worktree_request_invalid",
+                WorktreeAllocateError::SourceWorkspaceMismatch => "worktree_source_mismatch",
+                WorktreeAllocateError::CapacityExceeded => "worktree_capacity_exceeded",
+                WorktreeAllocateError::TaskAlreadyAllocated => "worktree_task_already_allocated",
+                WorktreeAllocateError::GitOperationFailed => "worktree_git_operation_failed",
+                WorktreeAllocateError::Unknown(_) => "worktree_unknown_error",
+            };
+            ChildWorkspaceError::Domain(execution_failed(
+                reason,
+                "The Worktree provider rejected the child Workspace allocation",
+                &serde_json::json!({"reason": reason}),
+            ))
+        }
+    }
 }
 
 fn task_metadata(task_id: Option<&str>, agent: Option<&str>, status: &str) -> serde_json::Value {
@@ -1062,12 +1206,11 @@ async fn execute_delegation(
     context: InvocationContext,
     task: String,
     limits: DelegationLimits,
-    task_id: Option<String>,
-    background: Option<(Rc<RefCell<SubagentTask>>, CancellationToken)>,
+    execution: DelegationExecution,
 ) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
     let mut progress = ChildRunProgress {
         agent: agent_instance.clone(),
-        task_id,
+        task_id: execution.task_id,
         ..ChildRunProgress::default()
     };
     let agent = agents
@@ -1076,8 +1219,14 @@ async fn execute_delegation(
         .ok_or_else(|| RuntimeFailure::InvalidResolvedPlan {
             detail: format!("subagent Agent binding `{agent_instance}` is unavailable"),
         })?;
-    let parent_cancellation = background.as_ref().map(|(_, cancellation)| cancellation);
-    let stream = match open_child_stream(agent.client(), context, task, parent_cancellation).await {
+    let stream = match open_child_stream(
+        agent.client(),
+        context,
+        task,
+        execution.parent_cancellation.as_ref(),
+    )
+    .await
+    {
         Ok(stream) => stream,
         Err(AgentInvocationError::Domain(error)) => {
             return Ok(Err(map_agent_error(
@@ -1090,19 +1239,19 @@ async fn execute_delegation(
         Err(AgentInvocationError::Runtime(error)) => return Err(error),
     };
     let stream = Rc::new(stream);
-    if let Some((background_task, _)) = &background {
+    if let Some(background_task) = &execution.background {
         background_task.borrow_mut().attach_stream(stream.clone());
     }
     stream.close_send().await?;
     loop {
-        match receive_child_event(&stream, parent_cancellation).await? {
+        match receive_child_event(&stream, execution.parent_cancellation.as_ref()).await? {
             StreamEvent::Message(message) => {
                 if let Err(error) =
                     progress.observe_message(&message, limits.task_bytes, limits.output_bytes)
                 {
                     return Ok(Err(error));
                 }
-                if let Some((background_task, _)) = &background
+                if let Some(background_task) = &execution.background
                     && let Some(session_id) = progress.child_session_id.as_deref()
                 {
                     background_task.borrow_mut().observe_session(session_id);
@@ -1429,6 +1578,7 @@ mod tests {
                 max_output_bytes: 1_048_576,
                 max_task_bytes: 262_144,
                 max_tasks: 64,
+                require_worktree_provider: false,
             })
             .is_ok()
         );
@@ -1437,6 +1587,7 @@ mod tests {
                 max_output_bytes: 0,
                 max_task_bytes: 262_144,
                 max_tasks: 8,
+                require_worktree_provider: false,
             })
             .is_err()
         );
@@ -1445,6 +1596,7 @@ mod tests {
                 max_output_bytes: 1_048_577,
                 max_task_bytes: 262_145,
                 max_tasks: 65,
+                require_worktree_provider: false,
             })
             .is_err()
         );
@@ -1526,7 +1678,7 @@ mod tests {
             })
             .unwrap();
 
-        let child = detached_child_context(&parent).unwrap();
+        let child = detached_child_context(&parent, "/tmp/child-workspace").unwrap();
         child.cancellation().cancel();
 
         assert!(!parent_cancellation.is_cancelled());
