@@ -58,3 +58,4 @@
 - [0056 — Compose the official coding and planning Profiles](0056-compose-official-coding-and-planning-profiles.md)
 - [0057 — Make Workspace edits explicitly reviewable and reversible](0057-make-workspace-edits-reviewable-and-reversible.md)
 - [0058 — Isolate coding processes behind an explicit OS sandbox Profile](0058-isolate-coding-processes-behind-an-explicit-os-sandbox-profile.md)
+- [0059 — Compose named child Agents by Profile](0059-compose-named-child-agents-by-profile.md)

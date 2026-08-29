@@ -1,4 +1,4 @@
-//! Bounded Tool projection over one explicitly composed child Agent.
+//! Bounded Tool projection over explicitly composed, named child Agents.
 
 use std::{
     cell::RefCell,
@@ -52,6 +52,7 @@ struct SubagentToolsConfig {
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DelegateArguments {
+    agent: String,
     task: String,
 }
 
@@ -66,6 +67,12 @@ struct TaskIdArguments {
 struct SendArguments {
     task_id: String,
     input: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DelegationLimits {
+    task_bytes: usize,
+    output_bytes: usize,
 }
 
 fn validate_config(config: &SubagentToolsConfig) -> Result<(), RuntimeFailure> {
@@ -91,8 +98,8 @@ fn validate_config(config: &SubagentToolsConfig) -> Result<(), RuntimeFailure> {
 struct SubagentToolsPlugin {
     #[config]
     config: SubagentToolsConfig,
-    agent: Port<agent_contract::AgentClient>,
-    turn_input: Port<turn_input_contract::TurnInputClient>,
+    agents: ManyPort<agent_contract::AgentClient>,
+    turn_inputs: ManyPort<turn_input_contract::TurnInputClient>,
     registry: Rc<RefCell<SubagentTaskRegistry>>,
     #[tasks]
     managed_tasks: ManagedTasks,
@@ -105,7 +112,11 @@ impl ToolProviderProvider for SubagentToolsPlugin {
         _context: InvocationContext,
         _request: CatalogRequest,
     ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderCatalog> {
-        let task_schema = task_input_schema(self.config.max_task_bytes);
+        let agent_instances = match self.agent_instances() {
+            Ok(agent_instances) => agent_instances,
+            Err(error) => return Box::pin(ready(Err(error))),
+        };
+        let task_schema = task_input_schema(self.config.max_task_bytes, &agent_instances);
         let task_id_schema = task_id_input_schema();
         Box::pin(ready(Ok(Ok(CatalogResponse {
             tools: vec![
@@ -166,18 +177,25 @@ impl ToolProviderProvider for SubagentToolsPlugin {
     }
 }
 
-fn task_input_schema(max_task_bytes: usize) -> tool_provider_contract::RawJson {
+fn task_input_schema(
+    max_task_bytes: usize,
+    agent_instances: &[String],
+) -> tool_provider_contract::RawJson {
     serde_json::json!({
         "type": "object",
         "additionalProperties": false,
         "properties": {
+            "agent": {
+                "type": "string",
+                "enum": agent_instances
+            },
             "task": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": max_task_bytes
             }
         },
-        "required": ["task"]
+        "required": ["agent", "task"]
     })
     .to_string()
     .try_into()
@@ -229,6 +247,32 @@ fn empty_input_schema() -> tool_provider_contract::RawJson {
 }
 
 impl SubagentToolsPlugin {
+    fn agent_instances(&self) -> Result<Vec<String>, RuntimeFailure> {
+        let agents = self
+            .agents
+            .iter()
+            .map(|entry| entry.provider_instance().to_owned())
+            .collect::<Vec<_>>();
+        let turn_inputs = self
+            .turn_inputs
+            .iter()
+            .map(|entry| entry.provider_instance().to_owned())
+            .collect::<Vec<_>>();
+        if agents.is_empty() || agents != turn_inputs {
+            return Err(RuntimeFailure::InvalidResolvedPlan {
+                detail: "subagent Tools require matching, ordered Agent and Turn Input bindings"
+                    .to_owned(),
+            });
+        }
+        Ok(agents)
+    }
+
+    fn has_agent(&self, agent: &str) -> bool {
+        self.agents
+            .iter()
+            .any(|entry| entry.provider_instance() == agent)
+    }
+
     fn execute_delegate(
         &self,
         context: InvocationContext,
@@ -239,11 +283,14 @@ impl SubagentToolsPlugin {
         };
         let task_bytes = arguments.task.len();
         Box::pin(execute_delegation(
-            self.agent.clone(),
+            self.agents.clone(),
+            arguments.agent,
             context,
             arguments.task,
-            task_bytes,
-            self.config.max_output_bytes,
+            DelegationLimits {
+                task_bytes,
+                output_bytes: self.config.max_output_bytes,
+            },
             None,
             None,
         ))
@@ -262,11 +309,11 @@ impl SubagentToolsPlugin {
             return Box::pin(ready(Ok(Err(execution_failed(
                 "subagent_task_capacity_exceeded",
                 "The bounded subagent task registry is full",
-                &task_metadata(None, "rejected"),
+                &task_metadata(None, Some(&arguments.agent), "rejected"),
             )))));
         }
         let task_id = format!("subagent-{}", uuid::Uuid::new_v4());
-        let task = Rc::new(RefCell::new(SubagentTask::new()));
+        let task = Rc::new(RefCell::new(SubagentTask::new(arguments.agent.clone())));
         registry.tasks.insert(task_id.clone(), task.clone());
         drop(registry);
 
@@ -279,7 +326,8 @@ impl SubagentToolsPlugin {
         };
         task.borrow_mut()
             .attach_cancellation(child_context.cancellation());
-        let agent = self.agent.clone();
+        let agents = self.agents.clone();
+        let agent_instance = arguments.agent;
         let task_bytes = arguments.task.len();
         let max_output_bytes = self.config.max_output_bytes;
         let background_task_id = task_id.clone();
@@ -287,11 +335,14 @@ impl SubagentToolsPlugin {
         let parent_cancellation = context.cancellation();
         let spawned = self.managed_tasks.spawn_local(async move {
             let outcome = execute_delegation(
-                agent,
+                agents,
+                agent_instance,
                 child_context,
                 arguments.task,
-                task_bytes,
-                max_output_bytes,
+                DelegationLimits {
+                    task_bytes,
+                    output_bytes: max_output_bytes,
+                },
                 Some(background_task_id),
                 Some((background_task.clone(), parent_cancellation)),
             )
@@ -308,11 +359,12 @@ impl SubagentToolsPlugin {
         Box::pin(ready(Ok(Ok(ExecuteResponse {
             content: serde_json::json!({
                 "task_id": task_id,
+                "agent": task.borrow().agent,
                 "status": "running"
             })
             .to_string(),
             content_type: ContentType::Text,
-            metadata_json: task_metadata(Some(&task_id), "running")
+            metadata_json: task_metadata(Some(&task_id), Some(&task.borrow().agent), "running")
                 .to_string()
                 .try_into()
                 .expect("subagent task metadata must be valid JSON"),
@@ -346,7 +398,11 @@ impl SubagentToolsPlugin {
             {
                 registry.tasks.remove(&arguments.task_id);
             }
-            Ok(Ok(task_terminal_response(&arguments.task_id, terminal)))
+            Ok(Ok(task_terminal_response(
+                &arguments.task_id,
+                &task.borrow().agent,
+                terminal,
+            )))
         })
     }
 
@@ -367,14 +423,16 @@ impl SubagentToolsPlugin {
             return Box::pin(ready(Ok(Err(task_not_found(&arguments.task_id)))));
         };
         let status = task.borrow_mut().request_cancel();
+        let agent = task.borrow().agent.clone();
         Box::pin(ready(Ok(Ok(ExecuteResponse {
             content: serde_json::json!({
                 "task_id": arguments.task_id,
+                "agent": agent,
                 "status": status
             })
             .to_string(),
             content_type: ContentType::Text,
-            metadata_json: task_metadata(Some(&arguments.task_id), status)
+            metadata_json: task_metadata(Some(&arguments.task_id), Some(&agent), status)
                 .to_string()
                 .try_into()
                 .expect("subagent task metadata must be valid JSON"),
@@ -398,15 +456,20 @@ impl SubagentToolsPlugin {
         else {
             return Box::pin(ready(Ok(Err(task_not_found(&arguments.task_id)))));
         };
-        let turn_input = self.turn_input.clone();
+        let agent = task.borrow().agent.clone();
+        let turn_inputs = self.turn_inputs.clone();
         Box::pin(async move {
             let Some(child_session_id) = wait_for_child_session(task).await else {
                 return Ok(Err(execution_failed(
                     "subagent_task_not_running",
                     "The subagent task ended before it accepted additional input",
-                    &task_metadata(Some(&arguments.task_id), "already_terminal"),
+                    &task_metadata(Some(&arguments.task_id), Some(&agent), "already_terminal"),
                 )));
             };
+            let turn_input = turn_inputs
+                .iter()
+                .find(|entry| entry.provider_instance() == agent)
+                .expect("validated subagent route must retain its Turn Input binding");
             match turn_input
                 .submit_with_context(
                     context,
@@ -420,18 +483,27 @@ impl SubagentToolsPlugin {
                 Ok(response) => Ok(Ok(ExecuteResponse {
                     content: serde_json::json!({
                         "task_id": arguments.task_id,
+                        "agent": agent,
                         "status": "input_accepted",
                         "child_session_id": response.session_id,
                         "accepted_revision": response.accepted_revision,
                     })
                     .to_string(),
                     content_type: ContentType::Text,
-                    metadata_json: task_metadata(Some(&arguments.task_id), "input_accepted")
-                        .to_string()
-                        .try_into()
-                        .expect("subagent task metadata must be valid JSON"),
+                    metadata_json: task_metadata(
+                        Some(&arguments.task_id),
+                        Some(&agent),
+                        "input_accepted",
+                    )
+                    .to_string()
+                    .try_into()
+                    .expect("subagent task metadata must be valid JSON"),
                 })),
-                Err(error) => Ok(Err(map_turn_input_error(&error, &arguments.task_id))),
+                Err(error) => Ok(Err(map_turn_input_error(
+                    &error,
+                    &arguments.task_id,
+                    &agent,
+                ))),
             }
         })
     }
@@ -478,6 +550,9 @@ impl SubagentToolsPlugin {
         if arguments.task.trim().is_empty() || arguments.task.len() > self.config.max_task_bytes {
             return Err(());
         }
+        if !self.has_agent(&arguments.agent) {
+            return Err(());
+        }
         Ok(arguments)
     }
 }
@@ -511,6 +586,7 @@ struct SubagentTaskRegistry {
 
 #[derive(Debug)]
 struct SubagentTask {
+    agent: String,
     child_session_id: Option<String>,
     cancel_requested: bool,
     cancellation: Option<CancellationToken>,
@@ -528,8 +604,9 @@ enum SubagentTaskTerminal {
 }
 
 impl SubagentTask {
-    fn new() -> Self {
+    fn new(agent: String) -> Self {
         Self {
+            agent,
             child_session_id: None,
             cancel_requested: false,
             cancellation: None,
@@ -604,6 +681,7 @@ impl SubagentTask {
         };
         serde_json::json!({
             "task_id": task_id,
+            "agent": self.agent,
             "status": status,
             "child_session_id": self.child_session_id,
         })
@@ -672,10 +750,11 @@ fn detached_child_context(parent: &InvocationContext) -> Result<InvocationContex
     Ok(child)
 }
 
-fn task_metadata(task_id: Option<&str>, status: &str) -> serde_json::Value {
+fn task_metadata(task_id: Option<&str>, agent: Option<&str>, status: &str) -> serde_json::Value {
     serde_json::json!({
         "schema": TASK_METADATA_SCHEMA,
         "task_id": task_id,
+        "agent": agent,
         "status": status,
     })
 }
@@ -684,22 +763,28 @@ fn task_not_found(task_id: &str) -> ExecuteError {
     execution_failed(
         "subagent_task_not_found",
         "The subagent task does not exist in this App Generation",
-        &task_metadata(Some(task_id), "missing"),
+        &task_metadata(Some(task_id), None, "missing"),
     )
 }
 
-fn task_terminal_response(task_id: &str, terminal: SubagentTaskTerminal) -> ExecuteResponse {
+fn task_terminal_response(
+    task_id: &str,
+    agent: &str,
+    terminal: SubagentTaskTerminal,
+) -> ExecuteResponse {
     match terminal {
         SubagentTaskTerminal::Completed(response) => response,
-        SubagentTaskTerminal::Domain(error) => task_domain_error_response(task_id, error),
+        SubagentTaskTerminal::Domain(error) => task_domain_error_response(task_id, agent, error),
         SubagentTaskTerminal::Cancelled => task_status_response(
             task_id,
+            agent,
             "cancelled",
             "subagent_cancelled",
             "The child-Agent task was cancelled",
         ),
         SubagentTaskTerminal::Runtime(error) => task_status_response(
             task_id,
+            agent,
             "failed",
             runtime_failure_code(&error),
             "The child-Agent task ended with a Runtime Failure",
@@ -707,13 +792,17 @@ fn task_terminal_response(task_id: &str, terminal: SubagentTaskTerminal) -> Exec
     }
 }
 
-fn task_domain_error_response(task_id: &str, error: ExecuteError) -> ExecuteResponse {
+fn task_domain_error_response(task_id: &str, agent: &str, error: ExecuteError) -> ExecuteResponse {
     let (reason_code, message, metadata) = match error {
         ExecuteError::ExecutionFailed { payload } => {
             let mut metadata =
                 serde_json::from_str::<serde_json::Value>(payload.details_json.as_str())
-                    .unwrap_or_else(|_| task_metadata(Some(task_id), "failed"));
+                    .unwrap_or_else(|_| task_metadata(Some(task_id), Some(agent), "failed"));
             if let Some(object) = metadata.as_object_mut() {
+                object.insert(
+                    "agent".to_owned(),
+                    serde_json::Value::String(agent.to_owned()),
+                );
                 object.insert(
                     "task_id".to_owned(),
                     serde_json::Value::String(task_id.to_owned()),
@@ -728,32 +817,33 @@ fn task_domain_error_response(task_id: &str, error: ExecuteError) -> ExecuteResp
         ExecuteError::InvalidArguments => (
             "child_invalid_arguments".to_owned(),
             "The child Agent rejected its arguments".to_owned(),
-            task_metadata(Some(task_id), "failed"),
+            task_metadata(Some(task_id), Some(agent), "failed"),
         ),
         ExecuteError::NotFound => (
             "child_not_found".to_owned(),
             "The child Agent operation was not found".to_owned(),
-            task_metadata(Some(task_id), "failed"),
+            task_metadata(Some(task_id), Some(agent), "failed"),
         ),
         ExecuteError::OutputLimitExceeded => (
             "child_output_limit_exceeded".to_owned(),
             "The child Agent exceeded its output limit".to_owned(),
-            task_metadata(Some(task_id), "failed"),
+            task_metadata(Some(task_id), Some(agent), "failed"),
         ),
         ExecuteError::PermissionDenied => (
             "child_permission_denied".to_owned(),
             "The child Agent was denied".to_owned(),
-            task_metadata(Some(task_id), "failed"),
+            task_metadata(Some(task_id), Some(agent), "failed"),
         ),
         ExecuteError::Unknown(error) => (
             error.code,
             "The child Agent returned an unknown Domain Error".to_owned(),
-            task_metadata(Some(task_id), "failed"),
+            task_metadata(Some(task_id), Some(agent), "failed"),
         ),
     };
     ExecuteResponse {
         content: serde_json::json!({
             "task_id": task_id,
+            "agent": agent,
             "status": "failed",
             "reason_code": reason_code,
             "message": message,
@@ -769,6 +859,7 @@ fn task_domain_error_response(task_id: &str, error: ExecuteError) -> ExecuteResp
 
 fn task_status_response(
     task_id: &str,
+    agent: &str,
     status: &str,
     reason_code: &str,
     message: &str,
@@ -776,13 +867,14 @@ fn task_status_response(
     ExecuteResponse {
         content: serde_json::json!({
             "task_id": task_id,
+            "agent": agent,
             "status": status,
             "reason_code": reason_code,
             "message": message,
         })
         .to_string(),
         content_type: ContentType::Text,
-        metadata_json: task_metadata(Some(task_id), status)
+        metadata_json: task_metadata(Some(task_id), Some(agent), status)
             .to_string()
             .try_into()
             .expect("subagent task metadata must be valid JSON"),
@@ -811,27 +903,34 @@ const fn runtime_failure_code(error: &RuntimeFailure) -> &'static str {
 }
 
 async fn execute_delegation(
-    agent: Port<agent_contract::AgentClient>,
+    agents: ManyPort<agent_contract::AgentClient>,
+    agent_instance: String,
     context: InvocationContext,
     task: String,
-    task_bytes: usize,
-    max_output_bytes: usize,
+    limits: DelegationLimits,
     task_id: Option<String>,
     background: Option<(Rc<RefCell<SubagentTask>>, CancellationToken)>,
 ) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
     let mut progress = ChildRunProgress {
+        agent: agent_instance.clone(),
         task_id,
         ..ChildRunProgress::default()
     };
+    let agent = agents
+        .iter()
+        .find(|entry| entry.provider_instance() == agent_instance)
+        .ok_or_else(|| RuntimeFailure::InvalidResolvedPlan {
+            detail: format!("subagent Agent binding `{agent_instance}` is unavailable"),
+        })?;
     let parent_cancellation = background.as_ref().map(|(_, cancellation)| cancellation);
-    let stream = match open_child_stream(&agent, context, task, parent_cancellation).await {
+    let stream = match open_child_stream(agent.client(), context, task, parent_cancellation).await {
         Ok(stream) => stream,
         Err(AgentInvocationError::Domain(error)) => {
             return Ok(Err(map_agent_error(
                 error,
                 &progress,
-                task_bytes,
-                max_output_bytes,
+                limits.task_bytes,
+                limits.output_bytes,
             )));
         }
         Err(AgentInvocationError::Runtime(error)) => return Err(error),
@@ -844,7 +943,8 @@ async fn execute_delegation(
     loop {
         match receive_child_event(&stream, parent_cancellation).await? {
             StreamEvent::Message(message) => {
-                if let Err(error) = progress.observe_message(&message, task_bytes, max_output_bytes)
+                if let Err(error) =
+                    progress.observe_message(&message, limits.task_bytes, limits.output_bytes)
                 {
                     return Ok(Err(error));
                 }
@@ -860,8 +960,8 @@ async fn execute_delegation(
                 return Ok(Err(map_agent_error(
                     error,
                     &progress,
-                    task_bytes,
-                    max_output_bytes,
+                    limits.task_bytes,
+                    limits.output_bytes,
                 )));
             }
         }
@@ -870,18 +970,18 @@ async fn execute_delegation(
         return Ok(Err(execution_failed(
             "missing_child_session",
             "Child Agent completed without a durable Session identity",
-            &progress.metadata("failed", task_bytes, max_output_bytes),
+            &progress.metadata("failed", limits.task_bytes, limits.output_bytes),
         )));
     }
     if progress.output_limit_exceeded {
         return Ok(Err(execution_failed(
             "child_output_limit_exceeded",
             "Child Agent output exceeded the delegated result limit",
-            &progress.metadata("failed", task_bytes, max_output_bytes),
+            &progress.metadata("failed", limits.task_bytes, limits.output_bytes),
         )));
     }
     let metadata_json = progress
-        .metadata("completed", task_bytes, max_output_bytes)
+        .metadata("completed", limits.task_bytes, limits.output_bytes)
         .to_string()
         .try_into()
         .expect("subagent Tool metadata must be valid JSON");
@@ -893,7 +993,7 @@ async fn execute_delegation(
 }
 
 async fn open_child_stream(
-    agent: &Port<agent_contract::AgentClient>,
+    agent: &agent_contract::AgentClient,
     context: InvocationContext,
     task: String,
     parent_cancellation: Option<&CancellationToken>,
@@ -942,7 +1042,11 @@ async fn receive_child_event(
     }
 }
 
-fn map_turn_input_error(error: &TurnInputInvocationError, task_id: &str) -> ExecuteError {
+fn map_turn_input_error(
+    error: &TurnInputInvocationError,
+    task_id: &str,
+    agent: &str,
+) -> ExecuteError {
     let (reason_code, message) = match error {
         TurnInputInvocationError::Domain(SubmitError::InvalidInput) => (
             "subagent_input_invalid",
@@ -966,12 +1070,13 @@ fn map_turn_input_error(error: &TurnInputInvocationError, task_id: &str) -> Exec
     execution_failed(
         reason_code,
         message,
-        &task_metadata(Some(task_id), "input_rejected"),
+        &task_metadata(Some(task_id), Some(agent), "input_rejected"),
     )
 }
 
 #[derive(Default)]
 struct ChildRunProgress {
+    agent: String,
     child_session_id: Option<String>,
     message_count: u64,
     observed_output_bytes: usize,
@@ -1043,6 +1148,7 @@ impl ChildRunProgress {
     ) -> serde_json::Value {
         serde_json::json!({
             "schema": RESULT_METADATA_SCHEMA,
+            "agent": self.agent,
             "status": status,
             "context_mode": "fresh",
             "child_session_id": self.child_session_id,
@@ -1102,6 +1208,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn task_schema_requires_one_composed_agent_instance() {
+        let schema = task_input_schema(
+            1024,
+            &[
+                "lenso.agent.loop/researcher".to_owned(),
+                "lenso.agent.loop/reviewer".to_owned(),
+            ],
+        );
+        let schema: serde_json::Value = serde_json::from_str(schema.as_str()).unwrap();
+
+        assert_eq!(
+            schema["properties"]["agent"]["enum"],
+            serde_json::json!(["lenso.agent.loop/researcher", "lenso.agent.loop/reviewer"])
+        );
+        assert_eq!(schema["required"], serde_json::json!(["agent", "task"]));
+    }
+
+    #[test]
     fn child_session_identity_is_stable() {
         let mut progress = ChildRunProgress::default();
         progress.observe_session(Some("child-1"), 12, 1024).unwrap();
@@ -1123,6 +1247,7 @@ mod tests {
     #[test]
     fn result_metadata_is_versioned_and_bounded() {
         let progress = ChildRunProgress {
+            agent: "lenso.agent.loop/researcher".to_owned(),
             child_session_id: Some("child-1".to_owned()),
             message_count: 5,
             observed_output_bytes: 4,
@@ -1135,6 +1260,7 @@ mod tests {
 
         let metadata = progress.metadata("completed", 12, 1024);
         assert_eq!(metadata["schema"], RESULT_METADATA_SCHEMA);
+        assert_eq!(metadata["agent"], "lenso.agent.loop/researcher");
         assert_eq!(metadata["context_mode"], "fresh");
         assert_eq!(metadata["child_session_id"], "child-1");
         assert_eq!(metadata["output_bytes"], 4);
@@ -1172,7 +1298,7 @@ mod tests {
 
     #[test]
     fn task_snapshot_is_non_destructive_and_tracks_lifecycle() {
-        let mut task = SubagentTask::new();
+        let mut task = SubagentTask::new("lenso.agent.loop/researcher".to_owned());
         assert_eq!(task.snapshot("task-1")["status"], "running");
 
         task.observe_session("session-1");
@@ -1211,7 +1337,9 @@ mod tests {
 
     #[test]
     fn cancellation_before_child_stream_open_is_terminal_and_waitable() {
-        let task = Rc::new(RefCell::new(SubagentTask::new()));
+        let task = Rc::new(RefCell::new(SubagentTask::new(
+            "lenso.agent.loop/reviewer".to_owned(),
+        )));
         let child_cancellation = CancellationToken::new();
         task.borrow_mut()
             .attach_cancellation(child_cancellation.clone());

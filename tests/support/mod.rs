@@ -22,7 +22,12 @@ max_history_events = 200
 "#,
                 ),
                 (
-                    "lenso.agent.loop/subagent-agent.toml",
+                    "lenso.agent.loop/researcher.toml",
+                    r#"model = "gpt-5.6-luna"
+"#,
+                ),
+                (
+                    "lenso.agent.loop/reviewer.toml",
                     r#"model = "gpt-5.6-luna"
 "#,
                 ),
@@ -62,7 +67,12 @@ content = "Be concise, follow explicit user instructions, and use only the Tools
 "#,
                 ),
                 (
-                    "lenso.agent.loop/subagent-agent.toml",
+                    "lenso.agent.loop/researcher.toml",
+                    r#"model = "gpt-4o-mini"
+"#,
+                ),
+                (
+                    "lenso.agent.loop/reviewer.toml",
                     r#"model = "gpt-4o-mini"
 "#,
                 ),
@@ -102,7 +112,11 @@ pub(crate) fn fixture_configurations() -> &'static [(&'static str, &'static str)
             "model = \"fixture/readme-summary-v1\"\n",
         ),
         (
-            "lenso.agent.loop/subagent-agent.toml",
+            "lenso.agent.loop/researcher.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+        (
+            "lenso.agent.loop/reviewer.toml",
             "model = \"fixture/readme-summary-v1\"\n",
         ),
         (
