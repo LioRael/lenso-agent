@@ -34,6 +34,7 @@ use lenso_capability_agent_session::{
     ListSessionsResponse, ReadSessionResponse, ReadSessionResponseEventsItemKind, RenameError,
     RenameSessionResponse,
 };
+use lenso_capability_agent_task_supervisor::SnapshotResponse as TaskSnapshotResponse;
 use lenso_capability_agent_user_interaction::{
     InteractionAnswer, InteractionOption, InteractionQuestion, PendingInteraction,
 };
@@ -635,6 +636,9 @@ enum RuntimeCommand {
     ListSessions {
         reply: oneshot::Sender<Result<WebSessionList, String>>,
     },
+    TaskSnapshot {
+        reply: oneshot::Sender<Result<TaskSnapshotResponse, String>>,
+    },
     PendingInteractions {
         reply: oneshot::Sender<Result<Vec<PendingInteraction>, RuntimeInteractionError>>,
         request_id: String,
@@ -1219,6 +1223,7 @@ fn router(runtime: WebRuntime) -> Router {
             post(answer_interaction),
         )
         .route("/api/console/v1/agent/sessions", get(list_sessions))
+        .route("/api/console/v1/agent/tasks", get(task_snapshot))
         .route(
             "/api/console/v1/agent/control/tool-policy",
             get(read_tool_policy).put(update_tool_policy),
@@ -1332,6 +1337,7 @@ async fn bootstrap(
             ("sessionRead", true),
             ("userInteraction", true),
             ("sessionRename", true),
+            ("taskSnapshot", true),
         ]
         .into_iter()
         .collect(),
@@ -1720,6 +1726,22 @@ async fn list_sessions(
     runtime
         .commands
         .send(RuntimeCommand::ListSessions { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn task_snapshot(
+    State(runtime): State<WebRuntime>,
+) -> Result<Json<TaskSnapshotResponse>, ApiProblem> {
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::TaskSnapshot { reply })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -2291,6 +2313,9 @@ async fn runtime_actor(
                 let result = list_sessions_from_app(&app).await;
                 let _ = reply.send(result);
             }
+            RuntimeCommand::TaskSnapshot { reply } => {
+                let _ = reply.send(app.web_task_snapshot().await);
+            }
             RuntimeCommand::ReadSession { reply, session_id } => {
                 handle_read_command(&app, session_id, reply).await;
             }
@@ -2367,6 +2392,9 @@ async fn runtime_actor(
                                             &mut app,
                                             &mut plugin_inventory,
                                         ));
+                                    }
+                                    RuntimeCommand::TaskSnapshot { reply } => {
+                                        let _ = reply.send(turn.task_snapshot().await);
                                     }
                                     RuntimeCommand::PendingInteractions { reply, request_id: target_id } => {
                                         let result = if target_id == request_id {

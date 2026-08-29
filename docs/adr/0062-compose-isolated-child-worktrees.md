@@ -44,7 +44,8 @@ The Provider also exposes three parent Tools:
 
 - `list_worktrees` projects retained allocations;
 - `review_worktree` requires a clean child checkout and locks its exact HEAD and
-  diff SHA-256; and
+  diff SHA-256, returning both values in model-visible content alongside the
+  bounded diff; and
 - `integrate_worktree` requires that retained review, an unchanged clean child,
   and a clean parent Workspace before a no-fast-forward merge. Conflicts abort
   the merge. Successful integration removes the checkout and integrated branch

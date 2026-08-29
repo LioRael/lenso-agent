@@ -196,11 +196,20 @@ impl FixtureModel {
         if current_user == "Edit and validate the workspace project." {
             return local_coding_response(request, &tool_results);
         }
+        if current_user == "Run and observe one background process." {
+            return background_process_response(request, &tool_results);
+        }
+        if current_user == "Cancel one background process." {
+            return cancelled_process_response(request, &tool_results);
+        }
         if current_user == "Inspect and commit the prepared Git change." {
             return git_workflow_response(request, &tool_results);
         }
         if current_user == "Spawn two isolated mutation workers." {
             return isolated_workers_root_response(request, &tool_results);
+        }
+        if current_user == "Supervise and integrate two isolated mutation workers." {
+            return supervised_workers_root_response(request, &tool_results);
         }
         if current_user == "Create worker-a.txt and commit it." {
             return isolated_worker_response(request, &tool_results, "worker-a.txt", "worker-a");
@@ -214,11 +223,7 @@ impl FixtureModel {
         if current_user == "Use the MCP fixture to ping." {
             return mcp_plugin_response(request, &tool_results);
         }
-        if current_user.contains("Selected Context Prompt: fixture/review")
-            && current_user.contains("Selected Context Resource: fixture/fixture://guide")
-            && current_user.contains("Review carefully.")
-            && current_user.contains("Fixture guide content.")
-        {
+        if is_context_source_fixture(current_user) {
             return Ok(context_source_result());
         }
         if current_user == "Ask me which mode to use." {
@@ -246,6 +251,13 @@ impl FixtureModel {
         }
         default_fixture_response(request, current_user, &tool_results)
     }
+}
+
+fn is_context_source_fixture(current_user: &str) -> bool {
+    current_user.contains("Selected Context Prompt: fixture/review")
+        && current_user.contains("Selected Context Resource: fixture/fixture://guide")
+        && current_user.contains("Review carefully.")
+        && current_user.contains("Fixture guide content.")
 }
 
 fn session_presentation_fixture_response(
@@ -1283,6 +1295,159 @@ fn local_coding_final_response() -> Vec<CompleteMessage> {
     ]
 }
 
+fn background_process_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    let has_background_tools = [
+        "start_process",
+        "read_process",
+        "cancel_process",
+        "list_processes",
+    ]
+    .iter()
+    .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
+    if !has_background_tools {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    if tool_results.is_empty() {
+        return Ok(named_tool_request(
+            "call-background-start",
+            "start_process",
+            r#"{"program":"sh","arguments":["-c","printf background-output"]}"#,
+        ));
+    }
+    let started = serde_json::from_str::<serde_json::Value>(&tool_results[0].content)
+        .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    let process_id = started["process_id"]
+        .as_str()
+        .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    if tool_results.len() == 1 {
+        return Ok(named_tool_request(
+            "call-background-list",
+            "list_processes",
+            "{}",
+        ));
+    }
+    let latest = serde_json::from_str::<serde_json::Value>(
+        &tool_results
+            .last()
+            .expect("non-empty background Tool results")
+            .content,
+    )
+    .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    let terminal_and_durable = latest["status"] == "completed"
+        && latest["durable_terminal"] == true
+        && latest["stdout"] == "background-output";
+    if terminal_and_durable && tool_results.len() >= 4 {
+        return Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Background process completed with durable terminal facts.",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "32",
+                "12",
+            ),
+        ]);
+    }
+    let arguments = serde_json::json!({
+        "process_id": process_id,
+        "release": terminal_and_durable,
+    })
+    .to_string();
+    Ok(named_tool_request(
+        &format!("call-background-read-{}", tool_results.len()),
+        "read_process",
+        &arguments,
+    ))
+}
+
+fn cancelled_process_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["start_process", "read_process", "cancel_process"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    if tool_results.is_empty() {
+        return Ok(named_tool_request(
+            "call-cancel-process-start",
+            "start_process",
+            r#"{"program":"sh","arguments":["-c","printf before-cancel; sleep 30"]}"#,
+        ));
+    }
+    let started = serde_json::from_str::<serde_json::Value>(&tool_results[0].content)
+        .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    let process_id = started["process_id"]
+        .as_str()
+        .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    if tool_results.len() == 1 {
+        return Ok(named_tool_request(
+            "call-cancel-process",
+            "cancel_process",
+            &serde_json::json!({"process_id": process_id}).to_string(),
+        ));
+    }
+    let latest = serde_json::from_str::<serde_json::Value>(
+        &tool_results
+            .last()
+            .expect("non-empty cancelled process results")
+            .content,
+    )
+    .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    let terminal_and_durable = latest["status"] == "cancelled"
+        && latest["durable_terminal"] == true
+        && latest["cancel_requested"] == true;
+    if terminal_and_durable && tool_results.len() >= 4 {
+        return Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Background process cancellation became durable.",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "28",
+                "10",
+            ),
+        ]);
+    }
+    Ok(named_tool_request(
+        &format!("call-cancel-process-read-{}", tool_results.len()),
+        "read_process",
+        &serde_json::json!({
+            "process_id": process_id,
+            "release": terminal_and_durable,
+        })
+        .to_string(),
+    ))
+}
+
 fn git_workflow_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
@@ -1448,6 +1613,193 @@ fn isolated_workers_root_response(
         }
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one deterministic fixture state machine keeps supervision, review, and integration explicit"
+)]
+fn supervised_workers_root_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in [
+        "spawn_subagent",
+        "wait_subagent",
+        "ask_user",
+        "review_worktree",
+        "integrate_worktree",
+    ] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    let task_id = |result: &&CompleteMessageInput| {
+        serde_json::from_str::<serde_json::Value>(&result.content)
+            .ok()
+            .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+    };
+    match tool_results {
+        [] => Ok(isolated_worker_spawn_requests()),
+        [worker_a, worker_b] => {
+            task_id(worker_a)?;
+            task_id(worker_b)?;
+            Ok(named_tool_request(
+                "call-confirm-worker-integration",
+                "ask_user",
+                r#"{"questions":[{"id":"integration","header":"Review","question":"Review and integrate both isolated worker commits?","options":[{"label":"integrate","description":"Review exact commits before integration.","preview":"review = true"}]}]}"#,
+            ))
+        }
+        [worker_a, worker_b, answer] if approved_integration(answer) => {
+            let worker_a = serde_json::json!({"task_id": task_id(worker_a)?}).to_string();
+            let worker_b = serde_json::json!({"task_id": task_id(worker_b)?}).to_string();
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::ToolCall,
+                    "",
+                    "call-wait-supervised-worker-a",
+                    "wait_subagent",
+                    &worker_a,
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::ToolCall,
+                    "",
+                    "call-wait-supervised-worker-b",
+                    "wait_subagent",
+                    &worker_b,
+                    "0",
+                    "0",
+                ),
+                response("3", CompleteMessageKind::Usage, "", "", "", "{}", "24", "6"),
+            ])
+        }
+        [worker_a, worker_b, _, waited_a, waited_b]
+            if worker_results_completed(waited_a, waited_b) =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::ToolCall,
+                    "",
+                    "call-review-supervised-worker-a",
+                    "review_worktree",
+                    &serde_json::json!({"task_id": task_id(worker_a)?}).to_string(),
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::ToolCall,
+                    "",
+                    "call-review-supervised-worker-b",
+                    "review_worktree",
+                    &serde_json::json!({"task_id": task_id(worker_b)?}).to_string(),
+                    "0",
+                    "0",
+                ),
+                response("3", CompleteMessageKind::Usage, "", "", "", "{}", "24", "6"),
+            ])
+        }
+        [worker_a, worker_b, _, _, _, review_a, review_b] => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::ToolCall,
+                "",
+                "call-integrate-supervised-worker-a",
+                "integrate_worktree",
+                &integration_arguments(&task_id(worker_a)?, &review_a.content)?,
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::ToolCall,
+                "",
+                "call-integrate-supervised-worker-b",
+                "integrate_worktree",
+                &integration_arguments(&task_id(worker_b)?, &review_b.content)?,
+                "0",
+                "0",
+            ),
+            response("3", CompleteMessageKind::Usage, "", "", "", "{}", "24", "6"),
+        ]),
+        [_, _, _, _, _, _, _, integrated_a, integrated_b]
+            if integrated_a.content.starts_with("integrated worktree ")
+                && integrated_b.content.starts_with("integrated worktree ") =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Both reviewed worker commits were integrated.",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response("2", CompleteMessageKind::Usage, "", "", "", "{}", "28", "8"),
+            ])
+        }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn isolated_worker_spawn_requests() -> Vec<CompleteMessage> {
+    vec![
+        response(
+            "1",
+            CompleteMessageKind::ToolCall,
+            "",
+            "call-supervised-spawn-worker-a",
+            "spawn_subagent",
+            r#"{"agent":"lenso.agent.loop/worker-a","task":"Create worker-a.txt and commit it."}"#,
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteMessageKind::ToolCall,
+            "",
+            "call-supervised-spawn-worker-b",
+            "spawn_subagent",
+            r#"{"agent":"lenso.agent.loop/worker-b","task":"Create worker-b.txt and commit it."}"#,
+            "0",
+            "0",
+        ),
+        response("3", CompleteMessageKind::Usage, "", "", "", "{}", "24", "6"),
+    ]
+}
+
+fn approved_integration(result: &CompleteMessageInput) -> bool {
+    serde_json::from_str::<serde_json::Value>(&result.content)
+        .is_ok_and(|value| value["answers"][0]["selected_option_ids"][0] == "integrate")
+}
+
+fn worker_results_completed(first: &CompleteMessageInput, second: &CompleteMessageInput) -> bool {
+    [first.content.as_str(), second.content.as_str()].contains(&"worker-a committed")
+        && [first.content.as_str(), second.content.as_str()].contains(&"worker-b committed")
+}
+
+fn integration_arguments(task_id: &str, review: &str) -> Result<String, ModelInvocationError> {
+    let field = |name: &str| {
+        review
+            .lines()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .map(str::to_owned)
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+    };
+    Ok(serde_json::json!({
+        "task_id": task_id,
+        "reviewed_commit": field("reviewed_commit")?,
+        "diff_sha256": field("diff_sha256")?,
+    })
+    .to_string())
 }
 
 fn isolated_worker_response(

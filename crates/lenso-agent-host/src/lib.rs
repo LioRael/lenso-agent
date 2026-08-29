@@ -17,7 +17,7 @@ mod test_support;
 
 pub use directories::{AGENT_HOME_ENV, AgentDirectories};
 pub use host::{
-    AgentHost, AgentHostBuilder, AgentSurface, AgentSurfaceKind, ChannelSurface,
+    AcpSurface, AgentHost, AgentHostBuilder, AgentSurface, AgentSurfaceKind, ChannelSurface,
     ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,
     WebSurface,
 };

@@ -393,8 +393,12 @@ impl WorktreeProviderPlugin {
                 diff_sha256: diff_sha256.clone(),
             });
         }
+        let review_content = format!(
+            "reviewed_commit={commit}\ndiff_sha256={diff_sha256}\n\n{}",
+            diff.stdout
+        );
         Ok(ExecuteResponse {
-            content: diff.stdout,
+            content: review_content,
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
                 "task_id": task_id,
@@ -934,6 +938,7 @@ mod tests {
             serde_json::from_str(review.metadata_json.as_str()).unwrap();
         let reviewed_commit = metadata["reviewed_commit"].as_str().unwrap().to_owned();
         let diff_sha256 = metadata["diff_sha256"].as_str().unwrap().to_owned();
+        assert_model_visible_review(&review, &reviewed_commit, &diff_sha256);
         assert!(
             provider
                 .integrate(
@@ -966,5 +971,22 @@ mod tests {
         assert!(worker_b.exists());
         assert!(provider.allocations.borrow().contains_key("task-b"));
         assert!(!provider.allocations.borrow().contains_key("task-a"));
+    }
+
+    fn assert_model_visible_review(
+        review: &ExecuteResponse,
+        reviewed_commit: &str,
+        diff_sha256: &str,
+    ) {
+        assert!(
+            review
+                .content
+                .starts_with(&format!("reviewed_commit={reviewed_commit}\n"))
+        );
+        assert!(
+            review
+                .content
+                .contains(&format!("diff_sha256={diff_sha256}\n\n"))
+        );
     }
 }

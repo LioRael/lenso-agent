@@ -1,4 +1,4 @@
-# ADR 0064: Adapt one remote Plugin configuration resource
+# ADR 0069: Adapt one remote Plugin configuration resource
 
 ## Status
 
@@ -79,7 +79,7 @@ the same semantic Plugin Root revision.
   semantic revision. Retention gaps fail closed and require an explicit,
   separately designed baseline recovery operation.
 - Multi-Host rollout policy, durable cursor storage, and tenant/user RBAC remain
-  outside this adapter slice. ADR 0065 supplies a deployable single-resource
+  outside this adapter slice. ADR 0070 supplies a deployable single-resource
   service with scoped read/write credentials.
 
 ## Proof

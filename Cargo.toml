@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "apps/lenso-agent-acp",
     "apps/lenso-agent-cli",
     "apps/lenso-agent-channel",
     "apps/lenso-agent-tui",
@@ -72,6 +73,7 @@ members = [
     "crates/lenso-agent-workspace-read-plugin",
     "crates/lenso-agent-cli-plugin",
     "crates/lenso-agent-approval-hook-plugin",
+    "crates/lenso-agent-acp-plugin",
     "crates/lenso-agent-interactive-approval-hook-plugin",
     "crates/lenso-agent-code-mode-tools-plugin",
     "crates/lenso-agent-tui-plugin",
@@ -93,6 +95,7 @@ repository = "https://github.com/LioRael/lenso-agent-harness"
 rust-version = "1.94"
 
 [workspace.dependencies]
+agent-client-protocol = "2.0.0"
 anyhow = "1"
 bytes = "1.11"
 axum = "0.8"

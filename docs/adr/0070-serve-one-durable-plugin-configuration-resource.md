@@ -1,4 +1,4 @@
-# ADR 0065: Serve one durable Plugin configuration resource
+# ADR 0070: Serve one durable Plugin configuration resource
 
 ## Status
 
@@ -6,7 +6,7 @@ Accepted.
 
 ## Context
 
-ADR 0064 defined and adapted the remote Plugin configuration protocol, but its
+ADR 0069 defined and adapted the remote Plugin configuration protocol, but its
 proof server existed only inside adapter tests. A deployable service must use
 the same durable CAS and publication evidence as local managed configuration,
 must stream changes across every Plugin Instance in one resource, and must not

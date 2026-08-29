@@ -27,6 +27,9 @@ use lenso_capability_agent::{
 use lenso_capability_agent_context_source::{
     ContextRole, ReadResourceRequest, RenderPromptRequest,
 };
+use lenso_capability_agent_task_supervisor::{
+    SnapshotResponse as TaskSnapshotResponse, TaskStatus,
+};
 use lenso_capability_agent_tui_contribution::SnapshotResponsePanelsItem;
 use lenso_capability_agent_tui_suggestion::{
     Suggestion, SuggestionKind, validate_snapshot_suggestions,
@@ -60,6 +63,9 @@ const MAX_INPUT_CHARACTERS: usize = 262_144;
 const PANEL_BREAKPOINT: u16 = 96;
 const WHEEL_SCROLL_LINES: usize = 3;
 const ACTIVE_TICK: Duration = Duration::from_millis(90);
+const TASK_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const TASK_PANEL_ID: &str = "agent.tasks.supervisor";
+const MAX_VISIBLE_TASKS: usize = 8;
 const MAX_VISIBLE_SUGGESTIONS: usize = 6;
 const MAX_VISIBLE_QUEUE_ROWS: usize = 3;
 const MAX_VISIBLE_QUEUE_HEIGHT: u16 = 3;
@@ -555,6 +561,8 @@ struct TuiState {
     pending_answers: Option<Vec<InteractionAnswer>>,
     next_interaction_poll: Instant,
     interaction_poll_status: InteractionPollStatus,
+    next_task_poll: Instant,
+    task_poll_status: InteractionPollStatus,
     tool_scope: String,
     scroll: ScrollState,
     workspace: String,
@@ -613,6 +621,8 @@ impl TuiState {
             pending_answers: None,
             next_interaction_poll: Instant::now(),
             interaction_poll_status: InteractionPollStatus::Ready,
+            next_task_poll: Instant::now() + TASK_POLL_INTERVAL,
+            task_poll_status: InteractionPollStatus::Ready,
             tool_scope: match (&options.profile, &options.allowed_tools) {
                 (Some(profile), None) => format!("{profile} profile · composed tools"),
                 (Some(profile), Some(tools)) if tools.is_empty() => {
@@ -1358,6 +1368,7 @@ pub async fn run(app: &AgentApp, options: TuiOptions) -> Result<(), String> {
     let mut events = EventStream::new();
     let mut state = TuiState::new(&options, panels);
     state.suggestions = suggestions;
+    apply_task_snapshot(&mut state, app.tui_task_snapshot().await);
 
     let result = run_loop(
         app,
@@ -1424,6 +1435,7 @@ async fn run_loop(
 ) -> Result<(), String> {
     loop {
         present_online_generation_events(app, state).await;
+        sync_task_snapshot(app, state).await;
         sync_user_interaction(state).await;
         if state.active.is_none() {
             if state.phase == UiPhase::SubmitRequested {
@@ -1466,6 +1478,115 @@ async fn run_loop(
             }
         }
     }
+}
+
+async fn sync_task_snapshot(app: &AgentApp, state: &mut TuiState) {
+    if Instant::now() < state.next_task_poll {
+        return;
+    }
+    state.next_task_poll = Instant::now() + TASK_POLL_INTERVAL;
+    let result = if let Some(active) = state.active.as_ref() {
+        active.lease.task_snapshot().await
+    } else {
+        app.tui_task_snapshot().await
+    };
+    apply_task_snapshot(state, result);
+}
+
+fn apply_task_snapshot(state: &mut TuiState, result: Result<TaskSnapshotResponse, String>) {
+    let body = match result {
+        Ok(snapshot) => {
+            state.task_poll_status = InteractionPollStatus::Ready;
+            task_panel_body(&snapshot)
+        }
+        Err(error) => {
+            if state.task_poll_status == InteractionPollStatus::Ready {
+                state.transcript.push(TranscriptEntry::Error {
+                    text: format!("Could not read supervised tasks: {error}"),
+                });
+                state.task_poll_status = InteractionPollStatus::ErrorReported;
+            }
+            "Task supervision unavailable\nThe current Generation remains active.".to_owned()
+        }
+    };
+    let panel = SnapshotResponsePanelsItem {
+        body,
+        id: TASK_PANEL_ID.to_owned(),
+        title: "Tasks".to_owned(),
+    };
+    if let Some(existing) = state
+        .panels
+        .iter_mut()
+        .find(|item| item.id == TASK_PANEL_ID)
+    {
+        *existing = panel;
+    } else {
+        state.panels.push(panel);
+    }
+}
+
+fn task_panel_body(snapshot: &TaskSnapshotResponse) -> String {
+    if snapshot.tasks.is_empty() {
+        return "No supervised child tasks in this Generation.".to_owned();
+    }
+    let running = snapshot
+        .tasks
+        .iter()
+        .filter(|task| {
+            matches!(
+                task.status,
+                TaskStatus::Running | TaskStatus::CancellationRequested
+            )
+        })
+        .count();
+    let mut lines = vec![format!("{} tasks · {running} active", snapshot.tasks.len())];
+    for task in snapshot.tasks.iter().take(MAX_VISIBLE_TASKS) {
+        let (symbol, status) = match task.status {
+            TaskStatus::Running => ("●", "running"),
+            TaskStatus::CancellationRequested => ("◐", "cancelling"),
+            TaskStatus::Completed => ("✓", "completed"),
+            TaskStatus::Failed => ("×", "failed"),
+            TaskStatus::Cancelled => ("○", "cancelled"),
+        };
+        lines.push(format!(
+            "\n{symbol} {} · {status}",
+            truncate_text(&task.task_id, 54)
+        ));
+        lines.push(format!(
+            "  {} · {}",
+            truncate_text(&task.agent, 30),
+            truncate_text(&task.workspace, 46)
+        ));
+        lines.push(format!(
+            "  owner {}/{} · gen {}",
+            truncate_text(&task.owner.session_id, 16),
+            truncate_text(&task.owner.turn_id, 16),
+            task.generation_spec_digest
+                .chars()
+                .skip(7)
+                .take(8)
+                .collect::<String>()
+        ));
+        if let Some(progress) = task.progress.as_ref().and_then(Option::as_ref) {
+            lines.push(format!(
+                "  progress r{} · {} messages · {} tools",
+                progress.revision, progress.message_count, progress.tool_call_count
+            ));
+            if !progress.content.is_empty() {
+                lines.push(format!("  {}", truncate_text(&progress.content, 72)));
+            }
+        }
+        if let Some(result) = task.terminal_result.as_ref().and_then(Option::as_ref)
+            && let Some(reason) = result.reason_code.as_ref().and_then(Option::as_ref)
+        {
+            lines.push(format!("  reason {}", truncate_text(reason, 48)));
+        }
+    }
+    let hidden = snapshot.tasks.len().saturating_sub(MAX_VISIBLE_TASKS);
+    if hidden > 0 {
+        lines.push(format!("\n+ {hidden} more tasks"));
+    }
+    lines.join("\n")
 }
 
 async fn sync_user_interaction(state: &mut TuiState) {
@@ -5001,6 +5122,53 @@ mod tests {
         assert!(content.contains("z (○) Type your answer here"));
         assert!(content.contains("mode = \"safe\""));
         assert!(!content.contains("╭ Mode"));
+    }
+
+    #[test]
+    fn task_snapshot_projects_into_one_compact_stable_panel() {
+        let snapshot: TaskSnapshotResponse = serde_json::from_value(serde_json::json!({
+            "tasks": [{
+                "agent": "lenso.agent.loop/worker-a",
+                "child_session_id": "child-session",
+                "generation_spec_digest": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "owner": {
+                    "session_id": "parent-session",
+                    "tool_call_id": "tool-1",
+                    "turn_id": "turn-1"
+                },
+                "progress": {
+                    "content": "worker is checking tests",
+                    "content_truncated": false,
+                    "message_count": 3,
+                    "revision": 3,
+                    "text_delta_count": 1,
+                    "tool_call_count": 2
+                },
+                "status": "failed",
+                "task_id": "task-1",
+                "terminal_result": {
+                    "content": "tests failed",
+                    "content_truncated": false,
+                    "reason_code": "child_failed"
+                },
+                "workspace": "/tmp/child-worktrees/task-1"
+            }]
+        }))
+        .unwrap();
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+
+        apply_task_snapshot(&mut state, Ok(snapshot.clone()));
+        apply_task_snapshot(&mut state, Ok(snapshot));
+
+        assert_eq!(state.panels.len(), 1);
+        let panel = &state.panels[0];
+        assert_eq!(panel.id, TASK_PANEL_ID);
+        assert!(panel.body.contains("1 tasks · 0 active"));
+        assert!(panel.body.contains("task-1 · failed"));
+        assert!(panel.body.contains("lenso.agent.loop/worker-a"));
+        assert!(panel.body.contains("progress r3 · 3 messages · 2 tools"));
+        assert!(panel.body.contains("worker is checking tests"));
+        assert!(panel.body.contains("reason child_failed"));
     }
 
     #[test]

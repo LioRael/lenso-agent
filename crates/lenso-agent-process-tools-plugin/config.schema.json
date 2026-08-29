@@ -4,6 +4,8 @@
   "additionalProperties": false,
   "required": ["default_timeout_ms"],
   "properties": {
-    "default_timeout_ms": { "type": "integer" }
+    "default_timeout_ms": { "type": "integer" },
+    "max_background_processes": { "type": "integer" },
+    "max_background_log_bytes": { "type": "integer" }
   }
 }

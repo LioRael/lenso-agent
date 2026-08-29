@@ -61,7 +61,9 @@ The Harness admits subagent delegation as an optional Tool Provider Plugin.
   for running work nor consumes terminal results; `wait_subagent` remains the
   only operation that collects a terminal result and releases its task slot.
 - Plugin release `0.6.0` also provides the typed
-  `lenso.agent.task-supervisor@1` snapshot defined by ADR-0060. The existing
+  Task Supervisor snapshot defined by ADR-0060. ADR-0066 later replaces its
+  original `@1` wire contract with `lenso.agent.task-supervisor@2` to add
+  progress without claiming backward compatibility. The existing
   `list_subagents` Tool serializes that same projection rather than maintaining
   a model-only task shape.
 - Task and output bytes, child Agent steps, Tool calls, history, output tokens,

@@ -16,6 +16,7 @@ root-slot = "surfaces"
 lenso.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
+lenso-capability-agent-task-supervisor = { path = "../lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 
 [dev-dependencies]

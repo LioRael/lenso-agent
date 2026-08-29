@@ -33,12 +33,29 @@ pub trait AgentSurface: Debug {
 /// layout remain private Host policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AgentSurfaceKind {
+    Acp,
     Headless,
     Tui,
     Channels,
     Telegram,
     Discord,
     Web,
+}
+
+/// The editor-facing Agent Client Protocol stdio surface.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AcpSurface;
+
+impl AcpSurface {
+    pub const fn stdio() -> Self {
+        Self
+    }
+}
+
+impl AgentSurface for AcpSurface {
+    fn kind(&self) -> AgentSurfaceKind {
+        AgentSurfaceKind::Acp
+    }
 }
 
 /// A one-shot stdin/stdout or programmatic Agent surface.
