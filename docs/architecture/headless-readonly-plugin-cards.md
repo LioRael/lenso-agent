@@ -127,22 +127,23 @@ Status: implementation baseline for the first executable slice.
 
 - **Deletion boundary:** removes Turn/Step coordination, budgets, sequencing,
   and terminal Agent outcomes.
-- **Owned facts:** active Turn exclusion, maximum model steps/tool calls,
-  message construction, and Session event intent.
+- **Owned facts:** active Turn exclusion, bounded autonomous execution segments,
+  maximum model steps/tool calls, message construction, and Session event intent.
 - **Provides:** `lenso.agent@3` (`run_turn`, stream).
 - **Requires:** exactly one `lenso.agent.model@2`, one
   `lenso.agent.prompt@1`, one `lenso.agent.tools@2`, and one
   `lenso.agent.session@1`.
-- **Configuration:** model name, maximum steps, maximum Tool calls, bounded
-  parallel Tool calls, aggregate model output-token budget, and bounded
-  Session-history event count.
+- **Configuration:** model name, per-segment maximum steps and Tool calls,
+  maximum user resumes (default eight), bounded parallel Tool calls, per-segment
+  model output-token budget, and bounded Session-history event count.
 - **Lifecycle/resources:** `activate` materializes generated clients only from
   `PluginDependencies`; each generation owns its client set, active-Turn state,
   and Driver-managed turn tasks. Each Agent stream uses a one-item internal
   channel so a slow consumer backpressures the Loop.
 - **First behavior:** reconstructs bounded completed-turn context, accepts a
   direct answer or bounded parallel-safe Tool waves with exclusive barriers
-  until a finite budget is reached,
+  until a finite budget is reached; a versioned completed-user-interaction fact
+  may renew one segment without creating a new conversation Turn,
   prepends the assembled Prompt, records its contribution manifest, persists
   terminal facts, and forwards Model text deltas immediately.
 

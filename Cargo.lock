@@ -2415,6 +2415,7 @@ dependencies = [
  "futures",
  "lenso",
  "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-tools",
  "lenso-capability-agent-user-interaction",
  "lenso-kernel",
  "serde",

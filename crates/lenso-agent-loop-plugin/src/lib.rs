@@ -66,6 +66,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 /// Host-issued Invocation Context key for one Turn's narrowed Tool authority.
 pub const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
+const DEFAULT_MAX_USER_RESUMES: u32 = 8;
 
 /// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -174,12 +175,56 @@ struct AgentConfig {
     model: String,
     max_steps: u32,
     max_tool_calls: u32,
+    #[lenso(default = 8)]
+    max_user_resumes: Option<u32>,
     max_output_tokens: i64,
     max_history_events: i64,
     max_compaction_summary_characters: i64,
     max_memory_items: i64,
     max_memory_characters: i64,
     max_parallel_tool_calls: u32,
+}
+
+#[derive(Debug)]
+struct TurnExecutionBudget {
+    segment: u32,
+    segment_steps: u32,
+    segment_tool_calls: u32,
+    remaining_output_tokens: i64,
+    user_resumes: u32,
+}
+
+impl TurnExecutionBudget {
+    fn new(config: &AgentConfig) -> Self {
+        Self {
+            segment: 1,
+            segment_steps: 0,
+            segment_tool_calls: 0,
+            remaining_output_tokens: config.max_output_tokens,
+            user_resumes: 0,
+        }
+    }
+
+    fn begin_model_step(&mut self) {
+        self.segment_steps = self.segment_steps.saturating_add(1);
+    }
+
+    fn consume_output(&mut self, output_tokens: u64) {
+        let used = i64::try_from(output_tokens).unwrap_or(i64::MAX);
+        self.remaining_output_tokens = self.remaining_output_tokens.saturating_sub(used);
+    }
+
+    fn renew_after_user_input(&mut self, config: &AgentConfig) -> bool {
+        if self.user_resumes >= config.max_user_resumes.unwrap_or(DEFAULT_MAX_USER_RESUMES) {
+            return false;
+        }
+        self.user_resumes = self.user_resumes.saturating_add(1);
+        self.segment = self.segment.saturating_add(1);
+        self.segment_steps = 0;
+        self.segment_tool_calls = 0;
+        self.remaining_output_tokens = config.max_output_tokens;
+        true
+    }
 }
 
 #[lenso::plugin(validate = validate_agent_config)]
@@ -205,6 +250,9 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
         || config.max_steps == 0
         || config.max_steps > 64
         || config.max_tool_calls > 64
+        || config
+            .max_user_resumes
+            .is_some_and(|max_user_resumes| max_user_resumes > 16)
         || !(1..=16).contains(&config.max_parallel_tool_calls)
         || config.max_output_tokens <= 0
         || !(1..=1000).contains(&config.max_history_events)
@@ -928,18 +976,24 @@ async fn execute_steps(
         .iter()
         .map(|tool| tool.name.as_str())
         .collect::<BTreeSet<_>>();
-    let mut tool_call_count = 0_u32;
     let mut sequence = 0_u64;
-    let mut remaining_output_tokens = config.max_output_tokens;
+    let mut model_step = 0_u32;
+    let mut budget = TurnExecutionBudget::new(config);
     let mut turn_output = String::new();
     let mut staged_inputs = Vec::new();
 
-    for step in 1..=config.max_steps {
+    loop {
+        model_step = model_step.saturating_add(1);
+        let resuming_staged_input = !staged_inputs.is_empty();
         let pending_inputs = if staged_inputs.is_empty() {
             drain_pending_turn_inputs(&clients.active, session_id, false)?
         } else {
             std::mem::take(&mut staged_inputs)
         };
+        if !resuming_staged_input && !pending_inputs.is_empty() {
+            budget.renew_after_user_input(config);
+        }
+        budget.begin_model_step();
         let additional_inputs = pending_inputs
             .iter()
             .map(|pending| pending.input.clone())
@@ -962,12 +1016,14 @@ async fn execute_steps(
                 AppendSessionRequestEventsItemKind::ModelRequested,
                 Some(turn_id),
                 &serde_json::json!({
-                    "step": step,
+                    "step": model_step,
+                    "segment": budget.segment,
+                    "segment_step": budget.segment_steps,
                     "model": config.model,
                     "message_count": message_count,
                     "tool_count": tool_count,
                     "temperature": 0.0,
-                    "max_output_tokens": remaining_output_tokens,
+                    "max_output_tokens": budget.remaining_output_tokens,
                     "additional_inputs": additional_inputs,
                     "prompt_contributions": prompt_contributions,
                     "system_instruction_digest": system_instruction_digest
@@ -984,24 +1040,25 @@ async fn execute_steps(
                 messages: messages.clone(),
                 tools: tools.clone(),
                 temperature: 0.0,
-                max_output_tokens: remaining_output_tokens,
+                max_output_tokens: budget.remaining_output_tokens,
             },
             session_id,
-            &format!("{turn_id}:{step}"),
+            &format!("{turn_id}:{model_step}"),
             &mut sequence,
             channel,
         )
         .await?;
         if let Some(output_tokens) = completion.output_tokens {
-            let used = i64::try_from(output_tokens).unwrap_or(i64::MAX);
-            remaining_output_tokens = remaining_output_tokens.saturating_sub(used);
+            budget.consume_output(output_tokens);
         }
         turn_output.push_str(&completion.text);
         let model_event = session_event(
             AppendSessionRequestEventsItemKind::ModelOutput,
             Some(turn_id),
             &serde_json::json!({
-                "step": step,
+                "step": model_step,
+                "segment": budget.segment,
+                "segment_step": budget.segment_steps,
                 "model": config.model,
                 "text": completion.text,
                 "tool_call_count": completion.tool_calls.len(),
@@ -1035,7 +1092,10 @@ async fn execute_steps(
                 });
             }
             staged_inputs = drain_pending_turn_inputs(&clients.active, session_id, false)?;
-            if step == config.max_steps {
+            if !staged_inputs.is_empty() {
+                budget.renew_after_user_input(config);
+            }
+            if budget.segment_steps == config.max_steps {
                 reject_pending_turn_inputs(
                     std::mem::take(&mut staged_inputs),
                     &SubmitError::InputClosed,
@@ -1067,7 +1127,8 @@ async fn execute_steps(
                     tool_name: None,
                     arguments_json: None,
                 });
-                if step == config.max_steps {
+                budget.renew_after_user_input(config);
+                if budget.segment_steps == config.max_steps {
                     reject_pending_turn_inputs(
                         std::mem::take(&mut staged_inputs),
                         &SubmitError::InputClosed,
@@ -1154,17 +1215,17 @@ async fn execute_steps(
                 arguments_json: None,
             });
         }
-        if step == config.max_steps {
+        if budget.segment_steps == config.max_steps {
             return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
         }
         let requested = u32::try_from(completion.tool_calls.len()).unwrap_or(u32::MAX);
-        if tool_call_count.saturating_add(requested) > config.max_tool_calls {
+        if budget.segment_tool_calls.saturating_add(requested) > config.max_tool_calls {
             return Err(PluginError::domain(RunTurnError::ToolCallLimitExceeded));
         }
-        if remaining_output_tokens <= 0 {
+        if budget.remaining_output_tokens <= 0 {
             return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
         }
-        tool_call_count = tool_call_count.saturating_add(requested);
+        budget.segment_tool_calls = budget.segment_tool_calls.saturating_add(requested);
         for tool_call in &completion.tool_calls {
             if !admitted_tools.contains(tool_call.tool_name.as_str()) {
                 return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
@@ -1175,8 +1236,9 @@ async fn execute_steps(
                 }));
             }
         }
+        let mut completed_user_interaction = false;
         for (parallel_safe, wave) in tool_call_waves(completion.tool_calls, &static_tools) {
-            execute_tool_wave(
+            completed_user_interaction |= execute_tool_wave(
                 clients,
                 context,
                 session_id,
@@ -1194,8 +1256,10 @@ async fn execute_steps(
             )
             .await?;
         }
+        if completed_user_interaction {
+            budget.renew_after_user_input(config);
+        }
     }
-    Err(PluginError::domain(RunTurnError::StepLimitExceeded))
 }
 
 fn drain_pending_turn_inputs(
@@ -1298,7 +1362,7 @@ async fn execute_tool_wave(
     messages: &mut Vec<CompleteMessageInput>,
     tool_calls: Vec<CompleteMessage>,
     max_parallel: usize,
-) -> Result<(), TurnFailure> {
+) -> Result<bool, TurnFailure> {
     let requested_events = tool_calls
         .iter()
         .map(|tool_call| {
@@ -1361,9 +1425,13 @@ async fn execute_tool_wave(
     .await;
 
     let mut first_error = None;
+    let mut completed_user_interaction = false;
     for (_, tool_call, (duration_ms, outcome)) in outcomes {
         match outcome {
             Ok(tool_result) => {
+                completed_user_interaction |= tools_capability::metadata_completes_user_interaction(
+                    tool_result.metadata_json.as_str(),
+                );
                 *revision = append_events(
                     clients,
                     context,
@@ -1447,7 +1515,7 @@ async fn execute_tool_wave(
     }
     match first_error {
         Some(error) => Err(error),
-        None => Ok(()),
+        None => Ok(completed_user_interaction),
     }
 }
 
@@ -2993,6 +3061,7 @@ mod tests {
                 "max_parallel_tool_calls"
             ])
         );
+        assert_eq!(descriptor["configuration_defaults"]["max_user_resumes"], 8);
     }
 
     fn history_event(
@@ -3126,6 +3195,7 @@ mod tests {
             model: "fixture".to_owned(),
             max_steps: 1,
             max_tool_calls: 0,
+            max_user_resumes: Some(0),
             max_output_tokens: 1,
             max_history_events: 1,
             max_compaction_summary_characters: 512,
@@ -3166,6 +3236,61 @@ mod tests {
         };
 
         assert!(validate_compaction_response(&config, &source, &fabricated).is_err());
+    }
+
+    #[test]
+    fn user_resume_renews_one_bounded_execution_segment() {
+        let config = AgentConfig {
+            model: "fixture".to_owned(),
+            max_steps: 8,
+            max_tool_calls: 4,
+            max_user_resumes: Some(1),
+            max_output_tokens: 1_024,
+            max_history_events: 200,
+            max_compaction_summary_characters: 8_192,
+            max_memory_items: 8,
+            max_memory_characters: 16_384,
+            max_parallel_tool_calls: 4,
+        };
+        let mut budget = TurnExecutionBudget::new(&config);
+        budget.begin_model_step();
+        budget.segment_tool_calls = 4;
+        budget.consume_output(1_000);
+
+        assert!(budget.renew_after_user_input(&config));
+        assert_eq!(budget.segment, 2);
+        assert_eq!(budget.segment_steps, 0);
+        assert_eq!(budget.segment_tool_calls, 0);
+        assert_eq!(budget.remaining_output_tokens, 1_024);
+
+        budget.begin_model_step();
+        budget.segment_tool_calls = 1;
+        assert!(!budget.renew_after_user_input(&config));
+        assert_eq!(budget.segment, 2);
+        assert_eq!(budget.segment_steps, 1);
+        assert_eq!(budget.segment_tool_calls, 1);
+    }
+
+    #[test]
+    fn omitted_user_resume_limit_keeps_legacy_configurations_bounded() {
+        let config = serde_json::from_value::<AgentConfig>(serde_json::json!({
+            "model": "fixture",
+            "max_steps": 8,
+            "max_tool_calls": 4,
+            "max_output_tokens": 1_024,
+            "max_history_events": 200,
+            "max_compaction_summary_characters": 8_192,
+            "max_memory_items": 8,
+            "max_memory_characters": 16_384,
+            "max_parallel_tool_calls": 4
+        }))
+        .expect("legacy Agent configuration should remain readable");
+        let mut budget = TurnExecutionBudget::new(&config);
+
+        for _ in 0..DEFAULT_MAX_USER_RESUMES {
+            assert!(budget.renew_after_user_input(&config));
+        }
+        assert!(!budget.renew_after_user_input(&config));
     }
 
     #[test]

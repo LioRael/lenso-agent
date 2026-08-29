@@ -10,6 +10,7 @@ use lenso_capability_agent_tool_provider::{
     self as tool_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
 };
+use lenso_capability_agent_tools::USER_INTERACTION_COMPLETED_METADATA_KEY;
 use lenso_capability_agent_user_interaction::{
     self as interaction_contract, AskError, AskRequest, InteractionOption, InteractionQuestion,
     UserInteractionAskInvocationError,
@@ -164,10 +165,13 @@ impl AskUserToolsPlugin {
                     })
                 })?,
                 content_type: ContentType::Text,
-                metadata_json: serde_json::json!({ "interaction_id": interaction_id })
-                    .to_string()
-                    .try_into()
-                    .expect("ask_user metadata must be valid JSON"),
+                metadata_json: serde_json::json!({
+                    "interaction_id": interaction_id,
+                    (USER_INTERACTION_COMPLETED_METADATA_KEY): true
+                })
+                .to_string()
+                .try_into()
+                .expect("ask_user metadata must be valid JSON"),
             }),
             Err(UserInteractionAskInvocationError::Domain(error)) => {
                 Err(PluginError::domain(map_interaction_error(&error)))

@@ -115,3 +115,92 @@ async fn tui_answers_ask_user_through_the_same_generation() {
         })
         .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn answered_interaction_renews_the_turn_execution_budget() {
+    let temporary = tempfile::tempdir().unwrap();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let host = AgentHost::builder()
+                .agent_home(temporary.path())
+                .unwrap()
+                .plugins(default_plugins::link)
+                .surface(TuiSurface::terminal())
+                .build()
+                .unwrap();
+            let plan = support::plan_for_home("interaction-resume-budget", temporary.path());
+            let mut app = host.run(Profile::resolved_plan(plan)).await.unwrap();
+            let lease = app.lease_tui_turn().await.unwrap();
+            let stream = lease
+                .handle()
+                .open_with_context(
+                    RUN_TURN_OPERATION,
+                    lease.invocation_context().unwrap(),
+                    RunTurnRequest {
+                        input: "Inspect before and after asking me which mode to use.".to_owned(),
+                        session_id: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            stream.close_send().await.unwrap();
+
+            let question = tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    tokio::select! {
+                        event = stream.receive() => match event.unwrap() {
+                            StreamEvent::Terminal(Ok(())) => {
+                                panic!("Agent Turn completed before ask_user")
+                            }
+                            StreamEvent::Terminal(Err(error)) => {
+                                panic!("Agent Turn failed before ask_user: {error:?}")
+                            }
+                            StreamEvent::Message(_) | StreamEvent::PeerHalfClosed => {}
+                        },
+                        () = tokio::time::sleep(Duration::from_millis(10)) => {
+                            let pending = lease.pending_interactions().await.unwrap();
+                            if let Some(question) = pending.into_iter().next() {
+                                break question;
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("ask_user should publish one pending question after earlier Tool calls");
+            lease
+                .answer_interaction(
+                    question.interaction_id,
+                    vec![InteractionAnswer {
+                        question_id: "mode".to_owned(),
+                        selected_option_ids: vec!["safe".to_owned()],
+                        other: Some(None),
+                    }],
+                )
+                .await
+                .unwrap();
+
+            let mut output = String::new();
+            loop {
+                match tokio::time::timeout(Duration::from_secs(2), stream.receive())
+                    .await
+                    .expect("Agent should resume after the answer")
+                    .unwrap()
+                {
+                    StreamEvent::Message(message) if message.is_text_delta() => {
+                        output.push_str(&message.text);
+                    }
+                    StreamEvent::Terminal(Ok(())) => break,
+                    StreamEvent::Terminal(Err(error)) => panic!("Agent Turn failed: {error:?}"),
+                    StreamEvent::Message(_) | StreamEvent::PeerHalfClosed => {}
+                }
+            }
+            assert_eq!(output, "Interaction resume completed");
+
+            drop(stream);
+            drop(lease);
+            app.shutdown().await.unwrap();
+        })
+        .await;
+}

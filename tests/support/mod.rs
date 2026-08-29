@@ -8,6 +8,7 @@ use std::{
 pub(crate) fn plan_for_home(app: &str, home: &Path) -> PathBuf {
     match app {
         "base" => resolve("lenso-agent", fixture_configurations(), home),
+        "interaction-resume-budget" => resolve_interaction_resume_budget(home),
         "openai-codex-direct" => resolve(
             app,
             &[
@@ -103,6 +104,23 @@ content = "Be concise, follow explicit user instructions, and use only the Tools
         ),
         _ => panic!("unsupported test App `{app}`"),
     }
+}
+
+fn resolve_interaction_resume_budget(home: &Path) -> PathBuf {
+    resolve(
+        "interaction-resume-budget",
+        &[
+            (
+                "lenso.agent.loop/agent.toml",
+                "model = \"fixture/readme-summary-v1\"\nmax_steps = 8\nmax_tool_calls = 4\n",
+            ),
+            (
+                "lenso.agent.model.fixture/model.toml",
+                "model = \"fixture/readme-summary-v1\"\n",
+            ),
+        ],
+        home,
+    )
 }
 
 pub(crate) fn fixture_configurations() -> &'static [(&'static str, &'static str)] {
