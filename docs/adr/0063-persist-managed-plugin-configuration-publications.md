@@ -25,14 +25,15 @@ The store owns three durable records:
 
 - the current desired Plugin Root revision;
 - exact proposal evidence, including base revision, candidate revision,
-  proposal digest, Plugin identity, Instance identity, reviewed TOML, review
-  result, and publication phase; and
+  exact base-source digest, proposal digest, Plugin identity, Instance
+  identity, reviewed TOML, review result, and publication phase; and
 - immutable publication history with the successful revision and timestamp.
 
 A proposal persists review evidence without changing desired state. Publication
 uses one operation lease and the following state machine:
 
-1. verify the stored desired revision and reviewed proposal;
+1. verify the stored desired revision, exact target source, and reviewed
+   proposal;
 2. commit the proposal phase as `materializing`;
 3. delegate revision-fenced atomic Plugin Root replacement to
    `LocalPluginRootAuthority`;
@@ -46,9 +47,20 @@ without such evidence, or multiple intents could explain it, startup fails
 closed. It never overwrites the Root, discards ambiguous evidence, or falls
 back to unmanaged publication.
 
-The proposal digest closes the proposal schema and exact reviewed TOML bytes.
-The candidate revision remains semantic, so formatting-only TOML changes do not
-create a different desired revision.
+The proposal digest closes the proposal schema, exact base-source digest, and
+exact reviewed TOML bytes. The candidate revision remains semantic, so
+formatting-only TOML changes do not create a different desired revision, while
+an out-of-band comment or formatting edit still invalidates an older proposal
+and remains byte-identical after rejection.
+HTTP proposal, rollback-proposal, and publication requests therefore require
+both `expectedSourceDigest` and the current process `expectedStreamId`; a stale
+source or pre-restart request fails before durable proposal or Root state can
+change.
+
+Before any authority publishes, the Host resolves a bounded staged overlay of
+the complete visible Plugin Root and applies Host-global root and resource
+budgets. A rejected candidate never invokes an opaque authority's publication
+method and never changes visible Plugin Root bytes.
 
 ## Consequences
 
@@ -66,5 +78,6 @@ create a different desired revision.
 
 Tests must prove read-only proposals, exact durable evidence, one CAS winner,
 publication history, recovery of one interrupted materialization, rejection of
-unrecorded Root changes, HTTP publication through the managed authority, and
-recovery after a real Host restart.
+unrecorded or exact-source-only Root changes, Host-global staged rejection for
+local, SQLite, and opaque authorities, HTTP publication through the managed
+authority, and recovery after a real Host restart.

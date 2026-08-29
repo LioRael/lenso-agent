@@ -1,15 +1,3 @@
-use std::{
-    any::Any,
-    cell::RefCell,
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    env, fs,
-    path::{Path, PathBuf},
-    rc::Rc,
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
-use tokio::sync::oneshot;
-
 use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_agent_loop_plugin::AgentBehaviorProvenance;
@@ -79,17 +67,33 @@ use lenso_kernel::{
 use lenso_native_adapter::NativePluginRegistry;
 use lenso_plugin_control_plane::{
     AdapterProfile, AppGenerationSpec, AppGenerationTransitionSpec, CanonicalDocument,
-    CatalogFactory, ControlHealth, ControlLifecycle, ControlPlaneError, ControlStateStore,
-    DurableControlState, DurableGenerationRoute, DurableTransitionOutcome, EmbeddedPlugin,
-    GenerationControllerClient, GenerationControllerEvent, GenerationMaintenanceOutcome,
-    HostBuildManifest, HostExecutionPolicy, KernelGenerationRuntime, MultiExecutionCatalogFactory,
-    PlanGenerationInput, ReplacementMode, ResolvedGeneration, RolloutPolicy,
-    resolve_plan_generation, sha256_digest,
+    CatalogFactory, ControlLifecycle, ControlPlaneError, ControlStateStore, DurableControlState,
+    DurableGenerationRoute, EmbeddedPlugin, HostBuildManifest, HostExecutionPolicy,
+    KernelGenerationRuntime, MultiExecutionCatalogFactory, PlanGenerationInput, ReplacementMode,
+    ResolvedGeneration, RolloutPolicy, resolve_plan_generation, sha256_digest,
 };
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use std::{
+    any::Any,
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
+    path::{Path, PathBuf},
+    rc::Rc,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
 
+pub use crate::online_generation::{
+    OnlineGenerationEvent, OnlineGenerationEventPage, OnlineGenerationEventRecord,
+    OnlineGenerationRejectionObservation, OnlineGenerationSelection, OnlineGenerationSnapshot,
+};
+use crate::online_generation::{OnlineGenerationEventLog, OnlineGenerationTracker};
 use crate::runtime_state::{LedgerControlStateStore, RuntimeAttachment, RuntimeState};
 use crate::{AgentDirectories, AgentSurfaceKind};
+
+mod online_reconciler;
+use online_reconciler::GenerationReconciler;
+pub use online_reconciler::OnlineReconcileTelemetry;
 
 const APP_ID: &str = "lenso.agent.harness";
 const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
@@ -106,10 +110,6 @@ const DRAIN_TIMEOUT_NANOS: u64 = 2_000_000_000;
 const ONLINE_DRAIN_TIMEOUT_NANOS: u64 = 300_000_000_000;
 const ONLINE_ROLLBACK_WINDOW_NANOS: u64 = 1_000_000_000;
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
-const RECONCILE_QUIET_PERIOD: Duration = Duration::from_millis(200);
-const RECONCILE_SETTLE_LIMIT: Duration = Duration::from_secs(2);
-const RECONCILE_CONSISTENCY_INTERVAL: Duration = Duration::from_secs(2);
-const MAX_RECONCILE_EVENTS: usize = 32;
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const CONTEXT_SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_TUI_PANELS: usize = 64;
@@ -118,6 +118,10 @@ const MAX_TUI_SUGGESTIONS: usize = 2_112;
 const MAX_TUI_SUGGESTION_BYTES: usize = 2_097_152;
 
 static NEXT_ROOT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+
+pub fn online_reconcile_telemetry() -> OnlineReconcileTelemetry {
+    online_reconciler::telemetry()
+}
 
 #[derive(Debug)]
 struct HarnessCatalogFactory;
@@ -210,152 +214,24 @@ pub(crate) struct HostBuildIdentity {
     executable_digest: String,
 }
 
-/// One operator-visible outcome from the live Plugin Desired State reconciler.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OnlineGenerationEvent {
-    Switched {
-        plugin_root_revision: String,
-        resolution_authority_digest: String,
-        generation_spec_digest: String,
-        previous_generation_spec_digest: String,
-        routing_epoch: u64,
-    },
-    Rejected {
-        plugin_root_revision: Option<String>,
-        resolution_authority_digest: Option<String>,
-        detail: String,
-    },
-    RolledBack {
-        failed_generation_spec_digest: String,
-        restored_generation_spec_digest: String,
-        routing_epoch: u64,
-        detail: String,
-    },
-    Failed {
-        generation_spec_digest: String,
-        detail: String,
-    },
-    WatchDegraded {
-        detail: String,
-    },
+#[derive(Clone, Debug)]
+struct DesiredGeneration {
+    plugin_root_revision: String,
+    resolution_authority_digest: String,
+    desired_state_digest: String,
+    plan_digest: String,
+    generation: ResolvedGeneration,
 }
 
-#[derive(Debug)]
-struct GenerationReconciler {
-    stop: Option<oneshot::Sender<()>>,
-    task: tokio::task::JoinHandle<()>,
-}
-
-#[derive(Debug)]
-enum FilesystemReconcileSignal {
-    Changed,
-    Error(String),
-}
-
-struct FilesystemReconcileWatcher {
-    watcher: Option<RecommendedWatcher>,
-    signals: tokio::sync::mpsc::UnboundedReceiver<FilesystemReconcileSignal>,
-    _sender: tokio::sync::mpsc::UnboundedSender<FilesystemReconcileSignal>,
-    recursive_path: Option<PathBuf>,
-    recursive_watched: bool,
-}
-
-impl FilesystemReconcileWatcher {
-    fn start(non_recursive: &[&Path], recursive_path: Option<PathBuf>) -> (Self, Vec<String>) {
-        let (sender, signals) = tokio::sync::mpsc::unbounded_channel();
-        let callback_sender = sender.clone();
-        let mut errors = Vec::new();
-        let watcher =
-            match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                match event {
-                    Ok(_) => {
-                        let _ = callback_sender.send(FilesystemReconcileSignal::Changed);
-                    }
-                    Err(error) => {
-                        let _ = callback_sender
-                            .send(FilesystemReconcileSignal::Error(error.to_string()));
-                    }
-                }
-            }) {
-                Ok(mut watcher) => {
-                    let mut watched_paths = BTreeSet::new();
-                    for path in non_recursive
-                        .iter()
-                        .copied()
-                        .filter(|path| watched_paths.insert((*path).to_path_buf()))
-                    {
-                        if let Err(error) = watcher.watch(path, RecursiveMode::NonRecursive) {
-                            errors.push(format!(
-                                "failed to watch Desired State path {}: {error}",
-                                path.display()
-                            ));
-                        }
-                    }
-                    Some(watcher)
-                }
-                Err(error) => {
-                    errors.push(format!("failed to start filesystem watcher: {error}"));
-                    None
-                }
-            };
-        let mut watcher = Self {
-            watcher,
-            signals,
-            _sender: sender,
-            recursive_path,
-            recursive_watched: false,
-        };
-        if let Some(error) = watcher.refresh_recursive_watch() {
-            errors.push(error);
-        }
-        (watcher, errors)
-    }
-
-    fn refresh_recursive_watch(&mut self) -> Option<String> {
-        let path = self.recursive_path.as_ref()?;
-        let watcher = self.watcher.as_mut()?;
-        if path.is_dir() && !self.recursive_watched {
-            match watcher.watch(path, RecursiveMode::Recursive) {
-                Ok(()) => self.recursive_watched = true,
-                Err(error) => {
-                    return Some(format!(
-                        "failed to watch Plugin discovery path {}: {error}",
-                        path.display()
-                    ));
-                }
-            }
-        } else if !path.exists() && self.recursive_watched {
-            let _ = watcher.unwatch(path);
-            self.recursive_watched = false;
-        }
-        None
-    }
-
-    async fn changed(&mut self) -> Option<FilesystemReconcileSignal> {
-        self.signals.recv().await
-    }
-
-    async fn settle_after(&mut self, initial: Option<FilesystemReconcileSignal>) -> Vec<String> {
-        let mut errors = Vec::new();
-        if let Some(FilesystemReconcileSignal::Error(error)) = initial {
-            errors.push(error);
-        }
-        let deadline = tokio::time::Instant::now() + RECONCILE_SETTLE_LIMIT;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                break;
-            }
-            let quiet_period = RECONCILE_QUIET_PERIOD.min(remaining);
-            let Ok(Some(signal)) = tokio::time::timeout(quiet_period, self.signals.recv()).await
-            else {
-                break;
-            };
-            if let FilesystemReconcileSignal::Error(error) = signal {
-                errors.push(error);
-            }
-        }
-        errors
+impl DesiredGeneration {
+    fn selection(&self) -> OnlineGenerationSelection {
+        OnlineGenerationSelection::new(
+            self.plugin_root_revision.clone(),
+            self.desired_state_digest.clone(),
+            self.generation.spec.digest().to_owned(),
+            self.plan_digest.clone(),
+            self.generation.plan.clone(),
+        )
     }
 }
 
@@ -449,13 +325,14 @@ async fn recover_or_open_host<F: CatalogFactory>(
 pub struct AgentApp {
     host: FrameworkHost<NativeApp>,
     resolved_plan: ResolvedAppPlan,
-    generation_plans: Rc<RefCell<BTreeMap<String, ResolvedAppPlan>>>,
     runtime: RuntimeAttachment,
     session_database: PathBuf,
     profile_name: Option<String>,
     authoring_managed: bool,
     reconciler: Option<GenerationReconciler>,
-    reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
+    reconcile_events: Rc<RefCell<OnlineGenerationEventLog>>,
+    online_generation: Rc<RefCell<OnlineGenerationTracker>>,
+    legacy_event_cursor: Cell<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -478,9 +355,8 @@ impl AgentApp {
         let runtime_state = RuntimeState::open(store_root)?;
         let runtime_attachment = runtime_state.attach(surface)?;
         let _authority_fence = runtime_attachment.authority_snapshot()?;
-        let (generation, _resolution_authority_digest) =
-            resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
-        let initial_generation_digest = generation.spec.digest().to_owned();
+        let initial = resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
+        let generation = initial.generation.clone();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
         let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
@@ -516,32 +392,32 @@ impl AgentApp {
             return Err(error);
         }
         let client = host.controller();
-        let reconcile_events = Rc::new(RefCell::new(VecDeque::new()));
-        let generation_plans = Rc::new(RefCell::new(BTreeMap::from([(
-            initial_generation_digest,
-            resolved_plan.clone(),
-        )])));
+        let reconcile_events = Rc::new(RefCell::new(OnlineGenerationEventLog::default()));
+        let online_generation = Rc::new(RefCell::new(OnlineGenerationTracker::new(
+            initial.selection(),
+        )));
         let authoring_managed =
             plan_is_authoring_managed(plan_bytes, store_root, profile_name.as_deref());
-        let reconciler = start_generation_reconciler(
+        let reconciler = online_reconciler::start(
             client.clone(),
             store_root.to_path_buf(),
             host_build,
             profile_name.clone(),
             authoring_managed,
             reconcile_events.clone(),
-            generation_plans.clone(),
+            online_generation.clone(),
         );
         Ok(Self {
             host,
             resolved_plan,
-            generation_plans,
             runtime: runtime_attachment,
             session_database,
             profile_name,
             authoring_managed,
             reconciler: Some(reconciler),
             reconcile_events,
+            online_generation,
+            legacy_event_cursor: Cell::new(0),
         })
     }
 
@@ -552,6 +428,12 @@ impl AgentApp {
 
     /// Resolves the current author-owned Plugin Root without changing runtime authority.
     pub fn desired_plan(&self) -> Result<ResolvedAppPlan, String> {
+        self.desired_plan_and_contents().map(|(plan, _)| plan)
+    }
+
+    fn desired_plan_and_contents(
+        &self,
+    ) -> Result<(ResolvedAppPlan, crate::plugin_root::PluginRootContents), String> {
         if !self.authoring_managed {
             return Err(
                 "this Host runs an exact diagnostic Plan, not an author-managed Plugin Root"
@@ -559,23 +441,31 @@ impl AgentApp {
             );
         }
         let directories = directories_for_store_root(self.runtime.state().root())?;
-        let root = crate::plugin_root::snapshot(&directories.plugins())?;
-        if let Some(profile_name) = self.profile_name.as_deref() {
-            let profile = crate::profile::select(profile_name, &root, &directories.profiles())?;
-            resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())
+        let root = crate::plugin_root::snapshot_with_resources(&directories.plugins())?;
+        let plan = if let Some(profile_name) = self.profile_name.as_deref() {
+            let profile =
+                crate::profile::select(profile_name, root.root(), &directories.profiles())?;
+            resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())?
         } else {
-            resolve_host_plan_in(&directories, &root)
-        }
+            resolve_host_plan_in(&directories, root.root())?
+        };
+        Ok((plan, root))
+    }
+
+    fn retained_generation_plan(
+        &self,
+        generation_spec_digest: &str,
+    ) -> Option<Rc<ResolvedAppPlan>> {
+        self.online_generation
+            .borrow()
+            .retained_plan(generation_spec_digest)
     }
 
     /// Projects the linked Model Providers and the exact selection in this App.
     pub async fn provider_model_catalog(&self) -> Result<crate::ProviderModelCatalog, String> {
         let route = self.host.route().await.map_err(control_error)?;
         let plan = self
-            .generation_plans
-            .borrow()
-            .get(route.generation_spec_digest())
-            .cloned()
+            .retained_generation_plan(route.generation_spec_digest())
             .ok_or_else(|| {
                 format!(
                     "active Generation `{}` has no retained Provider/Model catalog authority",
@@ -593,6 +483,14 @@ impl AgentApp {
         Ok(crate::plugin_root::snapshot(&directories.plugins())?
             .disabled()
             .to_vec())
+    }
+
+    /// Reopens reconciliation after one explicit, successfully committed authoring mutation.
+    pub fn reopen_plugin_reconciliation(&self) -> Result<(), String> {
+        self.reconciler
+            .as_ref()
+            .ok_or_else(|| "Generation Reconciler is not available".to_owned())?
+            .reopen()
     }
 
     /// Returns Instances whose author-owned files may be enabled or disabled.
@@ -855,14 +753,15 @@ impl AgentApp {
             .map(|binding| binding.provider_instance().to_owned())
             .ok_or_else(|| "leased Generation Surface has no Agent provider binding".to_owned())?;
         let behavior_digest = {
-            let plans = self.generation_plans.borrow();
-            let plan = plans.get(route.generation_spec_digest()).ok_or_else(|| {
-                format!(
-                    "active Generation `{}` has no retained Agent behavior authority",
-                    route.generation_spec_digest()
-                )
-            })?;
-            agent_behavior_digest(plan, &agent_provider)?
+            let plan = self
+                .retained_generation_plan(route.generation_spec_digest())
+                .ok_or_else(|| {
+                    format!(
+                        "active Generation `{}` has no retained Agent behavior authority",
+                        route.generation_spec_digest()
+                    )
+                })?;
+            agent_behavior_digest(&plan, &agent_provider)?
         };
         let tools_catalog = route
             .target()
@@ -982,14 +881,8 @@ impl AgentApp {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
-        if let Some(mut reconciler) = self.reconciler.take() {
-            if let Some(stop) = reconciler.stop.take() {
-                let _ = stop.send(());
-            }
-            reconciler
-                .task
-                .await
-                .map_err(|error| format!("Generation Reconciler task failed: {error}"))?;
+        if let Some(reconciler) = self.reconciler.take() {
+            reconciler.shutdown().await?;
         }
         self.host.suspend().await.map_err(control_error)?;
         self.runtime.release();
@@ -1000,9 +893,37 @@ impl AgentApp {
         Ok(())
     }
 
-    /// Drains bounded online-reconcile events for terminal or host presentation.
+    /// Returns the current Desired/Preparing/Active Generation projection.
+    pub fn online_generation_snapshot(&self) -> OnlineGenerationSnapshot {
+        self.online_generation.borrow().snapshot()
+    }
+
+    /// Reads bounded reconcile events after one caller-owned monotonic cursor.
+    pub fn online_generation_events(&self, after: Option<u64>) -> OnlineGenerationEventPage {
+        self.reconcile_events.borrow().after(after)
+    }
+
+    /// Records degradation observed by an external Plugin configuration watcher
+    /// in the same cursor-ordered journal as local reconciliation failures.
+    pub fn report_plugin_watch_degraded(&self, detail: impl Into<String>) -> u64 {
+        self.reconcile_events
+            .borrow_mut()
+            .push(OnlineGenerationEvent::WatchDegraded {
+                detail: detail.into(),
+            })
+    }
+
+    /// Compatibility projection for terminal consumers that previously drained
+    /// the shared queue. Each `AgentApp` now owns a private legacy cursor, so this
+    /// method cannot destroy events needed by another presentation surface.
     pub fn take_online_generation_events(&self) -> Vec<OnlineGenerationEvent> {
-        self.reconcile_events.borrow_mut().drain(..).collect()
+        let page = self.online_generation_events(Some(self.legacy_event_cursor.get()));
+        self.legacy_event_cursor.set(page.cursor());
+        page.events()
+            .iter()
+            .cloned()
+            .map(OnlineGenerationEventRecord::into_event)
+            .collect()
     }
 }
 
@@ -1027,9 +948,11 @@ fn resolve_and_record_current_generation(
     plan_bytes: &[u8],
     store_root: &Path,
     host_build: &HostBuildIdentity,
-) -> Result<(ResolvedGeneration, String), String> {
+) -> Result<DesiredGeneration, String> {
     let directories = directories_for_store_root(store_root)?;
     let authority = crate::generation_authority::load_generation_authority_unfenced(store_root);
+    let plugin_root = crate::plugin_root::snapshot(&directories.plugins())?;
+    let plugin_root_revision = crate::plugin_root::revision(&plugin_root)?;
     let generation = resolve_generation_with_authority(
         plan_bytes,
         &authority,
@@ -1040,110 +963,11 @@ fn resolve_and_record_current_generation(
     crate::generation_authority::record_resolved_generation_authority_unfenced(
         store_root, &authority,
     );
-    Ok((generation, authority.resolution_authority_digest))
-}
-
-fn start_generation_reconciler(
-    client: GenerationControllerClient<NativeApp>,
-    store_root: PathBuf,
-    host_build: HostBuildIdentity,
-    profile_name: Option<String>,
-    authoring_managed: bool,
-    events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
-    generation_plans: Rc<RefCell<BTreeMap<String, ResolvedAppPlan>>>,
-) -> GenerationReconciler {
-    let (stop, mut stopped) = oneshot::channel();
-    let mut controller_events = client.subscribe();
-    let directories = directories_for_store_root(&store_root)
-        .expect("validated Agent runtime root must have an Agent Home parent");
-    let plugin_root = directories.plugins();
-    let plugin_parent = watch_parent(&plugin_root);
-    let profile_directory = directories.profiles();
-    let mut watched_paths = vec![store_root.as_path()];
-    if authoring_managed {
-        watched_paths.push(plugin_parent.as_path());
-        if profile_name.is_some() {
-            watched_paths.push(profile_directory.as_path());
-        }
-    }
-    let (mut watcher, watcher_errors) =
-        FilesystemReconcileWatcher::start(&watched_paths, Some(plugin_root.clone()));
-    report_watcher_errors(&events, watcher_errors);
-    let task = tokio::task::spawn_local(async move {
-        let mut interval = tokio::time::interval(RECONCILE_CONSISTENCY_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut last_attempted_desired_state_digest = None;
-        let mut last_rejection = None::<OnlineGenerationEvent>;
-        loop {
-            tokio::select! {
-                biased;
-                _ = &mut stopped => break,
-                event = controller_events.recv() => {
-                    match event {
-                        Ok(event) => {
-                            if let Some(event) = online_event_from_controller_event(event) {
-                                push_reconcile_event(&events, event);
-                            }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                            push_reconcile_event(&events, OnlineGenerationEvent::Rejected {
-                                plugin_root_revision: None,
-                                resolution_authority_digest: None,
-                                detail: format!(
-                                    "Generation Controller event stream lagged by {skipped} events"
-                                ),
-                            });
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-                    }
-                }
-                _ = interval.tick() => {
-                    if authoring_managed && let Some(event) = reconcile_online_generation(
-                        &client,
-                        &store_root,
-                        &plugin_root,
-                        &host_build,
-                        profile_name.as_deref(),
-                        &mut last_attempted_desired_state_digest,
-                        &generation_plans,
-                    ).await {
-                        if matches!(event, OnlineGenerationEvent::Switched { .. })
-                            || last_rejection.as_ref() != Some(&event)
-                        {
-                            push_reconcile_event(&events, event.clone());
-                        }
-                        last_rejection = matches!(event, OnlineGenerationEvent::Rejected { .. })
-                            .then_some(event);
-                    }
-                }
-                signal = watcher.changed() => {
-                    let errors = watcher.settle_after(signal).await;
-                    report_watcher_errors(&events, errors);
-                    if authoring_managed && let Some(event) = reconcile_online_generation(
-                        &client,
-                        &store_root,
-                        &plugin_root,
-                        &host_build,
-                        profile_name.as_deref(),
-                        &mut last_attempted_desired_state_digest,
-                        &generation_plans,
-                    ).await {
-                        if matches!(event, OnlineGenerationEvent::Switched { .. })
-                            || last_rejection.as_ref() != Some(&event)
-                        {
-                            push_reconcile_event(&events, event.clone());
-                        }
-                        last_rejection = matches!(event, OnlineGenerationEvent::Rejected { .. })
-                            .then_some(event);
-                    }
-                }
-            }
-        }
-    });
-    GenerationReconciler {
-        stop: Some(stop),
-        task,
-    }
+    desired_generation(
+        plugin_root_revision,
+        authority.resolution_authority_digest,
+        generation,
+    )
 }
 
 fn plan_is_authoring_managed(
@@ -1170,265 +994,6 @@ fn plan_is_authoring_managed(
                 .map_err(|error| format!("failed to encode the derived App: {error}"))
         })
         .is_ok_and(|derived| derived == plan_bytes)
-}
-
-fn watch_parent(path: &Path) -> PathBuf {
-    path.parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf()
-}
-
-fn online_event_from_controller_event(
-    event: GenerationControllerEvent,
-) -> Option<OnlineGenerationEvent> {
-    let GenerationControllerEvent::Maintained(GenerationMaintenanceOutcome::Failed(failure)) =
-        event
-    else {
-        return None;
-    };
-    let detail = format!("terminal App Generation failure: {:?}", failure.failure);
-    Some(match failure.automatic_rollback {
-        Some(rollback) => OnlineGenerationEvent::RolledBack {
-            failed_generation_spec_digest: failure.generation_spec_digest,
-            restored_generation_spec_digest: rollback.active_generation_spec_digest,
-            routing_epoch: rollback.routing_epoch,
-            detail,
-        },
-        None => OnlineGenerationEvent::Failed {
-            generation_spec_digest: failure.generation_spec_digest,
-            detail,
-        },
-    })
-}
-
-async fn activate_online_candidate(
-    client: &GenerationControllerClient<NativeApp>,
-    state: &DurableControlState,
-    previous_generation_spec_digest: &str,
-    candidate: ResolvedGeneration,
-) -> Result<Option<DurableTransitionOutcome>, String> {
-    let candidate_digest = candidate.spec.digest();
-    let retained_candidate = state.generations.iter().find(|record| {
-        record.generation_spec_digest == candidate_digest
-            && matches!(
-                record.lifecycle,
-                ControlLifecycle::Draining | ControlLifecycle::Standby
-            )
-            && record.health == ControlHealth::Healthy
-    });
-    if let Some(retained_candidate) = retained_candidate {
-        let is_direct_predecessor = state.generations.iter().any(|record| {
-            record.generation_spec_digest == previous_generation_spec_digest
-                && record.transition_spec_digest == retained_candidate.transition_spec_digest
-        });
-        if !is_direct_predecessor {
-            return Ok(None);
-        }
-        return client
-            .rollback(candidate_digest)
-            .await
-            .map(Some)
-            .map_err(control_error);
-    }
-    let transition = online_overlap_transition(previous_generation_spec_digest, &candidate)
-        .map_err(control_error)?;
-    client
-        .transition(transition, candidate, BTreeMap::new())
-        .await
-        .map(Some)
-        .map_err(control_error)
-}
-
-async fn reconcile_online_generation(
-    client: &GenerationControllerClient<NativeApp>,
-    store_root: &Path,
-    plugin_root: &Path,
-    host_build: &HostBuildIdentity,
-    profile_name: Option<&str>,
-    last_attempted_desired_state_digest: &mut Option<String>,
-    generation_plans: &Rc<RefCell<BTreeMap<String, ResolvedAppPlan>>>,
-) -> Option<OnlineGenerationEvent> {
-    let coordinator = match crate::authority::AuthorityCoordinator::prepare(store_root) {
-        Ok(coordinator) => coordinator,
-        Err(detail) => {
-            return Some(OnlineGenerationEvent::Rejected {
-                plugin_root_revision: None,
-                resolution_authority_digest: None,
-                detail,
-            });
-        }
-    };
-    let _authority_fence = match coordinator.try_snapshot() {
-        Ok(Some(fence)) => fence,
-        Ok(None) => return None,
-        Err(detail) => {
-            return Some(OnlineGenerationEvent::Rejected {
-                plugin_root_revision: None,
-                resolution_authority_digest: None,
-                detail,
-            });
-        }
-    };
-    let (resolution_authority_digest, plugin_root_revision, candidate) =
-        match resolve_desired_generation(
-            plugin_root,
-            store_root,
-            host_build,
-            profile_name,
-            last_attempted_desired_state_digest,
-        ) {
-            Ok(Some(candidate)) => candidate,
-            Ok(None) => return None,
-            Err(event) => return Some(event),
-        };
-    let state = match client.inspect().await.map_err(control_error) {
-        Ok(state) => state,
-        Err(detail) => {
-            return Some(OnlineGenerationEvent::Rejected {
-                plugin_root_revision: Some(plugin_root_revision),
-                resolution_authority_digest: Some(resolution_authority_digest),
-                detail,
-            });
-        }
-    };
-    let Some(previous_generation_spec_digest) = state.active_generation_spec_digest.as_deref()
-    else {
-        return Some(OnlineGenerationEvent::Rejected {
-            plugin_root_revision: Some(plugin_root_revision),
-            resolution_authority_digest: Some(resolution_authority_digest),
-            detail: "online reconcile requires one active App Generation".to_owned(),
-        });
-    };
-    if previous_generation_spec_digest == candidate.spec.digest() {
-        return None;
-    }
-    if let Err(detail) = record_generation_spec(store_root, &candidate.spec) {
-        return Some(OnlineGenerationEvent::Rejected {
-            plugin_root_revision: Some(plugin_root_revision),
-            resolution_authority_digest: Some(resolution_authority_digest),
-            detail,
-        });
-    }
-    let candidate_plan = candidate.plan.clone();
-    match activate_online_candidate(client, &state, previous_generation_spec_digest, candidate)
-        .await
-    {
-        Ok(Some(outcome)) => {
-            generation_plans.borrow_mut().insert(
-                outcome.active_generation_spec_digest.clone(),
-                candidate_plan,
-            );
-            Some(OnlineGenerationEvent::Switched {
-                plugin_root_revision,
-                resolution_authority_digest,
-                generation_spec_digest: outcome.active_generation_spec_digest,
-                previous_generation_spec_digest: previous_generation_spec_digest.to_owned(),
-                routing_epoch: outcome.routing_epoch,
-            })
-        }
-        Ok(None) => {
-            *last_attempted_desired_state_digest = None;
-            None
-        }
-        Err(detail) => Some(OnlineGenerationEvent::Rejected {
-            plugin_root_revision: Some(plugin_root_revision),
-            resolution_authority_digest: Some(resolution_authority_digest),
-            detail,
-        }),
-    }
-}
-
-fn resolve_desired_generation(
-    plugin_root: &Path,
-    store_root: &Path,
-    host_build: &HostBuildIdentity,
-    profile_name: Option<&str>,
-    last_attempted_desired_state_digest: &mut Option<String>,
-) -> Result<Option<(String, String, ResolvedGeneration)>, OnlineGenerationEvent> {
-    let directories = directories_for_store_root(store_root).map_err(|detail| {
-        OnlineGenerationEvent::Rejected {
-            plugin_root_revision: None,
-            resolution_authority_digest: None,
-            detail,
-        }
-    })?;
-    let authority = crate::generation_authority::load_generation_authority_unfenced(store_root);
-    let root = crate::plugin_root::snapshot(plugin_root).map_err(|detail| {
-        OnlineGenerationEvent::Rejected {
-            plugin_root_revision: None,
-            resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
-            detail,
-        }
-    })?;
-    let plugin_root_revision = sha256_digest(&serde_json::to_vec(&root).map_err(|error| {
-        OnlineGenerationEvent::Rejected {
-            plugin_root_revision: None,
-            resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
-            detail: format!("failed to identify Plugin Root revision: {error}"),
-        }
-    })?);
-    let rejected = |detail| OnlineGenerationEvent::Rejected {
-        plugin_root_revision: Some(plugin_root_revision.clone()),
-        resolution_authority_digest: Some(authority.resolution_authority_digest.clone()),
-        detail,
-    };
-    let plan = if let Some(profile_name) = profile_name {
-        let profile = crate::profile::select(profile_name, &root, &directories.profiles())
-            .map_err(rejected)?;
-        resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())
-            .map_err(rejected)?
-    } else {
-        resolve_host_plan_in(&directories, &root).map_err(rejected)?
-    };
-    let resources = crate::plugin_root::plan_resources(plugin_root, &plan).map_err(rejected)?;
-    let resource_identity = resources
-        .iter()
-        .map(|(instance, snapshot)| (instance, snapshot.digest()))
-        .collect::<Vec<_>>();
-    let desired_state_digest = sha256_digest(
-        &serde_json::to_vec(&(
-            &authority.resolution_authority_digest,
-            &plan,
-            resource_identity,
-        ))
-        .map_err(|error| rejected(format!("failed to identify desired Plugin state: {error}")))?,
-    );
-    if last_attempted_desired_state_digest.as_deref() == Some(&desired_state_digest) {
-        return Ok(None);
-    }
-    *last_attempted_desired_state_digest = Some(desired_state_digest);
-    let candidate =
-        resolve_generation_from_plan(&plan, &authority, host_build, plugin_root, resources)
-            .map_err(rejected)?;
-    Ok(Some((
-        authority.resolution_authority_digest,
-        plugin_root_revision,
-        candidate,
-    )))
-}
-
-fn push_reconcile_event(
-    events: &Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
-    event: OnlineGenerationEvent,
-) {
-    let mut events = events.borrow_mut();
-    if events.len() == MAX_RECONCILE_EVENTS {
-        events.pop_front();
-    }
-    events.push_back(event);
-}
-
-fn report_watcher_errors(
-    events: &Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
-    errors: impl IntoIterator<Item = String>,
-) {
-    for detail in errors {
-        let event = OnlineGenerationEvent::WatchDegraded { detail };
-        if events.borrow().back() != Some(&event) {
-            push_reconcile_event(events, event);
-        }
-    }
 }
 
 async fn task_snapshot_on_route(
@@ -1479,7 +1044,6 @@ async fn task_snapshot_on_route(
     tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
     Ok(TaskSnapshotResponse { tasks })
 }
-
 fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), String> {
     if panels.len() > MAX_TUI_PANELS {
         return Err(format!(
@@ -2096,6 +1660,48 @@ fn resolve_generation_from_plan(
         resources,
     })
     .map_err(control_error)
+}
+
+fn desired_generation(
+    plugin_root_revision: String,
+    resolution_authority_digest: String,
+    generation: ResolvedGeneration,
+) -> Result<DesiredGeneration, String> {
+    let (desired_state_digest, plan_digest) = desired_generation_identity(
+        &resolution_authority_digest,
+        &generation.plan,
+        &generation.resources,
+    )?;
+    Ok(DesiredGeneration {
+        plugin_root_revision,
+        resolution_authority_digest,
+        desired_state_digest,
+        plan_digest,
+        generation,
+    })
+}
+
+pub(crate) fn desired_generation_identity(
+    resolution_authority_digest: &str,
+    plan: &ResolvedAppPlan,
+    resources: &lenso_runtime_codec::InstanceResourceCatalog,
+) -> Result<(String, String), String> {
+    let plan_digest = app_plan_digest(plan)?;
+    let resource_identity = resources
+        .iter()
+        .map(|(instance, snapshot)| (instance, snapshot.digest()))
+        .collect::<Vec<_>>();
+    let desired_state_digest = sha256_digest(
+        &serde_json::to_vec(&(resolution_authority_digest, plan, resource_identity))
+            .map_err(|error| format!("failed to identify desired Plugin state: {error}"))?,
+    );
+    Ok((desired_state_digest, plan_digest))
+}
+
+fn app_plan_digest(plan: &ResolvedAppPlan) -> Result<String, String> {
+    serde_json::to_vec(plan)
+        .map(|bytes| sha256_digest(&bytes))
+        .map_err(|error| format!("failed to identify desired App Plan: {error}"))
 }
 
 fn initial_transition(
@@ -3055,11 +2661,6 @@ mod tests {
     }
 
     #[test]
-    fn relative_plugin_root_watches_the_current_directory() {
-        assert_eq!(watch_parent(Path::new("plugins")), Path::new("."));
-    }
-
-    #[test]
     fn empty_plugin_root_selects_direct_codex_with_auth() {
         let plan = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
         let plan_json = serde_json::to_value(&plan).unwrap();
@@ -3336,125 +2937,6 @@ mod tests {
         assert_eq!(
             transition.value().replacement_mode,
             ReplacementMode::Initial
-        );
-    }
-
-    #[test]
-    fn plugin_root_edits_derive_a_new_generation_and_reject_invalid_state() {
-        let directory = tempfile::tempdir().unwrap();
-        let plugin_root = directory.path().join("plugins");
-        let store_root = directory.path().join("state");
-        fs::create_dir_all(&store_root).unwrap();
-        let host_build = HostBuildIdentity::current().unwrap();
-        let mut last_attempted = None;
-
-        let (_, _, base) = resolve_desired_generation(
-            &plugin_root,
-            &store_root,
-            &host_build,
-            None,
-            &mut last_attempted,
-        )
-        .unwrap()
-        .unwrap();
-
-        let text_tools = plugin_root.join("lenso.agent.text-tools");
-        fs::create_dir_all(&text_tools).unwrap();
-        fs::write(text_tools.join("default.toml"), "").unwrap();
-        let (_, _, configured) = resolve_desired_generation(
-            &plugin_root,
-            &store_root,
-            &host_build,
-            None,
-            &mut last_attempted,
-        )
-        .unwrap()
-        .unwrap();
-        assert_ne!(configured.spec.digest(), base.spec.digest());
-        assert!(
-            configured
-                .plan
-                .plugin_instances()
-                .iter()
-                .any(|plugin| { plugin.instance_key() == "lenso.agent.text-tools/default" })
-        );
-
-        fs::write(text_tools.join("default.toml"), "not valid = [").unwrap();
-        let rejected = resolve_desired_generation(
-            &plugin_root,
-            &store_root,
-            &host_build,
-            None,
-            &mut last_attempted,
-        )
-        .unwrap_err();
-        assert!(matches!(rejected, OnlineGenerationEvent::Rejected { .. }));
-
-        fs::remove_dir_all(text_tools).unwrap();
-        let (_, _, restored) = resolve_desired_generation(
-            &plugin_root,
-            &store_root,
-            &host_build,
-            None,
-            &mut last_attempted,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(restored.spec.digest(), base.spec.digest());
-    }
-
-    #[test]
-    fn resource_only_edits_create_a_generation_and_retain_old_bytes() {
-        let directory = tempfile::tempdir().unwrap();
-        let plugin_root = directory.path().join("plugins");
-        let store_root = directory.path().join("state");
-        let text_tools = plugin_root.join("lenso.agent.text-tools");
-        let resource_directory = text_tools.join("default/prompts");
-        fs::create_dir_all(&resource_directory).unwrap();
-        fs::create_dir_all(&store_root).unwrap();
-        fs::write(text_tools.join("default.toml"), "").unwrap();
-        let resource = resource_directory.join("system.md");
-        fs::write(&resource, "generation one").unwrap();
-        let host_build = HostBuildIdentity::current().unwrap();
-        let mut last_attempted = None;
-
-        let (_, _, first) = resolve_desired_generation(
-            &plugin_root,
-            &store_root,
-            &host_build,
-            None,
-            &mut last_attempted,
-        )
-        .unwrap()
-        .unwrap();
-        let retained_resources = first.resources.clone();
-
-        fs::write(&resource, "generation two").unwrap();
-        let (_, _, second) = resolve_desired_generation(
-            &plugin_root,
-            &store_root,
-            &host_build,
-            None,
-            &mut last_attempted,
-        )
-        .unwrap()
-        .unwrap();
-
-        assert_ne!(second.spec.digest(), first.spec.digest());
-        assert_eq!(
-            retained_resources
-                .for_instance("lenso.agent.text-tools/default")
-                .read_text("prompts/system.md")
-                .unwrap(),
-            "generation one"
-        );
-        assert_eq!(
-            second
-                .resources
-                .for_instance("lenso.agent.text-tools/default")
-                .read_text("prompts/system.md")
-                .unwrap(),
-            "generation two"
         );
     }
 

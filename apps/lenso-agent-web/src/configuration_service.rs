@@ -335,6 +335,7 @@ async fn propose(
 struct PublicationBody {
     expected_revision: String,
     proposal_digest: String,
+    rollback_of_proposal_digest: Option<String>,
     toml: String,
 }
 
@@ -349,7 +350,19 @@ async fn publish(
     let revision = parse_revision(&body.expected_revision)?;
     let authority = Arc::clone(&state.authority);
     let publication = blocking_operation(move || {
-        let proposal = authority.propose(&revision, &plugin, &instance, body.toml.as_bytes())?;
+        let proposal = if let Some(rollback_of) = body.rollback_of_proposal_digest.as_deref() {
+            let Some((proposal, published_toml)) =
+                authority.propose_rollback(&revision, &plugin, &instance, rollback_of)?
+            else {
+                anyhow::bail!("rollback publication not found");
+            };
+            if published_toml != body.toml {
+                anyhow::bail!("rollback configuration mismatch");
+            }
+            proposal
+        } else {
+            authority.propose(&revision, &plugin, &instance, body.toml.as_bytes())?
+        };
         if proposal.digest() != body.proposal_digest {
             anyhow::bail!("proposal digest mismatch");
         }
@@ -395,6 +408,7 @@ async fn history(
             "pluginId": plugin,
             "publications": publications.iter().map(|record| json!({
                 "baseRevision": record.base_revision,
+                "baseSourceDigest": record.base_source_digest,
                 "configurationToml": record.configuration_toml,
                 "proposalDigest": record.proposal_digest,
                 "publishedAtUnixMs": record.published_at_unix_ms,
@@ -568,6 +582,8 @@ fn operation_problem(error: &anyhow::Error) -> ServiceProblem {
     let detail = error.to_string();
     if detail.contains("revision conflict")
         || detail.contains("proposal digest mismatch")
+        || detail.contains("rollback publication not found")
+        || detail.contains("rollback configuration mismatch")
         || detail.contains("revision history gap")
         || detail.contains("change cursor is unavailable")
         || detail.contains("cursor and materialized revision do not align")

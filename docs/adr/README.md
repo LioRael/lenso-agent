@@ -76,3 +76,5 @@
 - [0074 — Compose browser and multimodal Tools with explicit grants](0074-compose-browser-and-multimodal-tools-with-explicit-grants.md)
 - [0075 — Export Session-grounded OTLP and evaluate replays](0075-export-session-grounded-otlp-and-evaluate-replays.md)
 - [0076 — Compare Agent behavior across surface-specific Generations](0076-compare-agent-behavior-across-surface-generations.md)
+- [0077 — Bound idle Plugin reconciliation I/O](0077-bound-idle-plugin-reconciliation-io.md)
+- [0078 — Project Plugin control as observable operations](0078-project-plugin-control-as-observable-operations.md)

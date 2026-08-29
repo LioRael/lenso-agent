@@ -21,6 +21,9 @@ use lenso_capability_agent_process::{
 use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
 use tokio::{io::AsyncReadExt, process::Child};
 
+const PRIVATE_TMP_WORKSPACE_CONFLICT: &str =
+    "sandbox Workspace root cannot equal the Linux private temporary mount point `/tmp`";
+
 #[cfg(target_os = "macos")]
 const SEATBELT_DENY_NETWORK: &str = r#"(version 1)
 (deny default)
@@ -340,6 +343,9 @@ impl Lifecycle for SandboxProcessPlugin {
             return Err(invalid_plan(
                 "sandbox root must be a directory narrower than the filesystem root",
             ));
+        }
+        if workspace_conflicts_with_private_tmp(&root) {
+            return Err(invalid_plan(PRIVATE_TMP_WORKSPACE_CONFLICT));
         }
         fs::create_dir_all(&self.config.temporary_directory).map_err(|error| {
             invalid_plan(format!(
@@ -712,12 +718,14 @@ impl SandboxProcessProvider {
                     .args(["--ro-bind", "/", "/"])
                     .args(["--dev", "/dev"])
                     .args(["--proc", "/proc"])
-                    .arg("--bind")
-                    .arg(workspace_root)
-                    .arg(workspace_root)
+                    // Keep this before the workspace bind: a workspace nested below
+                    // `/tmp` must be mounted back into the private temporary tree.
                     .arg("--bind")
                     .arg(temporary)
                     .arg("/tmp")
+                    .arg("--bind")
+                    .arg(workspace_root)
+                    .arg(workspace_root)
                     .arg("--chdir")
                     .arg(cwd)
                     .arg("--")
@@ -743,6 +751,11 @@ impl SandboxProcessProvider {
                 detail: "sandbox root identity changed after startup".to_owned(),
             });
         }
+        if workspace_conflicts_with_private_tmp(&root) {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: PRIVATE_TMP_WORKSPACE_CONFLICT.to_owned(),
+            });
+        }
         let Some(scope) = context
             .typed_extension::<WorkspaceScope>()
             .map_err(|error| RuntimeFailure::PluginFailure {
@@ -756,6 +769,11 @@ impl SandboxProcessProvider {
                 detail: format!("scoped Workspace is unavailable: {error}"),
             }
         })?;
+        if workspace_conflicts_with_private_tmp(&scoped) {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: PRIVATE_TMP_WORKSPACE_CONFLICT.to_owned(),
+            });
+        }
         if scoped == root {
             return Ok(root);
         }
@@ -777,6 +795,16 @@ impl SandboxProcessProvider {
         }
         Ok(scoped)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn workspace_conflicts_with_private_tmp(root: &Path) -> bool {
+    root == Path::new("/tmp")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn workspace_conflicts_with_private_tmp(_root: &Path) -> bool {
+    false
 }
 
 impl SandboxBackend {
@@ -1380,6 +1408,78 @@ mod tests {
         assert_eq!(
             messages.last().unwrap().kind,
             RunStreamResponseKind::Completed
+        );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod linux_tests {
+    use super::*;
+    use lenso_kernel::CancellationToken;
+
+    fn provider(root: &Path, temporary: &Path) -> SandboxProcessProvider {
+        let root = fs::canonicalize(root).unwrap();
+        let temporary_directory = fs::canonicalize(temporary).unwrap();
+        let shell = resolve_absolute_program(Path::new("/bin/sh")).unwrap();
+        SandboxProcessProvider {
+            config: SandboxProcessConfig {
+                root: root.clone(),
+                delegated_root: None,
+                temporary_directory: temporary_directory.clone(),
+                backend: BackendSelection::Bubblewrap,
+                allow_network: false,
+                allowed_programs: vec!["sh".to_owned()],
+                program_presets: Vec::new(),
+                environment_allowlist: Vec::new(),
+                max_timeout_ms: 5_000,
+                max_output_bytes: 16_384,
+                max_argument_bytes: 16_384,
+            },
+            root,
+            temporary_directory,
+            programs: BTreeMap::from([("sh".to_owned(), shell)]),
+            environment: BTreeMap::new(),
+            backend: resolve_backend(BackendSelection::Bubblewrap).unwrap(),
+            tasks: ManagedTasks::default(),
+        }
+    }
+
+    #[test]
+    fn private_tmp_mount_cannot_also_be_the_workspace_root() {
+        assert!(workspace_conflicts_with_private_tmp(Path::new("/tmp")));
+        assert!(!workspace_conflicts_with_private_tmp(Path::new(
+            "/tmp/workspace"
+        )));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bubblewrap_keeps_a_workspace_below_its_private_tmp_mount_visible() {
+        let parent = tempfile::tempdir_in("/tmp").unwrap();
+        let workspace = parent.path().join("workspace");
+        let temporary = parent.path().join("sandbox-tmp");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&temporary).unwrap();
+        let provider = provider(&workspace, &temporary);
+
+        provider.probe_backend().await.unwrap();
+        let response = provider
+            .run_process(
+                InvocationContext::new(31, None, CancellationToken::new()),
+                RunRequest {
+                    program: "sh".to_owned(),
+                    arguments: vec!["-c".to_owned(), "printf visible > inside.txt".to_owned()],
+                    cwd: ".".to_owned(),
+                    timeout_ms: "2000".to_owned(),
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(response.exit_code, "0");
+        assert_eq!(
+            fs::read_to_string(workspace.join("inside.txt")).unwrap(),
+            "visible"
         );
     }
 }

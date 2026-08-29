@@ -43,6 +43,7 @@ lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-s
 lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
+lenso-plugin-control-plane.workspace = true
 reqwest = { workspace = true, features = ["blocking"] }
 rusqlite.workspace = true
 serde.workspace = true
@@ -51,6 +52,7 @@ sha2.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tower.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

@@ -269,6 +269,7 @@ pub struct RemotePluginConfigurationAuthority {
 struct RetainedRemoteProposal {
     bytes: Vec<u8>,
     remote_digest: String,
+    rollback_of_proposal_digest: Option<String>,
 }
 
 impl fmt::Debug for RemotePluginConfigurationAuthority {
@@ -378,20 +379,29 @@ impl RemotePluginConfigurationAuthority {
         proposal: &PluginConfigurationProposal,
         bytes: &[u8],
         remote_digest: &str,
+        rollback_of_proposal_digest: Option<&str>,
     ) -> anyhow::Result<()> {
         let mut proposals = self.proposals.lock().map_err(|_| {
             anyhow::anyhow!("remote Plugin configuration proposal lock is poisoned")
         })?;
-        if !proposals.contains_key(proposal.digest()) && proposals.len() >= MAX_RETAINED_PROPOSALS {
+        let retained = RetainedRemoteProposal {
+            bytes: bytes.to_vec(),
+            remote_digest: remote_digest.to_owned(),
+            rollback_of_proposal_digest: rollback_of_proposal_digest.map(str::to_owned),
+        };
+        if let Some(existing) = proposals.get(proposal.digest()) {
+            if existing.bytes != retained.bytes
+                || existing.remote_digest != retained.remote_digest
+                || existing.rollback_of_proposal_digest != retained.rollback_of_proposal_digest
+            {
+                bail!("remote Plugin configuration proposal evidence conflicts with its digest");
+            }
+            return Ok(());
+        }
+        if proposals.len() >= MAX_RETAINED_PROPOSALS {
             bail!("remote Plugin configuration proposal cache is full");
         }
-        proposals.insert(
-            proposal.digest().to_owned(),
-            RetainedRemoteProposal {
-                bytes: bytes.to_vec(),
-                remote_digest: remote_digest.to_owned(),
-            },
-        );
+        proposals.insert(proposal.digest().to_owned(), retained);
         Ok(())
     }
 
@@ -520,7 +530,7 @@ impl PluginConfigurationAuthority for RemotePluginConfigurationAuthority {
             "proposal",
         )?;
         Self::compare_proposal(&local, &remote)?;
-        self.remember_proposal(&local, bytes, &remote.proposal_digest)?;
+        self.remember_proposal(&local, bytes, &remote.proposal_digest, None)?;
         Ok(local)
     }
 
@@ -546,6 +556,7 @@ impl PluginConfigurationAuthority for RemotePluginConfigurationAuthority {
         let request = RemotePublicationRequest {
             expected_revision: proposal.base_revision().as_str(),
             proposal_digest: &retained.remote_digest,
+            rollback_of_proposal_digest: retained.rollback_of_proposal_digest.as_deref(),
             toml: std::str::from_utf8(&retained.bytes)
                 .context("Plugin configuration must be UTF-8")?,
         };
@@ -603,6 +614,7 @@ impl PluginConfigurationHistoryAuthority for RemotePluginConfigurationAuthority 
                 proposal_digest: record.proposal_digest,
                 revision: record.revision,
                 base_revision: record.base_revision,
+                base_source_digest: record.base_source_digest,
                 plugin_id: plugin_id.to_owned(),
                 instance_key: instance.to_owned(),
                 configuration_toml: record.configuration_toml,
@@ -672,6 +684,7 @@ impl PluginConfigurationHistoryAuthority for RemotePluginConfigurationAuthority 
             &local,
             remote.configuration_toml.as_bytes(),
             &remote.proposal.proposal_digest,
+            Some(publication_proposal_digest),
         )?;
         Ok(Some((local, remote.configuration_toml)))
     }
@@ -804,6 +817,8 @@ struct RemoteDiagnostic {
 struct RemotePublicationRequest<'a> {
     expected_revision: &'a str,
     proposal_digest: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rollback_of_proposal_digest: Option<&'a str>,
     toml: &'a str,
 }
 
@@ -830,6 +845,7 @@ struct RemoteHistoryResponse {
 #[serde(rename_all = "camelCase")]
 struct RemotePublicationRecord {
     base_revision: String,
+    base_source_digest: Option<String>,
     configuration_toml: String,
     proposal_digest: String,
     published_at_unix_ms: i64,
@@ -882,7 +898,7 @@ mod tests {
         thread::{self, JoinHandle},
     };
 
-    use axum::extract::State;
+    use axum::extract::{Query, State};
     use lenso_agent_host::{AgentHost, WebSurface};
     use lenso_app_plan::authoring::{
         HostCatalog, HostDefaultPlugin, HostPluginRelease, HostSlot, PluginDescriptor,
@@ -1358,14 +1374,17 @@ mod tests {
                 let mut observed_switch = false;
                 tokio::time::timeout(Duration::from_secs(8), async {
                     loop {
-                        let inventory = crate::plugin_inventory(State(surface.runtime.clone()))
-                            .await
-                            .unwrap()
-                            .0;
+                        let inventory = crate::plugin_control::plugin_inventory(
+                            State(surface.runtime.clone()),
+                            Query(crate::plugin_control::PluginInventoryQuery::default()),
+                        )
+                        .await
+                        .unwrap()
+                        .0;
                         observed_switch |= inventory
-                            .generation_events
+                            .events
                             .iter()
-                            .any(|event| event.status == "switched");
+                            .any(|event| event.status() == "switched");
                         if inventory.applied_revision.as_deref() == Some(revision.as_str()) {
                             assert_eq!(
                                 inventory.desired_revision.as_deref(),
