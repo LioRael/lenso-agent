@@ -10,19 +10,21 @@
   behavior remain valid.
 - **Required Capabilities:** one `lenso.agent@3`; many
   `lenso.agent.tui-contribution@1`; many
-  `lenso.agent.tui-suggestion@1`.
+  `lenso.agent.tui-suggestion@1`; many optional
+  `lenso.agent.task-supervisor@2`.
 - **Provided Capabilities:** none. It is a user-facing consumer and does not
   invent a Provider solely for source-first metadata generation.
 - **Configuration and state:** empty immutable configuration. Input,
-  transcript rendering, selected panel, and active stream are volatile. The
-  durable Session remains owned by the Session Plugin.
+  transcript rendering, selected panel, active stream, and the one-second task
+  snapshot projection are volatile. The durable Session remains owned by the
+  Session Plugin; task lifecycle remains owned by the subagent Plugin.
 - **Lifecycle:** the Host opens terminal raw mode only after App readiness and
   successful Contribution snapshot validation. Drop restores terminal state.
 - **Final authorization:** none. Turn Tool authority is only narrowed through
   the existing invocation scope; target Tool Plugins retain final authority.
 - **First observable behavior:** running `lenso-agent` without arguments opens
   the conversation, accepts one prompt, streams the Agent response, and shows
-  selected semantic panels.
+  selected semantic panels, including a compact read-only Tasks panel.
 
 ## TUI Suggestion Plugins
 

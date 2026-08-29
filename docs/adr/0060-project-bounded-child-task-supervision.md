@@ -18,7 +18,7 @@ yet emitted a child Session fact.
 ## Decision
 
 `lenso.agent.subagent-tools` remains the sole task-fact owner and additionally
-provides the native request Capability `lenso.agent.task-supervisor@1` with one
+provides the native request Capability `lenso.agent.task-supervisor@2` with one
 `snapshot` operation. A snapshot returns at most 64 tasks in stable task-ID
 order. Each task contains:
 
@@ -26,6 +26,8 @@ order. Each task contains:
 - the parent Session, Turn, and Tool-call owner;
 - lifecycle status and observed child Session;
 - immutable Generation Spec digest and absolute Workspace identity; and
+- optional live progress with monotonic message, text-delta, and Tool-call
+  counters plus content bounded to 4 KiB and an explicit truncation flag; and
 - an optional terminal result with content bounded to 16 KiB, an explicit
   truncation flag, and a stable reason code when applicable.
 
@@ -53,7 +55,8 @@ consumes a terminal result and releases the task slot.
 ## Proof
 
 Contract generation and freshness checks cover the Descriptor, Schemas, and
-Rust runtime projection. Unit tests cover running, cancellation, terminal
-projection, provenance validation, and result truncation. Headless integration
+Rust runtime projection. Unit tests cover running, bounded progress,
+cancellation, terminal projection, provenance validation, and result
+truncation. Headless integration
 proves parent ownership, Generation, Workspace, child Session, and terminal
 result flow through the real Agent Loop and Tool Provider path.

@@ -12,11 +12,11 @@
   and a readiness-pinned Git executable. It has no arbitrary Process or shell
   authority.
 - **Model-visible Tools:** `list_worktrees`, `review_worktree`, and
-  `integrate_worktree`.
+  `integrate_worktree`. Review content includes the exact commit and diff digest
+  required by integration, so the model does not depend on transport metadata.
 - **Failure boundary:** invalid source identity, duplicate task, capacity,
   unavailable Git, dirty checkout, changed review, dirty parent, conflict,
   timeout, cancellation, and output overflow all fail closed.
 - **Removal:** removing the Plugin removes mutation-child allocation and the
   three parent Tools from the next immutable Generation. It does not delete
   retained branches or worktree files implicitly.
-

@@ -2819,22 +2819,97 @@ async fn append_events(
     clients: &AgentLoop,
     context: &InvocationContext,
     session_id: &str,
-    expected_revision: String,
+    mut expected_revision: String,
     events: Vec<AppendSessionRequestEventsItem>,
 ) -> Result<String, TurnFailure> {
-    clients
+    for _ in 0..32 {
+        match clients
+            .session
+            .append_with_context(
+                context.clone(),
+                AppendSessionRequest {
+                    session_id: session_id.to_owned(),
+                    expected_revision: expected_revision.clone(),
+                    events: events.clone(),
+                },
+            )
+            .await
+        {
+            Ok(response) => return Ok(response.revision),
+            Err(SessionAppendInvocationError::Domain(AppendError::RevisionConflict {
+                payload,
+            })) if only_background_process_terminals(
+                clients,
+                context,
+                session_id,
+                &expected_revision,
+                &payload.current_revision,
+            )
+            .await? =>
+            {
+                expected_revision = payload.current_revision;
+            }
+            Err(error) => return Err(map_session_append_error(error)),
+        }
+    }
+    Err(PluginError::runtime(RuntimeFailure::ResourceExhausted {
+        capability: session_capability::CAPABILITY_ID,
+        operation: "append background-process reconciliation".to_owned(),
+    }))
+}
+
+async fn only_background_process_terminals(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    previous_revision: &str,
+    current_revision: &str,
+) -> Result<bool, TurnFailure> {
+    let previous = previous_revision.parse::<u64>().map_err(|_| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session returned an invalid previous revision".to_owned(),
+        })
+    })?;
+    let current = current_revision.parse::<u64>().map_err(|_| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session returned an invalid current revision".to_owned(),
+        })
+    })?;
+    let Some(delta) = current.checked_sub(previous) else {
+        return Ok(false);
+    };
+    if delta == 0 || delta > 64 {
+        return Ok(false);
+    }
+    let response = clients
         .session
-        .append_with_context(
+        .read_with_context(
             context.clone(),
-            AppendSessionRequest {
+            ReadSessionRequest {
                 session_id: session_id.to_owned(),
-                expected_revision,
-                events,
+                after_revision: previous_revision.to_owned(),
+                limit: i64::try_from(delta).map_err(|_| {
+                    PluginError::runtime(RuntimeFailure::Internal {
+                        detail: "Session revision delta conversion failed".to_owned(),
+                    })
+                })?,
             },
         )
         .await
-        .map(|response| response.revision)
-        .map_err(map_session_append_error)
+        .map_err(map_session_read_error)?;
+    Ok(
+        response.events.len() == usize::try_from(delta).unwrap_or(usize::MAX)
+            && response.events.iter().all(|event| {
+                event.kind == ReadSessionResponseEventsItemKind::ToolResult
+                    && serde_json::from_str::<serde_json::Value>(event.payload_json.as_str())
+                        .is_ok_and(|payload| {
+                            payload["name"] == "background_process"
+                                && payload["call_id"]
+                                    .as_str()
+                                    .is_some_and(|value| value.starts_with("background-process:"))
+                        })
+            }),
+    )
 }
 
 fn session_event(

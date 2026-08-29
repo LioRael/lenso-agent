@@ -25,6 +25,7 @@ lenso-agent-tui-command-suggestions-plugin = { path = "../../crates/lenso-agent-
 lenso-agent-tui-workspace-suggestions-plugin = { path = "../../crates/lenso-agent-tui-workspace-suggestions-plugin" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-context-source = { path = "../../crates/lenso-capability-agent-context-source" }
+lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-tool-progress = { path = "../../crates/lenso-capability-agent-tool-progress" }
 lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
 lenso-capability-agent-tui-suggestion = { path = "../../crates/lenso-capability-agent-tui-suggestion" }

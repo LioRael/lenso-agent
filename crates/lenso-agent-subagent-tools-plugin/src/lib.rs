@@ -17,8 +17,8 @@ use lenso_capability_agent::{
 };
 use lenso_capability_agent_task_supervisor::{
     self as task_supervisor_contract, SnapshotRequest as SupervisorSnapshotRequest,
-    SnapshotResponse as SupervisorSnapshotResponse, TaskOwner, TaskSnapshot, TaskStatus,
-    TerminalResult,
+    SnapshotResponse as SupervisorSnapshotResponse, TaskOwner, TaskProgress, TaskSnapshot,
+    TaskStatus, TerminalResult,
 };
 use lenso_capability_agent_tool_provider::{
     self as tool_provider_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
@@ -51,7 +51,9 @@ const RESULT_METADATA_SCHEMA: &str = "lenso.agent.subagent-result@1";
 const TASK_METADATA_SCHEMA: &str = "lenso.agent.subagent-task@1";
 const TASK_LIST_METADATA_SCHEMA: &str = "lenso.agent.task-supervisor-snapshot@1";
 const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
+const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
 const MAX_SUPERVISOR_RESULT_BYTES: usize = 16_384;
+const MAX_SUPERVISOR_PROGRESS_BYTES: usize = 4_096;
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -738,6 +740,7 @@ struct SubagentTask {
     cancel_requested: bool,
     cancellation: Option<CancellationToken>,
     stream: Option<Rc<NativeStream<agent_contract::Agent>>>,
+    progress: Option<TaskProgress>,
     terminal: Option<SubagentTaskTerminal>,
     waiters: Vec<Waker>,
 }
@@ -810,6 +813,7 @@ impl SubagentTask {
             cancel_requested: false,
             cancellation: None,
             stream: None,
+            progress: None,
             terminal: None,
             waiters: Vec::new(),
         }
@@ -836,6 +840,10 @@ impl SubagentTask {
                 waiter.wake();
             }
         }
+    }
+
+    fn observe_progress(&mut self, progress: &ChildRunProgress) {
+        self.progress = Some(progress.task_progress());
     }
 
     fn complete(&mut self, outcome: Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>) {
@@ -888,6 +896,7 @@ impl SubagentTask {
             child_session_id: Some(self.child_session_id.clone()),
             generation_spec_digest: self.provenance.generation_spec_digest.clone(),
             workspace: self.provenance.workspace.clone(),
+            progress: Some(self.progress.clone()),
             terminal_result: Some(self.terminal_result(task_id)),
         }
     }
@@ -934,10 +943,14 @@ fn valid_owner_part(value: &str) -> bool {
 }
 
 fn bounded_supervisor_result(value: &str) -> (String, bool) {
-    if value.len() <= MAX_SUPERVISOR_RESULT_BYTES {
+    bounded_utf8(value, MAX_SUPERVISOR_RESULT_BYTES)
+}
+
+fn bounded_utf8(value: &str, max_bytes: usize) -> (String, bool) {
+    if value.len() <= max_bytes {
         return (value.to_owned(), false);
     }
-    let mut boundary = MAX_SUPERVISOR_RESULT_BYTES;
+    let mut boundary = max_bytes;
     while !value.is_char_boundary(boundary) {
         boundary -= 1;
     }
@@ -995,7 +1008,7 @@ fn detached_child_context(
     for extension in parent.extensions() {
         if matches!(
             extension.key(),
-            TOOL_TASK_OWNER_EXTENSION | WORKSPACE_SCOPE_EXTENSION
+            TOOL_TASK_OWNER_EXTENSION | WORKSPACE_SCOPE_EXTENSION | RUN_SCOPE_EXTENSION
         ) {
             continue;
         }
@@ -1251,10 +1264,12 @@ async fn execute_delegation(
                 {
                     return Ok(Err(error));
                 }
-                if let Some(background_task) = &execution.background
-                    && let Some(session_id) = progress.child_session_id.as_deref()
-                {
-                    background_task.borrow_mut().observe_session(session_id);
+                if let Some(background_task) = &execution.background {
+                    let mut task = background_task.borrow_mut();
+                    if let Some(session_id) = progress.child_session_id.as_deref() {
+                        task.observe_session(session_id);
+                    }
+                    task.observe_progress(&progress);
                 }
             }
             StreamEvent::PeerHalfClosed => {}
@@ -1391,6 +1406,19 @@ struct ChildRunProgress {
 }
 
 impl ChildRunProgress {
+    fn task_progress(&self) -> TaskProgress {
+        let (content, content_truncated) =
+            bounded_utf8(&self.output, MAX_SUPERVISOR_PROGRESS_BYTES);
+        TaskProgress {
+            revision: bounded_i64(self.message_count),
+            message_count: bounded_i64(self.message_count),
+            text_delta_count: bounded_i64(self.text_delta_count),
+            tool_call_count: bounded_i64(self.tool_call_count),
+            content,
+            content_truncated: content_truncated || self.output_limit_exceeded,
+        }
+    }
+
     fn observe_message(
         &mut self,
         message: &agent_contract::RunTurnResponse,
@@ -1464,6 +1492,10 @@ impl ChildRunProgress {
             "task_id": self.task_id,
         })
     }
+}
+
+fn bounded_i64(value: u64) -> i64 {
+    i64::try_from(value).unwrap_or(i64::MAX)
 }
 
 fn map_agent_error(
@@ -1611,9 +1643,24 @@ mod tests {
         assert_eq!(running.owner.session_id, "parent-session");
         assert_eq!(running.generation_spec_digest, test_generation_digest());
         assert_eq!(running.workspace, "/workspace");
+        assert_eq!(running.progress, Some(None));
         assert_eq!(running.terminal_result, Some(None));
 
         task.observe_session("session-1");
+        task.observe_progress(&ChildRunProgress {
+            message_count: 3,
+            output: "worker is checking tests".to_owned(),
+            text_delta_count: 1,
+            tool_call_count: 2,
+            ..ChildRunProgress::default()
+        });
+        let progress = task.snapshot("task-1").progress.unwrap().unwrap();
+        assert_eq!(progress.revision, 3);
+        assert_eq!(progress.message_count, 3);
+        assert_eq!(progress.text_delta_count, 1);
+        assert_eq!(progress.tool_call_count, 2);
+        assert_eq!(progress.content, "worker is checking tests");
+        assert!(!progress.content_truncated);
         assert_eq!(
             task.snapshot("task-1")
                 .child_session_id
@@ -1671,6 +1718,11 @@ mod tests {
                 b"sha256:test".to_vec(),
             )
             .unwrap()
+            .with_extension(
+                RUN_SCOPE_EXTENSION,
+                br#"{"allowed_tools":["root_only"]}"#.to_vec(),
+            )
+            .unwrap()
             .with_typed_extension(&ToolTaskOwner {
                 session_id: "parent-session".to_owned(),
                 turn_id: "parent-turn".to_owned(),
@@ -1687,6 +1739,7 @@ mod tests {
             child.extension("lenso.app.generation-spec-digest@1"),
             Some(b"sha256:test".as_slice())
         );
+        assert_eq!(child.extension(RUN_SCOPE_EXTENSION), None);
         assert!(child.typed_extension::<ToolTaskOwner>().unwrap().is_none());
     }
 

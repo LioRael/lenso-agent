@@ -63,3 +63,6 @@
 - [0061 — Abstract Plugin configuration authority](0061-abstract-plugin-configuration-authority.md)
 - [0062 — Compose isolated child worktrees](0062-compose-isolated-child-worktrees.md)
 - [0063 — Persist managed Plugin configuration publications](0063-persist-managed-plugin-configuration-publications.md)
+- [0064 — Compose bounded background process handles](0064-compose-background-process-handles.md)
+- [0065 — Render task supervision through read-only surfaces](0065-render-task-supervision-through-read-only-surfaces.md)
+- [0066 — Accept parallel coding supervision end to end](0066-accept-parallel-coding-supervision-end-to-end.md)
