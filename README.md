@@ -10,6 +10,8 @@ Agent Home:
 
 ```text
 ~/.lenso/agent/
+  .lenso/
+    host-catalog.json
   plugins/
   profiles/
   runtime/
@@ -500,6 +502,8 @@ lenso plugins enable lenso.agent.workspace-edit
 The visible state is ordinary files below `~/.lenso/agent/`:
 
 ```text
+.lenso/
+  host-catalog.json         # generated read-only Host authority
 plugins/
   lenso.agent.workspace-edit/
     default.toml
