@@ -170,6 +170,22 @@ fn plan_without_prompt_plugins(root: &Path) -> std::path::PathBuf {
     path
 }
 
+fn plan_without_session_presentation(root: &Path) -> std::path::PathBuf {
+    let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path(root)).unwrap())
+        .expect("decode canonical Plan");
+    plan["plugin_instances"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|plugin| plugin["instance_key"] != "lenso.agent.session-presentation/presentation");
+    plan["capability_bindings"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|binding| binding["capability_id"] != "lenso.agent.session-presentation@1");
+    let path = root.join("plan-without-session-presentation.json");
+    fs::write(&path, serde_json::to_vec(&plan).unwrap()).unwrap();
+    path
+}
+
 fn plan_with_filesystem_skill(root: &Path, skill_root: &Path) -> std::path::PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(&fs::read(plan_path(root)).unwrap())
         .expect("decode canonical Plan");
@@ -322,6 +338,24 @@ fn headless_turn_uses_tool_and_resumes_durable_session_after_restart() {
             .filter(|event| event["kind"] == "system_instruction_installed")
             .count(),
         1
+    );
+    let presentations = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "turn_completed")
+        .map(|event| {
+            serde_json::from_str::<serde_json::Value>(event["payload_json"].as_str().unwrap())
+                .unwrap()["presentation"]
+                .clone()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(presentations.len(), 2);
+    assert_eq!(presentations[0]["title"], "Summarize the README.");
+    assert_eq!(presentations[1]["title"], "Summarize the README.");
+    assert_eq!(
+        presentations[1]["latest_preview"],
+        "Previous answer: README summary: # Durable Fixture"
     );
 }
 
@@ -1373,6 +1407,146 @@ fn removing_all_optional_prompt_providers_keeps_the_required_base_instruction() 
         serde_json::from_str(installed["payload_json"].as_str().unwrap()).unwrap();
     assert_eq!(payload["contributions"].as_array().unwrap().len(), 1);
     assert_eq!(payload["contributions"][0]["id"], "harness.base");
+}
+
+#[test]
+fn removing_session_presentation_keeps_turn_execution_valid() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
+    let plan = plan_without_session_presentation(temporary.path());
+    let output = run(temporary.path(), &plan, "Answer directly: hello", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
+    let session = stored_session(temporary.path());
+    let completed = session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "turn_completed")
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(completed["payload_json"].as_str().unwrap()).unwrap();
+    assert!(payload.get("presentation").is_none());
+}
+
+#[test]
+fn profile_can_select_model_backed_session_title_and_preview() {
+    let temporary = tempfile::tempdir().unwrap();
+    configure_fixture_app(temporary.path());
+    fs::write(
+        temporary
+            .path()
+            .join("plugins/lenso.agent.model.fixture/model.toml"),
+        "model = \"fixture/readme-summary-v1\"\nallowed_models = [\"fixture/session-presentation-v1\"]\n",
+    )
+    .unwrap();
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.session-presentation.model",
+        "model = \"fixture/session-presentation-v1\"\n",
+    );
+    fs::create_dir_all(temporary.path().join("profiles")).unwrap();
+    fs::write(
+        temporary.path().join("profiles/semantic.toml"),
+        r#"description = "Semantic Session presentation"
+instances = [
+  "lenso.agent.model.fixture/model",
+  "lenso.agent.session-presentation.model/default",
+]
+"#,
+    )
+    .unwrap();
+
+    let output = command(temporary.path())
+        .args([
+            "--profile",
+            "semantic",
+            "--prompt",
+            "Answer directly: semantic presentation",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
+
+    let session = stored_session(temporary.path());
+    let completed = session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "turn_completed")
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(completed["payload_json"].as_str().unwrap()).unwrap();
+    assert_eq!(payload["presentation"]["title"], "Model-generated title");
+    assert_eq!(
+        payload["presentation"]["latest_preview"],
+        "Model preview: Direct answer."
+    );
+}
+
+#[test]
+fn rejected_presentation_model_does_not_fail_the_completed_turn() {
+    let temporary = tempfile::tempdir().unwrap();
+    configure_fixture_app(temporary.path());
+    configure_plugin_with(
+        temporary.path(),
+        "lenso.agent.session-presentation.model",
+        r#"model = "fixture/unsupported"
+instruction = "Create concise Session display metadata."
+temperature = 0.0
+max_output_tokens = 256
+max_input_characters = 524288
+max_title_characters = 80
+max_preview_characters = 240
+"#,
+    );
+    fs::create_dir_all(temporary.path().join("profiles")).unwrap();
+    fs::write(
+        temporary.path().join("profiles/rejected-presentation.toml"),
+        r#"description = "Rejected presentation model"
+instances = [
+  "lenso.agent.model.fixture/model",
+  "lenso.agent.session-presentation.model/default",
+]
+"#,
+    )
+    .unwrap();
+
+    let output = command(temporary.path())
+        .args([
+            "--profile",
+            "rejected-presentation",
+            "--prompt",
+            "Answer directly: presentation failure",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
+
+    let session = stored_session(temporary.path());
+    let completed = session["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "turn_completed")
+        .unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(completed["payload_json"].as_str().unwrap()).unwrap();
+    assert!(payload.get("presentation").is_none());
 }
 
 #[test]

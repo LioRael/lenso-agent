@@ -25,6 +25,10 @@ pub struct InspectedSessionEvent {
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct InspectedSession {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub title_revision: u64,
     pub session_id: String,
     pub revision: u64,
     pub events: Vec<InspectedSessionEvent>,
@@ -129,6 +133,12 @@ pub fn inspect_turn_started(
 pub fn validate_session(session: &InspectedSession) -> Result<(), String> {
     if !valid_session_id(&session.session_id)
         || session.revision != u64::try_from(session.events.len()).unwrap_or(u64::MAX)
+        || session.title_revision == 0 && session.title.is_some()
+        || session.title_revision > 0
+            && session
+                .title
+                .as_deref()
+                .is_none_or(|title| normalize_title(title).as_deref() != Some(title))
     {
         return Err("Session identity or revision is invalid".to_owned());
     }
@@ -150,6 +160,11 @@ pub fn validate_session(session: &InspectedSession) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn normalize_title(title: &str) -> Option<String> {
+    let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!title.is_empty() && title.chars().count() <= 256).then_some(title)
 }
 
 pub fn valid_session_id(session_id: &str) -> bool {
@@ -201,6 +216,8 @@ mod tests {
 
     fn session() -> InspectedSession {
         InspectedSession {
+            title: None,
+            title_revision: 0,
             session_id: "session-1".to_owned(),
             revision: 1,
             events: vec![InspectedSessionEvent {

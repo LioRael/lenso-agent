@@ -1,6 +1,6 @@
 {
   "id": "lenso.agent.session@1",
-  "version": "1.4.0",
+  "version": "1.6.0",
   "portable": true,
   "cross_lane_transfer": false,
   "operations": [
@@ -31,6 +31,13 @@
       "request_schema": "schemas/append-request.schema.json",
       "response_schema": "schemas/append-response.schema.json",
       "domain_error_schema": "schemas/append-error.schema.json"
+    },
+    {
+      "name": "rename",
+      "interaction": "request",
+      "request_schema": "schemas/rename-request.schema.json",
+      "response_schema": "schemas/rename-response.schema.json",
+      "domain_error_schema": "schemas/rename-error.schema.json"
     }
   ]
 }

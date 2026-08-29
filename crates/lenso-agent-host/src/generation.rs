@@ -38,10 +38,12 @@ use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::{
     APPEND_OPERATION, AppendSessionRequest, AppendSessionRequestEventsItem,
     AppendSessionRequestEventsItemKind, LIST_OPERATION, ListSessionsRequest, ListSessionsResponse,
-    OPEN_OPERATION, OpenSessionRequest, READ_OPERATION, ReadSessionRequest, ReadSessionResponse,
-    ReadSessionResponseEventsItemKind, SessionAppend, SessionJsonCodec, SessionList, SessionOpen,
-    SessionRead,
+    OPEN_OPERATION, OpenSessionRequest, READ_OPERATION, RENAME_OPERATION, ReadSessionRequest,
+    ReadSessionResponse, ReadSessionResponseEventsItemKind, RenameError, RenameSessionRequest,
+    RenameSessionResponse, SessionAppend, SessionJsonCodec, SessionList, SessionOpen, SessionRead,
+    SessionRename,
 };
+use lenso_capability_agent_session_presentation::SessionPresentationJsonCodec;
 use lenso_capability_agent_tool_hook::ToolHookJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::{
@@ -377,6 +379,12 @@ pub struct AgentApp {
     generation_gc_lease: Option<crate::authority::AuthorityFence>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum RenameSessionFailure {
+    Domain(RenameError),
+    Runtime(String),
+}
+
 impl AgentApp {
     pub(crate) async fn start_with_store_control_directory_profile_and_host_build(
         plan_bytes: &[u8],
@@ -709,6 +717,7 @@ impl AgentApp {
             None
         };
         Ok(TurnGeneration {
+            consumer_instance: consumer_instance.to_owned(),
             route,
             handle,
             interaction,
@@ -1298,6 +1307,7 @@ fn validate_tui_suggestions(suggestions: &[Suggestion]) -> Result<(), String> {
 
 #[derive(Debug)]
 pub struct TurnGeneration {
+    consumer_instance: String,
     route: DurableGenerationRoute<NativeApp>,
     handle: Rc<NativeStreamHandle<Agent>>,
     interaction: Option<UserInteractionSurfaceHandles>,
@@ -1423,7 +1433,7 @@ impl TurnGeneration {
         let handle = self
             .route
             .target()
-            .handle::<SessionRead>("lenso.agent.web/web")
+            .handle::<SessionRead>(&self.consumer_instance)
             .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?;
         handle
             .invoke_with_context(
@@ -1445,7 +1455,7 @@ impl TurnGeneration {
         let handle = self
             .route
             .target()
-            .handle::<SessionList>("lenso.agent.web/web")
+            .handle::<SessionList>(&self.consumer_instance)
             .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?;
         handle
             .invoke_with_context(
@@ -1458,11 +1468,45 @@ impl TurnGeneration {
             .map_err(|error| format!("Session list was rejected: {error:?}"))
     }
 
+    /// Replaces the user-owned Session title without changing the event-log revision.
+    pub async fn rename_session(
+        &self,
+        session_id: String,
+        title: String,
+        expected_title_revision: String,
+    ) -> Result<RenameSessionResponse, RenameSessionFailure> {
+        let handle = self
+            .route
+            .target()
+            .handle::<SessionRename>(&self.consumer_instance)
+            .map_err(|error| {
+                RenameSessionFailure::Runtime(format!(
+                    "leased Generation has no Session route: {error:?}"
+                ))
+            })?;
+        handle
+            .invoke_with_context(
+                RENAME_OPERATION,
+                self.invocation_context()
+                    .map_err(RenameSessionFailure::Runtime)?,
+                RenameSessionRequest {
+                    expected_title_revision,
+                    session_id,
+                    title,
+                },
+            )
+            .await
+            .map_err(|error| {
+                RenameSessionFailure::Runtime(format!("Session rename failed: {error:?}"))
+            })?
+            .map_err(RenameSessionFailure::Domain)
+    }
+
     /// Opens one durable Session through the selected Session Plugin.
     pub async fn open_session(&self) -> Result<String, String> {
         self.route
             .target()
-            .handle::<SessionOpen>("lenso.agent.web/web")
+            .handle::<SessionOpen>(&self.consumer_instance)
             .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?
             .invoke_with_context(
                 OPEN_OPERATION,
@@ -1517,7 +1561,7 @@ impl TurnGeneration {
         if !prefix.is_empty() {
             self.route
                 .target()
-                .handle::<SessionAppend>("lenso.agent.web/web")
+                .handle::<SessionAppend>(&self.consumer_instance)
                 .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?
                 .invoke_with_context(
                     APPEND_OPERATION,
@@ -1964,6 +2008,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::one("root-tools-runtime"),
         HostSlot::optional("secrets"),
         HostSlot::one("session").replaceable(),
+        HostSlot::optional("session-presentation").replaceable(),
         HostSlot::one("restricted-tools-runtime"),
         HostSlot::many("tui-contributions"),
         HostSlot::many("tui-suggestions"),
@@ -1980,6 +2025,7 @@ fn host_catalog_defaults(directories: &AgentDirectories) -> Vec<HostDefaultPlugi
         HostDefaultPlugin::new("lenso.agent.discord", "discord"),
         default_context_compaction_plugin(),
         default_memory_plugin(directories),
+        default_session_presentation_plugin(),
         default_plugin(
             "lenso.agent.http-fetch",
             "http-fetch",
@@ -2041,7 +2087,8 @@ fn host_catalog_defaults(directories: &AgentDirectories) -> Vec<HostDefaultPlugi
                 "commands": [
                     {"id": "agent.command.help", "label": "/help", "insert_text": "/help", "description": "Show keyboard shortcuts"},
                     {"id": "agent.command.clear", "label": "/clear", "insert_text": "/clear", "description": "Clear the visible conversation"},
-                    {"id": "agent.command.new", "label": "/new", "insert_text": "/new", "description": "Start a new session"}
+                    {"id": "agent.command.new", "label": "/new", "insert_text": "/new", "description": "Start a new session"},
+                    {"id": "agent.command.rename", "label": "/rename", "insert_text": "/rename ", "description": "Rename the current session"}
                 ]
             }),
         ),
@@ -2094,6 +2141,18 @@ fn default_memory_plugin(directories: &AgentDirectories) -> HostDefaultPlugin {
             "max_item_characters": 16_384,
             "max_recall_items": 8,
             "max_recall_characters": 16_384
+        }),
+    )
+}
+
+fn default_session_presentation_plugin() -> HostDefaultPlugin {
+    default_plugin(
+        "lenso.agent.session-presentation",
+        "presentation",
+        serde_json::json!({
+            "max_input_characters": 524_288,
+            "max_title_characters": 80,
+            "max_preview_characters": 240
         }),
     )
 }
@@ -2180,6 +2239,18 @@ fn default_skills_plugin() -> HostDefaultPlugin {
 fn host_catalog_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
     let mut configurations = local_tool_configurations(directories);
     configurations.extend(model_and_auth_configurations(directories));
+    configurations.push(host_plugin_configuration(
+        "lenso.agent.session-presentation.model",
+        serde_json::json!({
+            "model": DEFAULT_MODEL,
+            "instruction": "Create concise Session display metadata grounded only in the completed Turn.",
+            "temperature": 0.0,
+            "max_output_tokens": 256,
+            "max_input_characters": 524_288,
+            "max_title_characters": 80,
+            "max_preview_characters": 240
+        }),
+    ));
     configurations
 }
 
@@ -2406,6 +2477,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(ModelJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)
+        .with_wasm_codec(SessionPresentationJsonCodec)
         .with_wasm_codec(ToolHookJsonCodec)
         .with_wasm_codec(ToolProviderJsonCodec)
         .with_wasm_codec(ToolsJsonCodec)
@@ -2486,6 +2558,7 @@ mod tests {
         assert!(instances.contains("lenso.agent.model.openai-codex-direct/model"));
         assert!(instances.contains("lenso.agent.context-compaction/context-compactor"));
         assert!(instances.contains("lenso.agent.memory.sqlite/memory"));
+        assert!(instances.contains("lenso.agent.session-presentation/presentation"));
         assert!(instances.contains("lenso.agent.skills.filesystem/skills"));
         assert!(!instances.contains("lenso.agent.model.fixture/model"));
         assert!(
@@ -2507,10 +2580,112 @@ mod tests {
                 .iter()
                 .any(|binding| {
                     binding["consumer_instance"] == "lenso.agent.loop/agent"
+                        && binding["provider_instance"]
+                            == "lenso.agent.session-presentation/presentation"
+                        && binding["capability_id"] == "lenso.agent.session-presentation@1"
+                })
+        );
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.loop/agent"
                         && binding["provider_instance"] == "lenso.agent.memory.sqlite/memory"
                         && binding["capability_id"] == "lenso.agent.memory@1"
                 })
         );
+    }
+
+    #[test]
+    fn optional_session_presentation_can_be_removed_without_changing_the_agent_loop() {
+        let directories = AgentDirectories::resolve().unwrap();
+        let registry = NativePluginRegistry::new().with_linked_factories();
+        let available = registry
+            .factories()
+            .map(|factory| factory.package_id().to_owned())
+            .collect::<BTreeSet<_>>();
+        let defaults = host_catalog_defaults(&directories)
+            .into_iter()
+            .filter(|plugin| plugin.id().plugin_id() != "lenso.agent.session-presentation")
+            .filter(|plugin| available.contains(plugin.id().plugin_id()))
+            .collect::<Vec<_>>();
+        let configurations = host_catalog_configurations(&directories)
+            .into_iter()
+            .filter(|configuration| available.contains(configuration.id().plugin_id()))
+            .collect::<Vec<_>>();
+        let root_agent = PluginInstanceId::new("lenso.agent.loop", "agent");
+        let catalog = NativePluginRegistry::host_catalog(host_catalog_slots(), defaults)
+            .unwrap()
+            .with_configurations(configurations)
+            .with_bindings(host_catalog_bindings(&root_agent, &available));
+        let app = resolve_plugin_root(&catalog, &PluginRootSnapshot::default()).unwrap();
+        let plan = app.plan();
+
+        assert!(plan.plugin_instances().iter().all(|plugin| {
+            plugin.instance_key() != "lenso.agent.session-presentation/presentation"
+        }));
+        let plan_json = serde_json::to_value(plan).unwrap();
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|binding| binding["capability_id"] != "lenso.agent.session-presentation@1")
+        );
+    }
+
+    #[test]
+    fn profile_configuration_can_replace_local_presentation_with_model_projection() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.model.fixture",
+                    "model",
+                )
+                .with_configuration(serde_json::json!({
+                    "model": "fixture/readme-summary-v1",
+                    "allowed_models": ["fixture/session-presentation-v1"]
+                })),
+                lenso_app_plan::authoring::PluginRootInstance::new(
+                    "lenso.agent.session-presentation.model",
+                    "semantic",
+                )
+                .with_configuration(serde_json::json!({
+                    "model": "fixture/session-presentation-v1",
+                    "instruction": "Create concise Session display metadata.",
+                    "temperature": 0.0,
+                    "max_output_tokens": 256,
+                    "max_input_characters": 524_288,
+                    "max_title_characters": 80,
+                    "max_preview_characters": 240
+                })),
+            ],
+            [],
+        );
+        let plan = resolve_host_plan(&root).unwrap();
+        let instances = plan
+            .plugin_instances()
+            .iter()
+            .map(lenso_app_plan::PluginInstancePlan::instance_key)
+            .collect::<BTreeSet<_>>();
+        assert!(instances.contains("lenso.agent.session-presentation.model/semantic"));
+        assert!(!instances.contains("lenso.agent.session-presentation/presentation"));
+
+        let plan_json = serde_json::to_value(&plan).unwrap();
+        let bindings = plan_json["capability_bindings"].as_array().unwrap();
+        assert!(bindings.iter().any(|binding| {
+            binding["consumer_instance"] == "lenso.agent.session-presentation.model/semantic"
+                && binding["provider_instance"] == "lenso.agent.model.fixture/model"
+                && binding["capability_id"] == "lenso.agent.model@2"
+        }));
+        assert!(bindings.iter().any(|binding| {
+            binding["consumer_instance"] == "lenso.agent.loop/agent"
+                && binding["provider_instance"] == "lenso.agent.session-presentation.model/semantic"
+                && binding["capability_id"] == "lenso.agent.session-presentation@1"
+        }));
     }
 
     #[test]

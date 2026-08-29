@@ -803,6 +803,8 @@ mod tests {
     #[test]
     fn projection_merges_model_and_tool_lifecycles_with_real_metrics() {
         let session = InspectedSession {
+            title: None,
+            title_revision: 0,
             session_id: "session-1".to_owned(),
             revision: 6,
             events: vec![
@@ -868,6 +870,8 @@ mod tests {
     #[test]
     fn projection_includes_memory_compaction_and_terminal_failures() {
         let session = InspectedSession {
+            title: None,
+            title_revision: 0,
             session_id: "session-2".to_owned(),
             revision: 7,
             events: vec![
@@ -942,6 +946,8 @@ mod tests {
     #[test]
     fn projection_closes_legacy_tool_steps_and_pairs_unscoped_model_output() {
         let session = InspectedSession {
+            title: None,
+            title_revision: 0,
             session_id: "session-legacy".to_owned(),
             revision: 7,
             events: vec![

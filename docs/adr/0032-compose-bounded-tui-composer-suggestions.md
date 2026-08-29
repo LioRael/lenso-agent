@@ -22,7 +22,7 @@ terminal mode, rejects duplicate IDs and aggregate limit violations, and then
 filters the immutable in-memory catalog at the active composer token.
 
 The base App selects three independently removable providers. The command
-provider owns the reviewed `/help`, `/clear`, and `/new` actions. The workspace
+provider owns the reviewed `/help`, `/clear`, `/new`, and `/rename` actions. The workspace
 provider owns one startup filesystem snapshot below its configured root. It
 skips symlinks and hidden entries, supports explicit directory exclusions, and
 bounds both inspected entries and returned files. It does not watch the

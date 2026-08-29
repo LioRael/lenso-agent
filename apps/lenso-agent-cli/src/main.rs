@@ -563,9 +563,10 @@ async fn run_auth(command: &AuthCommand) -> Result<(), String> {
 }
 
 fn direct_auth_options() -> Result<DirectAuthOptions, String> {
-    let mut options = DirectAuthOptions::default();
-    options.credential_file = Some(AgentDirectories::resolve()?.auth());
-    Ok(options)
+    Ok(DirectAuthOptions {
+        credential_file: Some(AgentDirectories::resolve()?.auth()),
+        ..DirectAuthOptions::default()
+    })
 }
 
 fn open_browser(url: &str) -> Result<(), String> {

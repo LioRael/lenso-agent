@@ -132,6 +132,36 @@ lenso-agent --profile game --session <id>
 lenso-agent-cli --profile code "Review this workspace."
 ```
 
+Automatic Session titles and latest-turn previews use a deterministic local
+Plugin by default. Select the optional model-backed implementation when a
+Profile needs semantic display metadata:
+
+```toml
+# plugins/lenso.agent.session-presentation.model/semantic.toml
+model = "gpt-5.6-luna"
+instruction = "Create concise Session display metadata grounded only in the completed Turn."
+temperature = 0.0
+max_output_tokens = 256
+max_input_characters = 524288
+max_title_characters = 80
+max_preview_characters = 240
+```
+
+```toml
+# profiles/code.toml
+description = "Coding agent with semantic Session titles"
+instances = [
+  "lenso.agent.session-presentation.model/semantic",
+]
+```
+
+The model request goes through the Profile's Plan-bound Model provider, which
+must admit the configured model ID. To use a cheaper presentation model while
+the Agent keeps its primary model, add that ID to the selected Model Plugin's
+`allowed_models` array and select both configured Instances in the Profile.
+Unlisted model IDs fail closed. `/rename <title>` remains authoritative and is
+never overwritten by automatic projection.
+
 The Profile is an authoring-time selector. The resolved immutable Generation,
 including exact Plugin configurations and bindings, remains the execution and
 Session-provenance authority. Editing the selected Profile or its Plugin files

@@ -40,6 +40,9 @@ use lenso_capability_agent_session::{
     ReadSessionRequest, ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind,
     SessionAppendInvocationError, SessionOpenInvocationError, SessionReadInvocationError,
 };
+use lenso_capability_agent_session_presentation::{
+    self as presentation_capability, ProjectRequest as PresentationProjectRequest,
+};
 use lenso_capability_agent_tools::{
     self as tools_capability, CatalogRequest, ExecuteResponse, ExecuteResponseContentType,
     ExecuteStreamRequest, ExecuteStreamResponseKind, ToolsExecuteStreamInvocationError,
@@ -175,6 +178,7 @@ struct AgentLoop {
     prompt: Port<prompt_capability::PromptClient>,
     tools: Port<tools_capability::ToolsClient>,
     session: Port<session_capability::SessionClient>,
+    presentation: ManyPort<presentation_capability::SessionPresentationClient>,
     compaction: Port<compaction_capability::ContextCompactionClient>,
     memory: Port<memory_capability::MemoryClient>,
     lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
@@ -293,6 +297,7 @@ async fn run_turn(
     } else {
         read_session_tail(clients, context, &session_id, &opened.revision, config).await?
     };
+    let current_title = current_session_title(&history);
     let (mut messages, compacted_revision) = prepare_model_context(
         clients,
         config,
@@ -342,6 +347,7 @@ async fn run_turn(
         &mut revision,
         &system_instruction,
         &turn_input,
+        current_title.as_deref(),
         messages,
         run_scope.as_ref(),
         generation_spec_digest,
@@ -615,6 +621,67 @@ async fn memory_observation_event(
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct SessionPresentationPayload {
+    title: String,
+    latest_preview: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TurnCompletedPayload {
+    presentation: Option<SessionPresentationPayload>,
+}
+
+fn current_session_title(events: &[ReadSessionResponseEventsItem]) -> Option<String> {
+    events.iter().rev().find_map(|event| {
+        if event.kind != ReadSessionResponseEventsItemKind::TurnCompleted {
+            return None;
+        }
+        serde_json::from_str::<TurnCompletedPayload>(event.payload_json.as_ref())
+            .ok()
+            .and_then(|completed| completed.presentation)
+            .map(|presentation| presentation.title)
+            .filter(|title| !title.trim().is_empty() && title.chars().count() <= 256)
+    })
+}
+
+async fn session_presentation(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    turn_id: &str,
+    input: &str,
+    output: &str,
+    current_title: Option<&str>,
+) -> Option<SessionPresentationPayload> {
+    let provider = clients.presentation.first()?;
+    let response = provider
+        .project_with_context(
+            context.clone(),
+            PresentationProjectRequest {
+                assistant_output: output.to_owned(),
+                current_title: Some(current_title.map(str::to_owned)),
+                session_id: session_id.to_owned(),
+                turn_id: turn_id.to_owned(),
+                user_input: input.to_owned(),
+            },
+        )
+        .await
+        .ok()?;
+    let valid_title = !response.title.trim().is_empty()
+        && response.title.chars().count() <= 256
+        && current_title.is_none_or(|current| current == response.title);
+    let valid_preview = !response.latest_preview.trim().is_empty()
+        && response.latest_preview.chars().count() <= 1_024;
+    if !valid_title || !valid_preview {
+        return None;
+    }
+    Some(SessionPresentationPayload {
+        title: response.title,
+        latest_preview: response.latest_preview,
+    })
+}
+
 fn generation_spec_digest(context: &InvocationContext) -> Result<&str, TurnFailure> {
     let digest = context
         .extension(GENERATION_SPEC_DIGEST_EXTENSION)
@@ -645,6 +712,7 @@ async fn execute_steps(
     revision: &mut String,
     system_instruction: &InstalledSystemInstruction,
     turn_input: &str,
+    current_title: Option<&str>,
     mut messages: Vec<CompleteMessageInput>,
     run_scope: Option<&RunScope>,
     generation_spec_digest: &str,
@@ -779,6 +847,30 @@ async fn execute_steps(
                 &turn_output,
             )
             .await?;
+            let presentation = session_presentation(
+                clients,
+                context,
+                session_id,
+                turn_id,
+                turn_input,
+                &turn_output,
+                current_title,
+            )
+            .await;
+            let mut completed_payload = serde_json::json!({"output": turn_output});
+            if let Some(presentation) = presentation {
+                completed_payload
+                    .as_object_mut()
+                    .expect("Turn completion payload is an object")
+                    .insert(
+                        "presentation".to_owned(),
+                        serde_json::to_value(presentation).map_err(|error| {
+                            PluginError::runtime(RuntimeFailure::Internal {
+                                detail: format!("failed to encode Session presentation: {error}"),
+                            })
+                        })?,
+                    );
+            }
             *revision = append_events(
                 clients,
                 context,
@@ -790,7 +882,7 @@ async fn execute_steps(
                     session_event(
                         AppendSessionRequestEventsItemKind::TurnCompleted,
                         Some(turn_id),
-                        &serde_json::json!({"output": turn_output}),
+                        &completed_payload,
                     )?,
                 ],
             )
@@ -2493,15 +2585,24 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 7);
+        assert_eq!(requirements.len(), 8);
         assert!(
             requirements
                 .iter()
-                .filter(|requirement| requirement["capability_id"] != "lenso.agent.lifecycle@1")
+                .filter(|requirement| {
+                    !matches!(
+                        requirement["capability_id"].as_str(),
+                        Some("lenso.agent.lifecycle@1" | "lenso.agent.session-presentation@1")
+                    )
+                })
                 .all(|requirement| requirement["cardinality"] == "one")
         );
         assert!(requirements.iter().any(|requirement| {
             requirement["capability_id"] == "lenso.agent.lifecycle@1"
+                && requirement["cardinality"] == "many"
+        }));
+        assert!(requirements.iter().any(|requirement| {
+            requirement["capability_id"] == "lenso.agent.session-presentation@1"
                 && requirement["cardinality"] == "many"
         }));
         assert_eq!(

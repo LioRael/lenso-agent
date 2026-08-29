@@ -15,12 +15,25 @@ pub const MODEL_ID: &str = "fixture/readme-summary-v1";
 #[serde(deny_unknown_fields)]
 struct FixtureConfig {
     model: String,
+    #[serde(default)]
+    allowed_models: Vec<String>,
 }
 
 fn validate_config(config: &FixtureConfig) -> Result<(), RuntimeFailure> {
-    if config.model != MODEL_ID {
+    if config.model != MODEL_ID
+        || config.allowed_models.len() > 4
+        || config.allowed_models.iter().any(|model| {
+            model.trim() != model || model.is_empty() || model.len() > 256 || model == MODEL_ID
+        })
+        || config
+            .allowed_models
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != config.allowed_models.len()
+    {
         return Err(RuntimeFailure::InvalidResolvedPlan {
-            detail: format!("fixture Model must be `{MODEL_ID}`"),
+            detail: format!("fixture Model must be `{MODEL_ID}` with bounded auxiliary models"),
         });
     }
     Ok(())
@@ -49,11 +62,20 @@ impl ModelProvider for FixtureModel {
 }
 
 impl FixtureModel {
+    fn admits_model(&self, model: &str) -> bool {
+        model == self.config.model
+            || self
+                .config
+                .allowed_models
+                .iter()
+                .any(|allowed| allowed == model)
+    }
+
     fn complete_now(
         &self,
         request: &CompleteOpen,
     ) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
-        if request.model != self.config.model || request.max_output_tokens <= 0 {
+        if !self.admits_model(&request.model) || request.max_output_tokens <= 0 {
             return Err(ModelInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ));
@@ -155,6 +177,53 @@ impl FixtureModel {
     }
 }
 
+fn session_presentation_fixture_response(
+    request: &CompleteOpen,
+    current_user: &str,
+) -> Option<Vec<CompleteMessage>> {
+    let is_presentation = request.messages.iter().any(|message| {
+        message.role == CompleteMessageRole::System
+            && message
+                .content
+                .contains("Return exactly one JSON object and no prose or Markdown")
+    });
+    if !is_presentation {
+        return None;
+    }
+    let input = serde_json::from_str::<serde_json::Value>(current_user).ok()?;
+    let assistant_output = input["assistant_output"].as_str()?;
+    let title = input["current_title"].as_str().map_or_else(
+        || serde_json::Value::String("Model-generated title".to_owned()),
+        |_| serde_json::Value::Null,
+    );
+    let result = serde_json::json!({
+        "title": title,
+        "latest_preview": format!("Model preview: {assistant_output}"),
+    });
+    Some(vec![
+        response(
+            "1",
+            CompleteMessageKind::TextDelta,
+            result.to_string(),
+            "",
+            "",
+            "{}",
+            "0",
+            "0",
+        ),
+        response(
+            "2",
+            CompleteMessageKind::Usage,
+            "",
+            "",
+            "",
+            "{}",
+            "24",
+            "12",
+        ),
+    ])
+}
+
 fn direct_fixture_response(request: &CompleteOpen) -> Vec<CompleteMessage> {
     let has_prefix = |prefix: &str| {
         request.messages.iter().any(|message| {
@@ -171,7 +240,9 @@ fn standalone_fixture_response(
     request: &CompleteOpen,
     current_user: &str,
 ) -> Option<Vec<CompleteMessage>> {
-    if current_user.starts_with("Answer directly:") {
+    if let Some(response) = session_presentation_fixture_response(request, current_user) {
+        Some(response)
+    } else if current_user.starts_with("Answer directly:") {
         Some(direct_fixture_response(request))
     } else if current_user == "What is the capital of France?" {
         Some(sampling_fixture_response())
