@@ -1,0 +1,287 @@
+{
+  "inventory": {
+    "appliedRevision": "sha256:root-active",
+    "active": {
+      "generationSpecDigest": "sha256:generation-active",
+      "planDigest": "sha256:plan-active",
+      "pluginRootRevision": "sha256:root-active",
+      "plugins": [
+        {
+          "disableable": true,
+          "entrypoint": "native",
+          "executionClass": "lenso.native-rust@1",
+          "instanceKey": "example.echo/default",
+          "packageId": "example.echo",
+          "packageRevision": "1.0.0",
+          "providedCapabilities": [
+            "example.echo@1"
+          ],
+          "requiredCapabilities": []
+        }
+      ]
+    },
+    "configurationAuthority": {
+      "kind": "local_plugin_root",
+      "publicationHistory": false,
+      "reference": "app",
+      "rollbackProposals": false
+    },
+  "configurationStatus": "pending",
+    "cursor": "9007199254740993",
+    "desired": {
+      "desiredStateDigest": "sha256:desired-next",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "plugins": [
+        {
+          "disableable": true,
+          "entrypoint": "native",
+          "executionClass": "lenso.native-rust@1",
+          "instanceKey": "example.echo/default",
+          "packageId": "example.echo",
+          "packageRevision": "1.0.0",
+          "providedCapabilities": [
+            "example.echo@1"
+          ],
+          "requiredCapabilities": []
+        }
+      ]
+    },
+    "desiredRevision": "sha256:root-next",
+    "events": [
+      {
+        "cursor": "9007199254740992",
+        "detail": "older candidate failed after switching",
+        "generationSpecDigest": "sha256:generation-old",
+        "restoredGenerationSpecDigest": "sha256:generation-active",
+        "routingEpoch": "9007199254740994",
+        "status": "rolled_back"
+      },
+      {
+        "cursor": "9007199254740993",
+        "desiredStateDigest": "sha256:desired-next",
+        "generationSpecDigest": "sha256:generation-next",
+        "planDigest": "sha256:plan-next",
+        "pluginRootRevision": "sha256:root-next",
+        "previousGenerationSpecDigest": "sha256:generation-active",
+        "status": "preparing"
+      }
+    ],
+    "preparing": {
+      "desiredStateDigest": "sha256:desired-next",
+      "generationSpecDigest": "sha256:generation-next",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "plugins": [
+        {
+          "disableable": true,
+          "entrypoint": "native",
+          "executionClass": "lenso.native-rust@1",
+          "instanceKey": "example.echo/default",
+          "packageId": "example.echo",
+          "packageRevision": "1.0.0",
+          "providedCapabilities": [
+            "example.echo@1"
+          ],
+          "requiredCapabilities": []
+        }
+      ]
+    },
+    "schema": "lenso.agent.plugin-inventory.v2",
+    "streamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20",
+    "truncated": true
+  },
+  "mutation": {
+    "desired": null,
+    "operation": {
+      "acceptedAfterCursor": "9007199254740993",
+      "cursor": "9007199254740993",
+      "detail": "selected Profile no longer resolves",
+      "id": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b21",
+      "status": "rejected"
+    },
+    "schema": "lenso.agent.plugin-operation.v1",
+    "streamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20"
+  },
+  "operation": {
+    "operation": {
+      "acceptedAfterCursor": "9007199254740991",
+      "cursor": "9007199254740992",
+      "desiredStateDigest": "sha256:desired-next",
+      "generationSpecDigest": "sha256:generation-next",
+      "id": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b22",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "status": "preparing"
+    },
+    "schema": "lenso.agent.plugin-operation.v1",
+    "streamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20"
+  },
+  "management": {
+    "configurationAuthority": {
+      "kind": "sqlite_configuration_store",
+      "publicationHistory": true,
+      "reference": "agent",
+      "rollbackProposals": true
+    },
+    "plugins": [
+      {
+        "instances": [
+          {
+            "disableable": true,
+            "hasRootDifference": true,
+            "instanceKey": "default",
+            "origin": "host-default",
+            "rootConfigurationToml": "enabled = true\n",
+            "selection": "enabled",
+            "sourceDigest": "sha256:7505392d43ab29321a37810d9f6bd18c5d45a44c9b4dfe7c99a10acacd1dbe72"
+          }
+        ],
+        "packageId": "example.echo",
+        "packageRevision": "1.0.0",
+        "rootSupplied": false
+      }
+    ],
+    "revision": "sha256:root-next",
+    "schema": "lenso.agent.plugin-management.v1"
+  },
+  "proposal": {
+    "application": "app_generation",
+    "baseRevision": "sha256:root-active",
+    "baseSourceDigest": "sha256:6250680ceebbc342f2610f53dc5e9d7c6f0c3637b6ad1202d207733d0249dfc3",
+    "candidateRevision": "sha256:root-next",
+    "configurationAuthority": {
+      "kind": "sqlite_configuration_store",
+      "publicationHistory": true,
+      "reference": "agent",
+      "rollbackProposals": true
+    },
+    "diagnostics": [],
+    "instanceKey": "default",
+    "pluginId": "example.echo",
+    "proposalDigest": "sha256:proposal-next",
+    "schema": "lenso.plugin-configuration-proposal.v1",
+    "status": "ready"
+  },
+  "proposalRequest": {
+    "expectedRevision": "sha256:root-active",
+    "expectedSourceDigest": "sha256:6250680ceebbc342f2610f53dc5e9d7c6f0c3637b6ad1202d207733d0249dfc3",
+    "expectedStreamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20",
+    "toml": "enabled = false\n"
+  },
+  "publicationApplied": {
+    "baseRevision": "sha256:root-active",
+    "baseSourceDigest": "sha256:6250680ceebbc342f2610f53dc5e9d7c6f0c3637b6ad1202d207733d0249dfc3",
+    "configurationAuthority": {
+      "kind": "sqlite_configuration_store",
+      "publicationHistory": true,
+      "reference": "agent",
+      "rollbackProposals": true
+    },
+    "desired": {
+      "configurationStatus": "applied",
+      "desiredRevision": "sha256:root-next",
+      "desiredStateDigest": "sha256:desired-next",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "plugins": [
+        {
+          "disableable": true,
+          "entrypoint": "native",
+          "executionClass": "lenso.native-rust@1",
+          "instanceKey": "example.echo/default",
+          "packageId": "example.echo",
+          "packageRevision": "1.0.0",
+          "providedCapabilities": [
+            "example.echo@1"
+          ],
+          "requiredCapabilities": []
+        }
+      ]
+    },
+    "operation": {
+      "acceptedAfterCursor": "9007199254740994",
+      "cursor": "9007199254740994",
+      "desiredStateDigest": "sha256:desired-next",
+      "generationSpecDigest": "sha256:generation-next",
+      "id": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b23",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "status": "switched"
+    },
+    "proposalDigest": "sha256:proposal-next",
+    "publicationSchema": "lenso.plugin-configuration-publication.v1",
+    "publicationStatus": "published",
+    "revision": "sha256:root-next",
+    "schema": "lenso.agent.plugin-operation.v1",
+    "streamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20"
+  },
+  "publicationPending": {
+    "baseRevision": "sha256:root-active",
+    "baseSourceDigest": "sha256:6250680ceebbc342f2610f53dc5e9d7c6f0c3637b6ad1202d207733d0249dfc3",
+    "configurationAuthority": {
+      "kind": "sqlite_configuration_store",
+      "publicationHistory": true,
+      "reference": "agent",
+      "rollbackProposals": true
+    },
+    "desired": {
+      "configurationStatus": "pending",
+      "desiredRevision": "sha256:root-next",
+      "desiredStateDigest": "sha256:desired-next",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "plugins": [
+        {
+          "disableable": true,
+          "entrypoint": "native",
+          "executionClass": "lenso.native-rust@1",
+          "instanceKey": "example.echo/default",
+          "packageId": "example.echo",
+          "packageRevision": "1.0.0",
+          "providedCapabilities": [
+            "example.echo@1"
+          ],
+          "requiredCapabilities": []
+        }
+      ]
+    },
+    "operation": {
+      "acceptedAfterCursor": "9007199254740995",
+      "cursor": "9007199254740995",
+      "desiredStateDigest": "sha256:desired-next",
+      "generationSpecDigest": "sha256:generation-next",
+      "id": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b24",
+      "planDigest": "sha256:plan-next",
+      "pluginRootRevision": "sha256:root-next",
+      "status": "accepted"
+    },
+    "proposalDigest": "sha256:proposal-next",
+    "publicationSchema": "lenso.plugin-configuration-publication.v1",
+    "publicationStatus": "published",
+    "revision": "sha256:root-next",
+    "schema": "lenso.agent.plugin-operation.v1",
+    "streamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20"
+  },
+  "publicationRequest": {
+    "expectedRevision": "sha256:root-active",
+    "expectedSourceDigest": "sha256:6250680ceebbc342f2610f53dc5e9d7c6f0c3637b6ad1202d207733d0249dfc3",
+    "expectedStreamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20",
+    "proposalDigest": "sha256:proposal-next",
+    "toml": "enabled = false\n"
+  },
+  "rollbackPublicationRequest": {
+    "expectedRevision": "sha256:root-next",
+    "expectedSourceDigest": "sha256:source-next",
+    "expectedStreamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20",
+    "proposalDigest": "sha256:proposal-rollback",
+    "rollbackOfProposalDigest": "sha256:proposal-active",
+    "toml": "enabled = true\n"
+  },
+  "rollbackProposalRequest": {
+    "expectedRevision": "sha256:root-next",
+    "expectedSourceDigest": "sha256:source-next",
+    "expectedStreamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20",
+    "publicationProposalDigest": "sha256:proposal-active"
+  }
+}

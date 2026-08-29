@@ -86,7 +86,81 @@ fn serves_one_durable_resource_with_read_and_write_scopes() {
         .send()
         .unwrap();
     assert_eq!(hidden.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let configuration = format!(
+        "http://{address}/v1/apps/agent/environments/production/plugins/lenso.agent.loop/agent/configuration"
+    );
+    let proposal = client
+        .post(format!("{configuration}/proposals"))
+        .bearer_auth(WRITE_TOKEN)
+        .json(&serde_json::json!({
+            "expectedRevision": body["revision"],
+            "toml": "max_steps = 8\n",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(proposal.status(), reqwest::StatusCode::OK);
+    let proposal = proposal.json::<serde_json::Value>().unwrap();
+    let publication = client
+        .put(&configuration)
+        .bearer_auth(WRITE_TOKEN)
+        .json(&serde_json::json!({
+            "expectedRevision": body["revision"],
+            "proposalDigest": proposal["proposalDigest"],
+            "toml": "max_steps = 8\n",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(publication.status(), reqwest::StatusCode::OK);
+    let publication = publication.json::<serde_json::Value>().unwrap();
+    assert_rollback_publication_provenance(
+        &client,
+        &configuration,
+        publication["revision"].as_str().unwrap(),
+        proposal["proposalDigest"].as_str().unwrap(),
+    );
     assert!(database.is_file());
+}
+
+fn assert_rollback_publication_provenance(
+    client: &reqwest::blocking::Client,
+    configuration: &str,
+    revision: &str,
+    published_proposal_digest: &str,
+) {
+    let forged_rollback = client
+        .put(configuration)
+        .bearer_auth(WRITE_TOKEN)
+        .json(&serde_json::json!({
+            "expectedRevision": revision,
+            "proposalDigest": "sha256:forged-rollback-proposal",
+            "rollbackOfProposalDigest": "sha256:not-a-publication",
+            "toml": "max_steps = 8\n",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(forged_rollback.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(
+        forged_rollback.json::<serde_json::Value>().unwrap()["detail"],
+        "rollback publication not found"
+    );
+
+    let mismatched_rollback = client
+        .put(configuration)
+        .bearer_auth(WRITE_TOKEN)
+        .json(&serde_json::json!({
+            "expectedRevision": revision,
+            "proposalDigest": "sha256:mismatched-rollback-proposal",
+            "rollbackOfProposalDigest": published_proposal_digest,
+            "toml": "max_steps = 9\n",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(mismatched_rollback.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(
+        mismatched_rollback.json::<serde_json::Value>().unwrap()["detail"],
+        "rollback configuration mismatch"
+    );
 }
 
 fn available_address() -> SocketAddr {

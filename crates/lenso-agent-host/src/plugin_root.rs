@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use lenso_app_plan::{
@@ -11,17 +12,182 @@ use lenso_app_plan::{
 use lenso_plugin_bundle::{
     ImplementationPolicy, read_bundle_manifest, resolve_implementation, verify_bundle_directory,
 };
-use lenso_plugin_control_plane::PlanArtifact;
+use lenso_plugin_control_plane::{PlanArtifact, sha256_digest};
 use lenso_runtime_codec::{ArtifactHandle, InstanceResourceCatalog, InstanceResources};
 
 const BUNDLE_NAME: &str = "plugin.lenso-plugin";
 const MAX_CONFIGURATION_BYTES: u64 = 256 * 1024;
+const MAX_CONFIGURATION_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PLUGIN_ROOT_ENTRIES: usize = 16_384;
+const MAX_PLUGIN_ROOT_INSTANCES: usize = 4_096;
+const MAX_PLUGIN_ROOT_PLUGINS: usize = 1_024;
+const MAX_PROBE_DEPTH: usize = 64;
+const MAX_PROBE_ENTRIES: usize = MAX_PLUGIN_ROOT_ENTRIES + 2;
 const MAX_RESOURCE_FILES: usize = 4_096;
 const MAX_RESOURCE_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_RESOURCE_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ROOT_RESOURCE_FILES: usize = 4_096;
+const MAX_ROOT_RESOURCE_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_RESOURCE_DEPTH: usize = 32;
 
+static CANONICAL_SNAPSHOTS: AtomicU64 = AtomicU64::new(0);
+static METADATA_PROBES: AtomicU64 = AtomicU64::new(0);
+static RESOURCE_DIRECTORY_READS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+std::thread_local! {
+    // Unit-test before/after assertions must not observe snapshots from parallel test threads.
+    static TEST_CANONICAL_SNAPSHOTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn snapshot(path: &Path) -> Result<PluginRootSnapshot, String> {
+    snapshot_with_resources(path).map(|snapshot| snapshot.root)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PluginRootContents {
+    root: PluginRootSnapshot,
+    resources: BTreeMap<String, InstanceResources>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DesiredStateProbe(String);
+
+/// Captures only filesystem identity metadata. The result is a wakeup hint,
+/// never Plugin authority; every changed or failed probe is followed by the
+/// complete canonical snapshot and Ready Gate path.
+pub(crate) fn desired_state_probe(
+    plugin_root: &Path,
+    selected_profile: Option<&Path>,
+) -> Result<DesiredStateProbe, String> {
+    METADATA_PROBES.fetch_add(1, Ordering::Relaxed);
+    let mut entries = Vec::new();
+    let mut budget = ProbeBudget::default();
+    probe_path(
+        plugin_root,
+        Path::new("plugins"),
+        0,
+        &mut budget,
+        &mut entries,
+    )?;
+    if let Some(profile) = selected_profile {
+        probe_path(profile, Path::new("profile"), 0, &mut budget, &mut entries)?;
+    }
+    entries.sort();
+    serde_json::to_vec(&entries)
+        .map(|bytes| DesiredStateProbe(sha256_digest(&bytes)))
+        .map_err(|error| format!("failed to identify Plugin consistency metadata: {error}"))
+}
+
+fn probe_path(
+    path: &Path,
+    relative: &Path,
+    depth: usize,
+    budget: &mut ProbeBudget,
+    entries: &mut Vec<(String, &'static str, u64, Option<u128>)>,
+) -> Result<(), String> {
+    if depth > MAX_PROBE_DEPTH {
+        return Err(format!(
+            "Plugin consistency metadata exceeds {MAX_PROBE_DEPTH} levels: {}",
+            path.display()
+        ));
+    }
+    let relative = probe_relative_path(relative)?;
+    budget.admit(&relative, path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            entries.push((relative, "missing", 0, None));
+            return Ok(());
+        }
+        Err(error) => return Err(format!("failed to inspect {}: {error}", path.display())),
+    };
+    let file_type = metadata.file_type();
+    let kind = if file_type.is_symlink() {
+        "symlink"
+    } else if file_type.is_dir() {
+        "directory"
+    } else if file_type.is_file() {
+        "file"
+    } else {
+        "special"
+    };
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos());
+    entries.push((relative.clone(), kind, metadata.len(), modified));
+    if !file_type.is_dir() || file_type.is_symlink() {
+        return Ok(());
+    }
+    let mut children = read_entries_bounded(
+        path,
+        MAX_PROBE_ENTRIES.saturating_sub(budget.entries),
+        "Plugin consistency metadata",
+    )?;
+    children.sort_by_key(fs::DirEntry::file_name);
+    for child in children {
+        let child_path = child.path();
+        let name = utf8_name(&child_path, &child.file_name())?;
+        if is_ignored_os_metadata(&name) {
+            continue;
+        }
+        probe_path(
+            &child_path,
+            &Path::new(&relative).join(name),
+            depth + 1,
+            budget,
+            entries,
+        )?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct ProbeBudget {
+    entries: usize,
+}
+
+impl ProbeBudget {
+    fn admit(&mut self, _relative: &str, path: &Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > MAX_PROBE_ENTRIES {
+            return Err(format!(
+                "Plugin consistency metadata exceeds {MAX_PROBE_ENTRIES} entries: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn probe_relative_path(path: &Path) -> Result<String, String> {
+    path.to_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("Plugin consistency path is not UTF-8: {}", path.display()))
+}
+
+impl PluginRootContents {
+    pub(crate) const fn root(&self) -> &PluginRootSnapshot {
+        &self.root
+    }
+
+    pub(crate) fn revision(&self) -> Result<String, String> {
+        revision(&self.root)
+    }
+}
+
+pub(crate) fn revision(root: &PluginRootSnapshot) -> Result<String, String> {
+    serde_json::to_vec(root)
+        .map(|bytes| sha256_digest(&bytes))
+        .map_err(|error| format!("failed to identify Plugin Root revision: {error}"))
+}
+
+/// Reads and validates one complete Plugin Root, retaining immutable resource
+/// bytes so Generation resolution never needs to read them a second time.
+pub(crate) fn snapshot_with_resources(path: &Path) -> Result<PluginRootContents, String> {
+    record_canonical_snapshot();
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_dir() => {}
         Ok(_) => {
@@ -31,7 +197,10 @@ pub(crate) fn snapshot(path: &Path) -> Result<PluginRootSnapshot, String> {
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(PluginRootSnapshot::default());
+            return Ok(PluginRootContents {
+                root: PluginRootSnapshot::default(),
+                resources: BTreeMap::new(),
+            });
         }
         Err(error) => return Err(format!("failed to inspect {}: {error}", path.display())),
     }
@@ -39,8 +208,10 @@ pub(crate) fn snapshot(path: &Path) -> Result<PluginRootSnapshot, String> {
     let mut releases = Vec::new();
     let mut instances = Vec::new();
     let mut disabled = Vec::new();
+    let mut resources = BTreeMap::new();
+    let mut budget = PluginRootBudget::default();
     let mut normalized = BTreeMap::new();
-    let mut entries = read_entries(path)?;
+    let mut entries = read_entries_bounded(path, budget.remaining_entries(), "Plugin Root")?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for entry in entries {
         let entry_path = entry.path();
@@ -60,15 +231,22 @@ pub(crate) fn snapshot(path: &Path) -> Result<PluginRootSnapshot, String> {
         let plugin_id = name;
         validate_identity(&plugin_id, "Plugin ID")?;
         reject_case_collision(&mut normalized, &plugin_id, "Plugin ID")?;
+        budget.admit_entry(&entry_path)?;
+        budget.admit_plugin(&plugin_id, &entry_path)?;
         scan_plugin(
             &entry.path(),
             &plugin_id,
             &mut releases,
             &mut instances,
             &mut disabled,
+            &mut resources,
+            &mut budget,
         )?;
     }
-    Ok(PluginRootSnapshot::new(releases, instances, disabled))
+    Ok(PluginRootContents {
+        root: PluginRootSnapshot::new(releases, instances, disabled),
+        resources,
+    })
 }
 
 pub(crate) fn plan_artifacts(
@@ -141,29 +319,19 @@ pub(crate) fn plan_resources(
     path: &Path,
     plan: &ResolvedAppPlan,
 ) -> Result<InstanceResourceCatalog, String> {
+    let contents = snapshot_with_resources(path)?;
+    plan_resources_from_snapshot(&contents, plan)
+}
+
+pub(crate) fn plan_resources_from_snapshot(
+    contents: &PluginRootContents,
+    plan: &ResolvedAppPlan,
+) -> Result<InstanceResourceCatalog, String> {
     let mut catalog = InstanceResourceCatalog::new();
     for instance in plan.plugin_instances() {
-        let Some((plugin_id, instance_name)) = instance.instance_key().split_once('/') else {
+        let Some(resources) = contents.resources.get(instance.instance_key()) else {
             continue;
         };
-        let resource_directory = path.join(plugin_id).join(instance_name);
-        match fs::symlink_metadata(&resource_directory) {
-            Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
-            }
-            Ok(_) => {
-                return Err(format!(
-                    "Plugin resource path must be a regular directory: {}",
-                    resource_directory.display()
-                ));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(format!(
-                    "failed to inspect {}: {error}",
-                    resource_directory.display()
-                ));
-            }
-        }
         if instance.execution_class().as_str() != "lenso.native-rust@1" {
             return Err(format!(
                 "Plugin Instance `{}` uses resources, but execution class `{}` does not yet expose immutable Instance resources",
@@ -171,9 +339,8 @@ pub(crate) fn plan_resources(
                 instance.execution_class().as_str()
             ));
         }
-        let resources = read_resource_directory(&resource_directory)?;
         catalog = catalog
-            .with_resources(instance.instance_key(), resources)
+            .with_resources(instance.instance_key(), resources.clone())
             .map_err(|error| format!("invalid Plugin resources: {error:?}"))?;
     }
     Ok(catalog)
@@ -185,11 +352,13 @@ fn scan_plugin(
     releases: &mut Vec<PluginDescriptor>,
     instances: &mut Vec<PluginRootInstance>,
     disabled: &mut Vec<PluginInstanceId>,
+    resources: &mut BTreeMap<String, InstanceResources>,
+    budget: &mut PluginRootBudget,
 ) -> Result<(), String> {
     let mut normalized = BTreeMap::new();
     let mut configured_instances = BTreeSet::new();
     let mut resource_directories = BTreeMap::<String, PathBuf>::new();
-    let mut entries = read_entries(path)?;
+    let mut entries = read_entries_bounded(path, budget.remaining_entries(), "Plugin Root")?;
     entries.sort_by_key(fs::DirEntry::file_name);
     for entry in entries {
         let entry_path = entry.path();
@@ -197,6 +366,7 @@ fn scan_plugin(
         if is_ignored_os_metadata(&name) {
             continue;
         }
+        budget.admit_entry(&entry_path)?;
         reject_case_collision(&mut normalized, &name, "Plugin filename")?;
         let file_type = entry
             .file_type()
@@ -208,6 +378,7 @@ fn scan_plugin(
                     entry_path.display()
                 ));
             }
+            admit_descendant_entries(&entry_path, budget)?;
             releases.push(read_bundle_descriptor(&entry_path, plugin_id)?);
         } else if file_type.is_dir() {
             validate_instance(&name)?;
@@ -219,13 +390,15 @@ fn scan_plugin(
             ));
         } else if let Some(instance) = name.strip_suffix(".toml") {
             validate_instance(instance)?;
+            budget.admit_instance(plugin_id, instance, &entry_path)?;
             configured_instances.insert(instance.to_owned());
             instances.push(
                 PluginRootInstance::new(plugin_id, instance)
-                    .with_configuration(read_configuration(&entry_path)?),
+                    .with_configuration(read_configuration(&entry_path, budget)?),
             );
         } else if let Some(instance) = name.strip_suffix(".disabled") {
             validate_instance(instance)?;
+            budget.admit_instance(plugin_id, instance, &entry_path)?;
             let length = fs::metadata(&entry_path)
                 .map_err(|error| format!("failed to inspect {}: {error}", entry_path.display()))?
                 .len();
@@ -247,12 +420,130 @@ fn scan_plugin(
                 resource_directory.display()
             ));
         }
-        read_resource_directory(&resource_directory)?;
+        let instance_resources = read_resource_directory(&resource_directory, budget)?;
+        resources.insert(format!("{plugin_id}/{instance}"), instance_resources);
     }
     Ok(())
 }
 
-fn read_resource_directory(path: &Path) -> Result<InstanceResources, String> {
+#[derive(Debug, Default)]
+struct PluginRootBudget {
+    configuration_bytes: u64,
+    entries: usize,
+    instances: BTreeSet<String>,
+    plugins: BTreeSet<String>,
+    resource_bytes: u64,
+    resource_files: usize,
+}
+
+impl PluginRootBudget {
+    fn remaining_entries(&self) -> usize {
+        MAX_PLUGIN_ROOT_ENTRIES.saturating_sub(self.entries)
+    }
+
+    fn admit_entry(&mut self, path: &Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > MAX_PLUGIN_ROOT_ENTRIES {
+            return Err(format!(
+                "Plugin Root exceeds {MAX_PLUGIN_ROOT_ENTRIES} filesystem entries: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn admit_plugin(&mut self, plugin_id: &str, path: &Path) -> Result<(), String> {
+        self.plugins.insert(plugin_id.to_owned());
+        if self.plugins.len() > MAX_PLUGIN_ROOT_PLUGINS {
+            return Err(format!(
+                "Plugin Root exceeds {MAX_PLUGIN_ROOT_PLUGINS} Plugins: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn admit_instance(
+        &mut self,
+        plugin_id: &str,
+        instance: &str,
+        path: &Path,
+    ) -> Result<(), String> {
+        self.instances.insert(format!("{plugin_id}/{instance}"));
+        if self.instances.len() > MAX_PLUGIN_ROOT_INSTANCES {
+            return Err(format!(
+                "Plugin Root exceeds {MAX_PLUGIN_ROOT_INSTANCES} Instance entries: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn admit_resource(&mut self, bytes: u64, path: &Path) -> Result<(), String> {
+        self.resource_files = self.resource_files.saturating_add(1);
+        if self.resource_files > MAX_ROOT_RESOURCE_FILES {
+            return Err(format!(
+                "Plugin Root resources exceed {MAX_ROOT_RESOURCE_FILES} files: {}",
+                path.display()
+            ));
+        }
+        self.resource_bytes = self
+            .resource_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| "Plugin Root resource size overflow".to_owned())?;
+        if self.resource_bytes > MAX_ROOT_RESOURCE_TOTAL_BYTES {
+            return Err(format!(
+                "Plugin Root resources exceed 16 MiB in aggregate: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn admit_configuration(&mut self, bytes: u64, path: &Path) -> Result<(), String> {
+        self.configuration_bytes = self
+            .configuration_bytes
+            .checked_add(bytes)
+            .ok_or_else(|| "Plugin Root configuration size overflow".to_owned())?;
+        if self.configuration_bytes > MAX_CONFIGURATION_TOTAL_BYTES {
+            return Err(format!(
+                "Plugin Root configurations exceed 16 MiB in aggregate: {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn admit_descendant_entries(root: &Path, budget: &mut PluginRootBudget) -> Result<(), String> {
+    let mut pending = vec![(root.to_path_buf(), 0_usize)];
+    while let Some((directory, depth)) = pending.pop() {
+        if depth > MAX_PROBE_DEPTH {
+            return Err(format!(
+                "Plugin Root exceeds {MAX_PROBE_DEPTH} levels: {}",
+                directory.display()
+            ));
+        }
+        let entries = read_entries_bounded(&directory, budget.remaining_entries(), "Plugin Root")?;
+        for entry in entries {
+            let path = entry.path();
+            budget.admit_entry(&path)?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+            if file_type.is_dir() {
+                pending.push((path, depth + 1));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_resource_directory(
+    path: &Path,
+    root_budget: &mut PluginRootBudget,
+) -> Result<InstanceResources, String> {
+    RESOURCE_DIRECTORY_READS.fetch_add(1, Ordering::Relaxed);
     let mut files = Vec::new();
     let mut pending = vec![(path.to_path_buf(), PathBuf::new(), 0_usize)];
     let mut total_size = 0_u64;
@@ -263,7 +554,8 @@ fn read_resource_directory(path: &Path) -> Result<InstanceResources, String> {
                 directory.display()
             ));
         }
-        let mut entries = read_entries(&directory)?;
+        let mut entries =
+            read_entries_bounded(&directory, root_budget.remaining_entries(), "Plugin Root")?;
         entries.sort_by_key(fs::DirEntry::file_name);
         for entry in entries.into_iter().rev() {
             let entry_path = entry.path();
@@ -271,6 +563,7 @@ fn read_resource_directory(path: &Path) -> Result<InstanceResources, String> {
             if is_ignored_os_metadata(&name) {
                 continue;
             }
+            root_budget.admit_entry(&entry_path)?;
             let resource_path = relative.join(&name);
             let file_type = entry
                 .file_type()
@@ -315,6 +608,7 @@ fn read_resource_directory(path: &Path) -> Result<InstanceResources, String> {
                     entry_path.display()
                 ));
             }
+            root_budget.admit_resource(byte_count, &entry_path)?;
             total_size = total_size
                 .checked_add(byte_count)
                 .ok_or_else(|| format!("Plugin resource size overflow: {}", path.display()))?;
@@ -329,6 +623,30 @@ fn read_resource_directory(path: &Path) -> Result<InstanceResources, String> {
     }
     InstanceResources::from_files(files)
         .map_err(|error| format!("invalid Plugin resources {}: {error:?}", path.display()))
+}
+
+pub(crate) fn io_telemetry() -> (u64, u64, u64) {
+    (
+        canonical_snapshot_count(),
+        METADATA_PROBES.load(Ordering::Relaxed),
+        RESOURCE_DIRECTORY_READS.load(Ordering::Relaxed),
+    )
+}
+
+fn record_canonical_snapshot() {
+    CANONICAL_SNAPSHOTS.fetch_add(1, Ordering::Relaxed);
+    #[cfg(test)]
+    TEST_CANONICAL_SNAPSHOTS.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+#[cfg(not(test))]
+fn canonical_snapshot_count() -> u64 {
+    CANONICAL_SNAPSHOTS.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+fn canonical_snapshot_count() -> u64 {
+    TEST_CANONICAL_SNAPSHOTS.with(std::cell::Cell::get)
 }
 
 fn normalized_resource_path(path: &Path) -> Result<String, String> {
@@ -383,7 +701,10 @@ fn implementation_policy() -> ImplementationPolicy {
     }
 }
 
-fn read_configuration(path: &Path) -> Result<serde_json::Value, String> {
+fn read_configuration(
+    path: &Path,
+    budget: &mut PluginRootBudget,
+) -> Result<serde_json::Value, String> {
     let metadata = fs::metadata(path)
         .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
     if metadata.len() > MAX_CONFIGURATION_BYTES {
@@ -392,6 +713,7 @@ fn read_configuration(path: &Path) -> Result<serde_json::Value, String> {
             path.display()
         ));
     }
+    budget.admit_configuration(metadata.len(), path)?;
     let text = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let table: toml::Table = toml::from_str(&text)
@@ -400,11 +722,24 @@ fn read_configuration(path: &Path) -> Result<serde_json::Value, String> {
         .map_err(|error| format!("failed to normalize {}: {error}", path.display()))
 }
 
-fn read_entries(path: &Path) -> Result<Vec<fs::DirEntry>, String> {
-    fs::read_dir(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))
+fn read_entries_bounded(
+    path: &Path,
+    maximum: usize,
+    label: &str,
+) -> Result<Vec<fs::DirEntry>, String> {
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut bounded = Vec::with_capacity(maximum.min(256));
+    for entry in entries {
+        if bounded.len() == maximum {
+            return Err(format!(
+                "{label} exceeds its {maximum}-entry remaining budget: {}",
+                path.display()
+            ));
+        }
+        bounded.push(entry.map_err(|error| format!("failed to read {}: {error}", path.display()))?);
+    }
+    Ok(bounded)
 }
 
 fn is_ignored_os_metadata(name: &str) -> bool {
@@ -455,6 +790,8 @@ fn reject_case_collision(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use lenso_app_plan::{
         CapabilityEndpointPlan, ExecutionClassId, PluginInstancePlan, ResolvedAppPlan,
         authoring::PluginContract,
@@ -463,7 +800,12 @@ mod tests {
         SourcePluginImplementation, SourcePluginReleaseBuild, build_source_plugin_release_bundle,
     };
 
-    use super::{plan_resources, read_bundle_descriptor, snapshot};
+    use super::{
+        MAX_CONFIGURATION_TOTAL_BYTES, MAX_PLUGIN_ROOT_INSTANCES, MAX_PROBE_DEPTH,
+        MAX_PROBE_ENTRIES, MAX_ROOT_RESOURCE_FILES, PluginRootBudget, desired_state_probe,
+        plan_resources, plan_resources_from_snapshot, read_bundle_descriptor, read_entries_bounded,
+        snapshot, snapshot_with_resources,
+    };
 
     #[test]
     fn missing_root_is_the_empty_root() {
@@ -565,6 +907,30 @@ mod tests {
     }
 
     #[test]
+    fn generation_resolution_reuses_the_canonical_resource_read() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("plugins");
+        let plugin = root.join("lenso.agent.text-tools");
+        std::fs::create_dir_all(plugin.join("default/prompts")).unwrap();
+        std::fs::write(plugin.join("default.toml"), "").unwrap();
+        let prompt = plugin.join("default/prompts/system.md");
+        std::fs::write(&prompt, "canonical snapshot").unwrap();
+
+        let contents = snapshot_with_resources(&root).unwrap();
+        let plan = crate::generation::resolve_host_plan(contents.root()).unwrap();
+        std::fs::write(prompt, "later live bytes").unwrap();
+        let resources = plan_resources_from_snapshot(&contents, &plan).unwrap();
+
+        assert_eq!(
+            resources
+                .for_instance("lenso.agent.text-tools/default")
+                .read_text("prompts/system.md")
+                .unwrap(),
+            "canonical snapshot"
+        );
+    }
+
+    #[test]
     fn rejects_orphan_resource_directory() {
         let directory = tempfile::tempdir().unwrap();
         let resources = directory
@@ -613,6 +979,104 @@ mod tests {
         let error = snapshot(&directory.path().join("plugins")).unwrap_err();
 
         assert!(error.contains("exceeds 1 MiB"));
+    }
+
+    #[test]
+    fn consistency_probe_rejects_excessive_depth_and_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("plugins");
+        let mut nested = root.clone();
+        for depth in 0..=MAX_PROBE_DEPTH {
+            nested = nested.join(format!("level-{depth}"));
+        }
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let depth_error = desired_state_probe(&root, None).unwrap_err();
+        assert!(depth_error.contains("levels"));
+
+        std::fs::remove_dir_all(&root).unwrap();
+        std::fs::create_dir(&root).unwrap();
+        for index in 0..MAX_PROBE_ENTRIES {
+            std::fs::write(root.join(format!("entry-{index}")), "").unwrap();
+        }
+
+        let entries_error = desired_state_probe(&root, None).unwrap_err();
+        assert!(
+            entries_error.contains("remaining budget"),
+            "{entries_error}"
+        );
+    }
+
+    #[test]
+    fn directory_reads_stop_at_the_remaining_budget_before_sorting() {
+        let directory = tempfile::tempdir().unwrap();
+        for index in 0..5 {
+            std::fs::write(directory.path().join(format!("entry-{index}")), "").unwrap();
+        }
+
+        let error = read_entries_bounded(directory.path(), 4, "fixture").unwrap_err();
+
+        assert!(error.contains("4-entry remaining budget"));
+    }
+
+    #[test]
+    fn canonical_snapshot_rejects_multi_instance_resource_amplification() {
+        let directory = tempfile::tempdir().unwrap();
+        let plugin = directory.path().join("plugins/lenso.agent.text-tools");
+        std::fs::create_dir_all(&plugin).unwrap();
+        for index in 0..=16 {
+            let instance = format!("instance-{index}");
+            std::fs::write(plugin.join(format!("{instance}.toml")), "").unwrap();
+            let resources = plugin.join(&instance);
+            std::fs::create_dir(&resources).unwrap();
+            std::fs::write(resources.join("resource.bin"), vec![0_u8; 1024 * 1024]).unwrap();
+        }
+
+        let error = snapshot(&directory.path().join("plugins")).unwrap_err();
+
+        assert!(error.contains("16 MiB in aggregate"));
+    }
+
+    #[test]
+    fn canonical_snapshot_budgets_instances_and_resource_files_globally() {
+        let mut budget = PluginRootBudget::default();
+        for index in 0..MAX_PLUGIN_ROOT_INSTANCES {
+            budget
+                .admit_instance(
+                    "example.plugin",
+                    &format!("instance-{index}"),
+                    Path::new("root"),
+                )
+                .unwrap();
+        }
+        assert!(
+            budget
+                .admit_instance("example.plugin", "overflow", Path::new("root"))
+                .unwrap_err()
+                .contains("Instance entries")
+        );
+
+        let mut budget = PluginRootBudget::default();
+        for _ in 0..MAX_ROOT_RESOURCE_FILES {
+            budget.admit_resource(0, Path::new("resource")).unwrap();
+        }
+        assert!(
+            budget
+                .admit_resource(0, Path::new("overflow"))
+                .unwrap_err()
+                .contains("resources exceed")
+        );
+
+        let mut budget = PluginRootBudget::default();
+        budget
+            .admit_configuration(MAX_CONFIGURATION_TOTAL_BYTES, Path::new("configuration"))
+            .unwrap();
+        assert!(
+            budget
+                .admit_configuration(1, Path::new("overflow"))
+                .unwrap_err()
+                .contains("configurations exceed")
+        );
     }
 
     #[cfg(unix)]

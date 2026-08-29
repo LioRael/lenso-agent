@@ -1658,6 +1658,9 @@ fn finish_interaction_submission(state: &mut TuiState, result: Result<(), String
 async fn present_online_generation_events(app: &AgentApp, state: &mut TuiState) {
     for event in app.take_online_generation_events() {
         match event {
+            OnlineGenerationEvent::Preparing { .. } => {
+                state.push_system("Preparing plugin changes…".to_owned());
+            }
             OnlineGenerationEvent::Switched { .. } => {
                 match app.tui_panels().await {
                     Ok(panels) => {

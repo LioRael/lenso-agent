@@ -6,12 +6,15 @@ use std::{
     time::{Duration, Instant},
 };
 
+static WEB_SERVER_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[tokio::test(flavor = "current_thread")]
 #[allow(
     clippy::too_many_lines,
     reason = "one end-to-end scenario keeps stream, history, branch, and provenance proof together"
 )]
 async fn streams_lists_and_branches_a_durable_session() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     write_web_fixture(root.path());
 
@@ -221,6 +224,7 @@ async fn verify_trajectory_and_presentation(
 
 #[tokio::test(flavor = "current_thread")]
 async fn answers_a_pending_web_interaction_and_resumes_the_same_turn() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     write_web_fixture(root.path());
 
@@ -551,6 +555,7 @@ async fn wait_for_completed_task_progress(
 
 #[tokio::test(flavor = "current_thread")]
 async fn rejects_an_allowed_tool_outside_the_active_catalog_before_readiness() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     write_web_fixture(root.path());
     let address = available_address();
@@ -590,6 +595,7 @@ async fn rejects_an_allowed_tool_outside_the_active_catalog_before_readiness() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn updates_and_recovers_the_durable_tool_policy_with_revision_fencing() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     write_web_fixture(root.path());
     let policy_path = root.path().join("state/tool-policy.json");
@@ -693,6 +699,7 @@ async fn updates_and_recovers_the_durable_tool_policy_with_revision_fencing() {
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)]
 async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     let control_token = ["fixture", "plugin", "control"].join("-");
     let address = available_address();
@@ -756,7 +763,10 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "local_plugin_root"
     );
     let initial_revision = initial_management["revision"].as_str().unwrap();
+    let initial_source_digest =
+        managed_source_digest(&initial_management, "lenso.agent.loop", "agent");
     let initial_inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
+    let initial_stream_id = initial_inventory["streamId"].as_str().unwrap();
     assert_eq!(initial_inventory["desiredRevision"], initial_revision);
     assert_eq!(initial_inventory["appliedRevision"], initial_revision);
     assert_eq!(initial_inventory["configurationStatus"], "applied");
@@ -765,11 +775,44 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "app"
     );
 
+    fs::write(root.path().join("escaped.toml"), "secret-marker = true\n").unwrap();
+    let invalid_identity = client
+        .post(format!(
+            "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/%2E%2E%2F%2E%2E%2Fescaped/configuration/proposals"
+        ))
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "expectedSourceDigest": "do-not-read-current-source",
+            "expectedStreamId": initial_stream_id,
+            "toml": "unexpected = true\n",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            invalid_identity.status(),
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::CONFLICT
+        ),
+        "unexpected traversal response: {}",
+        invalid_identity.status()
+    );
+    let invalid_identity = invalid_identity.text().await.unwrap();
+    assert!(
+        invalid_identity.contains("invalid Instance key"),
+        "{invalid_identity}"
+    );
+    assert!(!invalid_identity.contains("secret-marker"));
+    assert!(!invalid_identity.contains(initial_source_digest));
+
     assert_eq!(
         client
             .post(&proposals_endpoint)
             .json(&serde_json::json!({
                 "expectedRevision": initial_revision,
+                "expectedSourceDigest": initial_source_digest,
+                "expectedStreamId": initial_stream_id,
                 "toml": "unexpected = true\n",
             }))
             .send()
@@ -780,12 +823,35 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     );
     assert!(!configuration.exists());
 
+    let large_configuration = format!("unexpected = true\n#{}\n", "x".repeat(70 * 1024));
+    assert!(large_configuration.len() > 65_536);
+    assert!(large_configuration.len() < 256 * 1024);
+    let large_proposal = client
+        .post(&proposals_endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "expectedSourceDigest": initial_source_digest,
+            "expectedStreamId": initial_stream_id,
+            "toml": large_configuration,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(large_proposal.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        large_proposal.json::<serde_json::Value>().await.unwrap()["status"],
+        "rejected"
+    );
+
     assert_eq!(
         client
             .post(&proposals_endpoint)
             .bearer_auth(&control_token)
             .json(&serde_json::json!({
                 "expectedRevision": initial_revision,
+                "expectedSourceDigest": initial_source_digest,
+                "expectedStreamId": initial_stream_id,
                 "toml": "unexpected = true\n",
             }))
             .send()
@@ -799,6 +865,8 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": initial_revision,
+            "expectedSourceDigest": initial_source_digest,
+            "expectedStreamId": initial_stream_id,
             "toml": "unexpected = true\n",
         }))
         .send()
@@ -813,23 +881,14 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert!(!configuration.exists());
     assert_eq!(active_generation_digest(root.path()), initial_generation);
 
-    let updated_configuration = concat!(
-        "model = \"gpt-5.6-luna\"\n",
-        "max_steps = 9\n",
-        "max_tool_calls = 4\n",
-        "max_user_resumes = 8\n",
-        "max_parallel_tool_calls = 4\n",
-        "max_output_tokens = 1024\n",
-        "max_history_events = 200\n",
-        "max_compaction_summary_characters = 8192\n",
-        "max_memory_items = 8\n",
-        "max_memory_characters = 16384\n",
-    );
+    let updated_configuration = default_loop_configuration();
     let proposal = client
         .post(&proposals_endpoint)
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": initial_revision,
+            "expectedSourceDigest": initial_source_digest,
+            "expectedStreamId": initial_stream_id,
             "toml": updated_configuration,
         }))
         .send()
@@ -851,21 +910,30 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_ne!(proposal["candidateRevision"], initial_revision);
     assert!(!configuration.exists());
 
+    let rejected_publication = client
+        .put(&endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "expectedSourceDigest": proposal["baseSourceDigest"],
+            "expectedStreamId": initial_stream_id,
+            "proposalDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "toml": updated_configuration,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected_publication.status(), reqwest::StatusCode::CONFLICT);
+    let rejected_publication = rejected_publication
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
     assert_eq!(
-        client
-            .put(&endpoint)
-            .bearer_auth(&control_token)
-            .json(&serde_json::json!({
-                "expectedRevision": initial_revision,
-                "proposalDigest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                "toml": updated_configuration,
-            }))
-            .send()
-            .await
-            .unwrap()
-            .status(),
-        reqwest::StatusCode::CONFLICT
+        rejected_publication["schema"],
+        "lenso.agent.plugin-operation.v1"
     );
+    assert_eq!(rejected_publication["operation"]["status"], "rejected");
+    assert!(rejected_publication["desired"].is_null());
     assert!(!configuration.exists());
 
     let accepted = client
@@ -873,6 +941,8 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": initial_revision,
+            "expectedSourceDigest": proposal["baseSourceDigest"],
+            "expectedStreamId": initial_stream_id,
             "proposalDigest": proposal["proposalDigest"],
             "toml": updated_configuration,
         }))
@@ -887,11 +957,12 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "unexpected Plugin mutation response: {accepted_body}"
     );
     let accepted: serde_json::Value = serde_json::from_str(&accepted_body).unwrap();
+    assert_eq!(accepted["schema"], "lenso.agent.plugin-operation.v1");
     assert_eq!(
-        accepted["schema"],
+        accepted["publicationSchema"],
         "lenso.plugin-configuration-publication.v1"
     );
-    assert_eq!(accepted["status"], "published");
+    assert_eq!(accepted["publicationStatus"], "published");
     assert_eq!(accepted["baseRevision"], initial_revision);
     assert_eq!(accepted["revision"], proposal["candidateRevision"]);
     assert_eq!(accepted["proposalDigest"], proposal["proposalDigest"]);
@@ -901,7 +972,31 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     );
     assert!(accepted["desired"]["plugins"].is_array());
     assert_eq!(accepted["desired"]["desiredRevision"], accepted["revision"]);
-    assert_eq!(accepted["desired"]["configurationStatus"], "pending");
+    let expected_configuration_status = match accepted["operation"]["status"].as_str().unwrap() {
+        "switched" => "applied",
+        "rejected" | "rolled_back" => "rejected",
+        "accepted" | "preparing" => "pending",
+        status => panic!("unexpected operation status {status}"),
+    };
+    assert_eq!(
+        accepted["desired"]["configurationStatus"],
+        expected_configuration_status
+    );
+    let operation_id = accepted["operation"]["id"].as_str().unwrap();
+    let accepted_inventory = client
+        .get(&inventory_endpoint)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(accepted_inventory["desiredRevision"], accepted["revision"]);
+    if accepted_inventory["appliedRevision"] != accepted["revision"] {
+        assert_eq!(accepted_inventory["configurationStatus"], "pending");
+    }
     assert_eq!(
         fs::read_to_string(&configuration).unwrap(),
         updated_configuration
@@ -922,6 +1017,8 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
             .bearer_auth(&control_token)
             .json(&serde_json::json!({
                 "expectedRevision": initial_revision,
+                "expectedSourceDigest": proposal["baseSourceDigest"],
+                "expectedStreamId": initial_stream_id,
                 "proposalDigest": proposal["proposalDigest"],
                 "toml": updated_configuration,
             }))
@@ -943,11 +1040,16 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_eq!(applied["desiredRevision"], accepted["revision"]);
     assert_eq!(applied["appliedRevision"], accepted["revision"]);
     assert_eq!(applied["configurationStatus"], "applied");
+    let operation = wait_for_plugin_operation(&client, address, &control_token, operation_id).await;
+    assert_eq!(operation["operation"]["status"], "switched");
+
+    assert_inventory_cursor_is_non_destructive(&client, address).await;
 }
 
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)]
 async fn persists_managed_plugin_configuration_across_host_restart() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     let database = root.path().join("configuration.sqlite3");
     let control_token = ["fixture", "managed", "configuration"].join("-");
@@ -979,6 +1081,9 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
     );
     let proposals_endpoint = format!("{endpoint}/proposals");
     let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
+    let inventory_endpoint = format!("http://{address}/api/console/v1/agent/plugins");
+    let initial_inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
+    let initial_stream_id = initial_inventory["streamId"].as_str().unwrap().to_owned();
     let initial = read_plugin_management(&client, &management_endpoint, &control_token).await;
     assert_eq!(
         initial["configurationAuthority"],
@@ -990,12 +1095,16 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         })
     );
     let initial_revision = initial["revision"].as_str().unwrap();
+    let initial_source_digest = managed_source_digest(&initial, "lenso.agent.loop", "agent");
     assert_eq!(
         client
             .post(format!(
                 "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/disable"
             ))
             .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "expectedStreamId": initial_stream_id,
+            }))
             .send()
             .await
             .unwrap()
@@ -1022,6 +1131,8 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": initial_revision,
+            "expectedSourceDigest": initial_source_digest,
+            "expectedStreamId": initial_stream_id,
             "toml": configuration,
         }))
         .send()
@@ -1039,6 +1150,8 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
             .bearer_auth(&control_token)
             .json(&serde_json::json!({
                 "expectedRevision": initial_revision,
+                "expectedSourceDigest": proposal["baseSourceDigest"],
+                "expectedStreamId": initial_stream_id,
                 "proposalDigest": proposal["proposalDigest"],
                 "toml": reformatted_configuration,
             }))
@@ -1053,6 +1166,8 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": initial_revision,
+            "expectedSourceDigest": proposal["baseSourceDigest"],
+            "expectedStreamId": initial_stream_id,
             "proposalDigest": proposal["proposalDigest"],
             "toml": configuration,
         }))
@@ -1069,11 +1184,159 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
 
     let mut recovered = start_server();
     wait_until_ready(&client, address, &mut recovered.0).await;
+    let recovered_inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
+    let recovered_stream_id = recovered_inventory["streamId"].as_str().unwrap().to_owned();
+    assert_ne!(recovered_stream_id, initial_stream_id);
     let management = read_plugin_management(&client, &management_endpoint, &control_token).await;
+    let published_source_digest = managed_source_digest(&management, "lenso.agent.loop", "agent");
     assert_eq!(management["revision"], published_revision);
     assert_eq!(
         management["configurationAuthority"],
         initial["configurationAuthority"]
+    );
+    let management_response = client
+        .get(&management_endpoint)
+        .bearer_auth(&control_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let management_etag = management_response
+        .headers()
+        .get(reqwest::header::ETAG)
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        client
+            .get(&management_endpoint)
+            .bearer_auth(&control_token)
+            .header(reqwest::header::IF_NONE_MATCH, &management_etag)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::NOT_MODIFIED
+    );
+    let target = root.path().join("plugins/lenso.agent.loop/agent.toml");
+    let bytes_before_stale_requests = fs::read(&target).unwrap();
+    let proposals_before_stale_requests = configuration_proposal_count(&database);
+    let stale_configuration_request = serde_json::json!({
+        "expectedRevision": published_revision,
+        "expectedSourceDigest": published_source_digest,
+        "expectedStreamId": initial_stream_id,
+        "toml": configuration,
+    });
+    assert_plugin_stream_conflict(
+        client
+            .post(&proposals_endpoint)
+            .bearer_auth(&control_token)
+            .json(&stale_configuration_request)
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_plugin_stream_conflict(
+        client
+            .put(&endpoint)
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "expectedRevision": published_revision,
+                "expectedSourceDigest": published_source_digest,
+                "expectedStreamId": initial_stream_id,
+                "proposalDigest": "sha256:stale",
+                "toml": configuration,
+            }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_plugin_stream_conflict(
+        client
+            .post(format!("{endpoint}/rollback-proposals"))
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "expectedRevision": published_revision,
+                "expectedSourceDigest": published_source_digest,
+                "expectedStreamId": initial_stream_id,
+                "publicationProposalDigest": proposal["proposalDigest"],
+            }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_plugin_stream_conflict(
+        client
+            .post(format!(
+                "http://{address}/api/console/v1/agent/control/plugins/install"
+            ))
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "bundlePath": root.path().join("missing-plugin-bundle"),
+                "expectedStreamId": initial_stream_id,
+            }))
+            .send()
+            .await
+            .unwrap(),
+    )
+    .await;
+    for (method, suffix, body) in [
+        (
+            reqwest::Method::PUT,
+            "lenso.agent.loop/agent/enabled",
+            serde_json::json!({
+                "enabled": false,
+                "expectedStreamId": initial_stream_id,
+            }),
+        ),
+        (
+            reqwest::Method::POST,
+            "lenso.agent.loop/agent/disable",
+            serde_json::json!({"expectedStreamId": initial_stream_id}),
+        ),
+        (
+            reqwest::Method::POST,
+            "lenso.agent.loop/agent/enable",
+            serde_json::json!({"expectedStreamId": initial_stream_id}),
+        ),
+        (
+            reqwest::Method::DELETE,
+            "lenso.agent.loop/agent",
+            serde_json::json!({"expectedStreamId": initial_stream_id}),
+        ),
+        (
+            reqwest::Method::DELETE,
+            "lenso.agent.loop",
+            serde_json::json!({"expectedStreamId": initial_stream_id}),
+        ),
+    ] {
+        assert_plugin_stream_conflict(
+            client
+                .request(
+                    method,
+                    format!("http://{address}/api/console/v1/agent/control/plugins/{suffix}"),
+                )
+                .bearer_auth(&control_token)
+                .json(&body)
+                .send()
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    assert_eq!(fs::read(&target).unwrap(), bytes_before_stale_requests);
+    assert_eq!(
+        configuration_proposal_count(&database),
+        proposals_before_stale_requests
+    );
+    assert_eq!(
+        read_plugin_management(&client, &management_endpoint, &control_token).await["revision"],
+        published_revision
     );
     let second_configuration = configuration.replacen("max_steps = 7", "max_steps = 8", 1);
     let second_proposal = client
@@ -1081,6 +1344,8 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": published_revision,
+            "expectedSourceDigest": published_source_digest,
+            "expectedStreamId": recovered_stream_id,
             "toml": second_configuration,
         }))
         .send()
@@ -1091,11 +1356,52 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         .json::<serde_json::Value>()
         .await
         .unwrap();
+    let externally_reformatted = format!("# retained external note\n{configuration}");
+    fs::write(&target, &externally_reformatted).unwrap();
+    let source_changed = client
+        .get(&management_endpoint)
+        .bearer_auth(&control_token)
+        .header(reqwest::header::IF_NONE_MATCH, &management_etag)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    assert_ne!(
+        source_changed
+            .headers()
+            .get(reqwest::header::ETAG)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        management_etag
+    );
+    let exact_source_conflict = client
+        .put(&endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": published_revision,
+            "expectedSourceDigest": second_proposal["baseSourceDigest"],
+            "expectedStreamId": recovered_stream_id,
+            "proposalDigest": second_proposal["proposalDigest"],
+            "toml": second_configuration,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        exact_source_conflict.status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), externally_reformatted);
+    fs::write(&target, configuration).unwrap();
     let second_publication = client
         .put(&endpoint)
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": published_revision,
+            "expectedSourceDigest": second_proposal["baseSourceDigest"],
+            "expectedStreamId": recovered_stream_id,
             "proposalDigest": second_proposal["proposalDigest"],
             "toml": second_configuration,
         }))
@@ -1132,12 +1438,16 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         history["publications"][1]["configurationToml"],
         configuration
     );
+    let after_second = read_plugin_management(&client, &management_endpoint, &control_token).await;
+    let second_source_digest = managed_source_digest(&after_second, "lenso.agent.loop", "agent");
 
     let rollback = client
         .post(format!("{endpoint}/rollback-proposals"))
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": second_publication["revision"],
+            "expectedSourceDigest": second_source_digest,
+            "expectedStreamId": recovered_stream_id,
             "publicationProposalDigest": proposal["proposalDigest"],
         }))
         .send()
@@ -1163,7 +1473,10 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         .bearer_auth(&control_token)
         .json(&serde_json::json!({
             "expectedRevision": second_publication["revision"],
+            "expectedSourceDigest": rollback["proposal"]["baseSourceDigest"],
+            "expectedStreamId": recovered_stream_id,
             "proposalDigest": rollback["proposal"]["proposalDigest"],
+            "rollbackOfProposalDigest": rollback["rollbackOfProposalDigest"],
             "toml": rollback["configurationToml"],
         }))
         .send()
@@ -1202,14 +1515,47 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
     assert_eq!(publications, 2);
 }
 
-async fn read_plugin_management(
-    client: &reqwest::Client,
-    endpoint: &str,
-    control_token: &str,
-) -> serde_json::Value {
-    client
-        .get(endpoint)
-        .bearer_auth(control_token)
+async fn assert_plugin_stream_conflict(response: reqwest::Response) {
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::CONFLICT, "{body}");
+    let problem: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        problem["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("Plugin control stream conflict")),
+        "unexpected conflict response: {body}"
+    );
+}
+
+fn configuration_proposal_count(database: &Path) -> i64 {
+    rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM configuration_proposals", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+fn default_loop_configuration() -> &'static str {
+    concat!(
+        "model = \"gpt-5.6-luna\"\n",
+        "max_steps = 9\n",
+        "max_tool_calls = 4\n",
+        "max_user_resumes = 8\n",
+        "max_parallel_tool_calls = 4\n",
+        "max_output_tokens = 1024\n",
+        "max_history_events = 200\n",
+        "max_compaction_summary_characters = 8192\n",
+        "max_memory_items = 8\n",
+        "max_memory_characters = 16384\n",
+    )
+}
+
+async fn assert_inventory_cursor_is_non_destructive(client: &reqwest::Client, address: SocketAddr) {
+    let inventory_endpoint = format!("http://{address}/api/console/v1/agent/plugins");
+    let first = client
+        .get(&inventory_endpoint)
         .send()
         .await
         .unwrap()
@@ -1217,7 +1563,218 @@ async fn read_plugin_management(
         .unwrap()
         .json::<serde_json::Value>()
         .await
+        .unwrap();
+    let repeated = client
+        .get(&inventory_endpoint)
+        .send()
+        .await
         .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(first["schema"], "lenso.agent.plugin-inventory.v2");
+    assert_eq!(first["events"], repeated["events"]);
+    assert_eq!(first["cursor"], repeated["cursor"]);
+    let after = first["cursor"].as_str().unwrap();
+    let caught_up = client
+        .get(format!("{inventory_endpoint}?after={after}"))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(caught_up["cursor"], first["cursor"]);
+    assert_eq!(caught_up["events"], serde_json::json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)]
+async fn named_profile_plugin_control_returns_success_and_rejection_receipts() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    write_web_fixture(root.path());
+    let control_token = ["fixture", "profile", "control"].join("-");
+    let address = available_address();
+    let mut server = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args([
+                "--listen",
+                &address.to_string(),
+                "--profile",
+                "web",
+                "--plugin-control",
+            ])
+            .env("LENSO_AGENT_CONTROL_TOKEN", &control_token)
+            .current_dir(root.path())
+            .env("LENSO_AGENT_HOME", root.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+
+    let configuration_endpoint = format!(
+        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/web/configuration"
+    );
+    let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
+    let management = read_plugin_management(&client, &management_endpoint, &control_token).await;
+    let inventory_endpoint = format!("http://{address}/api/console/v1/agent/plugins");
+    let inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
+    let stream_id = inventory["streamId"].as_str().unwrap();
+    let initial_revision = management["revision"].as_str().unwrap();
+    assert_eq!(inventory["desiredRevision"], initial_revision);
+    let web_instance = managed_plugin(&management, "lenso.agent.loop")["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| instance["instanceKey"] == "web")
+        .unwrap();
+    let initial_source_digest = web_instance["sourceDigest"].as_str().unwrap();
+    assert_eq!(web_instance["selection"], "enabled");
+    assert_eq!(web_instance["origin"], "plugin-root");
+    assert!(web_instance["rootConfigurationToml"].is_string());
+    let updated_configuration = concat!(
+        "model = \"fixture/readme-summary-v1\"\n",
+        "max_steps = 3\n",
+        "max_tool_calls = 2\n",
+        "max_parallel_tool_calls = 1\n",
+        "max_output_tokens = 128\n",
+        "max_history_events = 100\n",
+        "max_compaction_summary_characters = 8192\n",
+        "max_memory_items = 8\n",
+        "max_memory_characters = 16384\n",
+    );
+    let proposal = client
+        .post(format!("{configuration_endpoint}/proposals"))
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "expectedSourceDigest": initial_source_digest,
+            "expectedStreamId": stream_id,
+            "toml": updated_configuration,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let proposal_status = proposal.status();
+    let proposal_body = proposal.text().await.unwrap();
+    assert_eq!(
+        proposal_status,
+        reqwest::StatusCode::OK,
+        "unexpected named Profile proposal response: {proposal_body}"
+    );
+    let proposal: serde_json::Value = serde_json::from_str(&proposal_body).unwrap();
+    let accepted = client
+        .put(&configuration_endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "expectedSourceDigest": proposal["baseSourceDigest"],
+            "expectedStreamId": stream_id,
+            "proposalDigest": proposal["proposalDigest"],
+            "toml": updated_configuration,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let accepted_status = accepted.status();
+    let accepted_body = accepted.text().await.unwrap();
+    assert_eq!(
+        accepted_status,
+        reqwest::StatusCode::ACCEPTED,
+        "unexpected named Profile mutation response: {accepted_body}"
+    );
+    let accepted: serde_json::Value = serde_json::from_str(&accepted_body).unwrap();
+    assert_eq!(accepted["schema"], "lenso.agent.plugin-operation.v1");
+    assert_eq!(
+        accepted["publicationSchema"],
+        "lenso.plugin-configuration-publication.v1"
+    );
+    assert!(accepted["desired"]["plugins"].is_array());
+    let operation_id = accepted["operation"]["id"].as_str().unwrap();
+    let switched = wait_for_plugin_operation(&client, address, &control_token, operation_id).await;
+    assert_eq!(switched["operation"]["status"], "switched");
+
+    let rejected = client
+        .delete(format!(
+            "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.model.fixture"
+        ))
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedStreamId": stream_id,
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = rejected.status();
+    let body = rejected.text().await.unwrap();
+    assert_eq!(status, reqwest::StatusCode::CONFLICT, "{body}");
+    let rejected: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(rejected["operation"]["status"], "rejected");
+    assert!(
+        rejected["operation"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("Profile `web`"))
+    );
+    assert!(rejected["desired"].is_null());
+}
+
+async fn wait_for_plugin_operation(
+    client: &reqwest::Client,
+    address: SocketAddr,
+    control_token: &str,
+    operation_id: &str,
+) -> serde_json::Value {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let operation = client
+                .get(format!(
+                    "http://{address}/api/console/v1/agent/control/plugin-operations/{operation_id}"
+                ))
+                .bearer_auth(control_token)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap()
+                .json::<serde_json::Value>()
+                .await
+                .unwrap();
+            if matches!(
+                operation["operation"]["status"].as_str(),
+                Some("switched" | "rejected" | "rolled_back")
+            ) {
+                break operation;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("Plugin operation should reach a visible outcome")
+}
+
+async fn read_plugin_management(
+    client: &reqwest::Client,
+    endpoint: &str,
+    control_token: &str,
+) -> serde_json::Value {
+    let response = client
+        .get(endpoint)
+        .bearer_auth(control_token)
+        .send()
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.text().await.unwrap();
+    assert!(status.is_success(), "Plugin management failed: {body}");
+    serde_json::from_str(&body).unwrap()
 }
 
 async fn read_plugin_inventory(client: &reqwest::Client, endpoint: &str) -> serde_json::Value {
@@ -1267,6 +1824,20 @@ fn managed_plugin<'a>(
         .unwrap()
         .iter()
         .find(|plugin| plugin["packageId"] == package_id)
+        .unwrap()
+}
+
+fn managed_source_digest<'a>(
+    management: &'a serde_json::Value,
+    package_id: &str,
+    instance_key: &str,
+) -> &'a str {
+    managed_plugin(management, package_id)["instances"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|instance| instance["instanceKey"] == instance_key)
+        .and_then(|instance| instance["sourceDigest"].as_str())
         .unwrap()
 }
 
