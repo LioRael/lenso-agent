@@ -20,4 +20,5 @@ fn rename_command_requires_and_extracts_a_title() {
 mod composer;
 mod interaction;
 mod stream;
+mod task_supervision;
 mod transcript;

@@ -79,7 +79,7 @@ pub(super) fn render(frame: &mut Frame<'_>, state: &mut TuiState) {
 
     render_header(frame, header, state);
 
-    if !state.panel_open || state.panels.is_empty() || body.width < PANEL_BREAKPOINT {
+    if !state.panel_open || body.width < PANEL_BREAKPOINT {
         render_transcript(frame, body, state);
     } else {
         let panel_width = body

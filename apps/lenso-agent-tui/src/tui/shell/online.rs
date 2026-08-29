@@ -5,14 +5,13 @@ use super::{AgentApp, OnlineGenerationEvent, TranscriptEntry, TuiState};
 pub(super) async fn present_online_generation_events(app: &AgentApp, state: &mut TuiState) {
     for event in app.take_online_generation_events() {
         match event {
+            OnlineGenerationEvent::Preparing { .. } => {
+                state.push_system("Preparing plugin changes…".to_owned());
+            }
             OnlineGenerationEvent::Switched { .. } => {
+                state.advance_task_generation_epoch();
                 match app.tui_panels().await {
-                    Ok(panels) => {
-                        state.panels = panels;
-                        state.selected_panel = state
-                            .selected_panel
-                            .min(state.panels.len().saturating_sub(1));
-                    }
+                    Ok(panels) => state.replace_plugin_panels(panels),
                     Err(error) => state.transcript.push(TranscriptEntry::Error {
                         text: format!(
                             "Plugin changes were applied, but the interface could not refresh: {error}"
@@ -27,13 +26,9 @@ pub(super) async fn present_online_generation_events(app: &AgentApp, state: &mut
                 ),
             }),
             OnlineGenerationEvent::RolledBack { detail, .. } => {
+                state.advance_task_generation_epoch();
                 match app.tui_panels().await {
-                    Ok(panels) => {
-                        state.panels = panels;
-                        state.selected_panel = state
-                            .selected_panel
-                            .min(state.panels.len().saturating_sub(1));
-                    }
+                    Ok(panels) => state.replace_plugin_panels(panels),
                     Err(error) => state.transcript.push(TranscriptEntry::Error {
                         text: format!(
                             "The previous plugins were restored, but the interface could not refresh: {error}"
@@ -46,11 +41,14 @@ pub(super) async fn present_online_generation_events(app: &AgentApp, state: &mut
                     ),
                 });
             }
-            OnlineGenerationEvent::Failed { detail, .. } => state.transcript.push(TranscriptEntry::Error {
-                text: format!(
-                    "A plugin change failed and no working previous setup was available; new requests are paused: {detail}"
-                ),
-            }),
+            OnlineGenerationEvent::Failed { detail, .. } => {
+                state.advance_task_generation_epoch();
+                state.transcript.push(TranscriptEntry::Error {
+                    text: format!(
+                        "A plugin change failed and no working previous setup was available; new requests are paused: {detail}"
+                    ),
+                });
+            }
             OnlineGenerationEvent::WatchDegraded { detail } => {
                 state.transcript.push(TranscriptEntry::Error {
                     text: format!(

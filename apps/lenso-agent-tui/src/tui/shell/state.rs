@@ -18,7 +18,7 @@ use super::{
     markdown_lines_with_width, render_grouped_tool_block, render_thinking_block, render_tool_block,
     render_tool_group,
 };
-use std::{collections::BTreeSet, time::Instant};
+use std::{collections::BTreeSet, rc::Rc, time::Instant};
 
 #[cfg(test)]
 use super::markdown_lines;
@@ -31,7 +31,8 @@ struct ActiveTurn {
     // Fields drop in declaration order. Cancel the stream before releasing the
     // App Generation lease that owns its runtime resources.
     stream: NativeStream<Agent>,
-    lease: TurnGeneration,
+    lease: Rc<TurnGeneration>,
+    task_scope_id: u64,
     started_at: Instant,
 }
 
@@ -63,10 +64,16 @@ enum SuggestionVisibility {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum InteractionPollStatus {
+enum PollStatus {
     #[default]
     Ready,
     ErrorReported,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TaskRouteScope {
+    CurrentGeneration(u64),
+    Turn(u64),
 }
 
 #[derive(Debug, Default)]
@@ -423,6 +430,7 @@ struct TuiState {
     expanded_groups: BTreeSet<usize>,
     visible_tool_blocks: Vec<ToolSelection>,
     panels: Vec<SnapshotResponsePanelsItem>,
+    task_panel_body: String,
     suggestions: Vec<Suggestion>,
     suggestion_selected: usize,
     suggestion_scroll: usize,
@@ -435,7 +443,11 @@ struct TuiState {
     interaction_draft: Option<InteractionDraft>,
     pending_answers: Option<Vec<InteractionAnswer>>,
     next_interaction_poll: Instant,
-    interaction_poll_status: InteractionPollStatus,
+    interaction_poll_status: PollStatus,
+    task_poll_status: PollStatus,
+    task_generation_epoch: u64,
+    task_projection_scope: Option<TaskRouteScope>,
+    task_turn_sequence: u64,
     tool_scope: String,
     scroll: ScrollState,
     workspace: String,
@@ -481,6 +493,7 @@ impl TuiState {
             expanded_groups: BTreeSet::new(),
             visible_tool_blocks: Vec::new(),
             panels,
+            task_panel_body: "Loading supervised tasks…".to_owned(),
             suggestions: Vec::new(),
             suggestion_selected: 0,
             suggestion_scroll: 0,
@@ -493,7 +506,11 @@ impl TuiState {
             interaction_draft: None,
             pending_answers: None,
             next_interaction_poll: Instant::now(),
-            interaction_poll_status: InteractionPollStatus::Ready,
+            interaction_poll_status: PollStatus::Ready,
+            task_poll_status: PollStatus::Ready,
+            task_generation_epoch: 0,
+            task_projection_scope: None,
+            task_turn_sequence: 0,
             tool_scope: match (&options.profile, &options.allowed_tools) {
                 (Some(profile), None) => format!("{profile} profile · composed tools"),
                 (Some(profile), Some(tools)) if tools.is_empty() => {
@@ -530,6 +547,57 @@ impl TuiState {
             interaction_hit_targets: Vec::new(),
             shortcut_hit_targets: Vec::new(),
             animation_tick: 0,
+        }
+    }
+
+    fn panel_count(&self) -> usize {
+        self.panels.len() + 1
+    }
+
+    fn panel_at(&self, index: usize) -> Option<(&str, &str)> {
+        self.panels.get(index).map_or_else(
+            || (index == self.panels.len()).then_some(("Tasks", self.task_panel_body.as_str())),
+            |panel| Some((panel.title.as_str(), panel.body.as_str())),
+        )
+    }
+
+    fn replace_plugin_panels(&mut self, panels: Vec<SnapshotResponsePanelsItem>) {
+        let tasks_selected = self.selected_panel == self.panels.len();
+        self.panels = panels;
+        self.selected_panel = if tasks_selected {
+            self.panels.len()
+        } else {
+            self.selected_panel.min(self.panels.len())
+        };
+    }
+
+    fn advance_task_generation_epoch(&mut self) {
+        self.task_generation_epoch = self.task_generation_epoch.wrapping_add(1);
+    }
+
+    fn current_task_scope(&self) -> TaskRouteScope {
+        self.active.as_ref().map_or(
+            TaskRouteScope::CurrentGeneration(self.task_generation_epoch),
+            |active| TaskRouteScope::Turn(active.task_scope_id),
+        )
+    }
+
+    fn next_task_turn_scope_id(&mut self) -> u64 {
+        self.task_turn_sequence = self.task_turn_sequence.wrapping_add(1);
+        self.task_turn_sequence
+    }
+
+    fn reset_task_projection_if_stale(&mut self) -> bool {
+        if self
+            .task_projection_scope
+            .is_some_and(|scope| scope != self.current_task_scope())
+        {
+            "Loading supervised tasks…".clone_into(&mut self.task_panel_body);
+            self.task_poll_status = PollStatus::Ready;
+            self.task_projection_scope = None;
+            true
+        } else {
+            false
         }
     }
 
@@ -597,6 +665,11 @@ use input::{
 use interaction::{InteractionDraft, sync_user_interaction};
 #[cfg(test)]
 use interaction::{finish_interaction_submission, handle_interaction_key};
+#[path = "task_supervision.rs"]
+mod task_supervision;
+use task_supervision::TaskSnapshotPoll;
+#[cfg(test)]
+use task_supervision::{TASK_POLL_ERROR_INTERVAL, TASK_POLL_INTERVAL, apply_task_snapshot};
 #[path = "turn.rs"]
 mod turn;
 #[cfg(test)]

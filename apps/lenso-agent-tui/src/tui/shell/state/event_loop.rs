@@ -2,9 +2,9 @@
 
 use super::{
     ACTIVE_TICK, AgentApp, CrosstermBackend, EVENT_TICK, EventStream, SnapshotResponsePanelsItem,
-    StreamExt, Suggestion, Terminal, TuiOptions, TuiState, UiPhase, handle_stream_event,
-    handle_terminal_event, io, present_online_generation_events, render, submit,
-    sync_user_interaction,
+    StreamExt, Suggestion, TaskSnapshotPoll, Terminal, TuiOptions, TuiState, UiPhase,
+    handle_stream_event, handle_terminal_event, io, present_online_generation_events, render,
+    submit, sync_user_interaction,
 };
 
 pub(in crate::tui::shell) async fn run_loop(
@@ -27,6 +27,7 @@ async fn run_loop_inner(
     events: &mut EventStream,
     state: &mut TuiState,
 ) -> Result<(), String> {
+    let mut task_poll = TaskSnapshotPoll::new();
     loop {
         present_online_generation_events(app, state).await;
         sync_user_interaction(state).await;
@@ -39,6 +40,8 @@ async fn run_loop_inner(
                 submit(app, options, state).await?;
             }
         }
+        task_poll.reset_if_stale(state);
+        task_poll.start_if_due(app, state);
         terminal
             .draw(|frame| render(frame, state))
             .map_err(|error| format!("failed to render TUI: {error}"))?;
@@ -46,6 +49,10 @@ async fn run_loop_inner(
         if state.active.is_some() {
             let active = state.active.as_mut().expect("active turn checked");
             tokio::select! {
+                snapshot = task_poll.receive() => {
+                    present_online_generation_events(app, state).await;
+                    task_poll.finish(state, snapshot);
+                }
                 event = events.next() => {
                     if handle_terminal_event(event, state)? {
                         return Ok(());
@@ -60,6 +67,10 @@ async fn run_loop_inner(
             }
         } else {
             tokio::select! {
+                snapshot = task_poll.receive() => {
+                    present_online_generation_events(app, state).await;
+                    task_poll.finish(state, snapshot);
+                }
                 event = events.next() => {
                     if handle_terminal_event(event, state)? {
                         return Ok(());

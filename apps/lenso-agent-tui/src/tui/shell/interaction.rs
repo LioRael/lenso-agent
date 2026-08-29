@@ -4,9 +4,8 @@
 //! transcript entry.
 
 use super::{
-    ACTIVE_TICK, Duration, Focus, Instant, InteractionAnswer, InteractionPollStatus,
-    InteractionQuestion, KeyCode, KeyEvent, KeyModifiers, PendingInteraction, TranscriptEntry,
-    TuiState,
+    ACTIVE_TICK, Duration, Focus, Instant, InteractionAnswer, InteractionQuestion, KeyCode,
+    KeyEvent, KeyModifiers, PendingInteraction, PollStatus, TranscriptEntry, TuiState,
 };
 use std::collections::BTreeSet;
 
@@ -288,7 +287,7 @@ pub(super) async fn sync_user_interaction(state: &mut TuiState) {
     };
     match result {
         Ok(interactions) => {
-            state.interaction_poll_status = InteractionPollStatus::Ready;
+            state.interaction_poll_status = PollStatus::Ready;
             if let Some(interaction) = interactions.into_iter().next() {
                 state.interaction_draft = Some(InteractionDraft::new(&interaction));
                 state.pending_interaction = Some(interaction);
@@ -297,11 +296,11 @@ pub(super) async fn sync_user_interaction(state: &mut TuiState) {
         }
         Err(error) => {
             state.next_interaction_poll = Instant::now() + Duration::from_secs(2);
-            if state.interaction_poll_status == InteractionPollStatus::Ready {
+            if state.interaction_poll_status == PollStatus::Ready {
                 state.transcript.push(TranscriptEntry::Error {
                     text: format!("Could not read pending user questions: {error}"),
                 });
-                state.interaction_poll_status = InteractionPollStatus::ErrorReported;
+                state.interaction_poll_status = PollStatus::ErrorReported;
             }
         }
     }

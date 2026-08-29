@@ -5,6 +5,7 @@ use super::{
     ReadResourceRequest, RenderPromptRequest, RunScope, RunTurnRequest, ScrollState,
     TranscriptEntry, TuiOptions, TuiState, UiPhase, current_timestamp,
 };
+use std::rc::Rc;
 
 pub(super) async fn submit(
     app: &AgentApp,
@@ -94,9 +95,11 @@ pub(super) async fn submit(
         .close_send()
         .await
         .map_err(|error| format!("failed to half-close Agent input: {error:?}"))?;
+    let task_scope_id = state.next_task_turn_scope_id();
     state.active = Some(ActiveTurn {
         stream,
-        lease,
+        lease: Rc::new(lease),
+        task_scope_id,
         started_at,
     });
     Ok(())

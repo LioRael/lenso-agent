@@ -5,19 +5,22 @@ use super::{
 };
 
 pub(super) fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
-    let panel = &state.panels[state.selected_panel];
-    let title = if state.panels.len() > 1 {
+    let Some((panel_title, panel_body)) = state.panel_at(state.selected_panel) else {
+        return;
+    };
+    let panel_count = state.panel_count();
+    let title = if panel_count > 1 {
         format!(
             " {} · {}/{} ",
-            panel.title,
+            panel_title,
             state.selected_panel + 1,
-            state.panels.len()
+            panel_count
         )
     } else {
-        format!(" {} ", panel.title)
+        format!(" {panel_title} ")
     };
     frame.render_widget(
-        Paragraph::new(panel.body.as_str())
+        Paragraph::new(panel_body)
             .style(Style::default().fg(Palette::MUTED))
             .block(
                 Block::default()

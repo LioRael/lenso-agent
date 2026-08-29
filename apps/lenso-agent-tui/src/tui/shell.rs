@@ -94,3 +94,4 @@ mod state;
 use state::run_loop;
 mod terminal;
 use terminal::TerminalSession;
+mod text;

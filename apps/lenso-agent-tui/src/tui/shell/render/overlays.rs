@@ -2,6 +2,7 @@ use super::{
     Block, Clear, ENTRY_ACCENT_WIDTH, ENTRY_PAD_LEFT, Frame, Line, MAX_VISIBLE_QUEUE_ROWS,
     Modifier, Palette, Paragraph, QueueHitTarget, Rect, Span, Style, SuggestionHitTarget, TuiState,
 };
+use crate::tui::shell::text::truncate_text;
 
 pub(super) fn render_queue(frame: &mut Frame<'_>, area: Rect, state: &mut TuiState) {
     state.queue_hit_targets.clear();
@@ -266,25 +267,4 @@ pub(super) fn content_area(area: Rect) -> Rect {
         width: area.width.saturating_sub(horizontal.saturating_mul(2)),
         height: area.height.saturating_sub(vertical.saturating_mul(2)),
     }
-}
-
-fn truncate_text(text: &str, max_width: usize) -> String {
-    if Line::from(text).width() <= max_width {
-        return text.to_owned();
-    }
-    if max_width == 0 {
-        return String::new();
-    }
-    let mut output = String::new();
-    let mut used: usize = 0;
-    for character in text.chars() {
-        let width = Line::from(character.to_string()).width();
-        if used.saturating_add(width).saturating_add(1) > max_width {
-            break;
-        }
-        output.push(character);
-        used = used.saturating_add(width);
-    }
-    output.push('…');
-    output
 }

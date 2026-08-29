@@ -389,9 +389,9 @@ pub(in crate::tui::shell) fn handle_key(key: KeyEvent, state: &mut TuiState) -> 
         return handled;
     }
     match key.code {
-        KeyCode::BackTab if !state.panels.is_empty() => {
+        KeyCode::BackTab => {
             if state.panel_open {
-                state.selected_panel = (state.selected_panel + 1) % state.panels.len();
+                state.selected_panel = (state.selected_panel + 1) % state.panel_count();
             } else {
                 state.panel_open = true;
             }
