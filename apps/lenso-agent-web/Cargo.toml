@@ -22,9 +22,11 @@ default = ["standalone"]
 standalone = ["dep:lenso-agent-default-plugins"]
 
 [dependencies]
+anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
 futures.workspace = true
+fs2.workspace = true
 lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins", optional = true }
 lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
@@ -36,6 +38,7 @@ lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
+rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
@@ -45,8 +48,6 @@ tokio-stream.workspace = true
 workspace = true
 
 [dev-dependencies]
-anyhow.workspace = true
 lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
 reqwest.workspace = true
-rusqlite.workspace = true
 tempfile.workspace = true

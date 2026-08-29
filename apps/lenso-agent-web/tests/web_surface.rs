@@ -590,6 +590,149 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_eq!(applied["configurationStatus"], "applied");
 }
 
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)]
+async fn persists_managed_plugin_configuration_across_host_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let database = root.path().join("configuration.sqlite3");
+    let control_token = ["fixture", "managed", "configuration"].join("-");
+    let address = available_address();
+    let start_server = || {
+        ChildGuard(
+            Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+                .args([
+                    "--listen",
+                    &address.to_string(),
+                    "--plugin-control",
+                    "--plugin-configuration-store",
+                    database.to_str().unwrap(),
+                ])
+                .env("LENSO_AGENT_CONTROL_TOKEN", &control_token)
+                .current_dir(root.path())
+                .env("LENSO_AGENT_HOME", root.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let mut server = start_server();
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+    let endpoint = format!(
+        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/configuration"
+    );
+    let proposals_endpoint = format!("{endpoint}/proposals");
+    let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
+    let initial = read_plugin_management(&client, &management_endpoint, &control_token).await;
+    assert_eq!(
+        initial["configurationAuthority"],
+        serde_json::json!({
+            "kind": "sqlite_configuration_store",
+            "reference": "agent",
+        })
+    );
+    let initial_revision = initial["revision"].as_str().unwrap();
+    assert_eq!(
+        client
+            .post(format!(
+                "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/disable"
+            ))
+            .bearer_auth(&control_token)
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert_eq!(
+        read_plugin_management(&client, &management_endpoint, &control_token).await["revision"],
+        initial_revision
+    );
+    let configuration = concat!(
+        "model = \"gpt-5.6-luna\"\n",
+        "max_steps = 7\n",
+        "max_tool_calls = 4\n",
+        "max_parallel_tool_calls = 4\n",
+        "max_output_tokens = 1024\n",
+        "max_history_events = 200\n",
+        "max_compaction_summary_characters = 8192\n",
+        "max_memory_items = 8\n",
+        "max_memory_characters = 16384\n",
+    );
+    let proposal = client
+        .post(&proposals_endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "toml": configuration,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let reformatted_configuration = configuration.replacen("model = ", "model=", 1);
+    assert_eq!(
+        client
+            .put(&endpoint)
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({
+                "expectedRevision": initial_revision,
+                "proposalDigest": proposal["proposalDigest"],
+                "toml": reformatted_configuration,
+            }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let publication = client
+        .put(&endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({
+            "expectedRevision": initial_revision,
+            "proposalDigest": proposal["proposalDigest"],
+            "toml": configuration,
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    let published_revision = publication["revision"].as_str().unwrap().to_owned();
+    drop(server);
+
+    let mut recovered = start_server();
+    wait_until_ready(&client, address, &mut recovered.0).await;
+    let management = read_plugin_management(&client, &management_endpoint, &control_token).await;
+    assert_eq!(management["revision"], published_revision);
+    assert_eq!(
+        management["configurationAuthority"],
+        initial["configurationAuthority"]
+    );
+    let connection = rusqlite::Connection::open_with_flags(
+        &database,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
+    let publications = connection
+        .query_row(
+            "SELECT COUNT(*) FROM configuration_publications WHERE revision = ?1",
+            [&published_revision],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap();
+    assert_eq!(publications, 1);
+}
+
 async fn read_plugin_management(
     client: &reqwest::Client,
     endpoint: &str,

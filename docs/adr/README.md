@@ -62,3 +62,4 @@
 - [0060 — Project bounded child-task supervision](0060-project-bounded-child-task-supervision.md)
 - [0061 — Abstract Plugin configuration authority](0061-abstract-plugin-configuration-authority.md)
 - [0062 — Compose isolated child worktrees](0062-compose-isolated-child-worktrees.md)
+- [0063 — Persist managed Plugin configuration publications](0063-persist-managed-plugin-configuration-publications.md)
