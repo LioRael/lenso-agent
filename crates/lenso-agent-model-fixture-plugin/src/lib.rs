@@ -544,7 +544,12 @@ fn cancelled_subagent_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
 ) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
-    for tool in ["spawn_subagent", "wait_subagent", "cancel_subagent"] {
+    for tool in [
+        "spawn_subagent",
+        "list_subagents",
+        "wait_subagent",
+        "cancel_subagent",
+    ] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
             return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
         }
@@ -561,7 +566,18 @@ fn cancelled_subagent_response(
             "spawn_subagent",
             r#"{"task":"Remain pending until cancelled."}"#,
         )),
-        ([_], Some(Ok(task_id))) => {
+        ([_], Some(Ok(_))) => Ok(named_tool_request(
+            "call-list-subagents",
+            "list_subagents",
+            "{}",
+        )),
+        ([_, listed], Some(Ok(task_id)))
+            if serde_json::from_str::<serde_json::Value>(&listed.content).is_ok_and(|value| {
+                value["task_count"] == 1
+                    && value["tasks"][0]["task_id"] == task_id
+                    && value["tasks"][0]["status"] == "running"
+            }) =>
+        {
             let arguments = serde_json::json!({ "task_id": task_id }).to_string();
             Ok(named_tool_request(
                 "call-cancel-pending-subagent",
@@ -569,7 +585,7 @@ fn cancelled_subagent_response(
                 &arguments,
             ))
         }
-        ([_, _], Some(Ok(task_id))) => {
+        ([_, _, _], Some(Ok(task_id))) => {
             let arguments = serde_json::json!({ "task_id": task_id }).to_string();
             Ok(named_tool_request(
                 "call-wait-cancelled-subagent",
@@ -577,7 +593,7 @@ fn cancelled_subagent_response(
                 &arguments,
             ))
         }
-        ([_, _, waited], Some(Ok(_)))
+        ([_, _, _, waited], Some(Ok(_)))
             if serde_json::from_str::<serde_json::Value>(&waited.content)
                 .is_ok_and(|value| value["status"] == "cancelled") =>
         {

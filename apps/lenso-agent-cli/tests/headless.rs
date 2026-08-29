@@ -1862,6 +1862,25 @@ fn cancelling_a_spawned_child_does_not_cancel_the_parent_turn() {
     let cancel_metadata: serde_json::Value =
         serde_json::from_str(cancelled["metadata_json"].as_str().unwrap()).unwrap();
     assert_eq!(cancel_metadata["status"], "cancellation_requested");
+    let listed = tool_results
+        .iter()
+        .find(|result| result["name"] == "list_subagents")
+        .unwrap();
+    let listed_content: serde_json::Value =
+        serde_json::from_str(listed["content"].as_str().unwrap()).unwrap();
+    let listed_metadata: serde_json::Value =
+        serde_json::from_str(listed["metadata_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        listed_metadata["schema"],
+        "lenso.agent.subagent-task-list@1"
+    );
+    assert_eq!(listed_metadata["task_count"], 1);
+    assert_eq!(listed_content["task_count"], 1);
+    assert_eq!(listed_content["tasks"][0]["status"], "running");
+    assert_eq!(
+        listed_content["tasks"][0]["task_id"],
+        cancel_metadata["task_id"]
+    );
     let waited = tool_results
         .iter()
         .find(|result| result["name"] == "wait_subagent")

@@ -34,8 +34,11 @@ pub const WAIT_SUBAGENT_TOOL: &str = "wait_subagent";
 pub const CANCEL_SUBAGENT_TOOL: &str = "cancel_subagent";
 /// Stable model-visible Tool name for adding input at the child Agent's next model boundary.
 pub const SEND_SUBAGENT_TOOL: &str = "send_subagent";
+/// Stable model-visible Tool name for non-destructive task discovery.
+pub const LIST_SUBAGENTS_TOOL: &str = "list_subagents";
 const RESULT_METADATA_SCHEMA: &str = "lenso.agent.subagent-result@1";
 const TASK_METADATA_SCHEMA: &str = "lenso.agent.subagent-task@1";
+const TASK_LIST_METADATA_SCHEMA: &str = "lenso.agent.subagent-task-list@1";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -136,6 +139,12 @@ impl ToolProviderProvider for SubagentToolsPlugin {
                     input_schema_json: send_input_schema(self.config.max_task_bytes),
                     execution: ToolExecutionClass::Exclusive,
                 },
+                ToolDefinition {
+                    name: LIST_SUBAGENTS_TOOL.to_owned(),
+                    description: "List every child-Agent task still owned by this App Generation without waiting for or consuming terminal results.".to_owned(),
+                    input_schema_json: empty_input_schema(),
+                    execution: ToolExecutionClass::Exclusive,
+                },
             ],
         }))))
     }
@@ -151,6 +160,7 @@ impl ToolProviderProvider for SubagentToolsPlugin {
             WAIT_SUBAGENT_TOOL => self.execute_wait(&request),
             CANCEL_SUBAGENT_TOOL => self.execute_cancel(&request),
             SEND_SUBAGENT_TOOL => self.execute_send(context, &request),
+            LIST_SUBAGENTS_TOOL => self.execute_list(&request),
             _ => Box::pin(ready(Ok(Err(ExecuteError::NotFound)))),
         }
     }
@@ -205,6 +215,17 @@ fn send_input_schema(max_input_bytes: usize) -> tool_provider_contract::RawJson 
     .to_string()
     .try_into()
     .expect("subagent send schema must be valid JSON")
+}
+
+fn empty_input_schema() -> tool_provider_contract::RawJson {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+    })
+    .to_string()
+    .try_into()
+    .expect("subagent list schema must be valid JSON")
 }
 
 impl SubagentToolsPlugin {
@@ -415,6 +436,42 @@ impl SubagentToolsPlugin {
         })
     }
 
+    fn execute_list(
+        &self,
+        request: &ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        let Ok(arguments) = serde_json::from_str::<BTreeMap<String, serde_json::Value>>(
+            request.arguments_json.as_str(),
+        ) else {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        };
+        if !arguments.is_empty() {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        }
+        let tasks = self
+            .registry
+            .borrow()
+            .tasks
+            .iter()
+            .map(|(task_id, task)| task.borrow().snapshot(task_id))
+            .collect::<Vec<_>>();
+        Box::pin(ready(Ok(Ok(ExecuteResponse {
+            content: serde_json::json!({
+                "task_count": tasks.len(),
+                "tasks": tasks,
+            })
+            .to_string(),
+            content_type: ContentType::Text,
+            metadata_json: serde_json::json!({
+                "schema": TASK_LIST_METADATA_SCHEMA,
+                "task_count": tasks.len(),
+            })
+            .to_string()
+            .try_into()
+            .expect("subagent task-list metadata must be valid JSON"),
+        }))))
+    }
+
     fn parse_task(&self, request: &ExecuteRequest) -> Result<DelegateArguments, ()> {
         let arguments = serde_json::from_str::<DelegateArguments>(request.arguments_json.as_str())
             .map_err(|_| ())?;
@@ -535,6 +592,21 @@ impl SubagentTask {
             stream.cancel();
         }
         "cancellation_requested"
+    }
+
+    fn snapshot(&self, task_id: &str) -> serde_json::Value {
+        let status = match self.terminal {
+            Some(SubagentTaskTerminal::Completed(_)) => "completed",
+            Some(SubagentTaskTerminal::Domain(_) | SubagentTaskTerminal::Runtime(_)) => "failed",
+            Some(SubagentTaskTerminal::Cancelled) => "cancelled",
+            None if self.cancel_requested => "cancellation_requested",
+            None => "running",
+        };
+        serde_json::json!({
+            "task_id": task_id,
+            "status": status,
+            "child_session_id": self.child_session_id,
+        })
     }
 }
 
@@ -1096,6 +1168,24 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn task_snapshot_is_non_destructive_and_tracks_lifecycle() {
+        let mut task = SubagentTask::new();
+        assert_eq!(task.snapshot("task-1")["status"], "running");
+
+        task.observe_session("session-1");
+        assert_eq!(task.snapshot("task-1")["child_session_id"], "session-1");
+        assert_eq!(task.request_cancel(), "cancellation_requested");
+        assert_eq!(task.snapshot("task-1")["status"], "cancellation_requested");
+
+        task.terminal = Some(SubagentTaskTerminal::Cancelled);
+        assert_eq!(task.snapshot("task-1")["status"], "cancelled");
+        assert!(matches!(
+            task.terminal,
+            Some(SubagentTaskTerminal::Cancelled)
+        ));
     }
 
     #[test]
