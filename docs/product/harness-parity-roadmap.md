@@ -51,7 +51,8 @@ explicit parent approval.
 
 Expose the same Host and immutable Generation semantics through:
 
-1. ACP for editor integration, followed by first-party VS Code/Zed packaging;
+1. ACP stdio editor integration is delivered by ADR-0067; first-party VS Code
+   and Zed packaging follows;
 2. a provider/model catalog with typed authentication and capability metadata;
 3. Plugin discovery and marketplace UX over the existing Plugin Root and
    admission policy;

@@ -12,6 +12,7 @@ The Host starts with its compiled defaults when
 
 ```sh
 cargo run -p lenso-agent-tui
+cargo run -p lenso-agent-acp -- --profile code
 cargo run -p lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
@@ -46,10 +47,10 @@ Each Host build generates an immutable Host Catalog containing:
 - private attachments needed to distinguish repeated capability providers.
 
 The shared `lenso-agent-host` crate does not link concrete Plugins. The
-headless, TUI, and Channel distributions each link a surface-neutral default
-Plugin set plus only their own consumer Plugins. Therefore a Plugin absent from
-an executable is absent from its Host Catalog rather than merely disabled at
-runtime.
+headless, TUI, ACP, and Channel distributions each link a surface-neutral
+default Plugin set plus only their own consumer Plugins. Therefore a Plugin
+absent from an executable is absent from its Host Catalog rather than merely
+disabled at runtime.
 
 Resolution snapshots the complete Plugin Root, validates strict directory,
 TOML, and bounded Instance-resource shapes, verifies any external package bytes, merges package defaults, Host

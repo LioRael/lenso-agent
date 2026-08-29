@@ -1,0 +1,33 @@
+[package]
+name = "lenso-agent-acp"
+version = "0.1.0"
+description = "ACP stdio surface for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "lenso-agent-acp"
+path = "src/main.rs"
+
+[dependencies]
+agent-client-protocol.workspace = true
+clap.workspace = true
+lenso-agent-acp-plugin = { path = "../../crates/lenso-agent-acp-plugin" }
+lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins" }
+lenso-agent-host = { path = "../../crates/lenso-agent-host" }
+lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
+lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
+lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
+lenso-kernel.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

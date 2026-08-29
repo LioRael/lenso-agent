@@ -587,6 +587,11 @@ impl AgentApp {
         self.lease_turn_for("cli").await
     }
 
+    /// Pins one editor-submitted ACP Turn to the active App Generation.
+    pub async fn lease_acp_turn(&self) -> Result<TurnGeneration, String> {
+        self.lease_turn_for("acp").await
+    }
+
     /// Pins one TUI-submitted Agent Turn to the active App Generation.
     pub async fn lease_tui_turn(&self) -> Result<TurnGeneration, String> {
         self.lease_turn_for("tui").await
@@ -797,6 +802,7 @@ impl AgentApp {
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
         let route = self.host.route().await.map_err(control_error)?;
         let consumer_instance = match consumer_instance {
+            "acp" => "lenso.agent.acp/acp",
             "cli" => "lenso.agent.cli/cli",
             "tui" => "lenso.agent.tui/tui",
             "telegram" => "lenso.agent.telegram/telegram",
@@ -2158,6 +2164,7 @@ fn host_catalog_defaults(
     let mut defaults = agent_defaults(available);
     defaults.extend(default_interactive_plugins());
     defaults.extend([
+        HostDefaultPlugin::new("lenso.agent.acp", "acp"),
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
         HostDefaultPlugin::new("lenso.agent.discord", "discord"),
         default_context_compaction_plugin(),
@@ -2671,6 +2678,7 @@ fn host_catalog_bindings(
         );
     }
     for surface in [
+        PluginInstanceId::new("lenso.agent.acp", "acp"),
         PluginInstanceId::new("lenso.agent.cli", "cli"),
         PluginInstanceId::new("lenso.agent.discord", "discord"),
         PluginInstanceId::new("lenso.agent.telegram", "telegram"),
@@ -3393,6 +3401,26 @@ mod tests {
                     && binding.provider_slot() == Some("tool-providers")
             }));
         }
+    }
+
+    #[test]
+    fn acp_surface_binds_only_to_the_selected_agent() {
+        let available = ["lenso.agent.acp"].into_iter().map(str::to_owned).collect();
+        let selected_agent = PluginInstanceId::new("lenso.agent.loop", "reviewer");
+        let bindings = host_catalog_bindings(&selected_agent, &available);
+
+        let acp_bindings = bindings
+            .iter()
+            .filter(|binding| binding.consumer().to_string() == "lenso.agent.acp/acp")
+            .collect::<Vec<_>>();
+        assert_eq!(acp_bindings.len(), 1);
+        assert_eq!(acp_bindings[0].capability_id(), "lenso.agent@3");
+        let binding = serde_json::to_value(acp_bindings[0]).unwrap();
+        assert_eq!(
+            binding["provider_instance"]["plugin_id"],
+            "lenso.agent.loop"
+        );
+        assert_eq!(binding["provider_instance"]["instance_key"], "reviewer");
     }
 
     #[test]
