@@ -35,6 +35,14 @@ questions.
 An accepted answer completes the blocked `ask_user` Tool invocation. It is not
 a new conversational prompt and therefore must not create a User transcript
 entry. The resulting Tool completion remains the durable conversation record.
+The completed result carries the versioned
+`lenso.agent.user-interaction-completed@1` metadata fact. The Agent Loop treats
+that fact as a user resume boundary: the conversation Turn and monotonically
+ordered model-step record remain unchanged, while a fresh bounded autonomous
+execution segment receives new step, Tool-call, and output-token budgets.
+Ordinary Tool metadata cannot renew a segment, and the App-owned
+`max_user_resumes` limit bounds how many renewals one Turn may receive. It
+defaults to eight when omitted so existing Agent configurations remain valid.
 
 `lenso.agent.ask-user-tools` projects the seam as one exclusive `ask_user`
 Tool. It accepts one to eight identified questions with bounded option labels,
@@ -62,3 +70,5 @@ change cannot route an answer into a newer Adapter instance.
 - A non-interactive surface has explicit behavior instead of a hidden timeout.
 - One Tool invocation can collect several related decisions without inventing
   multiple Tool calls, while each pending interaction remains Generation-pinned.
+- A late `ask_user` no longer consumes the remaining autonomous budget needed
+  to act on the answer, while repeated user interactions remain finitely bounded.

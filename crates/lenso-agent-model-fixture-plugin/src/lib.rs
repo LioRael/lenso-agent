@@ -224,6 +224,9 @@ impl FixtureModel {
         if current_user == "Ask me which mode to use." {
             return ask_user_response(request, &tool_results);
         }
+        if current_user == "Inspect before and after asking me which mode to use." {
+            return resumed_ask_user_response(request, &tool_results);
+        }
         if current_user == "Use the workspace Plugin to read README.md." {
             return workspace_plugin_response(request, &tool_results);
         }
@@ -417,6 +420,56 @@ fn ask_user_response(
                 response("2", CompleteMessageKind::Usage, "", "", "", "{}", "16", "4"),
             ])
         }
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn resumed_ask_user_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    if !request.tools.iter().any(|tool| tool.name == "ask_user")
+        || !request.tools.iter().any(|tool| tool.name == "list")
+    {
+        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-resume-read-before-1",
+            "list",
+            "{}",
+        )),
+        [_] => Ok(named_tool_request(
+            "call-resume-read-before-2",
+            "list",
+            "{}",
+        )),
+        [_, _] => Ok(named_tool_request(
+            "call-resume-read-before-3",
+            "list",
+            "{}",
+        )),
+        [_, _, _] => Ok(named_tool_request(
+            "call-resume-ask-user",
+            "ask_user",
+            r#"{"questions":[{"id":"mode","header":"Mode","question":"Which mode should I use?","options":[{"label":"safe","description":"Prefer bounded changes.","preview":"mode = \"safe\""},{"label":"fast","description":"Prefer faster iteration.","preview":"mode = \"fast\""}]}]}"#,
+        )),
+        [_, _, _, answer] if answer.content.contains("\"safe\"") => {
+            Ok(named_tool_request("call-resume-read-after", "list", "{}"))
+        }
+        [_, _, _, _, _] => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Interaction resume completed",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response("2", CompleteMessageKind::Usage, "", "", "", "{}", "32", "8"),
+        ]),
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }

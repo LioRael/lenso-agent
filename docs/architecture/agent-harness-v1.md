@@ -38,7 +38,9 @@ running graph.
 5. Model output streams to the surface; complete Tool calls are recorded before
    execution.
 6. Tool Runtime validates and dispatches to the Plan-bound Provider Plugin.
-7. Agent records the result and continues within finite step and call budgets.
+7. Agent records the result and continues within finite step and call budgets;
+   a bounded user-interaction resume opens a fresh autonomous budget segment
+   inside the same durable Turn.
 8. A terminal event is recorded before the Generation lease is released.
 
 ## Ownership
