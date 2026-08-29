@@ -1,7 +1,10 @@
 use std::{net::SocketAddr, path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
-use lenso_agent_web::{AgentWebConfig, AgentWebControl, AgentWebSurface, CONTROL_TOKEN_ENV};
+use lenso_agent_web::{
+    AgentWebConfig, AgentWebControl, AgentWebSurface, CONTROL_TOKEN_ENV,
+    PluginConfigurationStoreConfig,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -33,6 +36,10 @@ struct Args {
     /// Allow the authorized Console Host to mutate this Agent Home's Plugin Root.
     #[arg(long)]
     plugin_control: bool,
+
+    /// SQLite store for managed Plugin configuration proposals and publications.
+    #[arg(long, value_name = "PATH", requires = "plugin_control")]
+    plugin_configuration_store: Option<PathBuf>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -54,6 +61,9 @@ async fn run(args: Args) -> Result<(), String> {
     config.allowed_tools = args.allowed_tools;
     config.tool_policy = args.tool_policy;
     config.plugin_control = args.plugin_control;
+    config.plugin_configuration_store = args
+        .plugin_configuration_store
+        .map(|database| PluginConfigurationStoreConfig::new(database, "agent"));
     config.control = std::env::var(CONTROL_TOKEN_ENV)
         .ok()
         .filter(|value| !value.is_empty())

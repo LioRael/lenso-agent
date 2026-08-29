@@ -94,6 +94,22 @@ The control route accepts only the matching bearer token. Updates validate
 against the active Plan-bound Tool catalog, use an expected revision, persist
 before activation, and affect only Turns admitted after the update.
 
+Plugin configuration control can additionally select an explicit durable
+authority. Proposals remain read-only, while publication uses revision CAS,
+materializes the reviewed Plugin Root, and records durable history:
+
+```sh
+LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
+  cargo run -p lenso-agent-web -- \
+  --listen 127.0.0.1:8788 \
+  --plugin-control \
+  --plugin-configuration-store ~/.lenso/agent/plugin-configuration.sqlite3
+```
+
+The store path must be absolute. Omitting it preserves direct local Plugin Root
+authority. This SQLite adapter is a single-Host persistence boundary, not a
+remote configuration service or distributed rollout coordinator.
+
 An embedding Host composes the library Surface with its own explicitly linked
 Plugin inventory. `lenso-agent-web` does not select Console, workspace, process,
 or other product behavior for the Host:

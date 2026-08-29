@@ -41,6 +41,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
+mod configuration_store;
+
+pub use configuration_store::{PluginConfigurationStoreConfig, SqlitePluginConfigurationAuthority};
+
 const MAX_REQUEST_BYTES: usize = 65_536;
 const MAX_PROMPT_BYTES: usize = 65_536;
 const TOOL_POLICY_SCHEMA: &str = "lenso.agent.tool-policy.v1";
@@ -86,6 +90,11 @@ pub struct AgentWebConfig {
     /// observe through its managed Plugin Root before Generation reconciliation.
     /// Omit to use the local Plugin Root authority.
     pub plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    /// Optional durable managed authority selected by this Host.
+    ///
+    /// This conflicts with `plugin_configuration_authority`; it is a concrete
+    /// standalone adapter for the same Host port.
+    pub plugin_configuration_store: Option<PluginConfigurationStoreConfig>,
     /// Exact linked Plugin inventory exposed by this Host build.
     pub plugins: fn(),
 }
@@ -103,6 +112,7 @@ impl AgentWebConfig {
             control: AgentWebControl::Disabled,
             plugin_control: false,
             plugin_configuration_authority: None,
+            plugin_configuration_store: None,
             plugins,
         }
     }
@@ -869,6 +879,7 @@ impl AgentWebSurface {
             control,
             plugin_control,
             plugin_configuration_authority,
+            plugin_configuration_store,
             plugins,
         } = config;
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
@@ -887,6 +898,15 @@ impl AgentWebSurface {
         if plugin_control && matches!(control, AgentWebControl::Disabled) {
             return Err("Plugin Root control requires an authorized Host control seam".to_owned());
         }
+        if !plugin_control && plugin_configuration_store.is_some() {
+            return Err("a Plugin configuration store requires Plugin Root control".to_owned());
+        }
+        if plugin_configuration_authority.is_some() && plugin_configuration_store.is_some() {
+            return Err(
+                "a Plugin configuration store conflicts with an injected configuration authority"
+                    .to_owned(),
+            );
+        }
         if plugin_control && (plan.is_some() || profile.is_some()) {
             return Err(
                 "Plugin Root control currently requires the default authoring-managed App"
@@ -904,6 +924,14 @@ impl AgentWebSurface {
         .surface(WebSurface::browser())
         .build()?;
         let app = host.run(selected_profile).await?;
+        let app_root = managed_app_root.as_deref().unwrap_or(directories.home());
+        let plugin_configuration_authority = match plugin_configuration_store {
+            Some(store) => Some(Arc::new(
+                SqlitePluginConfigurationAuthority::open(app_root, store)
+                    .map_err(|error| error.to_string())?,
+            ) as Arc<dyn PluginConfigurationAuthority>),
+            None => plugin_configuration_authority,
+        };
         let plugin_control = resolve_plugin_control(
             plugin_control,
             plugin_configuration_authority,
@@ -1617,6 +1645,7 @@ impl PluginControl {
     }
 
     fn install(&self, bundle: &FsPath) -> Result<PluginInventoryResponse, String> {
+        self.require_local_root_mutation()?;
         self.mutate(|root| {
             add_bundle(root, bundle)
                 .map(|(_, _, app)| app)
@@ -1706,6 +1735,7 @@ impl PluginControl {
         instance: &str,
         enabled: bool,
     ) -> Result<PluginInventoryResponse, String> {
+        self.require_local_root_mutation()?;
         self.mutate(|root| {
             set_instance_disabled(root, plugin_id, instance, !enabled)
                 .map_err(|error| error.to_string())
@@ -1717,17 +1747,29 @@ impl PluginControl {
         plugin_id: &str,
         instance: &str,
     ) -> Result<PluginInventoryResponse, String> {
+        self.require_local_root_mutation()?;
         self.mutate(|root| {
             remove_instance_difference(root, plugin_id, instance).map_err(|error| error.to_string())
         })
     }
 
     fn remove(&self, plugin_id: &str) -> Result<PluginInventoryResponse, String> {
+        self.require_local_root_mutation()?;
         self.mutate(|root| {
             remove_plugin(root, plugin_id)
                 .map(|(app, _)| app)
                 .map_err(|error| error.to_string())
         })
+    }
+
+    fn require_local_root_mutation(&self) -> Result<(), String> {
+        if self.configuration_source().kind() == "local_plugin_root" {
+            return Ok(());
+        }
+        Err(
+            "the selected Plugin configuration authority does not permit direct Plugin Root mutation"
+                .to_owned(),
+        )
     }
 
     fn mutate(
