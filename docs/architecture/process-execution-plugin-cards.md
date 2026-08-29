@@ -7,14 +7,17 @@ Status: implementation baseline for the higher-authority local-coding profile.
 - **Deletion boundary:** removes the authorized program catalog and every local
   subprocess; workspace read, Prompt, Session, Agent Loop, Runner,
   Execution Adapter, and Kernel remain unchanged.
-- **Owned facts:** canonical workspace root, allowed executable basenames and
-  resolved identities, inherited environment allowlist, argument/time/output
-  limits, cwd containment, child pipes, exit status, and process-group cleanup.
+- **Owned facts:** canonical workspace root, typed program preset expansion,
+  explicit executable basenames and resolved identities, inherited environment
+  allowlist, argument/time/output limits, cwd containment, child pipes, exit
+  status, and process-group cleanup.
 - **Provides:** private native `lenso.agent.process@1` (`catalog`, `run`).
 - **Requires:** none.
-- **Final authorization:** rejects unknown programs, invalid or escaping cwd,
-  excessive arguments/time/output, executable identity changes, and unavailable
-  roots. It clears the child environment before projecting configured values.
+- **Final authorization:** resolves optional typed presets only to installed
+  known basenames, requires every explicit program to exist, and rejects
+  unknown programs, invalid or escaping cwd, excessive arguments/time/output,
+  executable identity changes, and unavailable roots. It clears the child
+  environment before projecting configured values.
 - **Lifecycle/resources:** each request owns one child process, isolated Unix
   process group, pipes, timeout, and drop guard. Completion disarms the guard;
   timeout, cancellation, output overflow, and dropped invocations kill the

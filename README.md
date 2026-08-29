@@ -117,6 +117,52 @@ A Profile selects an exact subset of configured Plugin Instances for one Agent
 Session. It does not contain Plugin configuration or introduce another App
 manifest. Keep every configuration beside its Plugin in the Agent Home:
 
+Install the official coding experience once:
+
+```sh
+lenso-agent-cli profiles install coding
+```
+
+This creates three inspectable Profiles and their Plugin Instance configuration:
+
+```sh
+lenso-agent --profile code  # edit, run bounded processes, use Git, delegate, approve inline
+lenso-agent --profile code-sandbox  # same workflow with OS-isolated processes and no network
+lenso-agent --profile plan  # read-only workspace planning
+```
+
+Both Profiles load `AGENTS.md` from the repository root through the current
+working directory when launched inside a Git repository. The coding Profile
+asks in the TUI before each Tool call not covered by its explicit read-only
+allowlist. Its Process Plugin runs only configured trusted executables and is
+not an OS security sandbox. The installer is idempotent and refuses to
+overwrite a file whose content was customized.
+
+The official coding configurations also select typed `rust`, `javascript`,
+`python`, `go`, and `build` program presets. Each preset expands only to known
+executable basenames that are actually present on the Host, and the generated
+`run_process` schema enumerates that resolved set. Explicit
+`allowed_programs` remain required-on-Host overrides. Neither path accepts a
+shell command string or arbitrary executable path.
+
+`code-sandbox` replaces the native Process Provider with
+`lenso.agent.process.sandbox`. On macOS it uses Seatbelt; on Linux it requires
+`bwrap` and usable unprivileged namespaces. Readiness runs a real backend probe
+and fails closed when the selected backend cannot isolate a process. The
+official policy exposes the host filesystem read-only, makes only the
+Workspace and a private per-invocation temporary directory writable, clears
+the child environment to an allowlist, and denies network access. This is an
+integrity and egress boundary, not a confidentiality boundary or VM: sandboxed
+programs can still read host files and execute descendants inside the same
+boundary. Windows is not yet supported by this Profile.
+
+The coding Profile also requires an explicit Workspace checkpoint before
+`edit` or `create_file`. The Agent passes that checkpoint ID to every mutation,
+reviews the bounded unified diff, then calls `checkpoint_accept` or
+`checkpoint_restore`. Restore performs a complete conflict preflight: if any
+recorded file no longer matches content produced inside the checkpoint, no
+file is changed.
+
 ```text
 ~/.lenso/agent/plugins/
   example.code-tools/
@@ -322,6 +368,7 @@ access. Configure it beside the Process provider that authorizes `git`:
 # plugins/lenso.agent.process.native/default.toml
 root = "."
 allowed_programs = ["git"]
+program_presets = ["rust", "javascript"]
 environment_allowlist = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]
 max_timeout_ms = 600000
 max_output_bytes = 262144

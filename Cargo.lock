@@ -2398,6 +2398,7 @@ dependencies = [
  "lenso-agent-context-compaction-plugin",
  "lenso-agent-git-tools-plugin",
  "lenso-agent-http-fetch-plugin",
+ "lenso-agent-interactive-approval-hook-plugin",
  "lenso-agent-lifecycle-audit-plugin",
  "lenso-agent-lifecycle-command-plugin",
  "lenso-agent-loop-plugin",
@@ -2408,6 +2409,7 @@ dependencies = [
  "lenso-agent-model-openai-codex-direct-plugin",
  "lenso-agent-model-openai-compatible-plugin",
  "lenso-agent-process-native-plugin",
+ "lenso-agent-process-sandbox-plugin",
  "lenso-agent-process-tools-plugin",
  "lenso-agent-prompt-filesystem-plugin",
  "lenso-agent-prompt-plugin",
@@ -2423,6 +2425,7 @@ dependencies = [
  "lenso-agent-user-interaction-local-plugin",
  "lenso-agent-workspace-edit-plugin",
  "lenso-agent-workspace-import-read-plugin",
+ "lenso-agent-workspace-instructions-plugin",
  "lenso-agent-workspace-read-plugin",
  "lenso-agent-workspace-read-tools-plugin",
  "lenso-secrets-command-plugin",
@@ -2516,6 +2519,18 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "lenso-agent-interactive-approval-hook-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-tool-hook",
+ "lenso-capability-agent-user-interaction",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2682,6 +2697,21 @@ dependencies = [
  "lenso-capability-agent-process",
  "lenso-kernel",
  "lenso-native-adapter",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "lenso-agent-process-sandbox-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-process",
+ "lenso-kernel",
  "nix",
  "serde",
  "serde_json",
@@ -3011,6 +3041,7 @@ dependencies = [
  "lenso-cli",
  "lenso-kernel",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -3031,8 +3062,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-workspace-edit-plugin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
+ "fs2",
  "futures",
  "lenso",
  "lenso-capability-agent-tool-provider",
@@ -3042,6 +3074,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
+ "uuid",
 ]
 
 [[package]]
@@ -3055,6 +3088,20 @@ dependencies = [
  "lenso-native-adapter",
  "serde",
  "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "lenso-agent-workspace-instructions-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-prompt-provider",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 

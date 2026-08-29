@@ -2,10 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["root", "max_file_bytes", "max_edit_bytes"],
+  "required": ["root", "max_file_bytes", "max_edit_bytes", "checkpoint_directory", "require_checkpoint", "max_checkpoints", "max_review_bytes"],
   "properties": {
     "root": { "type": "string" },
     "max_file_bytes": { "type": "integer" },
-    "max_edit_bytes": { "type": "integer" }
+    "max_edit_bytes": { "type": "integer" },
+    "checkpoint_directory": { "type": "string" },
+    "require_checkpoint": { "type": "boolean" },
+    "max_checkpoints": { "type": "integer" },
+    "max_review_bytes": { "type": "integer" }
   }
 }

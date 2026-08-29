@@ -144,6 +144,7 @@ pub(super) enum ToolKind {
     Execute,
     Edit,
     Create,
+    Checkpoint,
     Skill,
     Other,
 }
@@ -187,6 +188,8 @@ impl ToolKind {
             "run_process" | "execute" | "shell" | "bash" => Self::Execute,
             "edit" | "apply_patch" => Self::Edit,
             "create_file" | "write" => Self::Create,
+            "checkpoint_create" | "checkpoint_review" | "checkpoint_accept"
+            | "checkpoint_restore" => Self::Checkpoint,
             "skill" | "skill_resource" => Self::Skill,
             _ => Self::Other,
         }
@@ -206,6 +209,8 @@ impl ToolKind {
             (Self::Edit, true) => "Edited",
             (Self::Create, false) => "Creating",
             (Self::Create, true) => "Created",
+            (Self::Checkpoint, false) => "Reviewing",
+            (Self::Checkpoint, true) => "Reviewed",
             (Self::Skill, false) => "Loading skill",
             (Self::Skill, true) => "Loaded skill",
             (Self::Other, false) => "Calling",
@@ -246,7 +251,7 @@ impl ToolCard {
     }
 
     pub(super) fn activity(&self) -> String {
-        format!("{} {}", self.kind.verb(false), self.subject())
+        format!("{} {}", self.verb(false), self.subject())
     }
 
     pub(super) fn append_progress(&mut self, chunk: &str) {
@@ -268,7 +273,7 @@ impl ToolCard {
             ToolKind::Search => Some(ToolGroupKind::Search),
             ToolKind::List => Some(ToolGroupKind::List),
             ToolKind::Execute => Some(ToolGroupKind::Execute),
-            ToolKind::Edit | ToolKind::Create => Some(ToolGroupKind::Edit),
+            ToolKind::Edit | ToolKind::Create | ToolKind::Checkpoint => Some(ToolGroupKind::Edit),
             ToolKind::Other => None,
         }
     }
@@ -292,7 +297,26 @@ impl ToolCard {
                 .as_ref()
                 .and_then(|value| string_field(value, &["name", "skill", "path"]))
                 .unwrap_or_else(|| self.name.clone()),
+            ToolKind::Checkpoint => arguments
+                .as_ref()
+                .and_then(|value| string_field(value, &["checkpoint_id"]))
+                .map_or_else(
+                    || self.name.replace('_', " "),
+                    |value| format!("checkpoint {}", value.chars().take(8).collect::<String>()),
+                ),
             ToolKind::Other => self.name.replace('_', " "),
+        }
+    }
+
+    fn verb(&self, finished: bool) -> &'static str {
+        match (self.name.as_str(), finished) {
+            ("checkpoint_create", false) => "Creating",
+            ("checkpoint_create", true) => "Created",
+            ("checkpoint_accept", false) => "Accepting",
+            ("checkpoint_accept", true) => "Accepted",
+            ("checkpoint_restore", false) => "Restoring",
+            ("checkpoint_restore", true) => "Restored",
+            _ => self.kind.verb(finished),
         }
     }
 
@@ -361,7 +385,7 @@ pub(super) fn render_tool_block(lines: &mut Vec<Line<'static>>, card: &ToolCard,
             Style::default().fg(if selected { Palette::ACCENT } else { accent }),
         ),
         Span::styled(
-            format!("{} ", card.kind.verb(!running)),
+            format!("{} ", card.verb(!running)),
             Style::default().add_modifier(Modifier::BOLD),
         ),
         Span::styled(card.subject(), Style::default().fg(path_color(card.kind))),
@@ -389,6 +413,7 @@ pub(super) fn render_tool_block(lines: &mut Vec<Line<'static>>, card: &ToolCard,
     match card.kind {
         ToolKind::Execute if card.expanded => render_process(lines, card),
         ToolKind::Edit | ToolKind::Create if card.expanded => render_edit(lines, card),
+        ToolKind::Checkpoint if card.expanded => render_checkpoint(lines, card),
         ToolKind::Read if card.expanded => render_read(lines, card),
         ToolKind::Search | ToolKind::List if card.expanded => render_results(lines, card),
         _ if card.expanded => render_generic(lines, card),
@@ -450,6 +475,22 @@ fn render_edit(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
     }
     if let Some(new) = new {
         render_diff_side(lines, &new, start_line, false);
+    }
+    render_error(lines, card);
+}
+
+fn render_checkpoint(lines: &mut Vec<Line<'static>>, card: &ToolCard) {
+    if let Some(content) = card.content.as_deref().filter(|value| !value.is_empty()) {
+        for line in bounded_preview(content, 24, 8192).lines() {
+            let color = if line.starts_with('+') && !line.starts_with("+++") {
+                Color::LightGreen
+            } else if line.starts_with('-') && !line.starts_with("---") {
+                Color::LightRed
+            } else {
+                Palette::MUTED
+            };
+            detail_line(lines, "  ", line, color);
+        }
     }
     render_error(lines, card);
 }
@@ -571,6 +612,20 @@ fn result_summary(card: &ToolCard) -> Option<String> {
                 .and_then(Value::as_u64)
                 .map(|bytes| format!("{bytes} B"))
         }),
+        ToolKind::Checkpoint => metadata.as_ref().and_then(|value| {
+            let changes = value.get("changes").and_then(Value::as_u64);
+            let conflicts = value.get("conflicts").and_then(Value::as_u64);
+            match (changes, conflicts) {
+                (Some(changes), Some(0)) => Some(format!("{changes} changes")),
+                (Some(changes), Some(conflicts)) => {
+                    Some(format!("{changes} changes, {conflicts} conflicts"))
+                }
+                _ => value
+                    .get("files")
+                    .and_then(Value::as_u64)
+                    .map(|files| format!("{files} files")),
+            }
+        }),
         _ => None,
     }
 }
@@ -612,7 +667,7 @@ fn number_field(value: &Value, names: &[&str]) -> Option<u64> {
 fn path_color(kind: ToolKind) -> Color {
     if matches!(
         kind,
-        ToolKind::Read | ToolKind::List | ToolKind::Edit | ToolKind::Create
+        ToolKind::Read | ToolKind::List | ToolKind::Edit | ToolKind::Create | ToolKind::Checkpoint
     ) {
         Palette::PATH
     } else if kind == ToolKind::Execute {
@@ -734,6 +789,56 @@ mod tests {
             Some(r#"{"program":"cargo","arguments":["test","-q"]}"#.to_owned()),
         );
         assert_eq!(card.activity(), "Running cargo test -q");
+    }
+
+    #[test]
+    fn checkpoint_review_renders_a_semantic_diff_card() {
+        let mut card = ToolCard::running(
+            "call-1".to_owned(),
+            "checkpoint_review".to_owned(),
+            Some(r#"{"checkpoint_id":"12345678-1234-1234-1234-123456789abc"}"#.to_owned()),
+        );
+        card.status = ToolStatus::Completed;
+        card.expanded = true;
+        card.content =
+            Some("--- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,1 +1,1 @@\n-old\n+new\n".to_owned());
+        card.metadata_json = Some(r#"{"changes":1,"conflicts":0}"#.to_owned());
+        let mut lines = Vec::new();
+        render_tool_block(&mut lines, &card, false);
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(text.contains("Reviewed checkpoint 12345678"));
+        assert!(text.contains("1 changes"));
+        assert!(text.contains("-old"));
+        assert!(text.contains("+new"));
+    }
+
+    #[test]
+    fn checkpoint_actions_use_their_exact_verbs() {
+        for (name, running, completed) in [
+            ("checkpoint_create", "Creating", "Created"),
+            ("checkpoint_accept", "Accepting", "Accepted"),
+            ("checkpoint_restore", "Restoring", "Restored"),
+        ] {
+            let mut card = ToolCard::running(
+                "call-1".to_owned(),
+                name.to_owned(),
+                Some(r#"{"checkpoint_id":"12345678-1234-1234-1234-123456789abc"}"#.to_owned()),
+            );
+            assert!(card.activity().starts_with(running));
+            card.status = ToolStatus::Completed;
+            let mut lines = Vec::new();
+            render_tool_block(&mut lines, &card, false);
+            let text = lines
+                .iter()
+                .flat_map(|line| line.spans.iter())
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            assert!(text.contains(&format!("{completed} checkpoint")));
+        }
     }
 
     #[test]

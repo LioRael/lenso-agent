@@ -20,11 +20,35 @@ use lenso_capability_agent_process::{
 use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
 use tokio::{io::AsyncReadExt, process::Child};
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum ProgramPreset {
+    Rust,
+    Javascript,
+    Python,
+    Go,
+    Build,
+}
+
+impl ProgramPreset {
+    const fn candidates(self) -> &'static [&'static str] {
+        match self {
+            Self::Rust => &["cargo", "rustc", "rustfmt"],
+            Self::Javascript => &["node", "npm", "npx", "corepack", "pnpm", "yarn", "bun"],
+            Self::Python => &["python3", "pip3", "uv", "ruff", "pytest"],
+            Self::Go => &["go", "gofmt"],
+            Self::Build => &["make", "cmake", "ninja"],
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProcessConfig {
     root: PathBuf,
     allowed_programs: Vec<String>,
+    #[serde(default)]
+    program_presets: Vec<ProgramPreset>,
     environment_allowlist: Vec<String>,
     max_timeout_ms: u64,
     max_output_bytes: usize,
@@ -61,9 +85,11 @@ struct NativeProcessPlugin {
 }
 
 fn validate_config(config: &ProcessConfig) -> Result<(), RuntimeFailure> {
-    if config.allowed_programs.is_empty() || config.allowed_programs.len() > 32 {
+    if (config.allowed_programs.is_empty() && config.program_presets.is_empty())
+        || config.allowed_programs.len() > 32
+    {
         return Err(invalid_plan(
-            "allowed_programs must contain between 1 and 32 names",
+            "allowed_programs and program_presets must select at least one program; allowed_programs cannot exceed 32 names",
         ));
     }
     let mut programs = BTreeSet::new();
@@ -79,6 +105,14 @@ fn validate_config(config: &ProcessConfig) -> Result<(), RuntimeFailure> {
                 "allowed_programs must contain unique executable basenames",
             ));
         }
+    }
+    let mut presets = BTreeSet::new();
+    if config
+        .program_presets
+        .iter()
+        .any(|preset| !presets.insert(*preset))
+    {
+        return Err(invalid_plan("program_presets must be unique"));
     }
     if config.environment_allowlist.len() > 64 {
         return Err(invalid_plan("environment_allowlist cannot exceed 64 names"));
@@ -107,29 +141,50 @@ fn validate_config(config: &ProcessConfig) -> Result<(), RuntimeFailure> {
     Ok(())
 }
 
-fn resolve_programs(names: &[String]) -> Result<BTreeMap<String, ResolvedProgram>, RuntimeFailure> {
+fn resolve_programs(
+    names: &[String],
+    presets: &[ProgramPreset],
+) -> Result<BTreeMap<String, ResolvedProgram>, RuntimeFailure> {
     let search_path = env::var_os("PATH")
         .ok_or_else(|| invalid_plan("PATH is unavailable while resolving allowed programs"))?;
-    names
-        .iter()
-        .map(|name| {
-            let invocation_path = env::split_paths(&search_path)
-                .filter_map(|directory| fs::canonicalize(directory).ok())
-                .map(|directory| directory.join(name))
-                .find(|candidate| candidate.is_file())
-                .ok_or_else(|| invalid_plan(format!("allowed program `{name}` was not found")))?;
-            let canonical_target = fs::canonicalize(&invocation_path).map_err(|error| {
-                invalid_plan(format!("allowed program `{name}` is unavailable: {error}"))
-            })?;
-            Ok((
-                name.clone(),
-                ResolvedProgram {
-                    invocation_path,
-                    canonical_target,
-                },
-            ))
-        })
-        .collect()
+    let resolve = |name: &str| -> Result<Option<ResolvedProgram>, RuntimeFailure> {
+        let Some(invocation_path) = env::split_paths(&search_path)
+            .filter_map(|directory| fs::canonicalize(directory).ok())
+            .map(|directory| directory.join(name))
+            .find(|candidate| candidate.is_file())
+        else {
+            return Ok(None);
+        };
+        let canonical_target = fs::canonicalize(&invocation_path).map_err(|error| {
+            invalid_plan(format!("allowed program `{name}` is unavailable: {error}"))
+        })?;
+        Ok(Some(ResolvedProgram {
+            invocation_path,
+            canonical_target,
+        }))
+    };
+
+    let mut programs = BTreeMap::new();
+    for name in names {
+        let program = resolve(name)?
+            .ok_or_else(|| invalid_plan(format!("allowed program `{name}` was not found")))?;
+        programs.insert(name.clone(), program);
+    }
+    for preset in presets {
+        for name in preset.candidates() {
+            if !programs.contains_key(*name)
+                && let Some(program) = resolve(name)?
+            {
+                programs.insert((*name).to_owned(), program);
+            }
+        }
+    }
+    if programs.is_empty() || programs.len() > 64 {
+        return Err(invalid_plan(
+            "resolved programs must contain between 1 and 64 executables",
+        ));
+    }
+    Ok(programs)
 }
 
 impl ProcessProvider for NativeProcessProvider {
@@ -244,7 +299,8 @@ impl Lifecycle for NativeProcessPlugin {
         if !root.is_dir() {
             return Err(invalid_plan("process root is not a directory"));
         }
-        let programs = resolve_programs(&self.config.allowed_programs)?;
+        let programs =
+            resolve_programs(&self.config.allowed_programs, &self.config.program_presets)?;
         let environment = self
             .config
             .environment_allowlist
@@ -775,6 +831,7 @@ mod tests {
             config: ProcessConfig {
                 root: root.clone(),
                 allowed_programs: vec!["test".to_owned()],
+                program_presets: Vec::new(),
                 environment_allowlist: Vec::new(),
                 max_timeout_ms: maximum_timeout,
                 max_output_bytes: maximum_output,
@@ -804,6 +861,33 @@ mod tests {
 
     fn context(cancellation: CancellationToken) -> InvocationContext {
         InvocationContext::new(7, None, cancellation)
+    }
+
+    #[test]
+    fn typed_presets_expand_installed_programs_without_a_shell() {
+        let programs = resolve_programs(
+            &[],
+            &[
+                ProgramPreset::Rust,
+                ProgramPreset::Javascript,
+                ProgramPreset::Python,
+                ProgramPreset::Go,
+                ProgramPreset::Build,
+            ],
+        )
+        .unwrap();
+
+        assert!(programs.contains_key("cargo"));
+        assert!(!programs.contains_key("sh"));
+        assert!(programs.keys().all(|name| {
+            ProgramPreset::Rust.candidates().contains(&name.as_str())
+                || ProgramPreset::Javascript
+                    .candidates()
+                    .contains(&name.as_str())
+                || ProgramPreset::Python.candidates().contains(&name.as_str())
+                || ProgramPreset::Go.candidates().contains(&name.as_str())
+                || ProgramPreset::Build.candidates().contains(&name.as_str())
+        }));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -924,9 +1008,16 @@ mod tests {
             context(cancellation.clone()),
             request("sleep 30 & echo $! > child.pid; wait", 1000),
         );
+        let child_pid_path = temporary.path().join("child.pid");
         let cancel = async {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            cancellation.cancel();
+            for _ in 0..100 {
+                if child_pid_path.exists() {
+                    cancellation.cancel();
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            panic!("descendant did not publish its process ID");
         };
         let (result, ()) = tokio::join!(running, cancel);
         assert!(matches!(
@@ -934,7 +1025,7 @@ mod tests {
             Err(RuntimeFailure::Cancelled { request_id: 7 })
         ));
 
-        let child_pid = fs::read_to_string(temporary.path().join("child.pid"))
+        let child_pid = fs::read_to_string(child_pid_path)
             .unwrap()
             .trim()
             .parse::<i32>()
