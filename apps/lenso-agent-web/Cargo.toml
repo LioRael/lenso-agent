@@ -11,16 +11,26 @@ rust-version.workspace = true
 [[bin]]
 name = "lenso-agent-web"
 path = "src/main.rs"
+required-features = ["standalone"]
+
+[lib]
+name = "lenso_agent_web"
+path = "src/lib.rs"
+
+[features]
+default = ["standalone"]
+standalone = ["dep:lenso-agent-default-plugins"]
 
 [dependencies]
 axum.workspace = true
 clap.workspace = true
 futures.workspace = true
-lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins" }
+lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins", optional = true }
 lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
 lenso-agent-session-inspection = { path = "../../crates/lenso-agent-session-inspection" }
 lenso-agent-web-plugin = { path = "../../crates/lenso-agent-web-plugin" }
+lenso-app-plan.workspace = true
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
@@ -34,5 +44,6 @@ tokio-stream.workspace = true
 workspace = true
 
 [dev-dependencies]
+lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
 reqwest.workspace = true
 tempfile.workspace = true

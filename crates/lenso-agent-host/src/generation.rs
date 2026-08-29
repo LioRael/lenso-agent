@@ -374,6 +374,7 @@ async fn recover_or_open_host<F: CatalogFactory>(
 #[derive(Debug)]
 pub struct AgentApp {
     host: FrameworkHost<NativeApp>,
+    resolved_plan: ResolvedAppPlan,
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
     host_lease: Option<crate::authority::AuthorityFence>,
@@ -395,6 +396,8 @@ impl AgentApp {
         profile_name: Option<String>,
         host_build: HostBuildIdentity,
     ) -> Result<Self, String> {
+        let resolved_plan: ResolvedAppPlan = serde_json::from_slice(plan_bytes)
+            .map_err(|error| format!("failed to decode the resolved App Plan: {error}"))?;
         let authority = crate::authority::AuthorityCoordinator::prepare(store_root)?;
         let (control_directory, host_lease) = (0..max_instances)
             .find_map(|index| {
@@ -458,11 +461,17 @@ impl AgentApp {
         );
         Ok(Self {
             host,
+            resolved_plan,
             reconciler: Some(reconciler),
             reconcile_events,
             host_lease: Some(host_lease),
             generation_gc_lease: Some(generation_gc_lease),
         })
+    }
+
+    /// Returns the immutable App Plan selected when this Host started.
+    pub const fn resolved_plan(&self) -> &ResolvedAppPlan {
+        &self.resolved_plan
     }
 
     pub async fn lease_turn(&self) -> Result<TurnGeneration, String> {
@@ -1974,7 +1983,7 @@ fn linked_host_catalog_for_agent_in(
         .factories()
         .map(|factory| factory.package_id().to_owned())
         .collect::<BTreeSet<_>>();
-    let defaults = host_catalog_defaults(directories)
+    let defaults = host_catalog_defaults(directories, &available)
         .into_iter()
         .filter(|plugin| available.contains(plugin.id().plugin_id()))
         .collect::<Vec<_>>();
@@ -2010,16 +2019,19 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::optional("secrets"),
         HostSlot::one("session").replaceable(),
         HostSlot::optional("session-presentation").replaceable(),
-        HostSlot::one("restricted-tools-runtime"),
+        HostSlot::optional("restricted-tools-runtime"),
         HostSlot::many("tui-contributions"),
         HostSlot::many("tui-suggestions"),
         HostSlot::one("user-interaction").replaceable(),
-        HostSlot::one("workspace-import-read"),
+        HostSlot::optional("workspace-import-read"),
     ]
 }
 
-fn host_catalog_defaults(directories: &AgentDirectories) -> Vec<HostDefaultPlugin> {
-    let mut defaults = agent_defaults();
+fn host_catalog_defaults(
+    directories: &AgentDirectories,
+    available: &BTreeSet<String>,
+) -> Vec<HostDefaultPlugin> {
+    let mut defaults = agent_defaults(available);
     defaults.extend(default_interactive_plugins());
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
@@ -2194,9 +2206,13 @@ fn default_interactive_plugins() -> [HostDefaultPlugin; 3] {
     ]
 }
 
-fn agent_defaults() -> Vec<HostDefaultPlugin> {
-    ["agent", "subagent-agent"]
-        .into_iter()
+fn agent_defaults(available: &BTreeSet<String>) -> Vec<HostDefaultPlugin> {
+    std::iter::once("agent")
+        .chain(
+            available
+                .contains("lenso.agent.subagent-tools")
+                .then_some("subagent-agent"),
+        )
         .map(|instance_key| {
             default_plugin(
                 "lenso.agent.loop",
@@ -2374,13 +2390,19 @@ fn host_catalog_bindings(
     let mut bindings = vec![
         HostBinding::to_instance(root_agent.clone(), "lenso.agent.tools@2", root_tools)
             .with_admission(tool_admission),
-        HostBinding::to_instance(
-            child_agent.clone(),
-            "lenso.agent.tools@2",
-            restricted_tools.clone(),
-        )
-        .with_admission(tool_admission),
     ];
+    if available.contains("lenso.agent.subagent-tools")
+        && available.contains("lenso.agent.workspace-read-tools")
+    {
+        bindings.push(
+            HostBinding::to_instance(
+                child_agent.clone(),
+                "lenso.agent.tools@2",
+                restricted_tools.clone(),
+            )
+            .with_admission(tool_admission),
+        );
+    }
     if selected_agent != &root_agent {
         bindings.push(
             HostBinding::to_instance(
@@ -2407,7 +2429,9 @@ fn host_catalog_bindings(
             selected_agent.clone(),
         ));
     }
-    if available.contains("lenso.agent.code-mode-tools") {
+    if available.contains("lenso.agent.code-mode-tools")
+        && available.contains("lenso.agent.workspace-read-tools")
+    {
         bindings.push(HostBinding::to_instance(
             PluginInstanceId::new("lenso.agent.code-mode-tools", "default"),
             "lenso.agent.tools@2",
@@ -2617,7 +2641,7 @@ mod tests {
             .factories()
             .map(|factory| factory.package_id().to_owned())
             .collect::<BTreeSet<_>>();
-        let defaults = host_catalog_defaults(&directories)
+        let defaults = host_catalog_defaults(&directories, &available)
             .into_iter()
             .filter(|plugin| plugin.id().plugin_id() != "lenso.agent.session-presentation")
             .filter(|plugin| available.contains(plugin.id().plugin_id()))

@@ -1,0 +1,26 @@
+[package]
+name = "lenso-agent-console-plugins"
+version = "0.1.0"
+description = "Minimal linked Plugin inventory for the local Console Agent Host."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plugin" }
+lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
+lenso-agent-context-compaction-plugin = { path = "../lenso-agent-context-compaction-plugin" }
+lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
+lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
+lenso-agent-memory-sqlite-plugin = { path = "../lenso-agent-memory-sqlite-plugin" }
+lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
+lenso-agent-prompt-plugin = { path = "../lenso-agent-prompt-plugin" }
+lenso-agent-prompt-static-plugin = { path = "../lenso-agent-prompt-static-plugin" }
+lenso-agent-session-sqlite-plugin = { path = "../lenso-agent-session-sqlite-plugin" }
+lenso-agent-tools-plugin = { path = "../lenso-agent-tools-plugin" }
+lenso-agent-user-interaction-local-plugin = { path = "../lenso-agent-user-interaction-local-plugin" }
+
+[lints]
+workspace = true
