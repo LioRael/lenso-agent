@@ -96,16 +96,6 @@ fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn stored_sessions(root: &Path) -> Vec<serde_json::Value> {
-    fs::read_dir(root.join(".lenso/sessions"))
-        .unwrap()
-        .map(|entry| {
-            let path = entry.unwrap().path();
-            serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-        })
-        .collect()
-}
-
 fn stored_session_path(root: &Path) -> std::path::PathBuf {
     fs::read_dir(root.join("sessions"))
         .unwrap()
