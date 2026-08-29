@@ -1,12 +1,19 @@
 //! Deterministic Model Plugin for the headless read-only proof.
 
-use futures::future::{LocalBoxFuture, ready};
+use std::{
+    any::Any,
+    cell::{Cell, RefCell},
+    rc::Rc,
+    task::Poll,
+};
+
+use futures::future::{LocalBoxFuture, poll_fn, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
     self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
     CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
 };
-use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure};
+use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
 /// Only model identifier supported by the deterministic fixture.
 pub const MODEL_ID: &str = "fixture/readme-summary-v1";
@@ -53,11 +60,65 @@ impl ModelProvider for FixtureModel {
         _context: InvocationContext,
         request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
+        if request.messages.iter().rev().any(|message| {
+            message.role == CompleteMessageRole::User
+                && message.content == "Remain pending until cancelled."
+        }) {
+            return Box::pin(ready(Ok(
+                Box::new(PendingOutputStream::default()) as Box<dyn NativeStreamSession>
+            )));
+        }
         let result = self.complete_now(&request).map(|messages| {
             Box::new(FiniteOutputStream::successful(CAPABILITY_ID, messages))
                 as Box<dyn NativeStreamSession>
         });
         Box::pin(ready(result))
+    }
+}
+
+#[derive(Debug, Default)]
+struct PendingOutputStream {
+    cancelled: Rc<Cell<bool>>,
+    receive_waker: Rc<RefCell<Option<std::task::Waker>>>,
+    send_closed: Cell<bool>,
+}
+
+impl NativeStreamSession for PendingOutputStream {
+    fn send(&self, _message: Box<dyn Any>) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        Box::pin(ready(Err(RuntimeFailure::ProtocolViolation {
+            capability: model_contract::CAPABILITY_ID,
+        })))
+    }
+
+    fn receive(&self) -> LocalBoxFuture<'static, Result<NativeStreamItem, RuntimeFailure>> {
+        let cancelled = self.cancelled.clone();
+        let receive_waker = self.receive_waker.clone();
+        Box::pin(poll_fn(move |context| {
+            if cancelled.get() {
+                Poll::Ready(Err(RuntimeFailure::AdmissionClosed))
+            } else {
+                receive_waker.replace(Some(context.waker().clone()));
+                Poll::Pending
+            }
+        }))
+    }
+
+    fn close_send(&self) -> LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        let result = if self.send_closed.replace(true) {
+            Err(RuntimeFailure::ProtocolViolation {
+                capability: model_contract::CAPABILITY_ID,
+            })
+        } else {
+            Ok(())
+        };
+        Box::pin(ready(result))
+    }
+
+    fn cancel(&self) {
+        self.cancelled.set(true);
+        if let Some(waker) = self.receive_waker.borrow_mut().take() {
+            waker.wake();
+        }
     }
 }
 
@@ -141,8 +202,8 @@ impl FixtureModel {
         if current_user == "Use the workspace Plugin to read README.md." {
             return workspace_plugin_response(request, &tool_results);
         }
-        if current_user == "Delegate a README.md summary." {
-            return subagent_root_response(request, &tool_results);
+        if let Some(response) = subagent_fixture_response(request, current_user, &tool_results) {
+            return response;
         }
         if current_user == "Use Code Mode to compare README.md twice." {
             return code_mode_response(request, &tool_results);
@@ -222,6 +283,23 @@ fn session_presentation_fixture_response(
             "12",
         ),
     ])
+}
+
+fn subagent_fixture_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Option<Result<Vec<CompleteMessage>, ModelInvocationError>> {
+    match current_user {
+        "Delegate a README.md summary." => Some(subagent_root_response(request, tool_results)),
+        "Spawn and wait for a README.md subagent." => {
+            Some(asynchronous_subagent_response(request, tool_results))
+        }
+        "Spawn and cancel a pending subagent." => {
+            Some(cancelled_subagent_response(request, tool_results))
+        }
+        _ => None,
+    }
 }
 
 fn direct_fixture_response(request: &CompleteOpen) -> Vec<CompleteMessage> {
@@ -372,6 +450,128 @@ fn subagent_root_response(
                 "12",
             ),
         ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn asynchronous_subagent_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["spawn_subagent", "wait_subagent", "cancel_subagent"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    match tool_results {
+        [] => Ok(named_tool_request(
+            "call-spawn-subagent-readme",
+            "spawn_subagent",
+            r#"{"task":"Summarize README.md for the parent Agent."}"#,
+        )),
+        [spawned] => {
+            let spawned: serde_json::Value = serde_json::from_str(&spawned.content)
+                .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            let task_id = spawned["task_id"]
+                .as_str()
+                .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-wait-subagent-readme",
+                "wait_subagent",
+                &arguments,
+            ))
+        }
+        [_, result] if result.content == "Child summary: # Plugin Fixture" => Ok(vec![
+            response(
+                "1",
+                CompleteMessageKind::TextDelta,
+                "Asynchronous result: Child summary: # Plugin Fixture",
+                "",
+                "",
+                "{}",
+                "0",
+                "0",
+            ),
+            response(
+                "2",
+                CompleteMessageKind::Usage,
+                "",
+                "",
+                "",
+                "{}",
+                "36",
+                "14",
+            ),
+        ]),
+        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+    }
+}
+
+fn cancelled_subagent_response(
+    request: &CompleteOpen,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    for tool in ["spawn_subagent", "wait_subagent", "cancel_subagent"] {
+        if !request.tools.iter().any(|candidate| candidate.name == tool) {
+            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        }
+    }
+    let task_id = tool_results.first().map(|spawned| {
+        serde_json::from_str::<serde_json::Value>(&spawned.content)
+            .ok()
+            .and_then(|value| value["task_id"].as_str().map(str::to_owned))
+            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+    });
+    match (tool_results, task_id) {
+        ([], None) => Ok(named_tool_request(
+            "call-spawn-pending-subagent",
+            "spawn_subagent",
+            r#"{"task":"Remain pending until cancelled."}"#,
+        )),
+        ([_], Some(Ok(task_id))) => {
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-cancel-pending-subagent",
+                "cancel_subagent",
+                &arguments,
+            ))
+        }
+        ([_, _], Some(Ok(task_id))) => {
+            let arguments = serde_json::json!({ "task_id": task_id }).to_string();
+            Ok(named_tool_request(
+                "call-wait-cancelled-subagent",
+                "wait_subagent",
+                &arguments,
+            ))
+        }
+        ([_, _, waited], Some(Ok(_)))
+            if serde_json::from_str::<serde_json::Value>(&waited.content)
+                .is_ok_and(|value| value["status"] == "cancelled") =>
+        {
+            Ok(vec![
+                response(
+                    "1",
+                    CompleteMessageKind::TextDelta,
+                    "Pending subagent cancelled without cancelling the parent Turn.",
+                    "",
+                    "",
+                    "{}",
+                    "0",
+                    "0",
+                ),
+                response(
+                    "2",
+                    CompleteMessageKind::Usage,
+                    "",
+                    "",
+                    "",
+                    "{}",
+                    "36",
+                    "14",
+                ),
+            ])
+        }
         _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
     }
 }

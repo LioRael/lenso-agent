@@ -2338,7 +2338,8 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
             "lenso.agent.subagent-tools",
             serde_json::json!({
                 "max_output_bytes": 1_048_576,
-                "max_task_bytes": 262_144
+                "max_task_bytes": 262_144,
+                "max_tasks": 8
             }),
         ),
         host_plugin_configuration(
@@ -2930,6 +2931,49 @@ mod tests {
         assert_eq!(
             plugin.configuration(),
             r#"{"max_edit_bytes":131072,"max_file_bytes":1048576,"root":"."}"#
+        );
+    }
+
+    #[test]
+    fn subagent_tasks_are_optional_bounded_and_bound_to_the_child_agent() {
+        let empty = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        assert!(
+            !empty
+                .plugin_instances()
+                .iter()
+                .any(|plugin| { plugin.instance_key() == "lenso.agent.subagent-tools/default" })
+        );
+
+        let directory = tempfile::tempdir().unwrap();
+        let plugin_directory = directory.path().join("lenso.agent.subagent-tools");
+        fs::create_dir_all(&plugin_directory).unwrap();
+        fs::write(plugin_directory.join("default.toml"), "").unwrap();
+        let root = crate::plugin_root::snapshot(directory.path()).unwrap();
+        let configured = resolve_host_plan(&root).unwrap();
+        let plugin = configured
+            .plugin_instances()
+            .iter()
+            .find(|plugin| plugin.instance_key() == "lenso.agent.subagent-tools/default")
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(plugin.configuration()).unwrap(),
+            serde_json::json!({
+                "max_output_bytes": 1_048_576,
+                "max_task_bytes": 262_144,
+                "max_tasks": 8
+            })
+        );
+        let plan_json = serde_json::to_value(&configured).unwrap();
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.subagent-tools/default"
+                        && binding["provider_instance"] == "lenso.agent.loop/subagent-agent"
+                        && binding["capability_id"] == "lenso.agent@3"
+                })
         );
     }
 

@@ -8,7 +8,10 @@
     },
     "max_task_bytes": {
       "type": "integer"
+    },
+    "max_tasks": {
+      "type": "integer"
     }
   },
-  "required": ["max_output_bytes", "max_task_bytes"]
+  "required": ["max_output_bytes", "max_task_bytes", "max_tasks"]
 }

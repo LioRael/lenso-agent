@@ -34,6 +34,17 @@ The Harness admits subagent delegation as an optional Tool Provider Plugin.
   delegated-output overflow retain the same child Session identity in structured
   failure details whenever the child emitted one. This observable contract is
   introduced by Plugin release `0.2.0`.
+- Plugin release `0.3.0` also projects `spawn_subagent`, `wait_subagent`, and
+  `cancel_subagent`. The Plugin owns a bounded, generation-local task registry;
+  spawned work is a generation-owned managed task, `wait_subagent` consumes one
+  terminal result and releases its slot, and cancellation uses a child-only
+  Invocation Context while still observing parent cancellation and deadline.
+  The child Session remains the durable record; task handles are not presented
+  as surviving Host suspension or an App Generation switch.
+- Running-input steering is not projected. `lenso.agent@3` accepts one opening
+  input and then closes the caller-to-provider direction, so a truthful
+  `send_subagent` requires a later Agent Capability revision rather than private
+  side-channel glue in this Plugin.
 - Task and output bytes, child Agent steps, Tool calls, history, output tokens,
   binding admission, and root Tool-call admission remain independently bounded.
 - The first profile is `exclusive` and binds one child Agent. Pooling several

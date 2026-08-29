@@ -2596,7 +2596,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-model-fixture-plugin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "lenso",
@@ -2807,7 +2807,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-subagent-tools-plugin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "futures",
  "lenso",
@@ -2816,6 +2816,7 @@ dependencies = [
  "lenso-kernel",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

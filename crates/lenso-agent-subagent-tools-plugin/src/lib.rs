@@ -1,6 +1,13 @@
 //! Bounded Tool projection over one explicitly composed child Agent.
 
-use futures::future::ready;
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    rc::Rc,
+    task::{Poll, Waker},
+};
+
+use futures::future::{Either, ready, select};
 use lenso::prelude::*;
 use lenso_capability_agent::{
     self as agent_contract, AgentInvocationError, RunTurnError, RunTurnRequest, RunTurnResponseKind,
@@ -10,17 +17,28 @@ use lenso_capability_agent_tool_provider::{
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
     ToolProviderProvider,
 };
-use lenso_kernel::{InvocationContext, RuntimeFailure, StreamEvent};
+use lenso_kernel::{
+    CancellationToken, InvocationContext, NativeStream, RuntimeFailure, StreamEvent,
+};
 
 /// Stable model-visible Tool name.
 pub const DELEGATE_TOOL: &str = "delegate";
+/// Stable model-visible Tool name for starting generation-owned child work.
+pub const SPAWN_SUBAGENT_TOOL: &str = "spawn_subagent";
+/// Stable model-visible Tool name for joining one generation-owned child task.
+pub const WAIT_SUBAGENT_TOOL: &str = "wait_subagent";
+/// Stable model-visible Tool name for cancelling one generation-owned child task.
+pub const CANCEL_SUBAGENT_TOOL: &str = "cancel_subagent";
 const RESULT_METADATA_SCHEMA: &str = "lenso.agent.subagent-result@1";
+const TASK_METADATA_SCHEMA: &str = "lenso.agent.subagent-task@1";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(clippy::struct_field_names)]
 struct SubagentToolsConfig {
     max_output_bytes: usize,
     max_task_bytes: usize,
+    max_tasks: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -29,11 +47,19 @@ struct DelegateArguments {
     task: String,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TaskIdArguments {
+    task_id: String,
+}
+
 fn validate_config(config: &SubagentToolsConfig) -> Result<(), RuntimeFailure> {
     if config.max_output_bytes == 0
         || config.max_output_bytes > 1_048_576
         || config.max_task_bytes == 0
         || config.max_task_bytes > 262_144
+        || config.max_tasks == 0
+        || config.max_tasks > 64
     {
         return Err(RuntimeFailure::InvalidResolvedPlan {
             detail: "subagent Tool limits are invalid".to_owned(),
@@ -51,6 +77,9 @@ struct SubagentToolsPlugin {
     #[config]
     config: SubagentToolsConfig,
     agent: Port<agent_contract::AgentClient>,
+    registry: Rc<RefCell<SubagentTaskRegistry>>,
+    #[tasks]
+    managed_tasks: ManagedTasks,
 }
 
 #[lenso::provides(tool_provider_contract::ToolProvider)]
@@ -60,27 +89,35 @@ impl ToolProviderProvider for SubagentToolsPlugin {
         _context: InvocationContext,
         _request: CatalogRequest,
     ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderCatalog> {
+        let task_schema = task_input_schema(self.config.max_task_bytes);
+        let task_id_schema = task_id_input_schema();
         Box::pin(ready(Ok(Ok(CatalogResponse {
-            tools: vec![ToolDefinition {
-                name: DELEGATE_TOOL.to_owned(),
-                description: "Delegate one bounded task to an independently composed child Agent. The child has its own durable Session and only the Capabilities selected for it by App Composition.".to_owned(),
-                input_schema_json: serde_json::json!({
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "task": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": self.config.max_task_bytes
-                        }
-                    },
-                    "required": ["task"]
-                })
-                .to_string()
-                .try_into()
-                .expect("subagent Tool schema must be valid JSON"),
-                execution: ToolExecutionClass::Exclusive,
-            }],
+            tools: vec![
+                ToolDefinition {
+                    name: DELEGATE_TOOL.to_owned(),
+                    description: "Delegate one bounded task to an independently composed child Agent and wait for its terminal result. The child has its own durable Session and only the Capabilities selected for it by App Composition.".to_owned(),
+                    input_schema_json: task_schema.clone(),
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: SPAWN_SUBAGENT_TOOL.to_owned(),
+                    description: "Start one bounded child-Agent task and return its task ID immediately. Use wait_subagent to collect the terminal result.".to_owned(),
+                    input_schema_json: task_schema,
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: WAIT_SUBAGENT_TOOL.to_owned(),
+                    description: "Wait for one spawned child-Agent task, consume its terminal result, and release its task slot.".to_owned(),
+                    input_schema_json: task_id_schema.clone(),
+                    execution: ToolExecutionClass::Exclusive,
+                },
+                ToolDefinition {
+                    name: CANCEL_SUBAGENT_TOOL.to_owned(),
+                    description: "Request cancellation of one spawned child-Agent task without cancelling the parent Turn.".to_owned(),
+                    input_schema_json: task_id_schema,
+                    execution: ToolExecutionClass::Exclusive,
+                },
+            ],
         }))))
     }
 
@@ -89,27 +126,466 @@ impl ToolProviderProvider for SubagentToolsPlugin {
         context: InvocationContext,
         request: ExecuteRequest,
     ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
-        if request.name != DELEGATE_TOOL {
-            return Box::pin(ready(Ok(Err(ExecuteError::NotFound))));
+        match request.name.as_str() {
+            DELEGATE_TOOL => self.execute_delegate(context, &request),
+            SPAWN_SUBAGENT_TOOL => self.execute_spawn(&context, &request),
+            WAIT_SUBAGENT_TOOL => self.execute_wait(&request),
+            CANCEL_SUBAGENT_TOOL => self.execute_cancel(&request),
+            _ => Box::pin(ready(Ok(Err(ExecuteError::NotFound)))),
         }
-        let Ok(arguments) =
-            serde_json::from_str::<DelegateArguments>(request.arguments_json.as_str())
-        else {
+    }
+}
+
+fn task_input_schema(max_task_bytes: usize) -> tool_provider_contract::RawJson {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "task": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": max_task_bytes
+            }
+        },
+        "required": ["task"]
+    })
+    .to_string()
+    .try_into()
+    .expect("subagent task schema must be valid JSON")
+}
+
+fn task_id_input_schema() -> tool_provider_contract::RawJson {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+            "task_id": { "type": "string", "minLength": 1, "maxLength": 64 }
+        },
+        "required": ["task_id"]
+    })
+    .to_string()
+    .try_into()
+    .expect("subagent task ID schema must be valid JSON")
+}
+
+impl SubagentToolsPlugin {
+    fn execute_delegate(
+        &self,
+        context: InvocationContext,
+        request: &ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        let Ok(arguments) = self.parse_task(request) else {
             return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
         };
-        if arguments.task.trim().is_empty() || arguments.task.len() > self.config.max_task_bytes {
-            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
-        }
-        let agent = self.agent.clone();
-        let max_output_bytes = self.config.max_output_bytes;
         let task_bytes = arguments.task.len();
         Box::pin(execute_delegation(
-            agent,
+            self.agent.clone(),
             context,
             arguments.task,
             task_bytes,
-            max_output_bytes,
+            self.config.max_output_bytes,
+            None,
+            None,
         ))
+    }
+
+    fn execute_spawn(
+        &self,
+        context: &InvocationContext,
+        request: &ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        let Ok(arguments) = self.parse_task(request) else {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        };
+        let mut registry = self.registry.borrow_mut();
+        if registry.tasks.len() >= self.config.max_tasks {
+            return Box::pin(ready(Ok(Err(execution_failed(
+                "subagent_task_capacity_exceeded",
+                "The bounded subagent task registry is full",
+                &task_metadata(None, "rejected"),
+            )))));
+        }
+        let task_id = format!("subagent-{}", uuid::Uuid::new_v4());
+        let task = Rc::new(RefCell::new(SubagentTask::default()));
+        registry.tasks.insert(task_id.clone(), task.clone());
+        drop(registry);
+
+        let child_context = match detached_child_context(context) {
+            Ok(context) => context,
+            Err(error) => {
+                self.registry.borrow_mut().tasks.remove(&task_id);
+                return Box::pin(ready(Err(error)));
+            }
+        };
+        task.borrow_mut()
+            .attach_cancellation(child_context.cancellation());
+        let agent = self.agent.clone();
+        let task_bytes = arguments.task.len();
+        let max_output_bytes = self.config.max_output_bytes;
+        let background_task_id = task_id.clone();
+        let background_task = task.clone();
+        let parent_cancellation = context.cancellation();
+        let spawned = self.managed_tasks.spawn_local(async move {
+            let outcome = execute_delegation(
+                agent,
+                child_context,
+                arguments.task,
+                task_bytes,
+                max_output_bytes,
+                Some(background_task_id),
+                Some((background_task.clone(), parent_cancellation)),
+            )
+            .await;
+            background_task.borrow_mut().complete(outcome);
+        });
+        if let Err(error) = spawned {
+            self.registry.borrow_mut().tasks.remove(&task_id);
+            return Box::pin(ready(Err(RuntimeFailure::PluginFailure {
+                detail: format!("subagent task failed to start: {error:?}"),
+            })));
+        }
+
+        Box::pin(ready(Ok(Ok(ExecuteResponse {
+            content: serde_json::json!({
+                "task_id": task_id,
+                "status": "running"
+            })
+            .to_string(),
+            content_type: ContentType::Text,
+            metadata_json: task_metadata(Some(&task_id), "running")
+                .to_string()
+                .try_into()
+                .expect("subagent task metadata must be valid JSON"),
+        }))))
+    }
+
+    fn execute_wait(
+        &self,
+        request: &ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        let Ok(arguments) = parse_task_id(request) else {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        };
+        let Some(task) = self
+            .registry
+            .borrow()
+            .tasks
+            .get(&arguments.task_id)
+            .cloned()
+        else {
+            return Box::pin(ready(Ok(Err(task_not_found(&arguments.task_id)))));
+        };
+        let registry = self.registry.clone();
+        Box::pin(async move {
+            let terminal = wait_for_task(task.clone()).await;
+            let mut registry = registry.borrow_mut();
+            if registry
+                .tasks
+                .get(&arguments.task_id)
+                .is_some_and(|registered| Rc::ptr_eq(registered, &task))
+            {
+                registry.tasks.remove(&arguments.task_id);
+            }
+            Ok(Ok(task_terminal_response(&arguments.task_id, terminal)))
+        })
+    }
+
+    fn execute_cancel(
+        &self,
+        request: &ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_provider_contract::ToolProviderExecute> {
+        let Ok(arguments) = parse_task_id(request) else {
+            return Box::pin(ready(Ok(Err(ExecuteError::InvalidArguments))));
+        };
+        let Some(task) = self
+            .registry
+            .borrow()
+            .tasks
+            .get(&arguments.task_id)
+            .cloned()
+        else {
+            return Box::pin(ready(Ok(Err(task_not_found(&arguments.task_id)))));
+        };
+        let status = task.borrow_mut().request_cancel();
+        Box::pin(ready(Ok(Ok(ExecuteResponse {
+            content: serde_json::json!({
+                "task_id": arguments.task_id,
+                "status": status
+            })
+            .to_string(),
+            content_type: ContentType::Text,
+            metadata_json: task_metadata(Some(&arguments.task_id), status)
+                .to_string()
+                .try_into()
+                .expect("subagent task metadata must be valid JSON"),
+        }))))
+    }
+
+    fn parse_task(&self, request: &ExecuteRequest) -> Result<DelegateArguments, ()> {
+        let arguments = serde_json::from_str::<DelegateArguments>(request.arguments_json.as_str())
+            .map_err(|_| ())?;
+        if arguments.task.trim().is_empty() || arguments.task.len() > self.config.max_task_bytes {
+            return Err(());
+        }
+        Ok(arguments)
+    }
+}
+
+fn parse_task_id(request: &ExecuteRequest) -> Result<TaskIdArguments, ()> {
+    let arguments =
+        serde_json::from_str::<TaskIdArguments>(request.arguments_json.as_str()).map_err(|_| ())?;
+    if arguments.task_id.trim().is_empty() || arguments.task_id.len() > 64 {
+        return Err(());
+    }
+    Ok(arguments)
+}
+
+#[derive(Default, Debug)]
+struct SubagentTaskRegistry {
+    tasks: BTreeMap<String, Rc<RefCell<SubagentTask>>>,
+}
+
+#[derive(Debug, Default)]
+struct SubagentTask {
+    cancel_requested: bool,
+    cancellation: Option<CancellationToken>,
+    stream: Option<Rc<NativeStream<agent_contract::Agent>>>,
+    terminal: Option<SubagentTaskTerminal>,
+    waiters: Vec<Waker>,
+}
+
+#[derive(Clone, Debug)]
+enum SubagentTaskTerminal {
+    Completed(ExecuteResponse),
+    Domain(ExecuteError),
+    Cancelled,
+    Runtime(RuntimeFailure),
+}
+
+impl SubagentTask {
+    fn attach_cancellation(&mut self, cancellation: CancellationToken) {
+        if self.cancel_requested {
+            cancellation.cancel();
+        }
+        self.cancellation = Some(cancellation);
+    }
+
+    fn attach_stream(&mut self, stream: Rc<NativeStream<agent_contract::Agent>>) {
+        if self.cancel_requested {
+            stream.cancel();
+        }
+        self.stream = Some(stream);
+    }
+
+    fn complete(&mut self, outcome: Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure>) {
+        self.cancellation = None;
+        self.stream = None;
+        self.terminal = Some(match outcome {
+            Ok(Ok(response)) => SubagentTaskTerminal::Completed(response),
+            Ok(Err(error)) => SubagentTaskTerminal::Domain(error),
+            Err(RuntimeFailure::Cancelled { .. } | RuntimeFailure::AdmissionClosed)
+                if self.cancel_requested =>
+            {
+                SubagentTaskTerminal::Cancelled
+            }
+            Err(error) => SubagentTaskTerminal::Runtime(error),
+        });
+        for waiter in self.waiters.drain(..) {
+            waiter.wake();
+        }
+    }
+
+    fn request_cancel(&mut self) -> &'static str {
+        if self.terminal.is_some() {
+            return "already_terminal";
+        }
+        self.cancel_requested = true;
+        if let Some(cancellation) = &self.cancellation {
+            cancellation.cancel();
+        }
+        if let Some(stream) = &self.stream {
+            stream.cancel();
+        }
+        "cancellation_requested"
+    }
+}
+
+async fn wait_for_task(task: Rc<RefCell<SubagentTask>>) -> SubagentTaskTerminal {
+    std::future::poll_fn(move |context| {
+        let mut task = task.borrow_mut();
+        if let Some(terminal) = task.terminal.clone() {
+            return Poll::Ready(terminal);
+        }
+        if !task
+            .waiters
+            .iter()
+            .any(|waiter| waiter.will_wake(context.waker()))
+        {
+            task.waiters.push(context.waker().clone());
+        }
+        Poll::Pending
+    })
+    .await
+}
+
+fn detached_child_context(parent: &InvocationContext) -> Result<InvocationContext, RuntimeFailure> {
+    let mut child = InvocationContext::new(
+        parent.request_id(),
+        parent.deadline(),
+        CancellationToken::new(),
+    );
+    for extension in parent.extensions() {
+        child = child
+            .with_extension(extension.key(), extension.value().to_vec())
+            .map_err(|error| RuntimeFailure::Internal {
+                detail: format!("failed to preserve child invocation context: {error}"),
+            })?;
+    }
+    for extension in parent.sealed_extensions() {
+        child = child
+            .with_sealed_extension(extension.clone())
+            .map_err(|error| RuntimeFailure::Internal {
+                detail: format!("failed to preserve sealed child invocation context: {error}"),
+            })?;
+    }
+    Ok(child)
+}
+
+fn task_metadata(task_id: Option<&str>, status: &str) -> serde_json::Value {
+    serde_json::json!({
+        "schema": TASK_METADATA_SCHEMA,
+        "task_id": task_id,
+        "status": status,
+    })
+}
+
+fn task_not_found(task_id: &str) -> ExecuteError {
+    execution_failed(
+        "subagent_task_not_found",
+        "The subagent task does not exist in this App Generation",
+        &task_metadata(Some(task_id), "missing"),
+    )
+}
+
+fn task_terminal_response(task_id: &str, terminal: SubagentTaskTerminal) -> ExecuteResponse {
+    match terminal {
+        SubagentTaskTerminal::Completed(response) => response,
+        SubagentTaskTerminal::Domain(error) => task_domain_error_response(task_id, error),
+        SubagentTaskTerminal::Cancelled => task_status_response(
+            task_id,
+            "cancelled",
+            "subagent_cancelled",
+            "The child-Agent task was cancelled",
+        ),
+        SubagentTaskTerminal::Runtime(error) => task_status_response(
+            task_id,
+            "failed",
+            runtime_failure_code(&error),
+            "The child-Agent task ended with a Runtime Failure",
+        ),
+    }
+}
+
+fn task_domain_error_response(task_id: &str, error: ExecuteError) -> ExecuteResponse {
+    let (reason_code, message, metadata) = match error {
+        ExecuteError::ExecutionFailed { payload } => {
+            let mut metadata =
+                serde_json::from_str::<serde_json::Value>(payload.details_json.as_str())
+                    .unwrap_or_else(|_| task_metadata(Some(task_id), "failed"));
+            if let Some(object) = metadata.as_object_mut() {
+                object.insert(
+                    "task_id".to_owned(),
+                    serde_json::Value::String(task_id.to_owned()),
+                );
+                object.insert(
+                    "status".to_owned(),
+                    serde_json::Value::String("failed".to_owned()),
+                );
+            }
+            (payload.reason_code, payload.message, metadata)
+        }
+        ExecuteError::InvalidArguments => (
+            "child_invalid_arguments".to_owned(),
+            "The child Agent rejected its arguments".to_owned(),
+            task_metadata(Some(task_id), "failed"),
+        ),
+        ExecuteError::NotFound => (
+            "child_not_found".to_owned(),
+            "The child Agent operation was not found".to_owned(),
+            task_metadata(Some(task_id), "failed"),
+        ),
+        ExecuteError::OutputLimitExceeded => (
+            "child_output_limit_exceeded".to_owned(),
+            "The child Agent exceeded its output limit".to_owned(),
+            task_metadata(Some(task_id), "failed"),
+        ),
+        ExecuteError::PermissionDenied => (
+            "child_permission_denied".to_owned(),
+            "The child Agent was denied".to_owned(),
+            task_metadata(Some(task_id), "failed"),
+        ),
+        ExecuteError::Unknown(error) => (
+            error.code,
+            "The child Agent returned an unknown Domain Error".to_owned(),
+            task_metadata(Some(task_id), "failed"),
+        ),
+    };
+    ExecuteResponse {
+        content: serde_json::json!({
+            "task_id": task_id,
+            "status": "failed",
+            "reason_code": reason_code,
+            "message": message,
+        })
+        .to_string(),
+        content_type: ContentType::Text,
+        metadata_json: metadata
+            .to_string()
+            .try_into()
+            .expect("subagent failure metadata must be valid JSON"),
+    }
+}
+
+fn task_status_response(
+    task_id: &str,
+    status: &str,
+    reason_code: &str,
+    message: &str,
+) -> ExecuteResponse {
+    ExecuteResponse {
+        content: serde_json::json!({
+            "task_id": task_id,
+            "status": status,
+            "reason_code": reason_code,
+            "message": message,
+        })
+        .to_string(),
+        content_type: ContentType::Text,
+        metadata_json: task_metadata(Some(task_id), status)
+            .to_string()
+            .try_into()
+            .expect("subagent task metadata must be valid JSON"),
+    }
+}
+
+const fn runtime_failure_code(error: &RuntimeFailure) -> &'static str {
+    match error {
+        RuntimeFailure::Unavailable { .. } => "child_runtime_unavailable",
+        RuntimeFailure::UnknownOperation { .. } => "child_runtime_unknown_operation",
+        RuntimeFailure::AmbiguousBinding { .. } => "child_runtime_ambiguous_binding",
+        RuntimeFailure::ProtocolViolation { .. } => "child_runtime_protocol_violation",
+        RuntimeFailure::MissingPluginFactory { .. } => "child_runtime_missing_plugin_factory",
+        RuntimeFailure::UnavailableExecutionClass { .. } => {
+            "child_runtime_unavailable_execution_class"
+        }
+        RuntimeFailure::InvalidResolvedPlan { .. } => "child_runtime_invalid_plan",
+        RuntimeFailure::AdmissionClosed => "child_runtime_admission_closed",
+        RuntimeFailure::ResourceExhausted { .. } => "child_runtime_resource_exhausted",
+        RuntimeFailure::DeadlineExceeded { .. } => "child_runtime_deadline_exceeded",
+        RuntimeFailure::Cancelled { .. } => "subagent_cancelled",
+        RuntimeFailure::Internal { .. } => "child_runtime_internal",
+        RuntimeFailure::PluginFailure { .. } => "child_runtime_plugin_failure",
+        RuntimeFailure::PluginRestartExhausted { .. } => "child_runtime_restart_exhausted",
     }
 }
 
@@ -119,18 +595,15 @@ async fn execute_delegation(
     task: String,
     task_bytes: usize,
     max_output_bytes: usize,
+    task_id: Option<String>,
+    background: Option<(Rc<RefCell<SubagentTask>>, CancellationToken)>,
 ) -> Result<Result<ExecuteResponse, ExecuteError>, RuntimeFailure> {
-    let mut progress = ChildRunProgress::default();
-    let stream = match agent
-        .run_turn_with_context(
-            context,
-            RunTurnRequest {
-                input: task,
-                session_id: None,
-            },
-        )
-        .await
-    {
+    let mut progress = ChildRunProgress {
+        task_id,
+        ..ChildRunProgress::default()
+    };
+    let parent_cancellation = background.as_ref().map(|(_, cancellation)| cancellation);
+    let stream = match open_child_stream(&agent, context, task, parent_cancellation).await {
         Ok(stream) => stream,
         Err(AgentInvocationError::Domain(error)) => {
             return Ok(Err(map_agent_error(
@@ -142,9 +615,13 @@ async fn execute_delegation(
         }
         Err(AgentInvocationError::Runtime(error)) => return Err(error),
     };
+    let stream = Rc::new(stream);
+    if let Some((background_task, _)) = &background {
+        background_task.borrow_mut().attach_stream(stream.clone());
+    }
     stream.close_send().await?;
     loop {
-        match stream.receive().await? {
+        match receive_child_event(&stream, parent_cancellation).await? {
             StreamEvent::Message(message) => {
                 if let Err(error) = progress.observe_message(&message, task_bytes, max_output_bytes)
                 {
@@ -189,6 +666,56 @@ async fn execute_delegation(
     }))
 }
 
+async fn open_child_stream(
+    agent: &Port<agent_contract::AgentClient>,
+    context: InvocationContext,
+    task: String,
+    parent_cancellation: Option<&CancellationToken>,
+) -> Result<NativeStream<agent_contract::Agent>, AgentInvocationError> {
+    let child_cancellation = context.cancellation();
+    let request_id = context.request_id();
+    let open = Box::pin(agent.run_turn_with_context(
+        context,
+        RunTurnRequest {
+            input: task,
+            session_id: None,
+        },
+    ));
+    let Some(parent_cancellation) = parent_cancellation else {
+        return open.await;
+    };
+    let cancelled = Box::pin(parent_cancellation.cancelled());
+    match select(open, cancelled).await {
+        Either::Left((result, _)) => result,
+        Either::Right(((), _)) => {
+            child_cancellation.cancel();
+            Err(AgentInvocationError::Runtime(RuntimeFailure::Cancelled {
+                request_id,
+            }))
+        }
+    }
+}
+
+async fn receive_child_event(
+    stream: &Rc<NativeStream<agent_contract::Agent>>,
+    parent_cancellation: Option<&CancellationToken>,
+) -> Result<StreamEvent<agent_contract::RunTurnResponse, RunTurnError>, RuntimeFailure> {
+    let Some(parent_cancellation) = parent_cancellation else {
+        return stream.receive().await;
+    };
+    let receive = Box::pin(stream.receive());
+    let cancelled = Box::pin(parent_cancellation.cancelled());
+    match select(receive, cancelled).await {
+        Either::Left((result, _)) => result,
+        Either::Right(((), _)) => {
+            stream.cancel();
+            Err(RuntimeFailure::Cancelled {
+                request_id: stream.request_id(),
+            })
+        }
+    }
+}
+
 #[derive(Default)]
 struct ChildRunProgress {
     child_session_id: Option<String>,
@@ -198,6 +725,7 @@ struct ChildRunProgress {
     output_limit_exceeded: bool,
     text_delta_count: u64,
     tool_call_count: u64,
+    task_id: Option<String>,
 }
 
 impl ChildRunProgress {
@@ -270,6 +798,7 @@ impl ChildRunProgress {
             "message_count": self.message_count,
             "text_delta_count": self.text_delta_count,
             "tool_call_count": self.tool_call_count,
+            "task_id": self.task_id,
         })
     }
 }
@@ -347,6 +876,7 @@ mod tests {
             output_limit_exceeded: false,
             text_delta_count: 2,
             tool_call_count: 1,
+            task_id: None,
         };
 
         let metadata = progress.metadata("completed", 12, 1024);
@@ -364,6 +894,7 @@ mod tests {
             validate_config(&SubagentToolsConfig {
                 max_output_bytes: 1_048_576,
                 max_task_bytes: 262_144,
+                max_tasks: 64,
             })
             .is_ok()
         );
@@ -371,6 +902,7 @@ mod tests {
             validate_config(&SubagentToolsConfig {
                 max_output_bytes: 0,
                 max_task_bytes: 262_144,
+                max_tasks: 8,
             })
             .is_err()
         );
@@ -378,8 +910,45 @@ mod tests {
             validate_config(&SubagentToolsConfig {
                 max_output_bytes: 1_048_577,
                 max_task_bytes: 262_145,
+                max_tasks: 65,
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn detached_child_cancellation_does_not_cancel_parent() {
+        let parent_cancellation = CancellationToken::new();
+        let parent = InvocationContext::new(7, None, parent_cancellation.clone())
+            .with_extension(
+                "lenso.app.generation-spec-digest@1",
+                b"sha256:test".to_vec(),
+            )
+            .unwrap();
+
+        let child = detached_child_context(&parent).unwrap();
+        child.cancellation().cancel();
+
+        assert!(!parent_cancellation.is_cancelled());
+        assert!(child.cancellation().is_cancelled());
+        assert_eq!(
+            child.extension("lenso.app.generation-spec-digest@1"),
+            Some(b"sha256:test".as_slice())
+        );
+    }
+
+    #[test]
+    fn cancellation_before_child_stream_open_is_terminal_and_waitable() {
+        let task = Rc::new(RefCell::new(SubagentTask::default()));
+        let child_cancellation = CancellationToken::new();
+        task.borrow_mut()
+            .attach_cancellation(child_cancellation.clone());
+        assert_eq!(task.borrow_mut().request_cancel(), "cancellation_requested");
+        assert!(child_cancellation.is_cancelled());
+        task.borrow_mut()
+            .complete(Err(RuntimeFailure::Cancelled { request_id: 7 }));
+
+        let terminal = futures::executor::block_on(wait_for_task(task));
+        assert!(matches!(terminal, SubagentTaskTerminal::Cancelled));
     }
 }

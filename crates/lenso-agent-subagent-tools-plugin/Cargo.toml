@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-subagent-tools-plugin"
-version = "0.2.0"
+version = "0.3.0"
 description = "Bounded subagent Tool Provider Plugin for the Lenso Agent Harness."
 edition.workspace = true
 license.workspace = true
@@ -20,6 +20,7 @@ lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-
 lenso-kernel.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true
