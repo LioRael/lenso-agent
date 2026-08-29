@@ -29,6 +29,10 @@ struct Args {
     /// Durable Tool policy file. Enabling mutation also requires `LENSO_AGENT_CONTROL_TOKEN`.
     #[arg(long, value_name = "PATH")]
     tool_policy: Option<PathBuf>,
+
+    /// Allow the authorized Console Host to mutate this Agent Home's Plugin Root.
+    #[arg(long)]
+    plugin_control: bool,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -49,6 +53,7 @@ async fn run(args: Args) -> Result<(), String> {
     config.profile = args.profile;
     config.allowed_tools = args.allowed_tools;
     config.tool_policy = args.tool_policy;
+    config.plugin_control = args.plugin_control;
     config.control = std::env::var(CONTROL_TOKEN_ENV)
         .ok()
         .filter(|value| !value.is_empty())

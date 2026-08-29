@@ -364,6 +364,95 @@ async fn updates_and_recovers_the_durable_tool_policy_with_revision_fencing() {
     assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!(["read"]));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
+    let root = tempfile::tempdir().unwrap();
+    let control_token = ["fixture", "plugin", "control"].join("-");
+    let address = available_address();
+    let mut server = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args(["--listen", &address.to_string(), "--plugin-control"])
+            .env("LENSO_AGENT_CONTROL_TOKEN", &control_token)
+            .current_dir(root.path())
+            .env("LENSO_AGENT_HOME", root.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+    let endpoint = format!(
+        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/configuration"
+    );
+    let configuration = root.path().join("plugins/lenso.agent.loop/agent.toml");
+    assert!(!configuration.exists());
+    let initial_generation = active_generation_digest(root.path());
+
+    assert_eq!(
+        client
+            .put(&endpoint)
+            .json(&serde_json::json!({ "toml": "unexpected = true\n" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    assert!(!configuration.exists());
+
+    assert_eq!(
+        client
+            .put(&endpoint)
+            .bearer_auth(&control_token)
+            .json(&serde_json::json!({ "toml": "unexpected = true\n" }))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    assert!(!configuration.exists());
+    assert_eq!(active_generation_digest(root.path()), initial_generation);
+
+    let updated_configuration = concat!(
+        "model = \"gpt-5.6-luna\"\n",
+        "max_steps = 9\n",
+        "max_tool_calls = 4\n",
+        "max_parallel_tool_calls = 4\n",
+        "max_output_tokens = 1024\n",
+        "max_history_events = 200\n",
+        "max_compaction_summary_characters = 8192\n",
+        "max_memory_items = 8\n",
+        "max_memory_characters = 16384\n",
+    );
+    let accepted = client
+        .put(&endpoint)
+        .bearer_auth(&control_token)
+        .json(&serde_json::json!({ "toml": updated_configuration }))
+        .send()
+        .await
+        .unwrap();
+    let accepted_status = accepted.status();
+    let accepted_body = accepted.text().await.unwrap();
+    assert_eq!(
+        accepted_status,
+        reqwest::StatusCode::ACCEPTED,
+        "unexpected Plugin mutation response: {accepted_body}"
+    );
+    let accepted: serde_json::Value = serde_json::from_str(&accepted_body).unwrap();
+    assert_eq!(accepted["schema"], "lenso.agent.plugin-mutation.v1");
+    assert_eq!(accepted["status"], "accepted");
+    assert!(accepted["desired"]["plugins"].is_array());
+    assert_eq!(
+        fs::read_to_string(&configuration).unwrap(),
+        updated_configuration
+    );
+
+    let switched_generation = wait_for_generation_change(root.path(), &initial_generation).await;
+    assert_ne!(switched_generation, initial_generation);
+}
+
 fn write_web_fixture(root: &std::path::Path) {
     let model_directory = root.join("plugins/lenso.agent.model.fixture");
     fs::create_dir_all(&model_directory).unwrap();
@@ -399,6 +488,31 @@ fn write_web_fixture(root: &std::path::Path) {
         ),
     )
     .unwrap();
+}
+
+fn active_generation_digest(root: &std::path::Path) -> String {
+    let state: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join("runtime/web-generation-control/control-state.json")).unwrap(),
+    )
+    .unwrap();
+    state["active_generation_spec_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+async fn wait_for_generation_change(root: &std::path::Path, previous: &str) -> String {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = active_generation_digest(root);
+            if current != previous {
+                break current;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the valid Plugin Root candidate should become the active Generation")
 }
 
 async fn verify_history_and_branch(
