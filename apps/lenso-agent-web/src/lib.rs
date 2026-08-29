@@ -1,8 +1,8 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     convert::Infallible,
-    path::PathBuf,
-    sync::{Arc, RwLock},
+    path::{Path as FsPath, PathBuf},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use axum::{
@@ -13,7 +13,7 @@ use axum::{
     routing::{get, post},
 };
 use lenso_agent_host::{
-    AgentHost, Profile, WebSurface,
+    AgentDirectories, AgentHost, Profile, WebSurface,
     generation::{AgentApp, RenameSessionFailure},
 };
 use lenso_agent_loop_plugin::RunScope;
@@ -21,7 +21,11 @@ use lenso_agent_session_inspection::{
     InspectedSession, InspectedSessionEvent, Trajectory, project_trajectory,
 };
 use lenso_agent_web_plugin as _;
-use lenso_app_plan::ResolvedAppPlan;
+use lenso_app_authoring::{
+    add_bundle, configure_instance, remove_instance_difference, remove_plugin,
+    set_instance_disabled,
+};
+use lenso_app_plan::{ResolvedAppPlan, authoring::ResolvedApp};
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
 use lenso_capability_agent_session::{
     ListSessionsResponse, ReadSessionResponse, ReadSessionResponseEventsItemKind, RenameError,
@@ -68,6 +72,8 @@ pub struct AgentWebConfig {
     pub tool_policy: Option<PathBuf>,
     /// Host-selected authorization seam for Tool policy control routes.
     pub control: AgentWebControl,
+    /// Enables Host-authorized mutation of the visible App Plugin Root.
+    pub plugin_control: bool,
     /// Exact linked Plugin inventory exposed by this Host build.
     pub plugins: fn(),
 }
@@ -82,6 +88,7 @@ impl AgentWebConfig {
             allowed_tools: Vec::new(),
             tool_policy: None,
             control: AgentWebControl::Disabled,
+            plugin_control: false,
             plugins,
         }
     }
@@ -101,7 +108,25 @@ struct WebRuntime {
     policy: Arc<RwLock<ToolPolicyDocument>>,
     policy_path: Option<PathBuf>,
     profile: Option<String>,
+    plugin_control: Option<PluginControl>,
     plugin_inventory: PluginInventoryResponse,
+}
+
+#[derive(Clone, Debug)]
+struct PluginControl {
+    app_root: PathBuf,
+    mutation: Arc<Mutex<()>>,
+}
+
+#[derive(Debug)]
+struct WebRuntimeConfig {
+    available_tools: Vec<BootstrapTool>,
+    control: AgentWebControl,
+    plugin_control: Option<PluginControl>,
+    plugin_inventory: PluginInventoryResponse,
+    policy: ToolPolicyDocument,
+    policy_path: Option<PathBuf>,
+    profile: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -121,6 +146,24 @@ struct PluginInventoryItem {
     package_revision: String,
     provided_capabilities: Vec<String>,
     required_capabilities: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginMutationResponse {
+    desired: PluginInventoryResponse,
+    schema: &'static str,
+    status: &'static str,
+}
+
+impl PluginMutationResponse {
+    fn accepted(desired: PluginInventoryResponse) -> Self {
+        Self {
+            desired,
+            schema: "lenso.agent.plugin-mutation.v1",
+            status: "accepted",
+        }
+    }
 }
 
 impl PluginInventoryResponse {
@@ -384,6 +427,24 @@ struct UpdateToolPolicyRequest {
     expected_revision: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct InstallPluginRequest {
+    bundle_path: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConfigurePluginRequest {
+    toml: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetPluginEnabledRequest {
+    enabled: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WebStreamEvent<'a> {
@@ -467,6 +528,7 @@ impl AgentWebSurface {
             allowed_tools,
             tool_policy,
             control,
+            plugin_control,
             plugins,
         } = config;
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
@@ -478,6 +540,19 @@ impl AgentWebSurface {
                 return Err("an exact Plan conflicts with a named Agent Profile".to_owned());
             }
         };
+        let directories = match agent_home.as_ref() {
+            Some(agent_home) => AgentDirectories::from_home(agent_home)?,
+            None => AgentDirectories::resolve()?,
+        };
+        if plugin_control && matches!(control, AgentWebControl::Disabled) {
+            return Err("Plugin Root control requires an authorized Host control seam".to_owned());
+        }
+        if plugin_control && (plan.is_some() || profile.is_some()) {
+            return Err(
+                "Plugin Root control currently requires the default authoring-managed App"
+                    .to_owned(),
+            );
+        }
         let host = AgentHost::builder().plugins(plugins);
         let host = match agent_home {
             Some(agent_home) => host.agent_home(agent_home)?,
@@ -487,6 +562,7 @@ impl AgentWebSurface {
         .build()?;
         let app = host.run(selected_profile).await?;
         let plugin_inventory = PluginInventoryResponse::from_plan(app.resolved_plan());
+        let plugin_control = plugin_control.then(|| PluginControl::new(directories.home()));
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
             return Err(format!("a Tool policy requires {CONTROL_TOKEN_ENV}"));
@@ -494,12 +570,15 @@ impl AgentWebSurface {
         let policy = load_tool_policy(tool_policy.as_deref(), configured_tools, &available_tools)?;
         let runtime = WebRuntime::start(
             app,
-            profile,
-            policy,
-            tool_policy,
-            available_tools,
-            control,
-            plugin_inventory,
+            WebRuntimeConfig {
+                available_tools,
+                control,
+                plugin_control,
+                plugin_inventory,
+                policy,
+                policy_path: tool_policy,
+                profile,
+            },
         );
         Ok(Self { runtime })
     }
@@ -536,6 +615,26 @@ fn router(runtime: WebRuntime) -> Router {
         .route(
             "/api/console/v1/agent/control/tool-policy",
             get(read_tool_policy).put(update_tool_policy),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/install",
+            post(install_plugin),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}",
+            axum::routing::delete(remove_controlled_plugin),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}",
+            axum::routing::delete(remove_plugin_instance),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/configuration",
+            axum::routing::put(configure_plugin_instance),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/enabled",
+            axum::routing::put(set_plugin_instance_enabled),
         )
         .route(
             "/api/console/v1/agent/sessions/{session_id}",
@@ -593,6 +692,105 @@ async fn update_tool_policy(
 ) -> Result<Json<ToolPolicyResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
     runtime.update_tool_policy(request).map(Json)
+}
+
+async fn install_plugin(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<InstallPluginRequest>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    if !request.bundle_path.is_absolute() {
+        return Err(ApiProblem::bad_request(
+            "Plugin Bundle path must be absolute",
+        ));
+    }
+    let control = runtime.plugin_control()?;
+    let inventory = tokio::task::spawn_blocking(move || control.install(&request.bundle_path))
+        .await
+        .map_err(|error| ApiProblem::unavailable(format!("Plugin install task failed: {error}")))?
+        .map_err(ApiProblem::conflict)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PluginMutationResponse::accepted(inventory)),
+    ))
+}
+
+async fn configure_plugin_instance(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Path((plugin_id, instance)): Path<(String, String)>,
+    Json(request): Json<ConfigurePluginRequest>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let control = runtime.plugin_control()?;
+    let inventory = tokio::task::spawn_blocking(move || {
+        control.configure(&plugin_id, &instance, request.toml.as_bytes())
+    })
+    .await
+    .map_err(|error| ApiProblem::unavailable(format!("Plugin configure task failed: {error}")))?
+    .map_err(ApiProblem::conflict)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PluginMutationResponse::accepted(inventory)),
+    ))
+}
+
+async fn set_plugin_instance_enabled(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Path((plugin_id, instance)): Path<(String, String)>,
+    Json(request): Json<SetPluginEnabledRequest>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let control = runtime.plugin_control()?;
+    let inventory = tokio::task::spawn_blocking(move || {
+        control.set_enabled(&plugin_id, &instance, request.enabled)
+    })
+    .await
+    .map_err(|error| ApiProblem::unavailable(format!("Plugin selection task failed: {error}")))?
+    .map_err(ApiProblem::conflict)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PluginMutationResponse::accepted(inventory)),
+    ))
+}
+
+async fn remove_plugin_instance(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Path((plugin_id, instance)): Path<(String, String)>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let control = runtime.plugin_control()?;
+    let inventory =
+        tokio::task::spawn_blocking(move || control.remove_instance(&plugin_id, &instance))
+            .await
+            .map_err(|error| {
+                ApiProblem::unavailable(format!("Plugin removal task failed: {error}"))
+            })?
+            .map_err(ApiProblem::conflict)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PluginMutationResponse::accepted(inventory)),
+    ))
+}
+
+async fn remove_controlled_plugin(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Path(plugin_id): Path<String>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let control = runtime.plugin_control()?;
+    let inventory = tokio::task::spawn_blocking(move || control.remove(&plugin_id))
+        .await
+        .map_err(|error| ApiProblem::unavailable(format!("Plugin removal task failed: {error}")))?
+        .map_err(ApiProblem::conflict)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PluginMutationResponse::accepted(inventory)),
+    ))
 }
 
 async fn run_turn(
@@ -888,16 +1086,87 @@ async fn resolve_tool_policy(
     Ok(available_tools)
 }
 
+impl PluginControl {
+    fn new(app_root: &FsPath) -> Self {
+        Self {
+            app_root: app_root.to_path_buf(),
+            mutation: Arc::new(Mutex::new(())),
+        }
+    }
+
+    fn install(&self, bundle: &FsPath) -> Result<PluginInventoryResponse, String> {
+        self.mutate(|root| {
+            add_bundle(root, bundle)
+                .map(|(_, _, app)| app)
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn configure(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+        bytes: &[u8],
+    ) -> Result<PluginInventoryResponse, String> {
+        self.mutate(|root| {
+            configure_instance(root, plugin_id, instance, bytes).map_err(|error| error.to_string())
+        })
+    }
+
+    fn set_enabled(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+        enabled: bool,
+    ) -> Result<PluginInventoryResponse, String> {
+        self.mutate(|root| {
+            set_instance_disabled(root, plugin_id, instance, !enabled)
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn remove_instance(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+    ) -> Result<PluginInventoryResponse, String> {
+        self.mutate(|root| {
+            remove_instance_difference(root, plugin_id, instance).map_err(|error| error.to_string())
+        })
+    }
+
+    fn remove(&self, plugin_id: &str) -> Result<PluginInventoryResponse, String> {
+        self.mutate(|root| {
+            remove_plugin(root, plugin_id)
+                .map(|(app, _)| app)
+                .map_err(|error| error.to_string())
+        })
+    }
+
+    fn mutate(
+        &self,
+        operation: impl FnOnce(&FsPath) -> Result<ResolvedApp, String>,
+    ) -> Result<PluginInventoryResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        let app = operation(&self.app_root)?;
+        Ok(PluginInventoryResponse::from_plan(app.plan()))
+    }
+}
+
 impl WebRuntime {
-    fn start(
-        app: AgentApp,
-        profile: Option<String>,
-        policy: ToolPolicyDocument,
-        policy_path: Option<PathBuf>,
-        available_tools: Vec<BootstrapTool>,
-        control: AgentWebControl,
-        plugin_inventory: PluginInventoryResponse,
-    ) -> Self {
+    fn start(app: AgentApp, config: WebRuntimeConfig) -> Self {
+        let WebRuntimeConfig {
+            available_tools,
+            control,
+            plugin_control,
+            plugin_inventory,
+            policy,
+            policy_path,
+            profile,
+        } = config;
         let (commands, receiver) = mpsc::channel(16);
         let policy = Arc::new(RwLock::new(policy));
         tokio::task::spawn_local(runtime_actor(app, receiver, Arc::clone(&policy)));
@@ -908,15 +1177,16 @@ impl WebRuntime {
             policy,
             policy_path,
             profile,
+            plugin_control,
             plugin_inventory,
         }
     }
 
     fn authorize_control(&self, headers: &HeaderMap) -> Result<(), ApiProblem> {
         match &self.control {
-            AgentWebControl::Disabled => Err(ApiProblem::not_found(
-                "Agent Tool policy control is not configured",
-            )),
+            AgentWebControl::Disabled => {
+                Err(ApiProblem::not_found("Agent control is not configured"))
+            }
             AgentWebControl::HostAuthorized => Ok(()),
             AgentWebControl::Bearer(expected) => {
                 let supplied = headers
@@ -926,12 +1196,16 @@ impl WebRuntime {
                 if supplied.is_some_and(|supplied| constant_time_eq(supplied, expected)) {
                     Ok(())
                 } else {
-                    Err(ApiProblem::forbidden(
-                        "Agent Tool policy control token is invalid",
-                    ))
+                    Err(ApiProblem::forbidden("Agent control token is invalid"))
                 }
             }
         }
+    }
+
+    fn plugin_control(&self) -> Result<PluginControl, ApiProblem> {
+        self.plugin_control
+            .clone()
+            .ok_or_else(|| ApiProblem::not_found("Agent Plugin Root control is not configured"))
     }
 
     fn read_tool_policy(&self) -> Result<ToolPolicyResponse, ApiProblem> {
@@ -1574,6 +1848,20 @@ mod tests {
                 surface.shutdown().await.unwrap();
             })
             .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plugin_control_rejects_a_named_profile_until_candidate_validation_is_profile_aware() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+        config.agent_home = Some(root.path().to_path_buf());
+        config.profile = Some("custom".to_owned());
+        config.control = AgentWebControl::HostAuthorized;
+        config.plugin_control = true;
+
+        let error = AgentWebSurface::start(config).await.unwrap_err();
+
+        assert!(error.contains("default authoring-managed App"));
     }
 
     #[test]

@@ -3006,6 +3006,7 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-session",
  "lenso-capability-agent-user-interaction",
+ "lenso-cli",
  "lenso-kernel",
  "reqwest",
  "serde",
@@ -3465,6 +3466,20 @@ dependencies = [
  "lenso-plugin-authoring",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-cli"
+version = "0.4.8"
+source = "git+https://github.com/LioRael/lenso-cli?rev=3c9deee579b00a67fd953ed9a62c4dc25c55292d#3c9deee579b00a67fd953ed9a62c4dc25c55292d"
+dependencies = [
+ "anyhow",
+ "lenso-app-plan",
+ "lenso-plugin-bundle",
+ "serde_json",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "uuid",
 ]
 
 [[package]]

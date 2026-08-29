@@ -30,6 +30,7 @@ lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
 lenso-agent-session-inspection = { path = "../../crates/lenso-agent-session-inspection" }
 lenso-agent-web-plugin = { path = "../../crates/lenso-agent-web-plugin" }
+lenso-app-authoring.workspace = true
 lenso-app-plan.workspace = true
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
