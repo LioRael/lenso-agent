@@ -1,4 +1,5 @@
 use std::{
+    any::Any,
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
     env, fs,
@@ -18,6 +19,7 @@ use lenso_app_plan::{
         PluginInstanceId, PluginRootSnapshot, resolve_plugin_root,
     },
 };
+use lenso_bun_adapter::{BunAdapter, BunCapabilityCodec};
 use lenso_capability_agent::{Agent, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID};
 use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
 use lenso_capability_agent_context_source::{
@@ -88,6 +90,7 @@ const DEFAULT_MODEL: &str = "gpt-5.6-luna";
 const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 const PROCESS_EXECUTION_CLASS: &str = "lenso.process@1";
+const BUN_EXECUTION_CLASS: &str = "lenso.bun-process@1";
 const WASM_EXECUTION_CLASS: &str = "lenso.wasm-component@1";
 // Wasm component instantiation can legitimately cross ten seconds on a busy developer machine.
 // Keep the gate bounded while avoiding spurious install and rollback failures under local load.
@@ -118,9 +121,80 @@ impl CatalogFactory for HarnessCatalogFactory {
         generation: &ResolvedGeneration,
     ) -> Result<ExecutionAdapterCatalog, ControlPlaneError> {
         let (registry, _) = native_host_build();
-        Ok(ExecutionAdapterCatalog::single(
-            registry.with_resources(generation.resources.clone()),
-        ))
+        let mut catalog =
+            ExecutionAdapterCatalog::single(registry.with_resources(generation.resources.clone()));
+        if generation
+            .plan
+            .plugin_instances()
+            .iter()
+            .any(|instance| instance.execution_class().as_str() == BUN_EXECUTION_CLASS)
+        {
+            catalog = catalog.with_adapter(bun_adapter()).map_err(|error| {
+                ControlPlaneError::HostFailure {
+                    detail: error.to_string(),
+                }
+            })?;
+        }
+        Ok(catalog)
+    }
+}
+
+fn bun_adapter() -> BunAdapter {
+    BunAdapter::production("bun")
+        .with_codec(BunJsonCodec(AgentJsonCodec))
+        .with_codec(BunJsonCodec(ContextCompactionJsonCodec))
+        .with_codec(BunJsonCodec(ContextSourceJsonCodec))
+        .with_codec(BunJsonCodec(MemoryJsonCodec))
+        .with_codec(BunJsonCodec(HttpFetchJsonCodec))
+        .with_codec(BunJsonCodec(LifecycleJsonCodec))
+        .with_codec(BunJsonCodec(ModelJsonCodec))
+        .with_codec(BunJsonCodec(PromptJsonCodec))
+        .with_codec(BunJsonCodec(SessionJsonCodec))
+        .with_codec(BunJsonCodec(SessionPresentationJsonCodec))
+        .with_codec(BunJsonCodec(ToolHookJsonCodec))
+        .with_codec(BunJsonCodec(ToolProviderJsonCodec))
+        .with_codec(BunJsonCodec(TurnInputJsonCodec))
+        .with_codec(BunJsonCodec(ToolsJsonCodec))
+        .with_codec(BunJsonCodec(UserInteractionJsonCodec))
+        .with_codec(BunJsonCodec(WorkspaceReadJsonCodec))
+}
+
+#[derive(Debug)]
+struct BunJsonCodec<T>(T);
+
+impl<T: lenso_runtime_codec::JsonCapabilityCodec> BunCapabilityCodec for BunJsonCodec<T> {
+    fn capability_id(&self) -> &'static str {
+        self.0.capability_id()
+    }
+    fn descriptor_version(&self) -> &'static str {
+        self.0.descriptor_version()
+    }
+    fn operations(&self) -> &'static [&'static str] {
+        self.0.request_operations()
+    }
+    fn stream_operations(&self) -> &'static [&'static str] {
+        self.0.stream_operations()
+    }
+    fn encode_request(
+        &self,
+        operation: &str,
+        request: &dyn Any,
+    ) -> Result<serde_json::Value, lenso_kernel::RuntimeFailure> {
+        self.0.encode_request(operation, request)
+    }
+    fn decode_response(
+        &self,
+        operation: &str,
+        value: serde_json::Value,
+    ) -> Result<Box<dyn Any>, lenso_kernel::RuntimeFailure> {
+        self.0.decode_response(operation, value)
+    }
+    fn decode_domain_error(
+        &self,
+        operation: &str,
+        value: serde_json::Value,
+    ) -> Result<Box<dyn Any>, lenso_kernel::RuntimeFailure> {
+        self.0.decode_domain_error(operation, value)
     }
 }
 
@@ -368,6 +442,8 @@ pub struct AgentApp {
     resolved_plan: ResolvedAppPlan,
     runtime: RuntimeAttachment,
     session_database: PathBuf,
+    profile_name: Option<String>,
+    authoring_managed: bool,
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<VecDeque<OnlineGenerationEvent>>>,
 }
@@ -436,7 +512,7 @@ impl AgentApp {
             client.clone(),
             store_root.to_path_buf(),
             host_build,
-            profile_name,
+            profile_name.clone(),
             authoring_managed,
             reconcile_events.clone(),
         );
@@ -445,6 +521,8 @@ impl AgentApp {
             resolved_plan,
             runtime: runtime_attachment,
             session_database,
+            profile_name,
+            authoring_managed,
             reconciler: Some(reconciler),
             reconcile_events,
         })
@@ -453,6 +531,48 @@ impl AgentApp {
     /// Returns the immutable App Plan selected when this Host started.
     pub const fn resolved_plan(&self) -> &ResolvedAppPlan {
         &self.resolved_plan
+    }
+
+    /// Resolves the current author-owned Plugin Root without changing runtime authority.
+    pub fn desired_plan(&self) -> Result<ResolvedAppPlan, String> {
+        if !self.authoring_managed {
+            return Err(
+                "this Host runs an exact diagnostic Plan, not an author-managed Plugin Root"
+                    .to_owned(),
+            );
+        }
+        let directories = directories_for_store_root(self.runtime.state().root())?;
+        let root = crate::plugin_root::snapshot(&directories.plugins())?;
+        if let Some(profile_name) = self.profile_name.as_deref() {
+            let profile = crate::profile::select(profile_name, &root, &directories.profiles())?;
+            resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())
+        } else {
+            resolve_host_plan_in(&directories, &root)
+        }
+    }
+
+    /// Snapshots explicit disabled Instance markers for management surfaces.
+    pub fn disabled_plugin_instances(&self) -> Result<Vec<PluginInstanceId>, String> {
+        let directories = directories_for_store_root(self.runtime.state().root())?;
+        Ok(crate::plugin_root::snapshot(&directories.plugins())?
+            .disabled()
+            .to_vec())
+    }
+
+    /// Returns Instances whose author-owned files may be enabled or disabled.
+    pub fn disableable_plugin_instances(&self) -> Result<Vec<PluginInstanceId>, String> {
+        let directories = directories_for_store_root(self.runtime.state().root())?;
+        let root = crate::plugin_root::snapshot(&directories.plugins())?;
+        let mut instances = root
+            .instances()
+            .iter()
+            .map(|instance| instance.id().clone())
+            .chain(root.disabled().iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        instances.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+        Ok(instances)
     }
 
     pub async fn lease_turn(&self) -> Result<TurnGeneration, String> {
@@ -1713,6 +1833,7 @@ fn resolve_generation_from_plan(
         (NATIVE_EXECUTION_CLASS, "lenso-native-adapter@0.1.2"),
         (QUICKJS_EXECUTION_CLASS, "lenso-quickjs-adapter@0.1.0"),
         (PROCESS_EXECUTION_CLASS, "lenso-process-adapter@0.1.0"),
+        (BUN_EXECUTION_CLASS, "lenso-bun-adapter@0.1.3"),
         (WASM_EXECUTION_CLASS, "lenso-wasm-component-adapter@0.1.0"),
     ];
     let adapter_profiles = execution_classes

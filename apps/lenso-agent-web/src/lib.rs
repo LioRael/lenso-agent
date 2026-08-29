@@ -14,7 +14,7 @@ use axum::{
 };
 use lenso_agent_host::{
     AgentDirectories, AgentHost, Profile, WebSurface,
-    generation::{AgentApp, RenameSessionFailure},
+    generation::{AgentApp, OnlineGenerationEvent, RenameSessionFailure},
 };
 use lenso_agent_loop_plugin::RunScope;
 use lenso_agent_session_inspection::{
@@ -109,7 +109,6 @@ struct WebRuntime {
     policy_path: Option<PathBuf>,
     profile: Option<String>,
     plugin_control: Option<PluginControl>,
-    plugin_inventory: PluginInventoryResponse,
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +131,7 @@ struct WebRuntimeConfig {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginInventoryResponse {
+    generation_events: Vec<PluginGenerationEvent>,
     plugins: Vec<PluginInventoryItem>,
     schema: &'static str,
 }
@@ -139,6 +139,7 @@ struct PluginInventoryResponse {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginInventoryItem {
+    disableable: bool,
     entrypoint: String,
     execution_class: String,
     instance_key: String,
@@ -146,6 +147,14 @@ struct PluginInventoryItem {
     package_revision: String,
     provided_capabilities: Vec<String>,
     required_capabilities: Vec<String>,
+    status: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginGenerationEvent {
+    detail: String,
+    status: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -235,10 +244,12 @@ impl PluginMutationResponse {
 impl PluginInventoryResponse {
     fn from_plan(plan: &ResolvedAppPlan) -> Self {
         Self {
+            generation_events: Vec::new(),
             plugins: plan
                 .plugin_instances()
                 .iter()
                 .map(|plugin| PluginInventoryItem {
+                    disableable: false,
                     entrypoint: plugin.entrypoint().to_owned(),
                     execution_class: plugin.execution_class().as_str().to_owned(),
                     instance_key: plugin.instance_key().to_owned(),
@@ -254,15 +265,81 @@ impl PluginInventoryResponse {
                         .iter()
                         .map(|capability| capability.capability_id().to_owned())
                         .collect(),
+                    status: "active",
                 })
                 .collect(),
             schema: "lenso.agent.plugin-inventory.v1",
         }
     }
+
+    fn with_runtime_state(
+        mut self,
+        disabled: Vec<lenso_app_plan::authoring::PluginInstanceId>,
+        disableable: BTreeSet<String>,
+        events: Vec<OnlineGenerationEvent>,
+    ) -> Self {
+        for plugin in &mut self.plugins {
+            plugin.disableable = disableable.contains(&plugin.instance_key);
+        }
+        let active = self
+            .plugins
+            .iter()
+            .map(|plugin| plugin.instance_key.clone())
+            .collect::<BTreeSet<_>>();
+        self.plugins
+            .extend(disabled.into_iter().filter_map(|instance| {
+                let instance_key = instance.to_string();
+                (!active.contains(&instance_key)).then(|| PluginInventoryItem {
+                    disableable: true,
+                    entrypoint: String::new(),
+                    execution_class: String::new(),
+                    instance_key,
+                    package_id: instance.plugin_id().to_owned(),
+                    package_revision: String::new(),
+                    provided_capabilities: Vec::new(),
+                    required_capabilities: Vec::new(),
+                    status: "disabled",
+                })
+            }));
+        self.plugins
+            .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
+        self.generation_events = events
+            .into_iter()
+            .map(|event| match event {
+                OnlineGenerationEvent::Switched {
+                    generation_spec_digest,
+                    ..
+                } => PluginGenerationEvent {
+                    detail: generation_spec_digest,
+                    status: "switched",
+                },
+                OnlineGenerationEvent::Rejected { detail, .. } => PluginGenerationEvent {
+                    detail,
+                    status: "rejected",
+                },
+                OnlineGenerationEvent::RolledBack { detail, .. } => PluginGenerationEvent {
+                    detail,
+                    status: "rolled_back",
+                },
+                OnlineGenerationEvent::Failed { detail, .. } => PluginGenerationEvent {
+                    detail,
+                    status: "failed",
+                },
+                OnlineGenerationEvent::WatchDegraded { detail } => PluginGenerationEvent {
+                    detail,
+                    status: "watch_degraded",
+                },
+            })
+            .collect();
+        self
+    }
 }
 
 #[derive(Debug)]
 enum RuntimeCommand {
+    PluginInventory {
+        reply: oneshot::Sender<Result<PluginInventoryResponse, String>>,
+    },
     AnswerInteraction {
         answers: Vec<InteractionAnswer>,
         interaction_id: String,
@@ -707,6 +784,14 @@ fn router(runtime: WebRuntime) -> Router {
             axum::routing::put(set_plugin_instance_enabled),
         )
         .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/disable",
+            post(disable_plugin_instance),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/{plugin_id}/{instance}/enable",
+            post(enable_plugin_instance),
+        )
+        .route(
             "/api/console/v1/agent/sessions/{session_id}",
             get(read_session).patch(rename_session),
         )
@@ -718,8 +803,20 @@ fn router(runtime: WebRuntime) -> Router {
         .with_state(runtime)
 }
 
-async fn plugin_inventory(State(runtime): State<WebRuntime>) -> Json<PluginInventoryResponse> {
-    Json(runtime.plugin_inventory)
+async fn plugin_inventory(
+    State(runtime): State<WebRuntime>,
+) -> Result<Json<PluginInventoryResponse>, ApiProblem> {
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::PluginInventory { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime already stopped"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped without an inventory"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
 }
 
 async fn plugin_management(
@@ -835,6 +932,43 @@ async fn set_plugin_instance_enabled(
     .await
     .map_err(|error| ApiProblem::unavailable(format!("Plugin selection task failed: {error}")))?
     .map_err(ApiProblem::conflict)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(PluginMutationResponse::accepted(inventory)),
+    ))
+}
+
+async fn disable_plugin_instance(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    path: Path<(String, String)>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    set_plugin_enabled_alias(runtime, headers, path, false).await
+}
+
+async fn enable_plugin_instance(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    path: Path<(String, String)>,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    set_plugin_enabled_alias(runtime, headers, path, true).await
+}
+
+async fn set_plugin_enabled_alias(
+    runtime: WebRuntime,
+    headers: HeaderMap,
+    Path((plugin_id, instance)): Path<(String, String)>,
+    enabled: bool,
+) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let control = runtime.plugin_control()?;
+    let inventory =
+        tokio::task::spawn_blocking(move || control.set_enabled(&plugin_id, &instance, enabled))
+            .await
+            .map_err(|error| {
+                ApiProblem::unavailable(format!("Plugin selection task failed: {error}"))
+            })?
+            .map_err(ApiProblem::conflict)?;
     Ok((
         StatusCode::ACCEPTED,
         Json(PluginMutationResponse::accepted(inventory)),
@@ -1264,7 +1398,12 @@ impl WebRuntime {
         } = config;
         let (commands, receiver) = mpsc::channel(16);
         let policy = Arc::new(RwLock::new(policy));
-        tokio::task::spawn_local(runtime_actor(app, receiver, Arc::clone(&policy)));
+        tokio::task::spawn_local(runtime_actor(
+            app,
+            receiver,
+            Arc::clone(&policy),
+            plugin_inventory.clone(),
+        ));
         Self {
             available_tools,
             commands,
@@ -1273,7 +1412,6 @@ impl WebRuntime {
             policy_path,
             profile,
             plugin_control,
-            plugin_inventory,
         }
     }
 
@@ -1360,6 +1498,7 @@ async fn runtime_actor(
     mut app: AgentApp,
     mut commands: mpsc::Receiver<RuntimeCommand>,
     policy: Arc<RwLock<ToolPolicyDocument>>,
+    mut plugin_inventory: PluginInventoryResponse,
 ) {
     let mut pending = VecDeque::new();
     let mut pre_cancelled = BTreeSet::new();
@@ -1372,6 +1511,9 @@ async fn runtime_actor(
             },
         };
         match command {
+            RuntimeCommand::PluginInventory { reply } => {
+                let _ = reply.send(snapshot_plugin_inventory(&mut app, &mut plugin_inventory));
+            }
             RuntimeCommand::AnswerInteraction { reply, .. } => {
                 let _ = reply.send(Err(RuntimeInteractionError::Inactive));
             }
@@ -1456,6 +1598,12 @@ async fn runtime_actor(
                                     break;
                                 };
                                 match command {
+                                    RuntimeCommand::PluginInventory { reply } => {
+                                        let _ = reply.send(snapshot_plugin_inventory(
+                                            &mut app,
+                                            &mut plugin_inventory,
+                                        ));
+                                    }
                                     RuntimeCommand::PendingInteractions { reply, request_id: target_id } => {
                                         let result = if target_id == request_id {
                                             turn.pending_interactions()
@@ -1513,6 +1661,28 @@ async fn runtime_actor(
         }
     }
     let _ = app.shutdown().await;
+}
+
+fn snapshot_plugin_inventory(
+    app: &mut AgentApp,
+    inventory: &mut PluginInventoryResponse,
+) -> Result<PluginInventoryResponse, String> {
+    let events = app.take_online_generation_events();
+    if events
+        .iter()
+        .any(|event| matches!(event, OnlineGenerationEvent::Switched { .. }))
+    {
+        *inventory = PluginInventoryResponse::from_plan(&app.desired_plan()?);
+    }
+    let disabled = app.disabled_plugin_instances()?;
+    let disableable = app
+        .disableable_plugin_instances()?
+        .into_iter()
+        .map(|instance| instance.to_string())
+        .collect();
+    Ok(inventory
+        .clone()
+        .with_runtime_state(disabled, disableable, events))
 }
 
 async fn handle_read_command(
@@ -1928,14 +2098,13 @@ mod tests {
                 let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
                 config.agent_home = Some(root.path().to_path_buf());
                 let surface = AgentWebSurface::start(config).await.unwrap();
-                assert_eq!(
-                    surface.runtime.plugin_inventory.schema,
-                    "lenso.agent.plugin-inventory.v1"
-                );
+                let inventory = plugin_inventory(State(surface.runtime.clone()))
+                    .await
+                    .unwrap()
+                    .0;
+                assert_eq!(inventory.schema, "lenso.agent.plugin-inventory.v1");
                 assert!(
-                    surface
-                        .runtime
-                        .plugin_inventory
+                    inventory
                         .plugins
                         .iter()
                         .any(|plugin| plugin.instance_key == "lenso.agent.loop/agent")
