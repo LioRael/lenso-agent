@@ -39,6 +39,7 @@ lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-
 lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 lenso-capability-agent-workspace-read = { path = "../lenso-capability-agent-workspace-read" }
 lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
+lenso-agent-native-support = { path = "../lenso-agent-native-support" }
 lenso-agent-session-file-plugin = { path = "../lenso-agent-session-file-plugin" }
 lenso-agent-session-inspection = { path = "../lenso-agent-session-inspection" }
 lenso-agent-session-sqlite-plugin = { path = "../lenso-agent-session-sqlite-plugin" }

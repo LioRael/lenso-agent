@@ -18,6 +18,7 @@ use futures::{
     stream,
 };
 use lenso::prelude::*;
+use lenso_agent_native_support::ToolTaskOwner;
 use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
     RunTurnResponseProgressChannel,
@@ -57,7 +58,7 @@ use lenso_capability_agent_tools::{
 use lenso_capability_agent_turn_input::{
     self as turn_input_capability, SubmitError, SubmitRequest, SubmitResponse,
 };
-use lenso_kernel::{InvocationContext, StreamEvent};
+use lenso_kernel::{InvocationContext, RuntimeFailure, StreamEvent};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -1339,9 +1340,21 @@ async fn execute_tool_wave(
         let progress_sink = Rc::clone(&progress_sink);
         async move {
             let started_at = Instant::now();
-            let result =
-                stream_tool_execution(&tools, &context, &tool_call, session_id, progress_sink)
-                    .await;
+            let result = async {
+                let context = context
+                    .with_typed_extension(&ToolTaskOwner {
+                        session_id: session_id.to_owned(),
+                        turn_id: turn_id.to_owned(),
+                        tool_call_id: tool_call.tool_call_id.clone(),
+                    })
+                    .map_err(|error| {
+                        ToolsExecuteStreamInvocationError::Runtime(RuntimeFailure::Internal {
+                            detail: format!("failed to attach Tool task ownership: {error}"),
+                        })
+                    })?;
+                stream_tool_execution(&tools, &context, &tool_call, session_id, progress_sink).await
+            }
+            .await;
             (elapsed_millis(started_at), result)
         }
     })

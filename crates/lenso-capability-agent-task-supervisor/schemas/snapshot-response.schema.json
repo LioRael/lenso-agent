@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["tasks"],
+  "properties": {
+    "tasks": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/TaskSnapshot"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "TaskOwner": {
+      "type": "object",
+      "required": ["session_id", "turn_id", "tool_call_id"],
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "turn_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskSnapshot": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "owner",
+        "agent",
+        "status",
+        "generation_spec_digest",
+        "workspace"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "owner": {
+          "$ref": "#/$defs/TaskOwner"
+        },
+        "agent": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "child_session_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation_spec_digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71
+        },
+        "workspace": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "terminal_result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TerminalResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": ["running", "cancellation_requested", "completed", "failed", "cancelled"]
+    },
+    "TerminalResult": {
+      "type": "object",
+      "required": ["content", "content_truncated"],
+      "properties": {
+        "content": {
+          "type": "string",
+          "maxLength": 16384
+        },
+        "content_truncated": {
+          "type": "boolean"
+        },
+        "reason_code": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "SnapshotResponse"
+}

@@ -2640,6 +2640,7 @@ dependencies = [
  "lenso-agent-cli-plugin",
  "lenso-agent-default-plugins",
  "lenso-agent-loop-plugin",
+ "lenso-agent-native-support",
  "lenso-agent-session-file-plugin",
  "lenso-agent-session-inspection",
  "lenso-agent-session-sqlite-plugin",
@@ -2738,6 +2739,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent",
  "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-lifecycle",
@@ -2856,6 +2858,7 @@ name = "lenso-agent-native-support"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "lenso",
  "lenso-kernel",
  "serde",
  "serde_json",
@@ -3033,11 +3036,13 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-subagent-tools-plugin"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "futures",
  "lenso",
+ "lenso-agent-native-support",
  "lenso-capability-agent",
+ "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-turn-input",
  "lenso-kernel",
@@ -3539,6 +3544,23 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "lenso-capability-agent-task-supervisor"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

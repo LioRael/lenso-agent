@@ -10,6 +10,7 @@ use std::{
 };
 
 use futures::future::{LocalBoxFuture, ready};
+use lenso::prelude::TypedExtension;
 use lenso_kernel::{NativeStreamItem, NativeStreamSession, RuntimeFailure};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{
@@ -19,6 +20,35 @@ use tokio::{
 
 const COMMAND_PROTOCOL: &str = "lenso.agent.command-adapter@1";
 const MAX_ARGUMENT_BYTES: usize = 16_384;
+
+/// Stable Invocation extension for the Workspace selected by the Host surface.
+pub const WORKSPACE_SCOPE_EXTENSION: &str = "lenso.agent.workspace-scope@1";
+/// Stable Invocation extension for the parent Tool call that owns spawned work.
+pub const TOOL_TASK_OWNER_EXTENSION: &str = "lenso.agent.tool-task-owner@1";
+
+/// Absolute Workspace identity retained by child-task projections.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceScope {
+    pub absolute_path: String,
+}
+
+impl TypedExtension for WorkspaceScope {
+    const KEY: &'static str = WORKSPACE_SCOPE_EXTENSION;
+}
+
+/// Durable parent identities that own work spawned by one Tool call.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ToolTaskOwner {
+    pub session_id: String,
+    pub turn_id: String,
+    pub tool_call_id: String,
+}
+
+impl TypedExtension for ToolTaskOwner {
+    const KEY: &'static str = TOOL_TASK_OWNER_EXTENSION;
+}
 
 /// Shared bounded process configuration for command-backed Agent Adapters.
 #[derive(Clone, Debug, serde::Deserialize)]
