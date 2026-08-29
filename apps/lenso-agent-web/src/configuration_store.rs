@@ -14,7 +14,37 @@ use lenso_app_authoring::{
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-const STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v1";
+const STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v2";
+const PREVIOUS_STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v1";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluginConfigurationPublicationRecord {
+    pub proposal_digest: String,
+    pub revision: String,
+    pub base_revision: String,
+    pub plugin_id: String,
+    pub instance_key: String,
+    pub configuration_toml: String,
+    pub published_at_unix_ms: i64,
+    pub rollback_of_proposal_digest: Option<String>,
+}
+
+pub trait PluginConfigurationHistoryAuthority: std::fmt::Debug + Send + Sync {
+    fn publications(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PluginConfigurationPublicationRecord>>;
+
+    fn propose_rollback(
+        &self,
+        expected_revision: &PluginRootRevision,
+        plugin_id: &str,
+        instance: &str,
+        publication_proposal_digest: &str,
+    ) -> anyhow::Result<Option<(PluginConfigurationProposal, String)>>;
+}
 
 /// Host-owned settings for one durable managed Plugin configuration authority.
 #[derive(Clone, Debug)]
@@ -142,6 +172,7 @@ impl SqlitePluginConfigurationAuthority {
         connection: &mut Connection,
         proposal: &PluginConfigurationProposal,
         bytes: &[u8],
+        rollback_of_proposal_digest: Option<&str>,
     ) -> anyhow::Result<()> {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
@@ -163,8 +194,9 @@ impl SqlitePluginConfigurationAuthority {
             transaction.execute(
                 "INSERT OR IGNORE INTO configuration_proposals(
                     proposal_digest, base_revision, candidate_revision, plugin_id,
-                    instance_key, configuration_toml, review_status, phase
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'proposed')",
+                    instance_key, configuration_toml, review_status, phase,
+                    rollback_of_proposal_digest
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'proposed', ?8)",
                 params![
                     proposal.digest(),
                     proposal.base_revision().as_str(),
@@ -173,9 +205,10 @@ impl SqlitePluginConfigurationAuthority {
                     proposal.instance_key(),
                     bytes,
                     review_status,
+                    rollback_of_proposal_digest,
                 ],
             )?;
-            verify_stored_proposal(&transaction, proposal, bytes)?;
+            verify_stored_proposal(&transaction, proposal, bytes, rollback_of_proposal_digest)?;
             transaction.commit()?;
             return Ok(());
         }
@@ -199,7 +232,7 @@ impl SqlitePluginConfigurationAuthority {
         }
         let bytes = stored_proposal_bytes(&transaction, proposal.digest())?
             .context("reviewed Plugin configuration proposal is not durable")?;
-        verify_stored_proposal(&transaction, proposal, &bytes)?;
+        verify_stored_proposal(&transaction, proposal, &bytes, None)?;
         let changed = transaction.execute(
             "UPDATE configuration_proposals
              SET phase = 'materializing'
@@ -243,6 +276,116 @@ impl SqlitePluginConfigurationAuthority {
         transaction.commit()?;
         Ok(())
     }
+
+    fn propose_with_rollback_source(
+        &self,
+        expected_revision: &PluginRootRevision,
+        plugin_id: &str,
+        instance: &str,
+        bytes: &[u8],
+        rollback_of_proposal_digest: Option<&str>,
+    ) -> anyhow::Result<PluginConfigurationProposal> {
+        self.with_operation(|connection| {
+            let materialized = self.reconcile(connection)?;
+            if materialized.revision() != expected_revision {
+                bail!(
+                    "Plugin configuration store revision conflict: expected {expected_revision}, current {}",
+                    materialized.revision()
+                );
+            }
+            let proposal = self
+                .local
+                .propose(expected_revision, plugin_id, instance, bytes)?;
+            Self::persist_proposal(
+                connection,
+                &proposal,
+                bytes,
+                rollback_of_proposal_digest,
+            )?;
+            Ok(proposal)
+        })
+    }
+
+    pub fn publications(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PluginConfigurationPublicationRecord>> {
+        let limit = i64::try_from(limit.clamp(1, 50)).context("publication limit exceeds i64")?;
+        self.with_operation(|connection| {
+            self.reconcile(connection)?;
+            let mut statement = connection.prepare(
+                "SELECT proposal_digest, revision, base_revision, plugin_id, instance_key,
+                        configuration_toml, published_at_unix_ms, rollback_of_proposal_digest
+                 FROM configuration_publications
+                 WHERE plugin_id = ?1 AND instance_key = ?2
+                 ORDER BY published_at_unix_ms DESC, rowid DESC
+                 LIMIT ?3",
+            )?;
+            let rows = statement.query_map(params![plugin_id, instance, limit], |row| {
+                let configuration_toml = row.get::<_, Vec<u8>>(5)?;
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    configuration_toml,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                ))
+            })?;
+            rows.map(|row| {
+                let (
+                    proposal_digest,
+                    revision,
+                    base_revision,
+                    plugin_id,
+                    instance_key,
+                    configuration_toml,
+                    published_at_unix_ms,
+                    rollback_of_proposal_digest,
+                ) = row?;
+                Ok(PluginConfigurationPublicationRecord {
+                    proposal_digest,
+                    revision,
+                    base_revision,
+                    plugin_id,
+                    instance_key,
+                    configuration_toml: String::from_utf8(configuration_toml)
+                        .context("published Plugin configuration TOML is not UTF-8")?,
+                    published_at_unix_ms,
+                    rollback_of_proposal_digest,
+                })
+            })
+            .collect()
+        })
+    }
+
+    pub fn propose_rollback(
+        &self,
+        expected_revision: &PluginRootRevision,
+        plugin_id: &str,
+        instance: &str,
+        publication_proposal_digest: &str,
+    ) -> anyhow::Result<Option<(PluginConfigurationProposal, String)>> {
+        let publication = self.with_operation(|connection| {
+            self.reconcile(connection)?;
+            publication_by_digest(connection, plugin_id, instance, publication_proposal_digest)
+        })?;
+        let Some(publication) = publication else {
+            return Ok(None);
+        };
+        let proposal = self.propose_with_rollback_source(
+            expected_revision,
+            plugin_id,
+            instance,
+            publication.configuration_toml.as_bytes(),
+            Some(publication_proposal_digest),
+        )?;
+        Ok(Some((proposal, publication.configuration_toml)))
+    }
 }
 
 impl PluginConfigurationAuthority for SqlitePluginConfigurationAuthority {
@@ -261,20 +404,7 @@ impl PluginConfigurationAuthority for SqlitePluginConfigurationAuthority {
         instance: &str,
         bytes: &[u8],
     ) -> anyhow::Result<PluginConfigurationProposal> {
-        self.with_operation(|connection| {
-            let materialized = self.reconcile(connection)?;
-            if materialized.revision() != expected_revision {
-                bail!(
-                    "Plugin configuration store revision conflict: expected {expected_revision}, current {}",
-                    materialized.revision()
-                );
-            }
-            let proposal = self
-                .local
-                .propose(expected_revision, plugin_id, instance, bytes)?;
-            Self::persist_proposal(connection, &proposal, bytes)?;
-            Ok(proposal)
-        })
+        self.propose_with_rollback_source(expected_revision, plugin_id, instance, bytes, None)
     }
 
     fn publish(
@@ -300,6 +430,33 @@ impl PluginConfigurationAuthority for SqlitePluginConfigurationAuthority {
             self.finish_publication(connection, &publication)?;
             Ok(publication)
         })
+    }
+}
+
+impl PluginConfigurationHistoryAuthority for SqlitePluginConfigurationAuthority {
+    fn publications(
+        &self,
+        plugin_id: &str,
+        instance: &str,
+        limit: usize,
+    ) -> anyhow::Result<Vec<PluginConfigurationPublicationRecord>> {
+        Self::publications(self, plugin_id, instance, limit)
+    }
+
+    fn propose_rollback(
+        &self,
+        expected_revision: &PluginRootRevision,
+        plugin_id: &str,
+        instance: &str,
+        publication_proposal_digest: &str,
+    ) -> anyhow::Result<Option<(PluginConfigurationProposal, String)>> {
+        Self::propose_rollback(
+            self,
+            expected_revision,
+            plugin_id,
+            instance,
+            publication_proposal_digest,
+        )
     }
 }
 
@@ -343,6 +500,7 @@ struct StoredProposal {
     plugin_id: String,
     instance_key: String,
     configuration_toml: Vec<u8>,
+    rollback_of_proposal_digest: Option<String>,
 }
 
 fn validate_database_path(path: &Path) -> anyhow::Result<()> {
@@ -389,7 +547,8 @@ fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result
             instance_key TEXT NOT NULL,
             configuration_toml BLOB NOT NULL,
             review_status TEXT NOT NULL CHECK (review_status IN ('ready', 'needs_decision', 'rejected')),
-            phase TEXT NOT NULL CHECK (phase IN ('proposed', 'materializing', 'published'))
+            phase TEXT NOT NULL CHECK (phase IN ('proposed', 'materializing', 'published')),
+            rollback_of_proposal_digest TEXT
          );
          CREATE TABLE IF NOT EXISTS configuration_publications (
             proposal_digest TEXT PRIMARY KEY,
@@ -399,6 +558,7 @@ fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result
             instance_key TEXT NOT NULL,
             configuration_toml BLOB NOT NULL,
             published_at_unix_ms INTEGER NOT NULL,
+            rollback_of_proposal_digest TEXT,
             FOREIGN KEY (proposal_digest) REFERENCES configuration_proposals(proposal_digest)
          );",
     )?;
@@ -410,12 +570,47 @@ fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result
         )
         .optional()?
     {
-        if schema != STORE_SCHEMA {
+        if schema == PREVIOUS_STORE_SCHEMA {
+            add_column_if_missing(
+                connection,
+                "configuration_proposals",
+                "rollback_of_proposal_digest",
+                "TEXT",
+            )?;
+            add_column_if_missing(
+                connection,
+                "configuration_publications",
+                "rollback_of_proposal_digest",
+                "TEXT",
+            )?;
+            connection.execute(
+                "UPDATE authority_state SET schema = ?1 WHERE singleton = 1 AND schema = ?2",
+                params![STORE_SCHEMA, PREVIOUS_STORE_SCHEMA],
+            )?;
+        } else if schema != STORE_SCHEMA {
             bail!("unsupported Plugin configuration store schema {schema}");
         }
         if stored != reference {
             bail!("Plugin configuration store belongs to authority {stored}, not {reference}");
         }
+    }
+    Ok(())
+}
+
+fn add_column_if_missing(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    declaration: &str,
+) -> anyhow::Result<()> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|candidate| candidate == column) {
+        connection.execute_batch(&format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+        ))?;
     }
     Ok(())
 }
@@ -434,7 +629,7 @@ fn desired_revision(transaction: &Transaction<'_>) -> anyhow::Result<Option<Stri
 fn materializing_proposals(transaction: &Transaction<'_>) -> anyhow::Result<Vec<StoredProposal>> {
     let mut statement = transaction.prepare(
         "SELECT proposal_digest, base_revision, candidate_revision, plugin_id,
-                instance_key, configuration_toml
+                instance_key, configuration_toml, rollback_of_proposal_digest
          FROM configuration_proposals WHERE phase = 'materializing'
          ORDER BY proposal_digest",
     )?;
@@ -446,6 +641,7 @@ fn materializing_proposals(transaction: &Transaction<'_>) -> anyhow::Result<Vec<
             plugin_id: row.get(3)?,
             instance_key: row.get(4)?,
             configuration_toml: row.get(5)?,
+            rollback_of_proposal_digest: row.get(6)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -469,11 +665,12 @@ fn verify_stored_proposal(
     transaction: &Transaction<'_>,
     proposal: &PluginConfigurationProposal,
     bytes: &[u8],
+    expected_rollback_of_proposal_digest: Option<&str>,
 ) -> anyhow::Result<()> {
     let stored = transaction
         .query_row(
             "SELECT proposal_digest, base_revision, candidate_revision, plugin_id,
-                    instance_key, configuration_toml
+                    instance_key, configuration_toml, rollback_of_proposal_digest
              FROM configuration_proposals WHERE proposal_digest = ?1",
             [proposal.digest()],
             |row| {
@@ -484,6 +681,7 @@ fn verify_stored_proposal(
                     plugin_id: row.get(3)?,
                     instance_key: row.get(4)?,
                     configuration_toml: row.get(5)?,
+                    rollback_of_proposal_digest: row.get(6)?,
                 })
             },
         )
@@ -495,6 +693,8 @@ fn verify_stored_proposal(
         || stored.plugin_id != proposal.plugin_id()
         || stored.instance_key != proposal.instance_key()
         || stored.configuration_toml != bytes
+        || expected_rollback_of_proposal_digest.is_some()
+            && stored.rollback_of_proposal_digest.as_deref() != expected_rollback_of_proposal_digest
     {
         bail!("durable Plugin configuration proposal does not match reviewed evidence");
     }
@@ -517,8 +717,8 @@ fn finalize_publication(
     transaction.execute(
         "INSERT OR IGNORE INTO configuration_publications(
             proposal_digest, revision, base_revision, plugin_id, instance_key,
-            configuration_toml, published_at_unix_ms
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            configuration_toml, published_at_unix_ms, rollback_of_proposal_digest
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             proposal.proposal_digest,
             revision,
@@ -527,6 +727,7 @@ fn finalize_publication(
             proposal.instance_key,
             proposal.configuration_toml,
             unix_time_millis()?,
+            proposal.rollback_of_proposal_digest,
         ],
     )?;
     let changed = transaction.execute(
@@ -541,6 +742,60 @@ fn finalize_publication(
         [&proposal.proposal_digest],
     )?;
     Ok(())
+}
+
+fn publication_by_digest(
+    connection: &Connection,
+    plugin_id: &str,
+    instance: &str,
+    proposal_digest: &str,
+) -> anyhow::Result<Option<PluginConfigurationPublicationRecord>> {
+    let row = connection
+        .query_row(
+            "SELECT proposal_digest, revision, base_revision, plugin_id, instance_key,
+                    configuration_toml, published_at_unix_ms, rollback_of_proposal_digest
+             FROM configuration_publications
+             WHERE proposal_digest = ?1 AND plugin_id = ?2 AND instance_key = ?3",
+            params![proposal_digest, plugin_id, instance],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(
+        |(
+            proposal_digest,
+            revision,
+            base_revision,
+            plugin_id,
+            instance_key,
+            configuration_toml,
+            published_at_unix_ms,
+            rollback_of_proposal_digest,
+        )| {
+            Ok(PluginConfigurationPublicationRecord {
+                proposal_digest,
+                revision,
+                base_revision,
+                plugin_id,
+                instance_key,
+                configuration_toml: String::from_utf8(configuration_toml)
+                    .context("published Plugin configuration TOML is not UTF-8")?,
+                published_at_unix_ms,
+                rollback_of_proposal_digest,
+            })
+        },
+    )
+    .transpose()
 }
 
 fn unix_time_millis() -> anyhow::Result<i64> {
@@ -667,6 +922,90 @@ mod tests {
         assert_eq!(stored.0, publication.revision().as_str());
         assert_eq!(stored.1, "published");
         assert_eq!(stored.2, proposal.digest());
+    }
+
+    #[test]
+    fn rollback_is_a_new_reviewed_proposal_with_a_traceable_publication() {
+        let root = fixture_root();
+        let database = root.path().join("configuration.sqlite3");
+        let authority = open_authority(&root, &database);
+        let first = proposal(&authority, b"greeting = \"first\"\n");
+        authority.publish(&first).unwrap();
+        let second = proposal(&authority, b"greeting = \"second\"\n");
+        let second_publication = authority.publish(&second).unwrap();
+
+        let (rollback, toml) = authority
+            .propose_rollback(
+                second_publication.revision(),
+                "example.agent",
+                "default",
+                first.digest(),
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(toml, "greeting = \"first\"\n");
+        assert_eq!(
+            fs::read(root.path().join("plugins/example.agent/default.toml")).unwrap(),
+            b"greeting = \"second\"\n"
+        );
+        authority.publish(&rollback).unwrap();
+
+        let history = authority
+            .publications("example.agent", "default", 20)
+            .unwrap();
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].configuration_toml, "greeting = \"first\"\n");
+        assert_eq!(
+            history[0].rollback_of_proposal_digest.as_deref(),
+            Some(first.digest())
+        );
+        assert_eq!(history[1].proposal_digest, second.digest());
+        assert_eq!(history[2].proposal_digest, first.digest());
+    }
+
+    #[test]
+    fn opens_and_migrates_a_v1_store_without_losing_history() {
+        let root = fixture_root();
+        let database = root.path().join("configuration.sqlite3");
+        let authority = open_authority(&root, &database);
+        let published = proposal(&authority, b"greeting = \"legacy\"\n");
+        authority.publish(&published).unwrap();
+        drop(authority);
+
+        let connection = Connection::open(&database).unwrap();
+        connection
+            .execute(
+                "UPDATE authority_state SET schema = ?1 WHERE singleton = 1",
+                [PREVIOUS_STORE_SCHEMA],
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE configuration_proposals DROP COLUMN rollback_of_proposal_digest;
+                 ALTER TABLE configuration_publications DROP COLUMN rollback_of_proposal_digest;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let migrated = open_authority(&root, &database);
+        let history = migrated
+            .publications("example.agent", "default", 20)
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].proposal_digest, published.digest());
+        assert_eq!(history[0].rollback_of_proposal_digest, None);
+        let connection = Connection::open(&database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT schema FROM authority_state WHERE singleton = 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            STORE_SCHEMA
+        );
     }
 
     #[test]
