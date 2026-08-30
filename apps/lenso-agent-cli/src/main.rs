@@ -50,6 +50,8 @@ struct ContextResourceSelection {
 enum CliCommand {
     Run(Args),
     Help,
+    Version,
+    Doctor { json: bool },
     Auth(AuthCommand),
     Generations(provenance::GenerationCommand),
     RuntimeStatus { root: PathBuf },
@@ -98,6 +100,11 @@ async fn run() -> Result<(), String> {
             println!("{}", run_usage());
             return Ok(());
         }
+        CliCommand::Version => {
+            println!("lenso-agent-cli {}", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        CliCommand::Doctor { json } => return run_doctor(json),
         CliCommand::Auth(command) => return run_auth(&command).await,
         CliCommand::Generations(command) => return provenance::run_generation(command),
         CliCommand::RuntimeStatus { root } => return provenance::run_runtime_status(&root),
@@ -297,6 +304,12 @@ fn parse_args() -> Result<CliCommand, String> {
 }
 
 fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
+    if matches!(raw.as_slice(), [argument] if argument == "--version" || argument == "-V") {
+        return Ok(CliCommand::Version);
+    }
+    if raw.first().is_some_and(|value| value == "doctor") {
+        return parse_doctor(&raw[1..]);
+    }
     if raw.first().is_some_and(|value| value == "auth") {
         return parse_auth(&raw[1..]).map(CliCommand::Auth);
     }
@@ -327,6 +340,14 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
         return parse_models(&raw[1..]);
     }
     parse_run_args(raw)
+}
+
+fn parse_doctor(arguments: &[String]) -> Result<CliCommand, String> {
+    match arguments {
+        [] => Ok(CliCommand::Doctor { json: false }),
+        [flag] if flag == "--json" => Ok(CliCommand::Doctor { json: true }),
+        _ => Err("usage: lenso-agent-cli doctor [--json]".to_owned()),
+    }
 }
 
 fn parse_runtime(arguments: &[String]) -> Result<CliCommand, String> {
@@ -513,7 +534,166 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli <contexts|models> [--profile <name>]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent-cli profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli <contexts|models> [--profile <name>]\n       lenso-agent-cli doctor [--json]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent-cli profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DoctorReport {
+    version: &'static str,
+    platform: String,
+    agent_home: DoctorAgentHome,
+    authentication: DoctorAuthentication,
+    components: Vec<DoctorCheck>,
+    dependencies: Vec<DoctorCheck>,
+    ready: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DoctorAgentHome {
+    path: String,
+    exists: bool,
+    parent_writable: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DoctorAuthentication {
+    authenticated: bool,
+    expires_at: Option<u64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct DoctorCheck {
+    name: String,
+    available: bool,
+    required: bool,
+}
+
+fn run_doctor(json: bool) -> Result<(), String> {
+    let directories = AgentDirectories::resolve()?;
+    let home = directories.home();
+    let auth = direct_auth_status(direct_auth_options()?)?;
+    let executable_directory = env::current_exe()
+        .map_err(|error| format!("failed to locate lenso-agent-cli: {error}"))?
+        .parent()
+        .ok_or_else(|| "lenso-agent-cli has no executable directory".to_owned())?
+        .to_path_buf();
+    let components = ["lenso-agent", "lenso-agent-cli", "lenso-agent-acp"]
+        .into_iter()
+        .map(|name| DoctorCheck {
+            name: name.to_owned(),
+            available: executable_exists(&executable_directory, name),
+            required: name != "lenso-agent-acp",
+        })
+        .collect::<Vec<_>>();
+    let dependencies = [
+        ("git", true),
+        ("rg", true),
+        ("cargo", false),
+        (sandbox_backend(), false),
+    ]
+    .into_iter()
+    .map(|(name, required)| DoctorCheck {
+        name: name.to_owned(),
+        available: command_available(name),
+        required,
+    })
+    .collect::<Vec<_>>();
+    let agent_home_parent_writable = nearest_existing_ancestor(home).is_some_and(|path| {
+        !fs::metadata(path).is_ok_and(|metadata| metadata.permissions().readonly())
+    });
+    let ready = auth.authenticated
+        && agent_home_parent_writable
+        && components
+            .iter()
+            .chain(&dependencies)
+            .all(|check| !check.required || check.available);
+    let report = DoctorReport {
+        version: env!("CARGO_PKG_VERSION"),
+        platform: format!("{}-{}", env::consts::OS, env::consts::ARCH),
+        agent_home: DoctorAgentHome {
+            path: home.display().to_string(),
+            exists: home.is_dir(),
+            parent_writable: agent_home_parent_writable,
+        },
+        authentication: DoctorAuthentication {
+            authenticated: auth.authenticated,
+            expires_at: auth.expires_at,
+        },
+        components,
+        dependencies,
+        ready,
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| format!("failed to encode doctor report: {error}"))?
+        );
+        return Ok(());
+    }
+    println!("Lenso Agent doctor {}", report.version);
+    println!("platform: {}", report.platform);
+    println!("agent-home: {}", report.agent_home.path);
+    println!(
+        "authentication: {}",
+        if report.authentication.authenticated {
+            "ready"
+        } else {
+            "missing; run `lenso-agent-cli auth login`"
+        }
+    );
+    for check in report.components.iter().chain(&report.dependencies) {
+        println!(
+            "{}: {}{}",
+            check.name,
+            if check.available {
+                "available"
+            } else {
+                "missing"
+            },
+            if check.required {
+                " (required)"
+            } else {
+                " (optional)"
+            }
+        );
+    }
+    println!(
+        "overall: {}",
+        if report.ready {
+            "ready"
+        } else {
+            "action required"
+        }
+    );
+    Ok(())
+}
+
+fn executable_exists(directory: &Path, name: &str) -> bool {
+    let executable = if cfg!(windows) {
+        directory.join(format!("{name}.exe"))
+    } else {
+        directory.join(name)
+    };
+    executable.is_file()
+}
+
+fn command_available(name: &str) -> bool {
+    Command::new(name).arg("--version").output().is_ok()
+}
+
+fn sandbox_backend() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "sandbox-exec"
+    } else if cfg!(target_os = "linux") {
+        "bwrap"
+    } else {
+        "sandbox-backend"
+    }
+}
+
+fn nearest_existing_ancestor(path: &Path) -> Option<&Path> {
+    path.ancestors().find(|ancestor| ancestor.exists())
 }
 
 fn parse_profile(arguments: &[String]) -> Result<ProfileCommand, String> {
@@ -979,5 +1159,22 @@ mod profile_tests {
             }) if profile == "code"
         ));
         assert!(parse_command(vec!["models".to_owned(), "--profile".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn release_commands_are_exact_and_do_not_become_prompts() {
+        assert!(matches!(
+            parse_command(vec!["--version".to_owned()]),
+            Ok(CliCommand::Version)
+        ));
+        assert!(matches!(
+            parse_command(vec!["doctor".to_owned()]),
+            Ok(CliCommand::Doctor { json: false })
+        ));
+        assert!(matches!(
+            parse_command(vec!["doctor".to_owned(), "--json".to_owned()]),
+            Ok(CliCommand::Doctor { json: true })
+        ));
+        assert!(parse_command(vec!["doctor".to_owned(), "extra".to_owned()]).is_err());
     }
 }

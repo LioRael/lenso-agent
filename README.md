@@ -17,31 +17,42 @@ Use it when you want a terminal-first Agent with:
 - reviewed workspace, process, Git, Skill, and user-interaction Tools;
 - fail-closed Tool grants and recoverable Plugin configuration history.
 
-The repository currently runs from source while versioned binary and ACP
-Registry releases are being prepared. Lenso Agent is a product Host built on
-Lenso, not a special mode built into the Lenso Kernel.
+Versioned release binaries run without a Rust toolchain. Lenso Agent is a
+product Host built on Lenso, not a special mode built into the Lenso Kernel.
 
 ## Quick start
 
-Authenticate once before the first Turn. The default App uses the direct Codex
-Model with the `default` ChatGPT Profile:
+Download the pinned installer, review it, then install the interactive Agent
+and management CLI. Version `0.1.0` supports Apple silicon macOS and x86-64
+Linux:
 
 ```sh
-cargo run -p lenso-agent-cli -- auth login
+curl --fail --location \
+  https://github.com/LioRael/lenso-agent/releases/download/v0.1.0/install.sh \
+  --output /tmp/lenso-agent-install.sh
+less /tmp/lenso-agent-install.sh
+sh /tmp/lenso-agent-install.sh --version 0.1.0
 ```
 
-Start the interactive TUI from the repository root:
+Authenticate once, install the official coding Profiles, and inspect local
+readiness. The default App uses the direct Codex Model with the `default`
+ChatGPT Profile:
 
 ```sh
-cargo run -p lenso-agent-tui
+lenso-agent-cli auth login
+lenso-agent-cli profiles install coding
+lenso-agent-cli doctor
 ```
 
-Or run one headless Turn against the current Workspace:
+Start the interactive coding Agent in any Workspace:
 
 ```sh
-cargo run -p lenso-agent-cli -- \
-  "Summarize this workspace README."
+lenso-agent --profile code
 ```
+
+Or run one headless Turn with `lenso-agent-cli "Summarize this workspace
+README."`. See [installation and release lifecycle](docs/installation.md) for
+checksum verification, ACP installation, upgrades, and uninstallation.
 
 ## Agent Home and Workspace
 
@@ -82,7 +93,8 @@ lenso app show
 Expose the same selected Profile to an ACP-compatible editor over stdio:
 
 ```sh
-cargo run -p lenso-agent-acp -- --profile code
+sh /tmp/lenso-agent-install.sh --version 0.1.0 --component acp
+lenso-agent-acp --profile code
 ```
 
 The ACP process implements stable protocol v1. The editor's session `cwd` must
@@ -91,8 +103,8 @@ updates, cancellation, and one-shot permission requests are supported; the
 entrypoint does not advertise client-provided MCP servers, additional roots,
 session loading, or rich media yet.
 
-Zed users can add the installed binary as a custom External Agent while a
-versioned Registry release is being prepared:
+Zed users can add the installed binary as a custom External Agent while the
+ACP Registry submission is awaiting admission:
 
 ```json
 {
@@ -110,7 +122,7 @@ Zed's supported publication path is now the ACP Registry; its older Agent
 Server extension format is deprecated. VS Code does not currently expose a
 public native ACP Agent registration API, so Lenso does not present an MCP
 configuration or a third-party ACP client as first-party VS Code packaging.
-Release preparation details live in `packaging/acp-registry/`.
+Release and Registry verification details live in `packaging/acp-registry/`.
 
 Use `--session <id>` to resume a Session, `--no-tools` to remove Tool access
 for one Turn, or repeat `--allow-tool <name>` to narrow the selected Tools.
@@ -773,10 +785,11 @@ Delete either `[telegram]` or `[discord]` from the file to run only one
 transport. The shared Host runs one Agent Turn at a time and bounds pending
 work across channels.
 
-The distributions are independent. Installing `lenso-agent-cli` does not
-compile or install Ratatui, ACP, Telegram, or Discord support; install
-`lenso-agent-tui`, `lenso-agent-acp`, or `lenso-agent-channel` only when those
-surfaces are needed. Each executable links only its own surface Plugin Catalog.
+The distributions remain independent. Release archives contain one executable
+and its exact surface Plugin Catalog. The default product installer selects the
+interactive `lenso-agent` and management `lenso-agent-cli` archives together;
+ACP is opt-in, while Web and Channel surfaces continue to run from their own
+distributions.
 
 ## Documentation
 

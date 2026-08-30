@@ -1,0 +1,243 @@
+name: Release
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "apps/lenso-agent-acp/**"
+      - "apps/lenso-agent-cli/**"
+      - "apps/lenso-agent-tui/**"
+      - "crates/**"
+      - "scripts/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact release version
+        required: true
+        default: "0.1.0"
+        type: string
+      publish:
+        description: Publish the GitHub prerelease after validation
+        required: true
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Resolve release intent
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - id: release
+        name: Validate version and event
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [[ "${EVENT_NAME}" == "push" ]]; then
+            version="${GITHUB_REF_NAME#v}"
+            publish=true
+          elif [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${INPUT_VERSION}"
+            publish="${INPUT_PUBLISH}"
+          else
+            version="0.1.0"
+            publish=false
+          fi
+          ./scripts/check-release-version.sh "${version}"
+          printf 'version=%s\n' "${version}" >>"${GITHUB_OUTPUT}"
+          printf 'publish=%s\n' "${publish}" >>"${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.release-target }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release-target: darwin-aarch64
+            os: macos-14
+            rust-target: aarch64-apple-darwin
+          - release-target: linux-x86_64
+            os: ubuntu-24.04
+            rust-target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
+        with:
+          toolchain: nightly-2026-07-10
+          target: ${{ matrix.rust-target }}
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - name: Install Linux acceptance dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends bubblewrap ripgrep
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            sudo sysctl --write kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --ro-bind / / --unshare-net /bin/true
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Test release entrypoints
+        run: >-
+          cargo test --locked
+          -p lenso-agent-cli
+          -p lenso-agent-tui
+          -p lenso-agent-acp
+      - name: Build release entrypoints
+        run: >-
+          cargo build --locked --release
+          --target "${{ matrix.rust-target }}"
+          -p lenso-agent-cli
+          -p lenso-agent-tui
+          -p lenso-agent-acp
+      - name: Smoke release binaries
+        run: |
+          target="target/${{ matrix.rust-target }}/release"
+          "${target}/lenso-agent" --version
+          "${target}/lenso-agent-cli" --version
+          "${target}/lenso-agent-acp" --version
+          LENSO_AGENT_HOME="${RUNNER_TEMP}/lenso-agent-doctor" \
+            "${target}/lenso-agent-cli" doctor --json
+      - name: Package release binaries
+        run: |
+          target="target/${{ matrix.rust-target }}/release"
+          for binary in lenso-agent lenso-agent-cli lenso-agent-acp; do
+            ./scripts/package-release-binary.sh \
+              "${{ needs.prepare.outputs.version }}" \
+              "${binary}" \
+              "${{ matrix.release-target }}" \
+              "${target}/${binary}" \
+              dist
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lenso-agent-${{ matrix.release-target }}
+          path: dist
+          if-no-files-found: error
+
+  assemble:
+    name: Assemble release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: lenso-agent-*
+          path: dist
+          merge-multiple: true
+      - name: Verify and complete release payload
+        run: |
+          cd dist
+          sha256sum --check ./*.sha256
+          cd ..
+          ./scripts/render-acp-registry-entry.py \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --base-url "https://github.com/LioRael/lenso-agent/releases/download/v${{ needs.prepare.outputs.version }}" \
+            --artifacts dist \
+            --output dist/agent.json
+          cp scripts/install.sh packaging/acp-registry/icon.svg LICENSE THIRD_PARTY_NOTICES.md dist/
+          cd dist
+          sha256sum ./*.tar.gz install.sh agent.json icon.svg >SHA256SUMS
+      - name: Clean-room install, upgrade, doctor, and uninstall
+        run: |
+          install_root="$(mktemp -d)"
+          agent_home="$(mktemp -d)"
+          printf 'preserve\n' >"${agent_home}/sentinel"
+          LENSO_AGENT_HOME="${agent_home}" ./dist/install.sh \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --target linux-x86_64 \
+            --base-url "file://${PWD}/dist" \
+            --install-dir "${install_root}/bin" \
+            --component agent \
+            --component cli \
+            --component acp
+          LENSO_AGENT_HOME="${agent_home}" ./dist/install.sh \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --target linux-x86_64 \
+            --base-url "file://${PWD}/dist" \
+            --install-dir "${install_root}/bin" \
+            --component agent \
+            --component cli \
+            --component acp
+          "${install_root}/bin/lenso-agent" --version
+          "${install_root}/bin/lenso-agent-cli" --version
+          "${install_root}/bin/lenso-agent-acp" --version
+          LENSO_AGENT_HOME="${agent_home}" "${install_root}/bin/lenso-agent-cli" doctor --json
+          LENSO_AGENT_HOME="${agent_home}" ./dist/install.sh \
+            --install-dir "${install_root}/bin" \
+            --component agent \
+            --component cli \
+            --component acp \
+            --uninstall
+          test -f "${agent_home}/sentinel"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lenso-agent-release-${{ needs.prepare.outputs.version }}
+          path: dist
+          if-no-files-found: error
+
+  publish:
+    name: Publish prerelease
+    if: needs.prepare.outputs.publish == 'true'
+    needs: [prepare, assemble]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: lenso-agent-release-${{ needs.prepare.outputs.version }}
+          path: dist
+      - name: Attest release archives
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Publish GitHub prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="${RUNNER_TEMP}/release-notes.md"
+          cp "docs/releases/v${{ needs.prepare.outputs.version }}.md" "${notes}"
+          gh release create "v${{ needs.prepare.outputs.version }}" \
+            dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --title "Lenso Agent v${{ needs.prepare.outputs.version }}" \
+            --notes-file "${notes}" \
+            --prerelease
