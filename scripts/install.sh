@@ -139,8 +139,17 @@ if [ "$uninstall" = true ]; then
   exit 0
 fi
 
+operating_system="$(uname -s)"
+if [ "$operating_system" = "Darwin" ]; then
+  macos_version="$(sw_vers -productVersion)"
+  macos_major="${macos_version%%.*}"
+  case "$macos_major" in
+    ''|*[!0-9]*) fail "could not determine the macOS version: $macos_version" ;;
+  esac
+  [ "$macos_major" -ge 15 ] || fail "macOS 15 or later is required; found $macos_version"
+fi
+
 if [ -z "$release_target" ]; then
-  operating_system="$(uname -s)"
   architecture="$(uname -m)"
   case "${operating_system}-${architecture}" in
     Darwin-arm64) release_target="darwin-aarch64" ;;
@@ -151,7 +160,7 @@ if [ -z "$release_target" ]; then
   esac
 fi
 case "$release_target" in
-  darwin-aarch64|darwin-x86_64|linux-aarch64|linux-x86_64) ;;
+  darwin-aarch64|linux-x86_64) ;;
   *) fail "unsupported release target: $release_target" ;;
 esac
 

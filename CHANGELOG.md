@@ -3,7 +3,7 @@
 ## 0.1.0 - 2026-08-31
 
 - Ship installable `lenso-agent`, `lenso-agent-cli`, and `lenso-agent-acp`
-  binaries for Apple silicon macOS and x86-64 Linux.
+  binaries for Apple silicon on macOS 15 or later and x86-64 Linux.
 - Add a checksum-verifying installer with independent components, atomic binary
   replacement, upgrade reuse, preserved-state uninstall, and explicit purge.
 - Add `lenso-agent-cli --version` and non-secret `doctor [--json]` diagnostics.

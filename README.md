@@ -23,8 +23,8 @@ product Host built on Lenso, not a special mode built into the Lenso Kernel.
 ## Quick start
 
 Download the pinned installer, review it, then install the interactive Agent
-and management CLI. Version `0.1.0` supports Apple silicon macOS and x86-64
-Linux:
+and management CLI. Version `0.1.0` supports Apple silicon on macOS 15 or later
+and x86-64 Linux:
 
 ```sh
 curl --fail --location \

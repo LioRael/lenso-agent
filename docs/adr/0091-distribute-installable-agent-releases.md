@@ -21,7 +21,7 @@ their Host Catalogs or creating a second App definition.
   remain `publish = false`.
 - Each archive contains exactly one of `lenso-agent`, `lenso-agent-cli`, or
   `lenso-agent-acp` and is named by exact version and target. The initial target
-  matrix is Apple silicon macOS and x86-64 Linux.
+  matrix is Apple silicon on macOS 15 or later and x86-64 Linux.
 - The default installer selects the interactive and management archives. ACP
   remains an explicit optional component. Web and Channel releases stay out of
   the first local coding product slice.

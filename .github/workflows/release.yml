@@ -107,19 +107,11 @@ jobs:
         run: brew install ripgrep
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Test release entrypoints
-        run: |
-          if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            cargo test --locked -p lenso-agent-cli --test headless \
-              background_process_cancellation_is_detached_and_durable -- \
-              --exact --nocapture
-            cargo test --locked -p lenso-agent-cli -- --test-threads=1
-            cargo test --locked -p lenso-agent-tui -p lenso-agent-acp
-          else
-            cargo test --locked \
-              -p lenso-agent-cli \
-              -p lenso-agent-tui \
-              -p lenso-agent-acp
-          fi
+        run: >-
+          cargo test --locked
+          -p lenso-agent-cli
+          -p lenso-agent-tui
+          -p lenso-agent-acp
       - name: Build release entrypoints
         run: >-
           cargo build --locked --release

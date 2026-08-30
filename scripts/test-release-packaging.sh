@@ -24,6 +24,29 @@ second_archive_digest="$(shasum -a 256 "${artifacts}/lenso-agent-v0.1.0-darwin-a
 test "${first_archive_digest}" = "${second_archive_digest}"
 
 base_url="file://${artifacts}"
+if ./scripts/install.sh \
+  --version 0.1.0 \
+  --target darwin-x86_64 \
+  --base-url "${base_url}" \
+  --install-dir "${install_root}/unsupported" >/dev/null 2>&1; then
+  echo "error: installer accepted an unpublished release target" >&2
+  exit 1
+fi
+
+fake_system="${temporary_directory}/fake-system"
+mkdir -p "${fake_system}"
+printf '#!/bin/sh\nprintf "Darwin\\n"\n' >"${fake_system}/uname"
+printf '#!/bin/sh\nprintf "14.7.0\\n"\n' >"${fake_system}/sw_vers"
+chmod 0755 "${fake_system}/uname" "${fake_system}/sw_vers"
+if PATH="${fake_system}:${PATH}" ./scripts/install.sh \
+  --version 0.1.0 \
+  --target darwin-aarch64 \
+  --base-url "${base_url}" \
+  --install-dir "${install_root}/old-macos" >/dev/null 2>&1; then
+  echo "error: installer accepted macOS older than 15" >&2
+  exit 1
+fi
+
 LENSO_AGENT_HOME="${agent_home}" ./scripts/install.sh \
   --version 0.1.0 \
   --target darwin-aarch64 \

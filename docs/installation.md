@@ -4,7 +4,7 @@
 
 The first binary release supports:
 
-- Apple silicon macOS (`darwin-aarch64`); and
+- Apple silicon on macOS 15 or later (`darwin-aarch64`); and
 - x86-64 Linux (`linux-x86_64`).
 
 Windows, Intel macOS, and ARM64 Linux remain source-build targets until their
