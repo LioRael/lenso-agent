@@ -6,7 +6,7 @@ fn renders_composed_panel_and_input() {
     let mut terminal = Terminal::new(backend).unwrap();
     let mut state = TuiState::new(
         &TuiOptions::default(),
-        vec![SnapshotResponsePanelsItem {
+        vec![PanelItem {
             id: "agent.help".to_owned(),
             title: "Help".to_owned(),
             body: "Esc quits".to_owned(),
@@ -59,7 +59,7 @@ fn compact_layout_keeps_the_conversation_and_composer_primary() {
     let mut terminal = Terminal::new(backend).unwrap();
     let mut state = TuiState::new(
         &TuiOptions::default(),
-        vec![SnapshotResponsePanelsItem {
+        vec![PanelItem {
             id: "agent.help".to_owned(),
             title: "Help".to_owned(),
             body: "Esc quits".to_owned(),

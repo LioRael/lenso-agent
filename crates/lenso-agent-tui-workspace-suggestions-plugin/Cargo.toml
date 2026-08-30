@@ -15,7 +15,7 @@ root-slot = "tui-suggestions"
 [dependencies]
 futures.workspace = true
 lenso.workspace = true
-lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
+lenso-capability-tui-suggestion = { path = "../lenso-capability-tui-suggestion" }
 lenso-kernel.workspace = true
 serde.workspace = true
 

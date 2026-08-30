@@ -1,9 +1,9 @@
 //! Terminal event-loop orchestration over one volatile state instance.
 
 use super::{
-    ACTIVE_TICK, AgentApp, CrosstermBackend, EVENT_TICK, EventStream, SnapshotResponsePanelsItem,
-    StreamExt, Suggestion, TaskSnapshotPoll, Terminal, TuiOptions, TuiState, UiPhase,
-    apply_pending_mode, handle_stream_event, handle_terminal_event, io,
+    ACTIVE_TICK, AgentApp, CrosstermBackend, EVENT_TICK, EventStream, StreamExt, TaskSnapshotPoll,
+    Terminal, TerminalSurfaceSnapshot, TuiOptions, TuiState, UiPhase, apply_pending_mode,
+    handle_stream_event, handle_terminal_command_event, handle_terminal_event, io,
     present_online_generation_events, render, submit, sync_user_interaction,
 };
 
@@ -12,10 +12,9 @@ pub(in crate::tui::shell) async fn run_loop(
     options: &TuiOptions,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     events: &mut EventStream,
-    panels: Vec<SnapshotResponsePanelsItem>,
-    suggestions: Vec<Suggestion>,
+    snapshot: TerminalSurfaceSnapshot,
 ) -> Result<(), String> {
-    let mut state = TuiState::new(options, panels);
+    let mut state = TuiState::new(options, Vec::new());
     let initial_generation = app.lease_tui_turn().await?;
     state.selected_model = Some(initial_generation.selected_model().to_owned());
     state.selected_reasoning_effort = initial_generation
@@ -24,7 +23,7 @@ pub(in crate::tui::shell) async fn run_loop(
     state.selected_service_tier = initial_generation
         .selected_service_tier()
         .map(str::to_owned);
-    state.suggestions = suggestions;
+    state.replace_terminal_surface(snapshot);
     run_loop_inner(app, options, terminal, events, &mut state).await
 }
 
@@ -40,7 +39,7 @@ async fn run_loop_inner(
         present_online_generation_events(app, state).await;
         sync_user_interaction(state).await;
         apply_pending_mode(app, state).await;
-        if state.active.is_none() {
+        if state.active.is_none() && state.active_command.is_none() {
             if state.phase == UiPhase::SubmitRequested {
                 submit(app, options, state).await?;
             } else if let Some(input) = state.queued_inputs.pop_front() {
@@ -69,6 +68,28 @@ async fn run_loop_inner(
                 }
                 stream_event = active.stream.receive() => {
                     handle_stream_event(stream_event, state);
+                }
+                () = tokio::time::sleep(ACTIVE_TICK) => {
+                    state.animation_tick = state.animation_tick.wrapping_add(1);
+                }
+            }
+        } else if state.active_command.is_some() {
+            let active = state
+                .active_command
+                .as_mut()
+                .expect("active terminal command checked");
+            tokio::select! {
+                snapshot = task_poll.receive() => {
+                    present_online_generation_events(app, state).await;
+                    task_poll.finish(state, snapshot);
+                }
+                event = events.next() => {
+                    if handle_terminal_event(event, state)? {
+                        return Ok(());
+                    }
+                }
+                stream_event = active.stream.receive() => {
+                    handle_terminal_command_event(stream_event, state);
                 }
                 () = tokio::time::sleep(ACTIVE_TICK) => {
                     state.animation_tick = state.animation_tick.wrapping_add(1);

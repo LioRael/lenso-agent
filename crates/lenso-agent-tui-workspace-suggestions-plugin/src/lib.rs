@@ -1,9 +1,9 @@
 //! Bounded workspace file suggestion Plugin for the Agent TUI.
 
 use futures::future::ready;
-use lenso_capability_agent_tui_suggestion::{
-    self as suggestion_contract, SnapshotRequest, SnapshotResponse, Suggestion, SuggestionKind,
-    TuiSuggestionProvider, validate_snapshot_suggestions,
+use lenso_capability_tui_suggestion::{
+    self as suggestion_contract, SnapshotRequest, SnapshotResponse, SuggestionItem as Suggestion,
+    SuggestionKind, SuggestionProvider, validate_snapshot_suggestions,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use std::{fs, path::PathBuf};
@@ -144,13 +144,13 @@ impl WorkspaceSuggestions {
     }
 }
 
-#[lenso::provides(suggestion_contract::TuiSuggestion)]
-impl TuiSuggestionProvider for WorkspaceSuggestions {
+#[lenso::provides(suggestion_contract::Suggestion)]
+impl SuggestionProvider for WorkspaceSuggestions {
     fn snapshot(
         &self,
         _context: InvocationContext,
         _request: SnapshotRequest,
-    ) -> lenso_kernel::NativeRequestFuture<suggestion_contract::TuiSuggestion> {
+    ) -> lenso_kernel::NativeRequestFuture<suggestion_contract::Suggestion> {
         Box::pin(ready(
             self.snapshot_files()
                 .map(|suggestions| Ok(SnapshotResponse { suggestions })),

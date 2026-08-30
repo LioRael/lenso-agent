@@ -1,62 +1,97 @@
 # Terminal surface Plugin cards
 
-## TUI Shell Plugin
+## Terminal Command Provider
 
-- **Owner:** `lenso-agent-tui-plugin` owns the interactive terminal consumer
-  identity; the optional `lenso-agent-tui` distribution owns terminal I/O.
-- **Deletion boundary:** removing the Shell and its `tui` Instance removes raw
-  terminal mode, layout, input, streamed rendering, cancellation UX, Session
-  selection, and panel aggregation. Agent, Model, Tool, Prompt, and Session
-  behavior remain valid.
-- **Required Capabilities:** one `lenso.agent@3`; many
-  `lenso.agent.tui-contribution@1`; many
-  `lenso.agent.tui-suggestion@1`; many optional
-  `lenso.agent.task-supervisor@2`.
-- **Provided Capabilities:** none. It is a user-facing consumer and does not
-  invent a Provider solely for source-first metadata generation.
-- **Configuration and state:** empty immutable configuration. Input,
-  transcript rendering, selected panel, active stream, and the one-second task
-  snapshot projection are volatile. The durable Session remains owned by the
-  Session Plugin; task lifecycle remains owned by the subagent Plugin.
-- **Lifecycle:** the Host opens terminal raw mode only after App readiness and
-  successful Contribution snapshot validation. Drop restores terminal state.
-- **Final authorization:** none. Turn Tool authority is only narrowed through
-  the existing invocation scope; target Tool Plugins retain final authority.
-- **First observable behavior:** running `lenso-agent` without arguments opens
-  the conversation, accepts one prompt, streams the Agent response, and shows
-  selected semantic panels, including a compact read-only Tasks panel.
+- **Owner:** each feature Plugin owns the commands that project its domain
+  behavior. `lenso.agent.session-terminal` is the first provider and owns
+  `sessions list` plus `sessions show`.
+- **Deletion boundary:** removing one provider removes only its command paths.
+  The aggregate runtime and every terminal surface remain valid.
+- **Provided Capability:** `lenso.terminal.command-provider@1`, with a bounded
+  catalog request and cancellable execution stream.
+- **Required Capabilities:** only the feature roles needed to perform the
+  command. The Session projection requires one `lenso.agent.session@1`.
+- **Configuration and state:** command IDs, paths, parameter metadata, and
+  supported text/JSON formats are provider-owned. Business state stays behind
+  the feature Capability; the command contract creates no second store.
+- **Lifecycle:** the provider is queried while the aggregate activates.
+  Provider-local and aggregate validators reject malformed or ambiguous
+  catalogs before App readiness.
+- **Final authorization:** the feature Plugin remains the final authority for
+  its operation. Advertising a command grants neither Tool nor OS authority.
 
-## TUI Suggestion Plugins
+## Terminal Command Aggregate
 
-- **Owner:** `lenso-agent-tui-command-suggestions-plugin` owns reviewed local
-  command candidates; `lenso-agent-tui-workspace-suggestions-plugin` owns the
-  bounded workspace file snapshot.
-- **Deletion boundary:** removing one provider removes only its command or file
-  candidates. The composer continues accepting ordinary text.
-- **Provided Capability:** `lenso.agent.tui-suggestion@1` snapshot.
-- **Required Capabilities:** none.
-- **Configuration and state:** command metadata is immutable configuration.
-  The workspace provider has a root, file/entry limits, and excluded directory
-  names. Both responses are immutable startup snapshots.
-- **Lifecycle:** stateless. Filesystem enumeration happens only when the Shell
-  requests its startup snapshot, before raw terminal mode.
-- **Final authorization:** suggestions grant no filesystem or Tool authority;
-  the selected Tool Plugins still authorize every Agent action.
+- **Owner:** `lenso-terminal-command-plugin` owns deterministic validation and
+  routing, not any feature command.
+- **Deletion boundary:** removing its `commands` Instance removes terminal
+  command discovery and execution. Agent Turns, Sessions, and feature
+  Capabilities remain valid.
+- **Provided Capability:** one validated `lenso.terminal.command@1` catalog and
+  execution stream.
+- **Required Capability:** many `lenso.terminal.command-provider@1` bindings.
+- **Lifecycle and state:** activation snapshots providers in resolved order,
+  rejects duplicate IDs, duplicate paths, path-prefix ambiguity, and more than
+  256 commands, then stores one immutable route table. Deactivation clears it.
+- **Failure boundary:** a provider catalog failure rejects readiness. Execution
+  errors and cancellation are forwarded without inventing fallback providers.
 
-## Static TUI Contribution Plugin
+## Generic CLI Surface
 
-- **Owner:** `lenso-agent-tui-static-plugin` owns configured read-only panel
-  content and provider-local uniqueness checks.
-- **Deletion boundary:** removing one Instance removes only its panels; the
-  TUI Shell and Agent continue running.
-- **Provided Capability:** `lenso.agent.tui-contribution@1` snapshot.
-- **Required Capabilities:** none.
-- **Configuration:** bounded panel IDs, titles, and bodies. Runtime validation
-  rejects empty/oversized values and duplicate provider-local IDs.
-- **Lifecycle and state:** stateless; no managed work or persistence.
-- **Final authorization:** not applicable because v1 panels expose no action.
-- **First observable behavior:** the selected `tui-help` Instance appears as a
-  Help panel; removing it resolves a valid App with no panel binding.
+- **Owner:** `lenso.terminal.cli` owns the consumer identity;
+  `lenso-terminal-cli-surface` owns catalog-to-Clap translation; each product
+  binary owns argv, stdout/stderr, exit codes, and maintenance commands.
+- **Deletion boundary:** removing one CLI Instance removes only that command
+  presentation. Providers and other CLI, TUI, or Console consumers remain.
+- **Required Capability:** one `lenso.terminal.command@1`.
+- **Lifecycle and state:** the process leases a catalog and command stream from
+  one immutable Generation. Nested help, option parsing, shell quoting, and
+  `--json` are derived from the catalog. Execution runs until completion,
+  cancellation, or Generation shutdown rather than an arbitrary short timeout.
+- **Multiplicity:** an App may select multiple `lenso.terminal.cli` Instances;
+  an embedded Host leases the exact `plugin-id/instance-name`. The parser crate
+  also accepts a caller-owned binary name, so separate products reuse the same
+  contract without sharing process I/O.
+
+## Generic TUI Surface
+
+- **Owner:** `lenso.terminal.tui` owns terminal extension Ports;
+  `lenso.agent.tui` owns the Agent Turn consumer; the optional
+  `lenso-agent-tui` distribution owns Ratatui, Crossterm, and the event loop.
+- **Deletion boundary:** removing the generic TUI consumer removes command,
+  panel, and suggestion composition. Removing the Agent TUI consumer removes
+  conversation Turns. Neither removal changes feature providers.
+- **Required Capabilities:** one `lenso.terminal.command@1`; many
+  `lenso.tui.panel@1`; and many `lenso.tui.suggestion@1`.
+  `lenso.agent.tui` separately requires one `lenso.agent@3` and optional task
+  supervision roles.
+- **Configuration and state:** input, transcript rendering, selected panel,
+  active streams, and task projection are volatile. A command catalog is kept
+  with the exact `TerminalGeneration` lease that produced it. Online switches
+  replace both atomically for subsequent commands; an active stream retains
+  its old immutable lease until completion or cancellation.
+- **Lifecycle:** snapshots are read before raw mode. Drop restores terminal
+  state. Built-in Shell controls remain local; feature commands are parsed by
+  the shared Clap-backed adapter and stream into the transcript.
+- **First observable behavior:** `/sessions list` and `/sessions show ...`
+  appear from the same Session provider used by the headless CLI.
+
+## TUI Panel and Suggestion Providers
+
+- **Owner:** each provider owns one concrete semantic role, not a generic
+  `Contribution`. `lenso-agent-tui-static-plugin` owns configured panels;
+  workspace and Skills Plugins own their own suggestion snapshots.
+- **Deletion boundary:** removing one provider removes only its panels or
+  candidates. The composer and terminal command catalog continue working.
+- **Provided Capabilities:** `lenso.tui.panel@1` or
+  `lenso.tui.suggestion@1`.
+- **Configuration and state:** panels are bounded IDs, titles, and read-only
+  bodies. Suggestions are bounded semantic command, file, prompt, resource, or
+  Skill items. Aggregate duplicate IDs and byte limits are enforced by the
+  Host surface.
+- **Final authorization:** panels and suggestions carry no actions or ambient
+  filesystem authority. Accepting a suggestion only edits the composer; the
+  eventual feature or Tool Plugin still authorizes execution.
 
 ## Telegram surface Plugin
 

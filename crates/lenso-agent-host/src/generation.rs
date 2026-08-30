@@ -52,15 +52,6 @@ use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::{
     CATALOG_OPERATION, CatalogRequest, CatalogResponseToolsItem, ToolsCatalog, ToolsJsonCodec,
 };
-use lenso_capability_agent_tui_contribution::{
-    SNAPSHOT_OPERATION, SnapshotRequest, SnapshotResponsePanelsItem, TuiContribution,
-    validate_snapshot_panels,
-};
-use lenso_capability_agent_tui_suggestion::{
-    SNAPSHOT_OPERATION as SUGGESTION_SNAPSHOT_OPERATION,
-    SnapshotRequest as SuggestionSnapshotRequest, Suggestion, TuiSuggestion,
-    validate_snapshot_suggestions,
-};
 use lenso_capability_agent_turn_input::TurnInputJsonCodec;
 use lenso_capability_agent_user_interaction::{
     ANSWER_OPERATION, AnswerRequest, CAPABILITY_ID as USER_INTERACTION_CAPABILITY_ID,
@@ -68,9 +59,22 @@ use lenso_capability_agent_user_interaction::{
     UserInteractionAnswer, UserInteractionJsonCodec, UserInteractionPending,
 };
 use lenso_capability_agent_workspace_read::WorkspaceReadJsonCodec;
+use lenso_capability_terminal_command::{
+    CATALOG_OPERATION as TERMINAL_CATALOG_OPERATION, CatalogRequest as TerminalCatalogRequest,
+    CatalogResponse as TerminalCatalogResponse, CommandCatalog, CommandExecute,
+    EXECUTE_OPERATION as TERMINAL_EXECUTE_OPERATION, ExecuteOpen as TerminalExecuteOpen,
+};
+use lenso_capability_tui_panel::{
+    Panel, PanelItem, SNAPSHOT_OPERATION, SnapshotRequest, validate_snapshot_panels,
+};
+use lenso_capability_tui_suggestion::{
+    SNAPSHOT_OPERATION as SUGGESTION_SNAPSHOT_OPERATION,
+    SnapshotRequest as SuggestionSnapshotRequest, Suggestion as TuiSuggestion,
+    SuggestionItem as Suggestion, validate_snapshot_suggestions,
+};
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeRequestHandle,
-    NativeStreamHandle,
+    NativeStream, NativeStreamHandle,
 };
 use lenso_native_adapter::NativePluginRegistry;
 use lenso_plugin_control_plane::{
@@ -152,6 +156,7 @@ const ONLINE_ROLLBACK_WINDOW_NANOS: u64 = 1_000_000_000;
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(10);
 const TUI_SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(2);
 const CONTEXT_SOURCE_TIMEOUT: Duration = Duration::from_secs(10);
+const TERMINAL_CATALOG_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_TUI_PANELS: usize = 64;
 const MAX_TUI_PANEL_BYTES: usize = 262_144;
 const MAX_TUI_SUGGESTIONS: usize = 2_112;
@@ -631,6 +636,61 @@ impl AgentApp {
         self.lease_turn_for("web").await
     }
 
+    /// Pins CLI command discovery and execution to one immutable App Generation.
+    pub async fn lease_cli_terminal(&self) -> Result<TerminalGeneration, String> {
+        self.lease_terminal("lenso.terminal.cli/cli").await
+    }
+
+    /// Returns no lease when the selected App intentionally omits the CLI terminal consumer.
+    pub async fn try_lease_cli_terminal(&self) -> Result<Option<TerminalGeneration>, String> {
+        self.try_lease_terminal("lenso.terminal.cli/cli").await
+    }
+
+    /// Pins TUI command discovery and execution to one immutable App Generation.
+    pub async fn lease_tui_terminal(&self) -> Result<TerminalGeneration, String> {
+        self.lease_terminal("lenso.terminal.tui/tui").await
+    }
+
+    /// Pins any explicitly named terminal consumer Instance to one Generation.
+    ///
+    /// Custom Hosts may compose multiple CLI or TUI consumer Instances and
+    /// lease each one by its canonical `plugin-id/instance-name` identity.
+    pub async fn lease_terminal(
+        &self,
+        consumer_instance: &str,
+    ) -> Result<TerminalGeneration, String> {
+        self.try_lease_terminal(consumer_instance)
+            .await?
+            .ok_or_else(|| {
+                format!("leased Generation has no terminal consumer `{consumer_instance}`")
+            })
+    }
+
+    /// Optionally leases an explicitly named terminal consumer Instance.
+    pub async fn try_lease_terminal(
+        &self,
+        consumer_instance: &str,
+    ) -> Result<Option<TerminalGeneration>, String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        let catalog = route
+            .target()
+            .optional_handle::<CommandCatalog>(consumer_instance);
+        let execute = route
+            .target()
+            .optional_stream_handle::<CommandExecute>(consumer_instance);
+        match (catalog, execute) {
+            (None, None) => Ok(None),
+            (Some(catalog), Some(execute)) => Ok(Some(TerminalGeneration {
+                route,
+                catalog: Rc::new(catalog),
+                execute: Rc::new(execute),
+            })),
+            _ => Err(format!(
+                "leased Generation has an incomplete terminal route for `{consumer_instance}`"
+            )),
+        }
+    }
+
     /// Snapshots Prompt and Resource metadata explicitly visible to the CLI surface.
     pub async fn cli_context_sources(&self) -> Result<ContextSnapshotResponse, String> {
         self.context_sources("lenso.agent.cli/cli").await
@@ -916,14 +976,12 @@ impl AgentApp {
     }
 
     /// Snapshots every TUI panel provider in deterministic resolved order.
-    pub async fn tui_panels(&self) -> Result<Vec<SnapshotResponsePanelsItem>, String> {
+    pub async fn tui_panels(&self) -> Result<Vec<PanelItem>, String> {
         let route = self.host.route().await.map_err(control_error)?;
         let handle = route
             .target()
-            .many_handle::<TuiContribution>("lenso.agent.tui/tui")
-            .map_err(|error| {
-                format!("leased Generation has no TUI contribution route: {error:?}")
-            })?;
+            .many_handle::<Panel>("lenso.terminal.tui/tui")
+            .map_err(|error| format!("leased Generation has no TUI panel route: {error:?}"))?;
         let cancellation = CancellationToken::new();
         let context = route
             .target()
@@ -932,19 +990,19 @@ impl AgentApp {
             handle.invoke_many_with_context(SNAPSHOT_OPERATION, context, SnapshotRequest {});
         let responses = match tokio::time::timeout(TUI_SNAPSHOT_TIMEOUT, invocation).await {
             Ok(result) => {
-                result.map_err(|error| format!("TUI contribution snapshot failed: {error:?}"))?
+                result.map_err(|error| format!("TUI panel snapshot failed: {error:?}"))?
             }
             Err(_) => {
                 cancellation.cancel();
-                return Err("TUI contribution snapshot timed out".to_owned());
+                return Err("TUI panel snapshot timed out".to_owned());
             }
         };
         let mut panels = Vec::new();
         for response in responses {
             let response = response
-                .map_err(|error| format!("TUI contribution rejected its snapshot: {error:?}"))?;
+                .map_err(|error| format!("TUI panel provider rejected its snapshot: {error:?}"))?;
             validate_snapshot_panels(&response.panels).map_err(|error| {
-                format!("TUI contribution returned an invalid snapshot: {error}")
+                format!("TUI panel provider returned an invalid snapshot: {error}")
             })?;
             panels.extend(response.panels);
         }
@@ -957,7 +1015,7 @@ impl AgentApp {
         let route = self.host.route().await.map_err(control_error)?;
         let handle = route
             .target()
-            .many_handle::<TuiSuggestion>("lenso.agent.tui/tui")
+            .many_handle::<TuiSuggestion>("lenso.terminal.tui/tui")
             .map_err(|error| format!("leased Generation has no TUI suggestion route: {error:?}"))?;
         let cancellation = CancellationToken::new();
         let context = route
@@ -1186,7 +1244,7 @@ async fn task_snapshot_on_route(
     tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
     Ok(TaskSnapshotResponse { tasks })
 }
-fn validate_tui_panels(panels: &[SnapshotResponsePanelsItem]) -> Result<(), String> {
+fn validate_tui_panels(panels: &[PanelItem]) -> Result<(), String> {
     if panels.len() > MAX_TUI_PANELS {
         return Err(format!(
             "TUI contributions exceed the {MAX_TUI_PANELS}-panel aggregate limit"
@@ -1237,6 +1295,55 @@ fn validate_tui_suggestions(suggestions: &[Suggestion]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Immutable Generation lease shared by terminal discovery and execution.
+#[derive(Debug)]
+pub struct TerminalGeneration {
+    route: DurableGenerationRoute<NativeApp>,
+    catalog: Rc<NativeRequestHandle<CommandCatalog>>,
+    execute: Rc<NativeStreamHandle<CommandExecute>>,
+}
+
+impl TerminalGeneration {
+    /// Reads the exact catalog bound to this terminal surface Generation.
+    pub async fn catalog(&self) -> Result<TerminalCatalogResponse, String> {
+        let cancellation = CancellationToken::new();
+        let context = self
+            .route
+            .target()
+            .invocation_context_after(TERMINAL_CATALOG_TIMEOUT, cancellation.clone());
+        let invocation = self.catalog.invoke_with_context(
+            TERMINAL_CATALOG_OPERATION,
+            context,
+            TerminalCatalogRequest {},
+        );
+        match tokio::time::timeout(TERMINAL_CATALOG_TIMEOUT, invocation).await {
+            Ok(result) => result
+                .map_err(|error| format!("terminal command catalog failed: {error:?}"))?
+                .map_err(|error| format!("terminal command catalog was rejected: {error:?}")),
+            Err(_) => {
+                cancellation.cancel();
+                Err("terminal command catalog timed out".to_owned())
+            }
+        }
+    }
+
+    /// Opens one command stream against the same immutable Generation as the catalog.
+    pub async fn execute(
+        &self,
+        request: TerminalExecuteOpen,
+    ) -> Result<NativeStream<CommandExecute>, String> {
+        let context = self
+            .route
+            .target()
+            .invocation_context(None, CancellationToken::new());
+        self.execute
+            .open_with_context(TERMINAL_EXECUTE_OPERATION, context, request)
+            .await
+            .map_err(|error| format!("terminal command stream failed to open: {error:?}"))?
+            .map_err(|error| format!("terminal command was rejected: {error:?}"))
+    }
 }
 
 #[derive(Debug)]
@@ -2109,7 +2216,9 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::one("session").replaceable(),
         HostSlot::optional("session-presentation").replaceable(),
         HostSlot::optional("restricted-tools-runtime"),
-        HostSlot::many("tui-contributions"),
+        HostSlot::optional("terminal-command-runtime").replaceable(),
+        HostSlot::many("terminal-command-providers"),
+        HostSlot::many("tui-panels"),
         HostSlot::many("tui-suggestions"),
         HostSlot::one("user-interaction").replaceable(),
         HostSlot::optional("workspace-import-read"),
@@ -2126,6 +2235,7 @@ fn host_catalog_defaults(
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.acp", "acp"),
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
+        HostDefaultPlugin::new("lenso.terminal.cli", "cli"),
         HostDefaultPlugin::new("lenso.agent.discord", "discord"),
         default_context_compaction_plugin(),
         default_memory_plugin(directories),
@@ -2162,6 +2272,7 @@ fn host_catalog_defaults(
                 "database": directories.session_database()
             }),
         ),
+        HostDefaultPlugin::new("lenso.agent.session-terminal", "sessions"),
         default_skills_plugin(),
         HostDefaultPlugin::new("lenso.agent.telegram", "telegram"),
         HostDefaultPlugin::new("lenso.agent.tools", "tools"),
@@ -2172,6 +2283,8 @@ fn host_catalog_defaults(
             serde_json::json!({"max_pending": 16, "timeout_ms": 300_000}),
         ),
         HostDefaultPlugin::new("lenso.agent.tui", "tui"),
+        HostDefaultPlugin::new("lenso.terminal.command", "commands"),
+        HostDefaultPlugin::new("lenso.terminal.tui", "tui"),
         HostDefaultPlugin::new("lenso.agent.web", "web"),
         default_plugin(
             "lenso.agent.tui.static",
@@ -2184,7 +2297,6 @@ fn host_catalog_defaults(
                 }]
             }),
         ),
-        default_tui_commands_plugin(),
         default_plugin(
             "lenso.agent.tui-workspace-suggestions",
             "tui-workspace-suggestions",
@@ -2234,24 +2346,6 @@ fn default_boundary_plugins(directories: &AgentDirectories) -> [HostDefaultPlugi
             }),
         ),
     ]
-}
-
-fn default_tui_commands_plugin() -> HostDefaultPlugin {
-    default_plugin(
-        "lenso.agent.tui-command-suggestions",
-        "tui-commands",
-        serde_json::json!({
-            "commands": [
-                {"id": "agent.command.help", "label": "/help", "insert_text": "/help", "description": "Show keyboard shortcuts"},
-                {"id": "agent.command.clear", "label": "/clear", "insert_text": "/clear", "description": "Clear the visible conversation"},
-                {"id": "agent.command.new", "label": "/new", "insert_text": "/new", "description": "Start a new session"},
-                {"id": "agent.command.compact", "label": "/compact", "insert_text": "/compact", "description": "Compact the current session context"},
-                {"id": "agent.command.model", "label": "/model", "insert_text": "/model ", "description": "List or select an admitted model"},
-                {"id": "agent.command.permissions", "label": "/permissions", "insert_text": "/permissions ", "description": "Inspect or narrow Tool permissions"},
-                {"id": "agent.command.rename", "label": "/rename", "insert_text": "/rename ", "description": "Rename the current session"}
-            ]
-        }),
-    )
 }
 
 fn default_context_compaction_plugin() -> HostDefaultPlugin {
@@ -3076,7 +3170,7 @@ mod tests {
     #[test]
     fn tui_panel_limits_reject_oversized_snapshots() {
         let panels = (0..=MAX_TUI_PANELS)
-            .map(|index| SnapshotResponsePanelsItem {
+            .map(|index| PanelItem {
                 id: format!("agent.panel-{index}"),
                 title: format!("Panel {index}"),
                 body: "Content".to_owned(),

@@ -5,18 +5,20 @@
 
 use super::{
     ACTIVE_TICK, Agent, AgentApp, Block, BorderType, Borders, COLLAPSED_USER_ROWS, Clear, Color,
-    Command, Constraint, ContextRole, CrosstermBackend, Duration, EVENT_TICK, Event, EventStream,
-    Frame, InteractionAnswer, InteractionQuestion, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
-    Layout, Line, MAX_INPUT_CHARACTERS, MAX_VISIBLE_QUEUE_HEIGHT, MAX_VISIBLE_QUEUE_ROWS,
+    Command, CommandDefinition, CommandExecute, Constraint, ContextRole, CrosstermBackend,
+    Duration, EVENT_TICK, Event, EventStream, ExecuteError, ExecuteMessage, ExecuteOpen, Frame,
+    InteractionAnswer, InteractionQuestion, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Layout,
+    Line, MAX_INPUT_CHARACTERS, MAX_VISIBLE_QUEUE_HEIGHT, MAX_VISIBLE_QUEUE_ROWS,
     MAX_VISIBLE_SUGGESTIONS, Modifier, MouseButton, MouseEvent, MouseEventKind, NativeStream,
-    OffsetDateTime, OnlineGenerationEvent, PANEL_BREAKPOINT, Padding, Palette, Paragraph, Path,
-    PendingInteraction, RUN_TURN_OPERATION, ReadResourceRequest, Rect, RenderPromptRequest,
-    RunScope, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind, Scrollbar,
-    ScrollbarOrientation, ScrollbarState, SnapshotResponsePanelsItem, Span, StreamEvent, StreamExt,
-    Style, Suggestion, SuggestionKind, Terminal, Text, ThinkingCard, ToolCard, ToolStatus,
-    TuiOptions, TurnGeneration, VecDeque, WHEEL_SCROLL_LINES, Wrap, blocks, io, markdown,
-    markdown_lines_with_width, render_grouped_tool_block, render_thinking_block, render_tool_block,
-    render_tool_group,
+    OffsetDateTime, OnlineGenerationEvent, OutputKind, PANEL_BREAKPOINT, Padding, Palette,
+    PanelItem, Paragraph, ParseOutcome, Path, PendingInteraction, RUN_TURN_OPERATION,
+    ReadResourceRequest, Rect, RenderPromptRequest, RunScope, RunTurnError, RunTurnRequest,
+    RunTurnResponse, RunTurnResponseKind, Scrollbar, ScrollbarOrientation, ScrollbarState, Span,
+    StreamEvent, StreamExt, Style, Suggestion, SuggestionKind, Terminal, TerminalGeneration,
+    TerminalSurfaceSnapshot, Text, ThinkingCard, ToolCard, ToolStatus, TuiOptions, TurnGeneration,
+    VecDeque, WHEEL_SCROLL_LINES, Wrap, blocks, io, markdown, markdown_lines_with_width,
+    parse_terminal_line, render_grouped_tool_block, render_thinking_block, render_tool_block,
+    render_tool_group, terminal_surface_snapshot,
 };
 use std::{collections::BTreeSet, rc::Rc, time::Instant};
 
@@ -34,6 +36,14 @@ struct ActiveTurn {
     lease: Rc<TurnGeneration>,
     task_scope_id: u64,
     started_at: Instant,
+}
+
+#[derive(Debug)]
+struct ActiveTerminalCommand {
+    // Keep the immutable Generation lease alive until the stream is terminal.
+    stream: NativeStream<CommandExecute>,
+    _lease: Rc<TerminalGeneration>,
+    emitted_output: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -474,9 +484,11 @@ struct TuiState {
     selected_block: Option<ToolSelection>,
     expanded_groups: BTreeSet<usize>,
     visible_tool_blocks: Vec<ToolSelection>,
-    panels: Vec<SnapshotResponsePanelsItem>,
+    panels: Vec<PanelItem>,
     task_panel_body: String,
     suggestions: Vec<Suggestion>,
+    command_catalog: Vec<CommandDefinition>,
+    terminal_generation: Option<Rc<TerminalGeneration>>,
     suggestion_selected: usize,
     suggestion_scroll: usize,
     suggestion_visibility: SuggestionVisibility,
@@ -490,6 +502,7 @@ struct TuiState {
     allowed_tools: Option<Vec<String>>,
     phase: UiPhase,
     active: Option<ActiveTurn>,
+    active_command: Option<ActiveTerminalCommand>,
     pending_interaction: Option<PendingInteraction>,
     interaction_draft: Option<InteractionDraft>,
     pending_answers: Option<Vec<InteractionAnswer>>,
@@ -527,7 +540,7 @@ struct TuiState {
 }
 
 impl TuiState {
-    fn new(options: &TuiOptions, panels: Vec<SnapshotResponsePanelsItem>) -> Self {
+    fn new(options: &TuiOptions, panels: Vec<PanelItem>) -> Self {
         Self {
             input: String::new(),
             input_characters: 0,
@@ -546,6 +559,8 @@ impl TuiState {
             panels,
             task_panel_body: "Loading supervised tasks…".to_owned(),
             suggestions: Vec::new(),
+            command_catalog: Vec::new(),
+            terminal_generation: None,
             suggestion_selected: 0,
             suggestion_scroll: 0,
             suggestion_visibility: SuggestionVisibility::Auto,
@@ -559,6 +574,7 @@ impl TuiState {
             allowed_tools: options.allowed_tools.clone(),
             phase: UiPhase::Idle,
             active: None,
+            active_command: None,
             pending_interaction: None,
             interaction_draft: None,
             pending_answers: None,
@@ -618,7 +634,7 @@ impl TuiState {
         )
     }
 
-    fn replace_plugin_panels(&mut self, panels: Vec<SnapshotResponsePanelsItem>) {
+    fn replace_plugin_panels(&mut self, panels: Vec<PanelItem>) {
         let tasks_selected = self.selected_panel == self.panels.len();
         self.panels = panels;
         self.selected_panel = if tasks_selected {
@@ -626,6 +642,15 @@ impl TuiState {
         } else {
             self.selected_panel.min(self.panels.len())
         };
+    }
+
+    fn replace_terminal_surface(&mut self, snapshot: TerminalSurfaceSnapshot) {
+        self.replace_plugin_panels(snapshot.panels);
+        self.suggestions = snapshot.suggestions;
+        self.command_catalog = snapshot.commands;
+        self.terminal_generation = Some(snapshot.terminal);
+        self.suggestion_selected = 0;
+        self.suggestion_scroll = 0;
     }
 
     fn advance_task_generation_epoch(&mut self) {
@@ -664,7 +689,7 @@ impl TuiState {
     }
 
     fn turn_is_running(&self) -> bool {
-        self.active.is_some() || self.phase == UiPhase::Active
+        self.active.is_some() || self.active_command.is_some() || self.phase == UiPhase::Active
     }
 
     fn request_next_mode(&mut self) {
@@ -739,7 +764,7 @@ use turn::{
     FastSelection, PermissionSelection, ThinkingSelection, fast_command, mode_command,
     model_command, permissions_command, rename_command, thinking_command,
 };
-use turn::{apply_pending_mode, submit};
+use turn::{apply_pending_mode, handle_terminal_command_event, submit};
 #[path = "turn_stream.rs"]
 mod turn_stream;
 use turn_stream::handle_stream_event;

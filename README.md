@@ -54,6 +54,18 @@ Or run one headless Turn with `lenso-agent-cli "Summarize this workspace
 README."`. See [installation and release lifecycle](docs/installation.md) for
 checksum verification, ACP installation, upgrades, and uninstallation.
 
+Feature Plugins can also contribute commands shared by the headless CLI and
+TUI. The built-in Session projection is the first complete slice:
+
+```sh
+lenso-agent-cli sessions list
+lenso-agent-cli sessions list --json
+lenso-agent-cli sessions show --help
+```
+
+The TUI discovers the same catalog as `/sessions list` and
+`/sessions show ...`; neither surface owns Session storage.
+
 ## Agent Home and Workspace
 
 The installed Agent keeps its configuration and durable state in one global
@@ -795,6 +807,7 @@ distributions.
 
 - [Documentation map](docs/README.md)
 - [Plugin tutorial](docs/tutorials/10-minute-tool-provider.md)
+- [Terminal command Plugin tutorial](docs/tutorials/add-terminal-command-provider.md)
 - [Control-plane glossary](docs/glossary.md)
 - [Host implementation and operational reference](docs/architecture/host-internals.md)
 

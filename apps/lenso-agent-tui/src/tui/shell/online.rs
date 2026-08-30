@@ -1,6 +1,8 @@
 //! Presentation of online Generation changes without owning reconciliation.
 
-use super::{AgentApp, OnlineGenerationEvent, TranscriptEntry, TuiState};
+use super::{
+    AgentApp, OnlineGenerationEvent, TranscriptEntry, TuiState, terminal_surface_snapshot,
+};
 
 pub(super) async fn present_online_generation_events(app: &AgentApp, state: &mut TuiState) {
     for event in app.take_online_generation_events() {
@@ -10,8 +12,8 @@ pub(super) async fn present_online_generation_events(app: &AgentApp, state: &mut
             }
             OnlineGenerationEvent::Switched { .. } => {
                 state.advance_task_generation_epoch();
-                match app.tui_panels().await {
-                    Ok(panels) => state.replace_plugin_panels(panels),
+                match terminal_surface_snapshot(app).await {
+                    Ok(snapshot) => state.replace_terminal_surface(snapshot),
                     Err(error) => state.transcript.push(TranscriptEntry::Error {
                         text: format!(
                             "Plugin changes were applied, but the interface could not refresh: {error}"
@@ -27,8 +29,8 @@ pub(super) async fn present_online_generation_events(app: &AgentApp, state: &mut
             }),
             OnlineGenerationEvent::RolledBack { detail, .. } => {
                 state.advance_task_generation_epoch();
-                match app.tui_panels().await {
-                    Ok(panels) => state.replace_plugin_panels(panels),
+                match terminal_surface_snapshot(app).await {
+                    Ok(snapshot) => state.replace_terminal_surface(snapshot),
                     Err(error) => state.transcript.push(TranscriptEntry::Error {
                         text: format!(
                             "The previous plugins were restored, but the interface could not refresh: {error}"
