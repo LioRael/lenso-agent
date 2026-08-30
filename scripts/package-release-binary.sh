@@ -47,9 +47,16 @@ TZ=UTC touch -t 198001010000 "${temporary_directory}/${archive_executable}"
 
 archive_name="${executable_name}-v${version}-${release_target}.tar.gz"
 archive_path="${output_directory}/${archive_name}"
-tar --format ustar --uid 0 --gid 0 --numeric-owner \
-  -C "${temporary_directory}" -cf - "${archive_executable}" |
-  gzip -n -9 >"${archive_path}"
+case "$(tar --version 2>/dev/null || true)" in
+  *GNU*)
+    tar --format=ustar --owner=0 --group=0 --numeric-owner \
+      -C "${temporary_directory}" -cf - "${archive_executable}"
+    ;;
+  *)
+    tar --format ustar --uid 0 --gid 0 --numeric-owner \
+      -C "${temporary_directory}" -cf - "${archive_executable}"
+    ;;
+esac | gzip -n -9 >"${archive_path}"
 
 if command -v shasum >/dev/null 2>&1; then
   checksum="$(shasum -a 256 "${archive_path}" | awk '{print $1}')"
