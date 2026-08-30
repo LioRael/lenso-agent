@@ -3004,6 +3004,7 @@ dependencies = [
  "lenso-agent-loop-plugin",
  "lenso-agent-memory-sqlite-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
+ "lenso-agent-model-selection-plugin",
  "lenso-agent-oauth-client-credentials-plugin",
  "lenso-agent-prompt-plugin",
  "lenso-agent-prompt-static-plugin",
@@ -3059,6 +3060,7 @@ dependencies = [
  "lenso-agent-model-fixture-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
  "lenso-agent-model-openai-compatible-plugin",
+ "lenso-agent-model-selection-plugin",
  "lenso-agent-multimodal-tools-plugin",
  "lenso-agent-oauth-client-credentials-plugin",
  "lenso-agent-process-native-plugin",
@@ -3148,6 +3150,7 @@ dependencies = [
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-memory",
  "lenso-capability-agent-model",
+ "lenso-capability-agent-model-selection",
  "lenso-capability-agent-oauth-access",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
@@ -3246,6 +3249,7 @@ dependencies = [
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-memory",
  "lenso-capability-agent-model",
+ "lenso-capability-agent-model-selection",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-control",
@@ -3355,6 +3359,19 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-agent-model-selection-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-model",
+ "lenso-capability-agent-model-selection",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -4061,6 +4078,25 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-model-selection"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

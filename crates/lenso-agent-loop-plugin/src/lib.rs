@@ -41,6 +41,10 @@ use lenso_capability_agent_model::{
     CompleteMessageKind, CompleteMessageRole, CompleteOpen, CompleteTool, ModelEvent,
     ModelInvocationError,
 };
+use lenso_capability_agent_model_selection::{
+    self as model_selection_capability, ModelSelectionInvocationError, SelectCandidate,
+    SelectRequest,
+};
 use lenso_capability_agent_prompt::{
     self as prompt_capability, AssembleRequest, PromptInvocationError,
 };
@@ -76,6 +80,8 @@ pub const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
 pub const AGENT_BEHAVIOR_PROVENANCE_EXTENSION: &str = "lenso.agent.behavior-provenance@1";
 /// Host-issued Invocation Context key for the exact Provider/model profile of one Turn.
 pub const RESOLVED_TURN_PROFILE_EXTENSION: &str = "lenso.agent.resolved-turn-profile@1";
+/// Host-issued selection intent narrowed to model profiles admitted by one Generation.
+pub const TURN_MODEL_SELECTION_EXTENSION: &str = "lenso.agent.turn-model-selection@1";
 const TOOL_SEARCH_NAME: &str = "tool_search";
 const DEFERRED_MCP_TOOL_THRESHOLD: usize = 16;
 const DEFERRED_TOOL_SEARCH_RESULTS: usize = 8;
@@ -156,6 +162,18 @@ pub struct ResolvedTurnProfile {
 
 impl TypedExtension for ResolvedTurnProfile {
     const KEY: &'static str = RESOLVED_TURN_PROFILE_EXTENSION;
+}
+
+/// One dynamic policy request plus the exact model profiles it may select.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnModelSelection {
+    pub policy: String,
+    pub candidates: Vec<ResolvedTurnProfile>,
+}
+
+impl TypedExtension for TurnModelSelection {
+    const KEY: &'static str = TURN_MODEL_SELECTION_EXTENSION;
 }
 
 /// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
@@ -241,6 +259,17 @@ pub struct TurnGenerationProvenance {
     pub agent_behavior_digest: Option<String>,
     /// Exact Provider/model profile resolved for the Turn, when recorded.
     pub resolved_turn_profile: Option<ResolvedTurnProfile>,
+    /// Dynamic selection decision that produced the resolved profile, when used.
+    pub model_selection: Option<ModelSelectionEvidence>,
+}
+
+/// Durable evidence explaining one dynamic model decision.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelSelectionEvidence {
+    pub policy: String,
+    pub strategy: String,
+    pub reason_code: String,
 }
 
 /// Interpret one `turn_started` payload owned by this Agent Loop.
@@ -260,6 +289,8 @@ pub fn inspect_turn_generation_provenance(
         run_scope: Option<RunScope>,
         #[serde(default)]
         resolved_turn_profile: Option<ResolvedTurnProfile>,
+        #[serde(default)]
+        model_selection: Option<ModelSelectionEvidence>,
     }
     let payload = serde_json::from_str::<TurnStartedPayload>(payload_json)
         .map_err(|error| format!("Turn provenance payload is invalid: {error}"))?;
@@ -284,6 +315,7 @@ pub fn inspect_turn_generation_provenance(
         generation_spec_digest: payload.generation_spec_digest,
         agent_behavior_digest: payload.agent_behavior_digest,
         resolved_turn_profile: payload.resolved_turn_profile,
+        model_selection: payload.model_selection,
     })
 }
 
@@ -422,6 +454,7 @@ struct AgentLoop {
     #[config]
     config: AgentConfig,
     model: Port<model_capability::ModelClient>,
+    model_selection: ManyPort<model_selection_capability::ModelSelectionClient>,
     prompt: Port<prompt_capability::PromptClient>,
     tools: Port<tools_capability::ToolsClient>,
     session: Port<session_capability::SessionClient>,
@@ -794,7 +827,9 @@ async fn run_turn(
     let turn_input = request.input;
     let generation_spec_digest = generation_spec_digest(context)?;
     let agent_behavior = agent_behavior_provenance(context)?;
-    let resolved_turn_profile = resolved_turn_profile(context, generation_spec_digest)?;
+    let base_turn_profile = resolved_turn_profile(context, generation_spec_digest)?;
+    let model_selection =
+        turn_model_selection(context, generation_spec_digest, &base_turn_profile)?;
     let run_scope = run_scope(context)?;
     let opened = clients
         .session
@@ -828,6 +863,16 @@ async fn run_turn(
     } else {
         read_session_tail(clients, context, &session_id, &opened.revision, config).await?
     };
+    let turn_id = uuid::Uuid::new_v4().to_string();
+    let (resolved_turn_profile, selection_evidence) = resolve_dynamic_model_selection(
+        clients,
+        context,
+        &turn_id,
+        &turn_input,
+        base_turn_profile,
+        model_selection,
+    )
+    .await?;
     let current_title = current_session_title(&history);
     let (mut messages, compacted_revision) = prepare_model_context(
         clients,
@@ -843,10 +888,11 @@ async fn run_turn(
         },
     )
     .await?;
-    let (turn_id, mut revision) = start_turn(
+    let mut revision = start_turn(
         clients,
         context,
         TurnStart {
+            turn_id: &turn_id,
             opened_created: opened.created,
             session_id: &session_id,
             revision: compacted_revision,
@@ -856,6 +902,7 @@ async fn run_turn(
             generation_spec_digest,
             agent_behavior_digest: agent_behavior.as_ref().map(|value| value.digest.as_str()),
             resolved_turn_profile: &resolved_turn_profile,
+            model_selection: selection_evidence.as_ref(),
             input: &turn_input,
             run_scope: run_scope.as_ref(),
         },
@@ -909,6 +956,7 @@ async fn run_turn(
 }
 
 struct TurnStart<'a> {
+    turn_id: &'a str,
     opened_created: bool,
     session_id: &'a str,
     revision: String,
@@ -918,6 +966,7 @@ struct TurnStart<'a> {
     generation_spec_digest: &'a str,
     agent_behavior_digest: Option<&'a str>,
     resolved_turn_profile: &'a ResolvedTurnProfile,
+    model_selection: Option<&'a ModelSelectionEvidence>,
     input: &'a str,
     run_scope: Option<&'a RunScope>,
 }
@@ -926,8 +975,7 @@ async fn start_turn(
     clients: &AgentLoop,
     context: &InvocationContext,
     start: TurnStart<'_>,
-) -> Result<(String, String), TurnFailure> {
-    let turn_id = uuid::Uuid::new_v4().to_string();
+) -> Result<String, TurnFailure> {
     let mut revision = start.revision;
     let mut initialization_events = Vec::new();
     if start.opened_created {
@@ -971,7 +1019,11 @@ async fn start_turn(
             LifecycleEventKind::SessionResumed
         },
         start.session_id,
-        if first_turn { None } else { Some(&turn_id) },
+        if first_turn {
+            None
+        } else {
+            Some(start.turn_id)
+        },
         start.generation_spec_digest,
         &serde_json::json!({"revision": revision}),
     )
@@ -981,7 +1033,7 @@ async fn start_turn(
         context,
         LifecycleEventKind::TurnStarted,
         start.session_id,
-        Some(&turn_id),
+        Some(start.turn_id),
         start.generation_spec_digest,
         &serde_json::json!({"input": start.input, "run_scope": start.run_scope}),
     )
@@ -989,17 +1041,18 @@ async fn start_turn(
     let mut turn_events = interrupted_turn_events(start.history)?;
     turn_events.push(session_event(
         AppendSessionRequestEventsItemKind::TurnStarted,
-        Some(&turn_id),
+        Some(start.turn_id),
         &serde_json::json!({
             "generation_spec_digest": start.generation_spec_digest,
             "agent_behavior_digest": start.agent_behavior_digest,
             "resolved_turn_profile": start.resolved_turn_profile,
+            "model_selection": start.model_selection,
             "input": start.input,
             "run_scope": start.run_scope
         }),
     )?);
     revision = append_events(clients, context, start.session_id, revision, turn_events).await?;
-    Ok((turn_id, revision))
+    Ok(revision)
 }
 
 fn run_scope(context: &InvocationContext) -> Result<Option<RunScope>, TurnFailure> {
@@ -1032,6 +1085,105 @@ fn resolved_turn_profile(
         }));
     }
     Ok(profile)
+}
+
+fn turn_model_selection(
+    context: &InvocationContext,
+    generation_spec_digest: &str,
+    base_profile: &ResolvedTurnProfile,
+) -> Result<Option<TurnModelSelection>, TurnFailure> {
+    let selection = context
+        .typed_extension::<TurnModelSelection>()
+        .map_err(|error| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: format!("Agent Turn has an invalid Model Selection intent: {error}"),
+            })
+        })?;
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+    let mut models = BTreeSet::new();
+    if selection.policy.is_empty()
+        || selection.policy.len() > 128
+        || selection.candidates.is_empty()
+        || selection.candidates.len() > 16
+        || selection.candidates.iter().any(|profile| {
+            profile.catalog_revision != generation_spec_digest
+                || profile.provider_instance != base_profile.provider_instance
+                || !models.insert(profile.model.as_str())
+        })
+    {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Agent Turn Model Selection exceeds its Generation authority".to_owned(),
+        }));
+    }
+    Ok(Some(selection))
+}
+
+async fn resolve_dynamic_model_selection(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    turn_id: &str,
+    input: &str,
+    base_profile: ResolvedTurnProfile,
+    selection: Option<TurnModelSelection>,
+) -> Result<(ResolvedTurnProfile, Option<ModelSelectionEvidence>), TurnFailure> {
+    let Some(selection) = selection else {
+        return Ok((base_profile, None));
+    };
+    if clients.model_selection.len() != 1 {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "dynamic Model Selection requires exactly one Plan-bound provider".to_owned(),
+        }));
+    }
+    let response = clients.model_selection[0]
+        .select_with_context(
+            context.clone(),
+            SelectRequest {
+                policy: selection.policy.clone(),
+                selection_id: turn_id.to_owned(),
+                input: input.to_owned(),
+                candidates: selection
+                    .candidates
+                    .iter()
+                    .map(|profile| SelectCandidate {
+                        model: profile.model.clone(),
+                        selected_by_default: profile.model == base_profile.model,
+                    })
+                    .collect(),
+            },
+        )
+        .await
+        .map_err(map_model_selection_error)?;
+    let profile = selection
+        .candidates
+        .into_iter()
+        .find(|profile| profile.model == response.model)
+        .ok_or_else(|| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Model Selection provider returned a model outside Turn authority"
+                    .to_owned(),
+            })
+        })?;
+    Ok((
+        profile,
+        Some(ModelSelectionEvidence {
+            policy: selection.policy,
+            strategy: response.strategy,
+            reason_code: response.reason_code,
+        }),
+    ))
+}
+
+fn map_model_selection_error(error: ModelSelectionInvocationError) -> TurnFailure {
+    match error {
+        ModelSelectionInvocationError::Runtime(error) => PluginError::runtime(error),
+        ModelSelectionInvocationError::Domain(error) => {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: format!("Model Selection rejected the Turn: {error:?}"),
+            })
+        }
+    }
 }
 
 async fn recall_memory(
@@ -4119,7 +4271,7 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 9);
+        assert_eq!(requirements.len(), 10);
         assert!(requirements.iter().any(|requirement| {
             requirement["capability_id"] == "lenso.agent.artifact@1"
                 && requirement["cardinality"] == "one"
@@ -4130,7 +4282,11 @@ mod tests {
                 .filter(|requirement| {
                     !matches!(
                         requirement["capability_id"].as_str(),
-                        Some("lenso.agent.lifecycle@1" | "lenso.agent.session-presentation@1")
+                        Some(
+                            "lenso.agent.lifecycle@1"
+                                | "lenso.agent.session-presentation@1"
+                                | "lenso.agent.model-selection@1"
+                        )
                     )
                 })
                 .all(|requirement| requirement["cardinality"] == "one")
@@ -4141,6 +4297,10 @@ mod tests {
         }));
         assert!(requirements.iter().any(|requirement| {
             requirement["capability_id"] == "lenso.agent.session-presentation@1"
+                && requirement["cardinality"] == "many"
+        }));
+        assert!(requirements.iter().any(|requirement| {
+            requirement["capability_id"] == "lenso.agent.model-selection@1"
                 && requirement["cardinality"] == "many"
         }));
         assert_eq!(
@@ -4733,6 +4893,11 @@ mod tests {
         let payload = serde_json::json!({
             "generation_spec_digest": digest,
             "agent_behavior_digest": behavior_digest,
+            "model_selection": {
+                "policy": "auto",
+                "strategy": "rules",
+                "reason_code": "strong_rule"
+            },
             "input": "hello"
         })
         .to_string();
@@ -4745,6 +4910,14 @@ mod tests {
             Some(behavior_digest.as_str())
         );
         assert!(provenance.resolved_turn_profile.is_none());
+        assert_eq!(
+            provenance.model_selection,
+            Some(ModelSelectionEvidence {
+                policy: "auto".to_owned(),
+                strategy: "rules".to_owned(),
+                reason_code: "strong_rule".to_owned(),
+            })
+        );
 
         let unknown = serde_json::json!({
             "generation_spec_digest": digest,

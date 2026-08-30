@@ -30,6 +30,8 @@ async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation
                 .await
                 .unwrap();
             let lease = app.lease_tui_turn().await.unwrap();
+            assert!(!lease.supports_dynamic_model_selection());
+            assert!(lease.invocation_context_for_model("auto").is_err());
             assert_eq!(
                 lease.available_models(),
                 vec![
@@ -74,6 +76,79 @@ async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation
                     && event.payload_json.as_str().contains("fixture/alternate-v1")
             });
             assert!(requested.is_some());
+
+            drop(stream);
+            drop(lease);
+            app.shutdown().await.unwrap();
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tui_turn_may_resolve_a_dynamic_model_policy_before_turn_start() {
+    let temporary = tempfile::tempdir().unwrap();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let host = AgentHost::builder()
+                .agent_home(temporary.path())
+                .unwrap()
+                .plugins(default_plugins::link)
+                .surface(TuiSurface::terminal())
+                .build()
+                .unwrap();
+            let mut app = host
+                .run(Profile::resolved_plan(support::plan_for_home(
+                    "dynamic-model-selection",
+                    temporary.path(),
+                )))
+                .await
+                .unwrap();
+            let lease = app.lease_tui_turn().await.unwrap();
+            assert!(lease.supports_dynamic_model_selection());
+            let stream = lease
+                .handle()
+                .open_with_context(
+                    RUN_TURN_OPERATION,
+                    lease.invocation_context_for_model("auto").unwrap(),
+                    RunTurnRequest {
+                        input: "Answer directly: selected model".to_owned(),
+                        session_id: None,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            stream.close_send().await.unwrap();
+
+            let mut session_id = None;
+            loop {
+                match stream.receive().await.unwrap() {
+                    StreamEvent::Message(message) => {
+                        session_id = session_id.or(message.session_id);
+                    }
+                    StreamEvent::Terminal(Ok(())) => break,
+                    StreamEvent::Terminal(Err(error)) => panic!("Agent Turn failed: {error:?}"),
+                    StreamEvent::PeerHalfClosed => {}
+                }
+            }
+            let durable = lease
+                .read_session(session_id.unwrap(), 0, 100)
+                .await
+                .unwrap();
+            let started = durable
+                .events
+                .iter()
+                .find(|event| format!("{:?}", event.kind) == "TurnStarted")
+                .expect("Turn start is durable");
+            let payload: serde_json::Value =
+                serde_json::from_str(started.payload_json.as_str()).unwrap();
+            assert_eq!(
+                payload["resolved_turn_profile"]["model"],
+                "fixture/alternate-v1"
+            );
+            assert_eq!(payload["model_selection"]["policy"], "auto");
+            assert_eq!(payload["model_selection"]["strategy"], "rules");
+            assert_eq!(payload["model_selection"]["reason_code"], "strong_rule");
 
             drop(stream);
             drop(lease);

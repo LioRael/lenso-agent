@@ -22,6 +22,7 @@ lenso-capability-agent-context-compaction = { path = "../lenso-capability-agent-
 lenso-capability-agent-memory = { path = "../lenso-capability-agent-memory" }
 lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle" }
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-model-selection = { path = "../lenso-capability-agent-model-selection" }
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-session-control = { path = "../lenso-capability-agent-session-control" }

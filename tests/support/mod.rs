@@ -22,6 +22,32 @@ pub(crate) fn plan_for_home(app: &str, home: &Path) -> PathBuf {
             ],
             home,
         ),
+        "dynamic-model-selection" => resolve(
+            "dynamic-model-selection",
+            &[
+                (
+                    "lenso.agent.loop/agent.toml",
+                    "model = \"fixture/readme-summary-v1\"\n",
+                ),
+                (
+                    "lenso.agent.model.fixture/model.toml",
+                    "model = \"fixture/readme-summary-v1\"\nallowed_models = [\"fixture/alternate-v1\"]\n",
+                ),
+                (
+                    "lenso.agent.model-selection.dynamic/selector.toml",
+                    r#"[[policies]]
+id = "auto"
+description = "Use the stronger fixture model for complex work"
+strategy = "rules"
+default_model = "fixture/readme-summary-v1"
+strong_model = "fixture/alternate-v1"
+min_input_characters = 10000
+strong_keywords = ["selected model"]
+"#,
+                ),
+            ],
+            home,
+        ),
         "interaction-resume-budget" => resolve_interaction_resume_budget(home),
         app @ ("interaction-resume-limit" | "interaction-total-tool-limit") => {
             interaction_limit(home, app)

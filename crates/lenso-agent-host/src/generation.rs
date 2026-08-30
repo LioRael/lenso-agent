@@ -1,6 +1,6 @@
 use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
-use lenso_agent_loop_plugin::AgentBehaviorProvenance;
+use lenso_agent_loop_plugin::{AgentBehaviorProvenance, TurnModelSelection};
 use lenso_agent_native_support::WorkspaceScope;
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
@@ -25,6 +25,9 @@ use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_memory::MemoryJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
+use lenso_capability_agent_model_selection::{
+    CAPABILITY_ID as MODEL_SELECTION_CAPABILITY_ID, ModelSelectionJsonCodec,
+};
 use lenso_capability_agent_oauth_access::OauthAccessJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::{
@@ -802,6 +805,7 @@ impl AgentApp {
             .map_err(|error| {
                 format!("leased Generation Agent has no Tool catalog route: {error:?}")
             })?;
+        let has_model_selection = agent_has_model_selection(&route, &agent_provider)?;
         let has_session_control = surface_dependencies.bindings().iter().any(|binding| {
             binding.capability_id() == lenso_capability_agent_session_control::CAPABILITY_ID
         });
@@ -839,6 +843,7 @@ impl AgentApp {
             interactive,
             tools_catalog: Rc::new(tools_catalog),
             session_control,
+            has_model_selection,
             behavior_digest,
             resolved_turn_profile,
             model_catalog,
@@ -984,6 +989,19 @@ fn session_control_handle(
                 })
         })
         .transpose()
+}
+
+fn agent_has_model_selection(
+    route: &DurableGenerationRoute<NativeApp>,
+    agent_provider: &str,
+) -> Result<bool, String> {
+    Ok(route
+        .target()
+        .dependencies(agent_provider)
+        .map_err(|error| format!("leased Generation has no Agent dependencies: {error:?}"))?
+        .bindings()
+        .iter()
+        .any(|binding| binding.capability_id() == MODEL_SELECTION_CAPABILITY_ID))
 }
 
 pub(crate) fn live_controller_generation_digests(
@@ -1165,6 +1183,7 @@ pub struct TurnGeneration {
     interactive: bool,
     tools_catalog: Rc<NativeRequestHandle<ToolsCatalog>>,
     session_control: Option<Rc<NativeRequestHandle<SessionControl>>>,
+    has_model_selection: bool,
     behavior_digest: String,
     resolved_turn_profile: crate::ResolvedTurnProfile,
     model_catalog: crate::ProviderModelCatalog,
@@ -1210,13 +1229,17 @@ impl TurnGeneration {
         self.resolved_turn_profile.service_tier.as_deref()
     }
 
+    /// Returns whether this Agent has one selected dynamic Model Selection provider.
+    pub const fn supports_dynamic_model_selection(&self) -> bool {
+        self.has_model_selection
+    }
+
     /// Creates a root context selecting one admitted model for this Turn only.
     pub fn invocation_context_for_model(
         &self,
         model_id: &str,
     ) -> Result<InvocationContext, String> {
-        let profile = self.model_catalog.resolve_model(model_id)?;
-        self.invocation_context_with_profile(CancellationToken::new(), &profile)
+        self.invocation_context_for_model_options(Some(model_id), None, None)
     }
 
     /// Creates a root context with model-specific, catalog-validated inference controls.
@@ -1227,10 +1250,45 @@ impl TurnGeneration {
         service_tier: Option<&str>,
     ) -> Result<InvocationContext, String> {
         let model_id = model_id.unwrap_or(self.resolved_turn_profile.model.as_str());
-        let profile =
-            self.model_catalog
-                .resolve_model_options(model_id, reasoning_effort, service_tier)?;
-        self.invocation_context_with_profile(CancellationToken::new(), &profile)
+        match self
+            .model_catalog
+            .resolve_model_options(model_id, reasoning_effort, service_tier)
+        {
+            Ok(profile) => self.invocation_context_with_profile(CancellationToken::new(), &profile),
+            Err(error)
+                if model_id != self.resolved_turn_profile.model
+                    && !self
+                        .model_catalog
+                        .selected_provider_models()
+                        .iter()
+                        .any(|candidate| candidate == model_id) =>
+            {
+                if !self.has_model_selection {
+                    return Err(format!(
+                        "{error}; no Model Selection Plugin is bound for dynamic policy `{model_id}`"
+                    ));
+                }
+                let candidates = self
+                    .model_catalog
+                    .resolve_model_candidates(reasoning_effort, service_tier);
+                if candidates.is_empty() {
+                    return Err(
+                        "no admitted model accepts the requested dynamic inference controls"
+                            .to_owned(),
+                    );
+                }
+                self.invocation_context_with_profile(
+                    CancellationToken::new(),
+                    &self.resolved_turn_profile,
+                )?
+                .with_typed_extension(&TurnModelSelection {
+                    policy: model_id.to_owned(),
+                    candidates,
+                })
+                .map_err(|error| format!("failed to attach dynamic Model Selection: {error}"))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Reads the exact Tool catalog bound to this Turn's Agent provider.
@@ -1976,6 +2034,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::many("lifecycle-hooks"),
         HostSlot::one("http-fetch"),
         HostSlot::one("model").replaceable(),
+        HostSlot::optional("model-selection").replaceable(),
         HostSlot::optional("process"),
         HostSlot::one("oauth-access").replaceable(),
         HostSlot::many("prompt-providers"),
@@ -2752,6 +2811,7 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(HttpFetchJsonCodec)
         .with_wasm_codec(LifecycleJsonCodec)
         .with_wasm_codec(ModelJsonCodec)
+        .with_wasm_codec(ModelSelectionJsonCodec)
         .with_wasm_codec(OauthAccessJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)

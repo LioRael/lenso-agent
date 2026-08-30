@@ -24,6 +24,7 @@ pub use host::{
     ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,
     WebSurface,
 };
+pub use lenso_agent_loop_plugin::TurnModelSelection;
 pub use official_prompts::migrate_legacy_official_files;
 pub use provider_catalog::{
     ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelInputModality, ModelLimits,

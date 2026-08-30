@@ -1,0 +1,25 @@
+[package]
+name = "lenso-agent-model-selection-plugin"
+version = "0.1.0"
+description = "Turn-scoped dynamic Model selection Plugin for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.model-selection.dynamic"
+root-slot = "model-selection"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-model-selection = { path = "../lenso-capability-agent-model-selection" }
+lenso-kernel.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true
