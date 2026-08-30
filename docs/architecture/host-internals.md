@@ -1,6 +1,6 @@
-# Agent Harness Host internals
+# Lenso Agent Host internals
 
-The normal product surface is deliberately small: run the Harness, place Plugin
+The normal product surface is deliberately small: run the Host, place Plugin
 configuration under the global Agent Home's `plugins/`, and use `lenso plugins`
 from that Home to manage the directory. The current directory remains the
 Workspace. This document describes the machinery behind that surface.
@@ -116,7 +116,7 @@ the Plugin Root, Plan, Session events, or diagnostics.
 ## Operational inspection
 
 `lenso app show` explains selected Plugins and derived bindings; `lenso app
-resolve` emits the exact Plan for diagnostics or replay. The Harness accepts an
+resolve` emits the exact Plan for diagnostics or replay. The Host accepts an
 explicit `--plan` only as an advanced exact-replay escape hatch. Resolved Plans
 must not be edited or committed as source configuration.
 

@@ -3,7 +3,7 @@
 Read `CONTEXT.md` and the accepted ADRs before changing architecture or
 contracts.
 
-- Treat the Agent Harness as one Host plus a visible `plugins/` Plugin Root. Do
+- Treat Lenso Agent as one Host plus a visible `plugins/` Plugin Root. Do
   not add Agent concepts, Plugin discovery, package installation, or graph
   mutation to `lenso-kernel`.
 - Use `Plugin` for every removable behavior unit. `Module` is retired public

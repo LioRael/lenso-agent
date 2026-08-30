@@ -8,7 +8,7 @@ use directories::BaseDirs;
 /// Environment override for the Lenso Agent's user-owned configuration and state root.
 pub const AGENT_HOME_ENV: &str = "LENSO_AGENT_HOME";
 
-/// Stable user-owned paths shared by every Agent Harness surface.
+/// Stable user-owned paths shared by every Lenso Agent surface.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentDirectories {
     home: PathBuf,

@@ -454,7 +454,7 @@ pub async fn begin_device_login(options: DirectAuthOptions) -> Result<PendingDev
             "{}/api/accounts/deviceauth/usercode",
             config.issuer.trim_end_matches('/')
         ))
-        .header("User-Agent", "lenso-agent-harness/0.1.0")
+        .header("User-Agent", "lenso-agent/0.1.0")
         .json(&serde_json::json!({ "client_id": CLIENT_ID }))
         .send()
         .await
@@ -490,7 +490,7 @@ pub async fn complete_device_login(
                 "{}/api/accounts/deviceauth/token",
                 config.issuer.trim_end_matches('/')
             ))
-            .header("User-Agent", "lenso-agent-harness/0.1.0")
+            .header("User-Agent", "lenso-agent/0.1.0")
             .json(&serde_json::json!({
                 "device_auth_id": pending.device_auth_id,
                 "user_code": pending.user_code

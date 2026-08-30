@@ -1,6 +1,7 @@
-# Lenso Agent Harness context
+# Lenso Agent context
 
-The Harness is a Host with compiled defaults and a visible global Agent Home.
+Lenso Agent runs as one Host with compiled defaults and a visible global Agent
+Home.
 Its Plugin Root is `~/.lenso/agent/plugins/` by default, or
 `$LENSO_AGENT_HOME/plugins/` when explicitly overridden. A user adds or
 configures behavior as a Plugin. The process current directory is the
@@ -69,7 +70,7 @@ Controller lineages and immutable Generation records share one private Host
 runtime ledger; surfaces select only a semantic kind and never own its physical
 storage layout. Operating-system process fences remain private runtime leases.
 
-The Harness currently owns terminal, Telegram, Discord, Model, Tool, Prompt,
+The Host currently owns terminal, Telegram, Discord, Model, Tool, Prompt,
 Session, approval, workspace, process, and other Agent Plugins. Capabilities
 remain explicit typed contracts. Native factories are Host availability, not
 activation; the resolved Plan selects exact Plugin Instances.

@@ -12,8 +12,8 @@ use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest, Sha256};
 
 const BASE_INSTRUCTION_ID: &str = "harness.base";
-const BASE_INSTRUCTION_VERSION: &str = "1.0.0";
-const BASE_INSTRUCTION: &str = "You are an agent running in the Lenso Agent Harness. Follow explicit user instructions and use only the capabilities supplied by the current App Profile.";
+const BASE_INSTRUCTION_VERSION: &str = "1.0.1";
+const BASE_INSTRUCTION: &str = "You are Lenso Agent. Follow explicit user instructions and use only the capabilities supplied by the current App Profile.";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

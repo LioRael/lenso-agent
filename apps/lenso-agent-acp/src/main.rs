@@ -7,7 +7,7 @@ use lenso_agent_acp::{AgentAcpConfig, run_stdio};
 #[command(
     name = "lenso-agent-acp",
     version,
-    about = "Run the Lenso Agent Harness over ACP stdio"
+    about = "Run Lenso Agent over ACP stdio"
 )]
 struct Args {
     /// Exact immutable Resolved App Plan used by the ACP surface.

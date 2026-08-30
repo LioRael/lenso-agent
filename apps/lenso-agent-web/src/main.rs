@@ -10,11 +10,7 @@ use lenso_agent_web::{
 const REMOTE_CONFIGURATION_TOKEN_ENV: &str = "LENSO_PLUGIN_CONFIGURATION_REMOTE_TOKEN";
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "lenso-agent-web",
-    version,
-    about = "Run the Lenso Agent Harness Web API"
-)]
+#[command(name = "lenso-agent-web", version, about = "Run Lenso Agent Web API")]
 struct Args {
     /// Address used by the Agent Web API.
     #[arg(long, default_value = "127.0.0.1:8787")]

@@ -1,7 +1,7 @@
 [package]
 name = "lenso-agent-channel"
 version = "0.1.0"
-description = "Optional Telegram and Discord ingress surfaces for the Lenso Agent Harness."
+description = "Optional Telegram and Discord ingress surfaces for Lenso Agent."
 default-run = "lenso-agent-channel"
 edition.workspace = true
 license.workspace = true

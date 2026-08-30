@@ -11,8 +11,8 @@ cd uppercase
 ```
 
 The generated project contains one Plugin identity, one Rust/Wasm source file,
-and the `lenso.agent.tool-provider@2` Tool contract expected by the Agent
-Harness. Edit `src/lib.rs` to implement the behavior.
+and the `lenso.agent.tool-provider@2` Tool contract expected by Lenso Agent.
+Edit `src/lib.rs` to implement the behavior.
 
 ## 2. Check and run it locally
 
@@ -34,9 +34,9 @@ lenso plugin pack
 and reopens the exact bytes it wrote. There is no separate `plugin verify`
 step.
 
-## 4. Add it to the Harness
+## 4. Add it to Lenso Agent
 
-From the Harness project:
+From the Lenso Agent repository:
 
 ```sh
 lenso plugins add \

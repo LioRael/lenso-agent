@@ -23,6 +23,8 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
+      - name: Check product identity
+        run: ./scripts/check-product-identity.sh
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: nightly-2026-07-10

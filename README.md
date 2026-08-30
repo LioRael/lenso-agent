@@ -1,9 +1,9 @@
-# Lenso Agent Harness
+# Lenso Agent
 
 **A local coding Agent whose tools, models, memory, and interfaces are
 replaceable Plugins.**
 
-Lenso Agent Harness starts with a small base App and gains product behavior
+Lenso Agent starts with a small base App and gains product behavior
 through explicit Plugins. Install or select a different implementation without
 rewriting the Agent loop, and keep every accepted App tied to exact Plugin,
 permission, and runtime evidence.
@@ -18,8 +18,8 @@ Use it when you want a terminal-first Agent with:
 - fail-closed Tool grants and recoverable Plugin configuration history.
 
 The repository currently runs from source while versioned binary and ACP
-Registry releases are being prepared. The Harness is a Lenso product Host, not
-a special mode built into the Lenso Kernel.
+Registry releases are being prepared. Lenso Agent is a product Host built on
+Lenso, not a special mode built into the Lenso Kernel.
 
 ## Quick start
 
@@ -133,7 +133,7 @@ Each process atomically claims an independent recoverable Controller slot, so
 different sessions and profiles retain Generation fencing without contending
 for one global TUI lock.
 
-Start the standalone Harness Web surface with a durable, administrator-controlled
+Start the standalone Lenso Agent Web surface with a durable, administrator-controlled
 Tool allowlist:
 
 ```sh
@@ -237,7 +237,7 @@ let app = Router::new().merge(surface.router());
 ```
 
 Cross-repository Hosts consume `lenso-agent-web` and their selected Plugin
-inventory from the same exact Harness Git revision. Local path dependencies are
+inventory from the same exact Lenso Agent Git revision. Local path dependencies are
 only a coordinated-development aid and are not a delivery boundary.
 
 ## Choose a Session Profile
@@ -444,8 +444,8 @@ max_response_bytes = 1048576
 
 Both command Adapters receive one
 `lenso.agent.command-adapter@1` JSON request on stdin and must return exactly
-one JSON response on stdout. The executable can bridge HTTP or MCP; the
-Harness never interprets a shell command or embeds transport credentials in
+one JSON response on stdout. The executable can bridge HTTP or MCP; the Host
+never interprets a shell command or embeds transport credentials in
 the Plugin protocol.
 
 Secrets use the same Profile and Plugin-directory model. The distributed Host
@@ -714,18 +714,18 @@ lenso plugin dev --operation execute \
 lenso plugin pack
 ```
 
-Add the package to the Harness App:
+Add the package to the Lenso Agent Plugin Root:
 
 ```sh
 lenso plugins add path/to/uppercase/dist/uppercase-0.1.0.lenso-plugin
 lenso plugins configure uppercase default
 ```
 
-`pack` checks the exact bytes it writes and the Harness checks received bytes
+`pack` checks the exact bytes it writes and the Host checks received bytes
 again. There is no separate `plugin verify` step. See the
 [10-minute Tool Plugin tutorial](docs/tutorials/10-minute-tool-provider.md).
 
-## Embed the Harness
+## Embed Lenso Agent
 
 An application declares only the Plugins compiled into its Host Build, its
 process-owned surface, and the Profile to run:
@@ -754,7 +754,7 @@ let mut app = host.run(Profile::Default).await?;
 
 `lenso::host::HostBuilder` is the lower framework seam that owns durable
 Generation recovery, Controller execution, fenced routes, and shutdown. Agent
-Profiles, Turns, sessions, and TUI or channel loops remain in this Harness.
+Profiles, Turns, sessions, and TUI or channel loops remain owned by Lenso Agent.
 
 ## Run chat channels
 

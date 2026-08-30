@@ -154,7 +154,7 @@ impl AgentSurface for WebSurface {
     }
 }
 
-/// Entry point for composing an Agent Harness binary.
+/// Entry point for composing a Lenso Agent binary.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AgentHost;
 
