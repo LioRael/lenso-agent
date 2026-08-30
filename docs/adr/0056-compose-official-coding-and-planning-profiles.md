@@ -23,6 +23,12 @@ is idempotent for exact official content and refuses to overwrite a customized
 file. ADR 0079 later moves the official Prompt bytes into Host-owned
 configuration defaults so new Sessions receive Prompt improvements with a Host
 update while visible empty Instance files retain local override semantics.
+Installed Profile-only Instances carry disabled markers, so installing the
+Profiles does not change or invalidate the default App. The official Profiles
+set `include_enabled = true`, enabling their declared Profile-only Instances
+while retaining enabled App-wide Plugin Root differences such as model
+configuration. Profiles without that explicit field keep exact-selection
+semantics.
 
 The `code` Profile selects Workspace edit, constrained native Process, semantic
 Git, Code Mode, bounded subagents, hierarchical Workspace instructions, one

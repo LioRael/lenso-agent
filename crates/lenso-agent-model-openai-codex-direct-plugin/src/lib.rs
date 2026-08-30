@@ -227,8 +227,9 @@ fn responses_request(
         "include": ["reasoning.encrypted_content"],
         "reasoning": { "effort": reasoning_effort, "summary": "auto" },
         "text": { "verbosity": "low" },
-        "max_output_tokens": request.max_output_tokens,
     });
+    // The ChatGPT Codex endpoint rejects the public Responses API
+    // `max_output_tokens` field, so its service owns the wire-level limit.
     if request.temperature != 0.0 {
         body["temperature"] = serde_json::json!(request.temperature);
     }
@@ -744,7 +745,7 @@ mod tests {
         assert_eq!(body["parallel_tool_calls"], true);
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert!(body.get("temperature").is_none());
-        assert_eq!(body["max_output_tokens"], 128);
+        assert!(body.get("max_output_tokens").is_none());
         assert_eq!(
             wire_request.provider_to_lenso_tool_names.get("read"),
             Some(&"read".to_owned())

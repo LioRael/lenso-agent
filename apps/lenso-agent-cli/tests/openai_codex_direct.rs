@@ -120,6 +120,7 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
     assert_eq!(requests[0].body["model"], "gpt-5.6-luna");
     assert_eq!(requests[0].body["reasoning"]["effort"], "medium");
     assert!(requests[0].body.get("temperature").is_none());
+    assert!(requests[0].body.get("max_output_tokens").is_none());
     assert_eq!(requests[0].body["store"], false);
     assert!(
         requests[0].body["instructions"]

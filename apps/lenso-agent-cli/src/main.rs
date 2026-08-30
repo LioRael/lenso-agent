@@ -546,6 +546,7 @@ fn install_coding_profiles(home: &Path) -> Result<(), String> {
         let path = home.join(relative);
         match fs::read_to_string(&path) {
             Ok(existing) if existing == content.as_str() => {}
+            Ok(existing) if previous_official_profile(relative, &existing, content) => {}
             Ok(_) => {
                 return Err(format!(
                     "refusing to overwrite customized coding Profile file: {}",
@@ -558,7 +559,7 @@ fn install_coding_profiles(home: &Path) -> Result<(), String> {
     }
     for (index, (relative, content)) in files.iter().enumerate() {
         let path = home.join(relative);
-        if path.exists() {
+        if fs::read_to_string(&path).is_ok_and(|existing| existing == content.as_str()) {
             continue;
         }
         let parent = path
@@ -584,11 +585,17 @@ fn install_coding_profiles(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn previous_official_profile(relative: &str, existing: &str, current: &str) -> bool {
+    relative.starts_with("profiles/")
+        && current.contains("include_enabled = true\n")
+        && existing == current.replacen("include_enabled = true\n", "", 1)
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "one reviewed list keeps the official Profile installation auditable"
 )]
-fn coding_profile_files() -> Vec<(&'static str, String)> {
+fn coding_profile_files() -> Vec<(String, String)> {
     let mut files = vec![
         (
             "plugins/lenso.agent.workspace-instructions/default.toml",
@@ -652,31 +659,61 @@ fn coding_profile_files() -> Vec<(&'static str, String)> {
         ),
         (
             "profiles/code.toml",
-            "description = \"Official coding agent with workspace instructions, isolated child worktrees, and inline approval\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.native/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/coding\",\n]\n",
+            "description = \"Official coding agent with workspace instructions, isolated child worktrees, and inline approval\"\ninclude_enabled = true\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.native/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/coding\",\n]\n",
         ),
         (
             "profiles/code-sandbox.toml",
-            "description = \"Official coding agent with OS-isolated process execution and isolated child worktrees\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.sandbox/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/sandbox-coding\",\n]\n",
+            "description = \"Official coding agent with OS-isolated process execution and isolated child worktrees\"\ninclude_enabled = true\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.sandbox/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/sandbox-coding\",\n]\n",
         ),
         (
             "profiles/plan.toml",
-            "description = \"Official read-only planning agent\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.prompt.static/plan\",\n]\n",
+            "description = \"Official read-only planning agent\"\ninclude_enabled = true\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.prompt.static/plan\",\n]\n",
         ),
     ]
     .into_iter()
-    .map(|(path, content)| (path, content.to_owned()))
+    .map(|(path, content)| (path.to_owned(), content.to_owned()))
     .collect::<Vec<_>>();
     files.extend([
         (
-            "plugins/lenso.agent.prompt.static/coding.toml",
+            "plugins/lenso.agent.prompt.static/coding.toml".to_owned(),
             String::new(),
         ),
         (
-            "plugins/lenso.agent.prompt.static/sandbox-coding.toml",
+            "plugins/lenso.agent.prompt.static/sandbox-coding.toml".to_owned(),
             String::new(),
         ),
-        ("plugins/lenso.agent.prompt.static/plan.toml", String::new()),
+        (
+            "plugins/lenso.agent.prompt.static/plan.toml".to_owned(),
+            String::new(),
+        ),
     ]);
+    files.extend(
+        [
+            "lenso.agent.workspace-instructions/default",
+            "lenso.agent.workspace-edit/default",
+            "lenso.agent.process.native/default",
+            "lenso.agent.process.sandbox/default",
+            "lenso.agent.process-tools/default",
+            "lenso.agent.git-tools/default",
+            "lenso.agent.code-mode-tools/default",
+            "lenso.agent.subagent-tools/worktree",
+            "lenso.agent.worktree-provider/default",
+            "lenso.agent.loop/worker-a",
+            "lenso.agent.loop/worker-b",
+            "lenso.agent.tools/worker-tools",
+            "lenso.agent.interactive-approval-hook/default",
+            "lenso.agent.prompt.static/coding",
+            "lenso.agent.prompt.static/sandbox-coding",
+            "lenso.agent.prompt.static/plan",
+        ]
+        .into_iter()
+        .map(|instance| {
+            let (plugin, key) = instance
+                .split_once('/')
+                .expect("official Profile Instance has a key");
+            (format!("plugins/{plugin}/{key}.disabled"), String::new())
+        }),
+    );
     files
 }
 
@@ -879,6 +916,12 @@ mod profile_tests {
                 "program_presets = [\"rust\", \"javascript\", \"python\", \"go\", \"build\"]"
             ));
         }
+        for profile in [None, Some("code"), Some("code-sandbox"), Some("plan")] {
+            lenso_agent_host::validate_desired_plugin_root_for_home(home.path(), profile)
+                .unwrap_or_else(|error| {
+                    panic!("installed Profile {profile:?} must resolve: {error}")
+                });
+        }
     }
 
     #[test]
@@ -892,6 +935,22 @@ mod profile_tests {
 
         assert!(error.contains("refusing to overwrite"));
         assert_eq!(fs::read_to_string(profile).unwrap(), "custom = true\n");
+    }
+
+    #[test]
+    fn coding_profile_install_upgrades_previous_official_profiles() {
+        let home = tempfile::tempdir().unwrap();
+        let plan = home.path().join("profiles/plan.toml");
+        fs::create_dir_all(plan.parent().unwrap()).unwrap();
+        let current = coding_profile_files()
+            .into_iter()
+            .find_map(|(path, content)| (path == "profiles/plan.toml").then_some(content))
+            .unwrap();
+        fs::write(&plan, current.replacen("include_enabled = true\n", "", 1)).unwrap();
+
+        install_coding_profiles(home.path()).unwrap();
+
+        assert_eq!(fs::read_to_string(plan).unwrap(), current);
     }
 
     #[test]

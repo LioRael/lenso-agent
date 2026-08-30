@@ -146,7 +146,7 @@ fn load_instructions(
         }
         contributions.push(ContributeResponseContributionsItem {
             id: format!("workspace.instructions.{index}"),
-            version: format!("sha256:{:x}", Sha256::digest(content.as_bytes())),
+            version: format!("{:x}", Sha256::digest(content.as_bytes())),
             kind: ContributeResponseContributionsItemKind::Instruction,
             content,
         });
@@ -220,6 +220,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["root", "child"]
         );
+        assert!(contributions.iter().all(|item| {
+            item.version.len() == 64
+                && item
+                    .version
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        }));
     }
 
     #[test]

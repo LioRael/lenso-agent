@@ -44,9 +44,11 @@ Invocation Context. The Agent Loop fails closed unless the profile revision
 matches Generation provenance and its model matches the immutable Agent
 configuration.
 
-`turn_started` persists the complete resolved profile. Model response output is
-bounded by the narrower of the Agent configuration and any known model maximum.
-This establishes the runtime seam for later token-aware compaction and
+`turn_started` persists the complete resolved profile. Adapters serialize an
+output bound only when their wire contract supports one, narrowed by any known
+model maximum. The direct ChatGPT Codex endpoint rejects the public Responses
+API `max_output_tokens` field, so that service retains its wire-level output
+limit. This establishes the runtime seam for later token-aware compaction and
 turn-scoped model/variant selection without making the catalog a mutable
 registry.
 

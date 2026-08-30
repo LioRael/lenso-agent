@@ -13,6 +13,8 @@ struct ProfileDocument {
     _description: String,
     #[serde(default = "default_agent")]
     agent: String,
+    #[serde(default)]
+    include_enabled: bool,
     instances: Vec<String>,
 }
 
@@ -96,13 +98,16 @@ fn apply(
     let instances = root
         .instances()
         .iter()
-        .filter(|instance| selected.contains(instance.id()))
+        .filter(|instance| document.include_enabled || selected.contains(instance.id()))
         .cloned()
         .collect::<Vec<_>>();
     let disabled = root
         .disabled()
         .iter()
-        .filter(|instance| !root_instances.contains(*instance) || selected.contains(*instance))
+        .filter(|instance| {
+            !selected.contains(*instance)
+                && (document.include_enabled || !root_instances.contains(*instance))
+        })
         .cloned()
         .collect::<Vec<_>>();
     Ok(SelectedProfile {
@@ -159,21 +164,27 @@ mod tests {
     }
 
     #[test]
-    fn profile_selects_only_declared_instances_and_its_agent() {
+    fn profile_enables_declared_instances_alongside_global_instances() {
         let root = PluginRootSnapshot::new(
             [],
             [
                 instance("example.code-tools", "code"),
                 instance("example.game-loop", "game"),
-                instance("example.unselected", "default"),
+                instance("example.global", "default"),
+                instance("example.other-profile", "default"),
             ],
-            [],
+            [
+                PluginInstanceId::new("example.code-tools", "code"),
+                PluginInstanceId::new("example.game-loop", "game"),
+                PluginInstanceId::new("example.other-profile", "default"),
+            ],
         );
         let selected = apply(
             "game",
             &ProfileDocument {
                 _description: "Game agent".to_owned(),
                 agent: "example.game-loop/game".to_owned(),
+                include_enabled: true,
                 instances: vec!["example.code-tools/code".to_owned()],
             },
             &root,
@@ -188,18 +199,37 @@ mod tests {
                 .iter()
                 .map(|instance| instance.id().to_string())
                 .collect::<Vec<_>>(),
-            ["example.code-tools/code", "example.game-loop/game"]
+            [
+                "example.code-tools/code",
+                "example.game-loop/game",
+                "example.global/default",
+                "example.other-profile/default",
+            ]
+        );
+        assert_eq!(
+            selected
+                .root()
+                .disabled()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["example.other-profile/default"]
         );
     }
 
     #[test]
     fn profile_uses_the_host_default_agent_without_reconfiguring_it() {
-        let root = PluginRootSnapshot::new([], [instance("example.code-tools", "code")], []);
+        let root = PluginRootSnapshot::new(
+            [],
+            [instance("example.code-tools", "code")],
+            [PluginInstanceId::new("example.code-tools", "code")],
+        );
         let selected = apply(
             "code",
             &ProfileDocument {
                 _description: String::new(),
                 agent: default_agent(),
+                include_enabled: false,
                 instances: vec!["example.code-tools/code".to_owned()],
             },
             &root,
@@ -224,13 +254,17 @@ mod tests {
                     "references": {"model/openai-api-key": "game-openai"}
                 })),
             ],
-            [],
+            [
+                PluginInstanceId::new("lenso.secrets.keychain", "code"),
+                PluginInstanceId::new("lenso.secrets.keychain", "game"),
+            ],
         );
         let code = apply(
             "code",
             &ProfileDocument {
                 _description: String::new(),
                 agent: default_agent(),
+                include_enabled: false,
                 instances: vec!["lenso.secrets.keychain/code".to_owned()],
             },
             &root,
@@ -241,6 +275,7 @@ mod tests {
             &ProfileDocument {
                 _description: String::new(),
                 agent: default_agent(),
+                include_enabled: false,
                 instances: vec!["lenso.secrets.keychain/game".to_owned()],
             },
             &root,
@@ -265,6 +300,7 @@ mod tests {
             &ProfileDocument {
                 _description: String::new(),
                 agent: default_agent(),
+                include_enabled: false,
                 instances: vec!["example.tools/code".to_owned()],
             },
             &root,
@@ -277,6 +313,7 @@ mod tests {
             &ProfileDocument {
                 _description: String::new(),
                 agent: default_agent(),
+                include_enabled: false,
                 instances: vec![
                     "example.tools/code".to_owned(),
                     "example.tools/code".to_owned(),
