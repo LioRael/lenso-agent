@@ -1,4 +1,7 @@
 use lenso_agent_cli_plugin as _;
+use lenso_agent_session_terminal_plugin as _;
+use lenso_terminal_cli_plugin as _;
+use lenso_terminal_command_plugin as _;
 
 #[test]
 fn headless_distribution_links_only_its_surface() {
@@ -7,6 +10,9 @@ fn headless_distribution_links_only_its_surface() {
         serde_json::to_value(lenso_agent_host::generation::linked_host_catalog()).unwrap();
     let catalog = catalog.to_string();
     assert!(catalog.contains(r#""plugin_id":"lenso.agent.cli""#));
+    assert!(catalog.contains(r#""plugin_id":"lenso.terminal.cli""#));
+    assert!(catalog.contains(r#""plugin_id":"lenso.terminal.command""#));
+    assert!(catalog.contains(r#""plugin_id":"lenso.agent.session-terminal""#));
     for plugin_id in [
         "lenso.secrets.env",
         "lenso.secrets.keychain",
@@ -19,6 +25,7 @@ fn headless_distribution_links_only_its_surface() {
         );
     }
     assert!(!catalog.contains(r#""plugin_id":"lenso.agent.tui""#));
+    assert!(!catalog.contains(r#""plugin_id":"lenso.terminal.tui""#));
     assert!(!catalog.contains(r#""plugin_id":"lenso.agent.telegram""#));
     assert!(!catalog.contains(r#""plugin_id":"lenso.agent.discord""#));
 }

@@ -2,10 +2,12 @@ use std::{path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
 use lenso_agent_host::{AgentHost, Profile, TuiSurface};
-use lenso_agent_tui_command_suggestions_plugin as _;
+use lenso_agent_session_terminal_plugin as _;
 use lenso_agent_tui_plugin as _;
 use lenso_agent_tui_static_plugin as _;
 use lenso_agent_tui_workspace_suggestions_plugin as _;
+use lenso_terminal_command_plugin as _;
+use lenso_terminal_tui_plugin as _;
 
 mod tui;
 use tui::TuiOptions;
@@ -42,7 +44,7 @@ struct Args {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let local = tokio::task::LocalSet::new();
-    match local.run_until(run(Args::parse())).await {
+    match Box::pin(local.run_until(run(Args::parse()))).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
@@ -96,7 +98,11 @@ mod tests {
             serde_json::to_value(lenso_agent_host::generation::linked_host_catalog()).unwrap();
         let catalog = catalog.to_string();
         assert!(catalog.contains(r#""plugin_id":"lenso.agent.tui""#));
+        assert!(catalog.contains(r#""plugin_id":"lenso.terminal.tui""#));
+        assert!(catalog.contains(r#""plugin_id":"lenso.terminal.command""#));
+        assert!(catalog.contains(r#""plugin_id":"lenso.agent.session-terminal""#));
         assert!(!catalog.contains(r#""plugin_id":"lenso.agent.cli""#));
+        assert!(!catalog.contains(r#""plugin_id":"lenso.terminal.cli""#));
         assert!(!catalog.contains(r#""plugin_id":"lenso.agent.telegram""#));
         assert!(!catalog.contains(r#""plugin_id":"lenso.agent.discord""#));
     }

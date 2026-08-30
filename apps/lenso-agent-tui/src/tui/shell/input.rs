@@ -273,12 +273,18 @@ fn update_hovered_entry(position: ratatui::layout::Position, state: &mut TuiStat
 }
 
 fn cancel_active_turn(state: &mut TuiState) {
-    if state.active.take().is_some() {
+    let cancelled_turn = state.active.take().is_some();
+    let cancelled_command = state.active_command.take().is_some();
+    if cancelled_turn || cancelled_command {
         state.pending_interaction = None;
         state.interaction_draft = None;
         state.pending_answers = None;
         state.finish_active_thinking();
-        state.push_system("Turn cancelled.");
+        state.push_system(if cancelled_command {
+            "Command cancelled."
+        } else {
+            "Turn cancelled."
+        });
         state.phase = UiPhase::Idle;
     }
 }
@@ -305,6 +311,7 @@ fn handle_shortcut_action(action: ShortcutAction, state: &mut TuiState) {
 pub(in crate::tui::shell) fn handle_key(key: KeyEvent, state: &mut TuiState) -> bool {
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         state.active = None;
+        state.active_command = None;
         return true;
     }
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('.') {
@@ -408,7 +415,7 @@ fn handle_scrollback_key(key: KeyEvent, state: &mut TuiState) -> bool {
         KeyCode::Char('l') => state.set_tool_details(true),
         KeyCode::Enter => state.toggle_selected_entry(),
         KeyCode::Char(' ') => state.focus = Focus::Prompt,
-        KeyCode::Char(character) if state.active.is_none() => {
+        KeyCode::Char(character) if !state.turn_is_running() => {
             state.focus = Focus::Prompt;
             state.append_input(&character.to_string());
         }
@@ -427,8 +434,8 @@ pub(in crate::tui::shell) fn handle_control_key(code: KeyCode, state: &mut TuiSt
         KeyCode::Char('a') => state.move_line_edge(false),
         KeyCode::Char('e') => state.move_line_edge(true),
         KeyCode::Char('w') => state.delete_previous_word(),
-        KeyCode::Char('p') if state.active.is_none() => state.previous_history(),
-        KeyCode::Char('n') if state.active.is_none() => state.next_history(),
+        KeyCode::Char('p') if !state.turn_is_running() => state.previous_history(),
+        KeyCode::Char('n') if !state.turn_is_running() => state.next_history(),
         _ => {}
     }
 }
@@ -439,21 +446,21 @@ fn handle_navigation_key(code: KeyCode, state: &mut TuiState) -> Option<bool> {
         KeyCode::PageDown => state.scroll.scroll_down(state.scroll.page_rows()),
         KeyCode::Home
             if state.focus == Focus::Prompt
-                && state.active.is_none()
+                && !state.turn_is_running()
                 && !state.input.is_empty() =>
         {
             state.move_line_edge(false);
         }
         KeyCode::End
             if state.focus == Focus::Prompt
-                && state.active.is_none()
+                && !state.turn_is_running()
                 && !state.input.is_empty() =>
         {
             state.move_line_edge(true);
         }
         KeyCode::Home => state.scroll.goto_top(),
         KeyCode::End => state.scroll.goto_bottom(),
-        KeyCode::Esc if state.active.is_some() => {
+        KeyCode::Esc if state.turn_is_running() => {
             cancel_active_turn(state);
         }
         KeyCode::Esc => return Some(true),

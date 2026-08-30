@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["commands"],
+  "properties": {
+    "commands": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/CommandDefinition"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "CommandDefinition": {
+      "type": "object",
+      "required": [
+        "id",
+        "path",
+        "summary",
+        "description",
+        "parameters",
+        "output_formats"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "path": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "parameters": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/CommandParameter"
+          }
+        },
+        "output_formats": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/OutputFormat"
+          },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "CommandParameter": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "description",
+        "required",
+        "multiple",
+        "choices"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "kind": {
+          "$ref": "#/$defs/ParameterKind"
+        },
+        "long": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "short": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 1
+        },
+        "value_name": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "multiple": {
+          "type": "boolean"
+        },
+        "choices": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "OutputFormat": {
+      "type": "string",
+      "enum": ["text", "json"]
+    },
+    "ParameterKind": {
+      "type": "string",
+      "enum": ["positional", "option", "flag"]
+    }
+  },
+  "title": "CatalogResponse"
+}

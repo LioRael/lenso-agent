@@ -1,9 +1,9 @@
-//! Static semantic panel contribution Plugin for the Agent TUI.
+//! Static semantic panel provider Plugin for the Agent TUI.
 
 use futures::future::ready;
-use lenso_capability_agent_tui_contribution::{
-    self as tui_contract, SnapshotRequest, SnapshotResponse, SnapshotResponsePanelsItem,
-    TuiContributionProvider, validate_snapshot_panels,
+use lenso_capability_tui_panel::{
+    self as tui_contract, PanelItem, PanelProvider, SnapshotRequest, SnapshotResponse,
+    validate_snapshot_panels,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 
@@ -35,21 +35,19 @@ struct StaticTui {
     config: StaticTuiConfig,
 }
 
-#[lenso::provides(tui_contract::TuiContribution)]
-impl TuiContributionProvider for StaticTui {
+#[lenso::provides(tui_contract::Panel)]
+impl PanelProvider for StaticTui {
     fn snapshot(
         &self,
         _context: InvocationContext,
         _request: SnapshotRequest,
-    ) -> lenso_kernel::NativeRequestFuture<tui_contract::TuiContribution> {
+    ) -> lenso_kernel::NativeRequestFuture<tui_contract::Panel> {
         let response = validate_panels(&self.config).map(|panels| SnapshotResponse { panels });
         Box::pin(ready(response.map(Ok)))
     }
 }
 
-fn validate_panels(
-    config: &StaticTuiConfig,
-) -> Result<Vec<SnapshotResponsePanelsItem>, RuntimeFailure> {
+fn validate_panels(config: &StaticTuiConfig) -> Result<Vec<PanelItem>, RuntimeFailure> {
     let panels = config
         .panels
         .iter()
@@ -59,7 +57,7 @@ fn validate_panels(
                     detail: format!("TUI panel `{}` has empty content", panel.id),
                 });
             }
-            Ok(SnapshotResponsePanelsItem {
+            Ok(PanelItem {
                 id: panel.id.clone(),
                 title: panel.title.clone(),
                 body: panel.body.clone(),

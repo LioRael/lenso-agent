@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["suggestions"],
+  "properties": {
+    "suggestions": {
+      "type": "array",
+      "maxItems": 2048,
+      "items": {
+        "$ref": "#/$defs/SuggestionItem"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "SuggestionItem": {
+      "type": "object",
+      "required": ["id", "kind", "label", "insert_text", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "kind": {
+          "$ref": "#/$defs/SuggestionKind"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "insert_text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "additionalProperties": false
+    },
+    "SuggestionKind": {
+      "type": "string",
+      "enum": ["command", "file", "prompt", "resource", "skill"]
+    }
+  },
+  "title": "SnapshotResponse"
+}

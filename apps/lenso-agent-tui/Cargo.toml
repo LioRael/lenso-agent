@@ -19,16 +19,20 @@ futures.workspace = true
 lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins" }
 lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
+lenso-agent-session-terminal-plugin = { path = "../../crates/lenso-agent-session-terminal-plugin" }
 lenso-agent-tui-plugin = { path = "../../crates/lenso-agent-tui-plugin" }
 lenso-agent-tui-static-plugin = { path = "../../crates/lenso-agent-tui-static-plugin" }
-lenso-agent-tui-command-suggestions-plugin = { path = "../../crates/lenso-agent-tui-command-suggestions-plugin" }
 lenso-agent-tui-workspace-suggestions-plugin = { path = "../../crates/lenso-agent-tui-workspace-suggestions-plugin" }
+lenso-terminal-cli-surface = { path = "../../crates/lenso-terminal-cli-surface" }
+lenso-terminal-command-plugin = { path = "../../crates/lenso-terminal-command-plugin" }
+lenso-terminal-tui-plugin = { path = "../../crates/lenso-terminal-tui-plugin" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-context-source = { path = "../../crates/lenso-capability-agent-context-source" }
 lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-tool-progress = { path = "../../crates/lenso-capability-agent-tool-progress" }
-lenso-capability-agent-tui-contribution = { path = "../../crates/lenso-capability-agent-tui-contribution" }
-lenso-capability-agent-tui-suggestion = { path = "../../crates/lenso-capability-agent-tui-suggestion" }
+lenso-capability-terminal-command = { path = "../../crates/lenso-capability-terminal-command" }
+lenso-capability-tui-panel = { path = "../../crates/lenso-capability-tui-panel" }
+lenso-capability-tui-suggestion = { path = "../../crates/lenso-capability-tui-suggestion" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true
 ratatui.workspace = true

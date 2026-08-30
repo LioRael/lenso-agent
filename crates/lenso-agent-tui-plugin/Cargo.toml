@@ -19,8 +19,6 @@ lenso-capability-agent-context-source = { path = "../lenso-capability-agent-cont
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-session-control = { path = "../lenso-capability-agent-session-control" }
 lenso-capability-agent-task-supervisor = { path = "../lenso-capability-agent-task-supervisor" }
-lenso-capability-agent-tui-contribution = { path = "../lenso-capability-agent-tui-contribution" }
-lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
 lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 
 [dev-dependencies]

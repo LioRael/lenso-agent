@@ -39,8 +39,9 @@ lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-capability-agent-turn-input = { path = "../lenso-capability-agent-turn-input" }
 lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
-lenso-capability-agent-tui-contribution = { path = "../lenso-capability-agent-tui-contribution" }
-lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
+lenso-capability-terminal-command = { path = "../lenso-capability-terminal-command" }
+lenso-capability-tui-panel = { path = "../lenso-capability-tui-panel" }
+lenso-capability-tui-suggestion = { path = "../lenso-capability-tui-suggestion" }
 lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 lenso-capability-agent-workspace-read = { path = "../lenso-capability-agent-workspace-read" }
 lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }

@@ -1,0 +1,25 @@
+[package]
+name = "lenso-terminal-tui-plugin"
+version = "0.1.0"
+description = "Generic TUI surface consumer Plugin identity."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.terminal.tui"
+root-slot = "surfaces"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-terminal-command = { path = "../lenso-capability-terminal-command" }
+lenso-capability-tui-panel = { path = "../lenso-capability-tui-panel" }
+lenso-capability-tui-suggestion = { path = "../lenso-capability-tui-suggestion" }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
