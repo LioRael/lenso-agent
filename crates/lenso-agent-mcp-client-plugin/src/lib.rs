@@ -21,9 +21,10 @@ use lenso_capability_agent_context_source::{
     SnapshotResponse as ContextSnapshotResponse,
 };
 use lenso_capability_agent_model::{
-    CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelEvent,
-    ModelInvocationError,
+    CompleteMessage, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen,
+    CompleteTool, ModelEvent, ModelInvocationError,
 };
+use lenso_capability_agent_oauth_access as oauth_contract;
 use lenso_capability_agent_tool_provider::{
     self as tool_contract, CatalogRequest, CatalogResponse, ContentType, ExecuteError,
     ExecuteRequest, ExecuteResponse, ExecutionFailedPayload, ToolDefinition, ToolExecutionClass,
@@ -77,11 +78,22 @@ struct McpClientConfig {
     allow_elicitation: bool,
     #[serde(default)]
     allow_sampling: bool,
+    #[serde(default)]
+    roots: Vec<McpRoot>,
+    #[serde(default)]
+    parallel_safe_tools: Vec<String>,
     #[serde(default = "default_continuation_rounds")]
     continuation_max_rounds: u8,
     sampling_model: Option<String>,
     #[serde(default = "default_max_sampling_tokens")]
     max_sampling_tokens: u32,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct McpRoot {
+    uri: String,
+    name: String,
 }
 
 const fn default_continuation_rounds() -> u8 {
@@ -104,6 +116,10 @@ enum TransportConfig {
     StreamableHttp {
         endpoint: String,
         authorization_environment: Option<String>,
+        #[serde(default)]
+        oauth_resource: Option<String>,
+        #[serde(default)]
+        oauth_scopes: Vec<String>,
     },
 }
 
@@ -115,6 +131,7 @@ struct ReadyClient {
     catalog: Rc<RefCell<CatalogResponse>>,
     exposed_to_remote: Rc<RefCell<BTreeMap<String, String>>>,
     session: Rc<Mutex<Option<Session>>>,
+    oauth: Port<oauth_contract::OauthAccessClient>,
 }
 
 #[derive(Clone, Debug)]
@@ -126,8 +143,18 @@ enum ReadyTransport {
     },
     StreamableHttp {
         endpoint: reqwest::Url,
-        authorization: Option<String>,
+        authorization: HttpAuthorization,
         client: reqwest::Client,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum HttpAuthorization {
+    None,
+    Environment(String),
+    Oauth {
+        resource_uri: String,
+        scopes: Vec<String>,
     },
 }
 
@@ -156,16 +183,22 @@ fn validate_config(config: &McpClientConfig) -> Result<(), RuntimeFailure> {
         TransportConfig::StreamableHttp {
             endpoint,
             authorization_environment,
+            oauth_resource,
+            oauth_scopes,
         } => {
             matches!(config.protocol, ProtocolMode::Auto | ProtocolMode::Modern)
-                && reqwest::Url::parse(endpoint).is_ok_and(|url| {
-                    url.scheme() == "https"
-                        || (url.scheme() == "http"
-                            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1")))
-                })
+                && safe_http_endpoint(endpoint)
                 && authorization_environment
                     .as_ref()
                     .is_none_or(|name| valid_environment_names(std::slice::from_ref(name)))
+                && !(authorization_environment.is_some() && oauth_resource.is_some())
+                && oauth_resource.as_ref().is_none_or(|resource| {
+                    safe_oauth_resource(resource) && same_origin(endpoint, resource)
+                })
+                && oauth_scopes.len() <= 64
+                && oauth_scopes.iter().all(|scope| valid_oauth_scope(scope))
+                && oauth_scopes.iter().collect::<BTreeSet<_>>().len() == oauth_scopes.len()
+                && (oauth_resource.is_some() || oauth_scopes.is_empty())
         }
     };
     if !transport_valid
@@ -174,6 +207,24 @@ fn validate_config(config: &McpClientConfig) -> Result<(), RuntimeFailure> {
         || !(1..=3_600_000).contains(&config.request_timeout_ms)
         || !(1..=8).contains(&config.continuation_max_rounds)
         || !(1..=65_536).contains(&config.max_sampling_tokens)
+        || config.roots.len() > 64
+        || config.roots.iter().any(|root| {
+            root.name.is_empty()
+                || root.name.len() > 256
+                || root.uri.len() > 4_096
+                || reqwest::Url::parse(&root.uri).is_err()
+        })
+        || config.parallel_safe_tools.len() > MAX_TOOLS
+        || config
+            .parallel_safe_tools
+            .iter()
+            .any(|name| name.is_empty() || name.len() > 256)
+        || config
+            .parallel_safe_tools
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != config.parallel_safe_tools.len()
         || (config.allow_sampling
             && config
                 .sampling_model
@@ -199,6 +250,41 @@ fn valid_environment_names(names: &[String]) -> bool {
         })
 }
 
+fn safe_http_endpoint(value: &str) -> bool {
+    reqwest::Url::parse(value).is_ok_and(|url| {
+        (url.scheme() == "https"
+            || (url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))))
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+    })
+}
+
+fn safe_oauth_resource(value: &str) -> bool {
+    safe_http_endpoint(value) && reqwest::Url::parse(value).is_ok_and(|url| url.query().is_none())
+}
+
+fn same_origin(left: &str, right: &str) -> bool {
+    let Ok(left) = reqwest::Url::parse(left) else {
+        return false;
+    };
+    let Ok(right) = reqwest::Url::parse(right) else {
+        return false;
+    };
+    left.scheme() == right.scheme()
+        && left.host_str() == right.host_str()
+        && left.port_or_known_default() == right.port_or_known_default()
+}
+
+fn valid_oauth_scope(scope: &str) -> bool {
+    !scope.is_empty()
+        && scope.len() <= 256
+        && scope
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'"' && byte != b'\\')
+}
+
 #[lenso::plugin(
     lifecycle,
     configuration_schema = "config.schema.json",
@@ -211,6 +297,7 @@ struct McpClientPlugin {
     ready: Rc<RefCell<Option<ReadyClient>>>,
     interaction: Port<lenso_capability_agent_user_interaction::UserInteractionClient>,
     model: Port<lenso_capability_agent_model::ModelClient>,
+    oauth: Port<oauth_contract::OauthAccessClient>,
 }
 
 #[lenso::provides(tool_contract::ToolProvider, context_contract::ContextSource)]
@@ -583,6 +670,10 @@ fn validate_elicitation_answer(
 }
 
 impl McpClientPlugin {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Sampling validates and projects one complete provider exchange"
+    )]
     async fn fulfill_sampling(
         &self,
         context: &Ctx,
@@ -622,14 +713,17 @@ impl McpClientPlugin {
         if !(0.0..=2.0).contains(&temperature) {
             return Err(protocol_failure("MCP Sampling temperature was invalid"));
         }
+        let tools = sampling_tools(params)?;
         let stream = self
             .model
             .complete_with_context(
                 context.clone(),
                 CompleteOpen {
                     model: model.clone(),
+                    reasoning_effort: None,
+                    service_tier: None,
                     messages,
-                    tools: Vec::new(),
+                    tools,
                     temperature,
                     max_output_tokens: i64::try_from(requested_tokens)
                         .expect("bounded sampling token count fits i64"),
@@ -639,6 +733,7 @@ impl McpClientPlugin {
             .map_err(map_model_failure)?;
         stream.close_send().await?;
         let mut text = String::new();
+        let mut tool_call: Option<CompleteMessage> = None;
         loop {
             match stream.receive().await? {
                 ModelEvent::Message(message) => match message.kind {
@@ -648,8 +743,13 @@ impl McpClientPlugin {
                             return Err(protocol_failure("MCP Sampling output exceeded the limit"));
                         }
                     }
+                    CompleteMessageKind::ToolCall if tool_call.is_none() => {
+                        tool_call = Some(message);
+                    }
                     CompleteMessageKind::ToolCall => {
-                        return Err(protocol_failure("MCP Sampling attempted a Tool call"));
+                        return Err(protocol_failure(
+                            "MCP Sampling returned more than one Tool call",
+                        ));
                     }
                     CompleteMessageKind::ReasoningSummaryDelta | CompleteMessageKind::Usage => {}
                 },
@@ -659,6 +759,21 @@ impl McpClientPlugin {
                     return Err(protocol_failure(format!("MCP Sampling failed: {error:?}")));
                 }
             }
+        }
+        if let Some(tool_call) = tool_call {
+            let arguments = serde_json::from_str::<Value>(tool_call.arguments_json.as_str())
+                .map_err(|_| protocol_failure("MCP Sampling Tool arguments were invalid"))?;
+            return Ok(json!({
+                "role":"assistant",
+                "content":{
+                    "type":"tool_use",
+                    "id":tool_call.tool_call_id,
+                    "name":tool_call.tool_name,
+                    "input":arguments
+                },
+                "model":model,
+                "stopReason":"toolUse"
+            }));
         }
         if text.is_empty() {
             return Err(protocol_failure("MCP Sampling returned no text"));
@@ -670,6 +785,41 @@ impl McpClientPlugin {
             "stopReason":"endTurn"
         }))
     }
+}
+
+fn sampling_tools(params: &Value) -> Result<Vec<CompleteTool>, RuntimeFailure> {
+    let Some(tools) = params.get("tools") else {
+        return Ok(Vec::new());
+    };
+    let tools = tools
+        .as_array()
+        .filter(|tools| tools.len() <= 64)
+        .ok_or_else(|| protocol_failure("MCP Sampling Tools were invalid"))?;
+    tools
+        .iter()
+        .map(|tool| {
+            let name = bounded_required_string(tool, "name", 128, "MCP Sampling Tool")?;
+            let description = bounded_optional_string(tool, "description", 4_096)?;
+            let schema = tool
+                .get("inputSchema")
+                .cloned()
+                .unwrap_or_else(|| json!({"type":"object"}));
+            let schema = serde_json::to_string(&schema)
+                .map_err(|error| protocol_failure(error.to_string()))?;
+            if schema.len() > MAX_SCHEMA_BYTES {
+                return Err(protocol_failure(
+                    "MCP Sampling Tool Schema exceeded the limit",
+                ));
+            }
+            Ok(CompleteTool {
+                name,
+                description,
+                input_schema_json: schema
+                    .try_into()
+                    .expect("validated MCP Sampling Tool Schema is JSON"),
+            })
+        })
+        .collect()
 }
 
 fn bounded_elicitation_message(params: &Value) -> Result<&str, RuntimeFailure> {
@@ -811,6 +961,7 @@ impl Lifecycle for McpClientPlugin {
             catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
             exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
             session: Rc::new(Mutex::new(None)),
+            oauth: self.oauth.clone(),
         };
         let protocol = select_protocol(&self.config, &seed).await?;
         let mut selected = seed.clone();
@@ -838,6 +989,7 @@ impl Lifecycle for McpClientPlugin {
             &self.config.tool_namespace,
             remote_tools,
             enforce_http_headers,
+            &self.config.parallel_safe_tools,
         ) {
             Ok(projected) => projected,
             Err(error) => {
@@ -900,6 +1052,7 @@ async fn refresh_catalog(
         &config.tool_namespace,
         remote_tools,
         matches!(ready.transport, ReadyTransport::StreamableHttp { .. }),
+        &config.parallel_safe_tools,
     )?;
     ready.catalog.replace(catalog);
     ready.exposed_to_remote.replace(exposed_to_remote);
@@ -934,17 +1087,23 @@ fn prepare_transport(config: &McpClientConfig) -> Result<ReadyTransport, Runtime
         TransportConfig::StreamableHttp {
             endpoint,
             authorization_environment,
+            oauth_resource,
+            oauth_scopes,
         } => {
             let endpoint = reqwest::Url::parse(endpoint)
                 .map_err(|error| invalid_plan(format!("MCP endpoint is invalid: {error}")))?;
-            let authorization = authorization_environment
-                .as_ref()
-                .map(|name| {
-                    env::var(name).map_err(|_| {
-                        invalid_plan(format!("MCP authorization environment `{name}` is missing"))
-                    })
-                })
-                .transpose()?;
+            let authorization = if let Some(name) = authorization_environment {
+                HttpAuthorization::Environment(env::var(name).map_err(|_| {
+                    invalid_plan(format!("MCP authorization environment `{name}` is missing"))
+                })?)
+            } else if let Some(resource_uri) = oauth_resource {
+                HttpAuthorization::Oauth {
+                    resource_uri: resource_uri.clone(),
+                    scopes: oauth_scopes.clone(),
+                }
+            } else {
+                HttpAuthorization::None
+            };
             let client = reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
@@ -967,6 +1126,7 @@ struct Session {
     stdout: BufReader<ChildStdout>,
     next_id: u64,
     client_capabilities: Value,
+    roots: Vec<McpRoot>,
 }
 
 impl Session {
@@ -1011,6 +1171,7 @@ impl Session {
             stdout: BufReader::new(stdout),
             next_id: 1,
             client_capabilities: client_capabilities(config),
+            roots: config.roots.clone(),
         })
     }
 
@@ -1105,9 +1266,8 @@ impl Session {
             }
             if let Some(id) = message.get("id") {
                 if message.get("method").is_some() {
-                    return Err(protocol_failure(
-                        "MCP server sent an unsupported client request",
-                    ));
+                    self.answer_client_request(id.clone(), &message).await?;
+                    continue;
                 }
                 if id.as_u64() != Some(expected_id) {
                     return Err(protocol_failure(
@@ -1119,6 +1279,32 @@ impl Session {
             if message.get("method").is_none() {
                 return Err(protocol_failure("MCP message was not a valid notification"));
             }
+        }
+    }
+
+    async fn answer_client_request(
+        &mut self,
+        id: Value,
+        message: &Value,
+    ) -> Result<(), RuntimeFailure> {
+        match message.get("method").and_then(Value::as_str) {
+            Some("roots/list") => {
+                self.write(&json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {"roots": &self.roots}
+                }))
+                .await
+            }
+            Some(method) => {
+                self.write(&json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {"code": -32601, "message": format!("Unsupported client method `{method}`")}
+                }))
+                .await
+            }
+            None => Err(protocol_failure("MCP client request omitted method")),
         }
     }
 
@@ -1169,6 +1355,9 @@ fn client_capabilities(config: &McpClientConfig) -> Value {
     }
     if config.allow_sampling {
         capabilities.insert("sampling".to_owned(), json!({}));
+    }
+    if !config.roots.is_empty() {
+        capabilities.insert("roots".to_owned(), json!({"listChanged": false}));
     }
     Value::Object(capabilities)
 }
@@ -1583,13 +1772,13 @@ fn project_resource_contents(result: &Value) -> Result<ReadResourceResponse, Rea
     let mut projected = Vec::with_capacity(contents.len());
     let mut total_bytes = 0_usize;
     for content in contents {
-        if content.get("blob").is_some() {
+        let text = content.get("text").and_then(Value::as_str);
+        let blob = content.get("blob").and_then(Value::as_str);
+        if text.is_some() == blob.is_some() {
             return Err(ReadResourceError::UnsupportedContent);
         }
-        let text = content["text"]
-            .as_str()
-            .ok_or(ReadResourceError::UnsupportedContent)?;
-        total_bytes = total_bytes.saturating_add(text.len());
+        total_bytes =
+            total_bytes.saturating_add(text.map_or_else(|| blob.map_or(0, str::len), str::len));
         if total_bytes > context_contract::MAX_TEXT_BYTES {
             return Err(ReadResourceError::UnsupportedContent);
         }
@@ -1604,7 +1793,8 @@ fn project_resource_contents(result: &Value) -> Result<ReadResourceResponse, Rea
         projected.push(ResourceContent {
             uri: uri.to_owned(),
             mime_type: mime_type.to_owned(),
-            text: text.to_owned(),
+            text: text.map(|text| Some(text.to_owned())),
+            data_base64: blob.map(|blob| Some(blob.to_owned())),
         });
     }
     Ok(ReadResourceResponse {
@@ -1681,34 +1871,46 @@ async fn http_request_raw_with_headers(
     add_modern_metadata(&mut params, Protocol::Modern, &ready.client_capabilities);
     let request_id = 1_u64;
     let body = json!({"jsonrpc":"2.0", "id":request_id, "method":method, "params":params});
-    let mut request = client
-        .post(endpoint.clone())
-        .header(
-            reqwest::header::ACCEPT,
-            "application/json, text/event-stream",
-        )
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header("MCP-Protocol-Version", MODERN_VERSION)
-        .header("Mcp-Method", method)
-        .timeout(Duration::from_millis(timeout_ms));
-    if matches!(method, "tools/call" | "resources/read" | "prompts/get")
-        && let Some(name) = body["params"]
-            .get(if method == "resources/read" {
-                "uri"
-            } else {
-                "name"
-            })
-            .and_then(Value::as_str)
-    {
-        request = request.header("Mcp-Name", encode_header_value(name));
-    }
-    if let Some(authorization) = authorization {
-        request = request.header(reqwest::header::AUTHORIZATION, authorization);
-    }
-    for (name, value) in parameter_headers {
-        request = request.header(name, value);
-    }
-    let response = request.json(&body).send().await.map_err(http_failure)?;
+    let mut attempt = 0_u8;
+    let response = loop {
+        let mut request = client
+            .post(endpoint.clone())
+            .header(
+                reqwest::header::ACCEPT,
+                "application/json, text/event-stream",
+            )
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header("MCP-Protocol-Version", MODERN_VERSION)
+            .header("Mcp-Method", method)
+            .timeout(Duration::from_millis(timeout_ms));
+        if matches!(method, "tools/call" | "resources/read" | "prompts/get")
+            && let Some(name) = body["params"]
+                .get(if method == "resources/read" {
+                    "uri"
+                } else {
+                    "name"
+                })
+                .and_then(Value::as_str)
+        {
+            request = request.header("Mcp-Name", encode_header_value(name));
+        }
+        if let Some(value) = http_authorization_header(ready, authorization).await? {
+            request = request.header(reqwest::header::AUTHORIZATION, value);
+        }
+        for (name, value) in parameter_headers {
+            request = request.header(name, value);
+        }
+        let response = request.json(&body).send().await.map_err(http_failure)?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && attempt == 0
+            && matches!(authorization, HttpAuthorization::Oauth { .. })
+        {
+            invalidate_oauth(ready, authorization).await?;
+            attempt = attempt.saturating_add(1);
+            continue;
+        }
+        break response;
+    };
     let status = response.status();
     let content_type = response
         .headers()
@@ -1734,6 +1936,57 @@ async fn http_request_raw_with_headers(
             "MCP HTTP response used unsupported Content-Type `{content_type}`"
         ))),
     }
+}
+
+async fn http_authorization_header(
+    ready: &ReadyClient,
+    authorization: &HttpAuthorization,
+) -> Result<Option<String>, RuntimeFailure> {
+    match authorization {
+        HttpAuthorization::None => Ok(None),
+        HttpAuthorization::Environment(value) => Ok(Some(value.clone())),
+        HttpAuthorization::Oauth {
+            resource_uri,
+            scopes,
+        } => match ready
+            .oauth
+            .access(oauth_contract::AccessRequest {
+                resource_uri: resource_uri.clone(),
+                scopes: scopes.clone(),
+            })
+            .await
+        {
+            Ok(access) if access.token_type.eq_ignore_ascii_case("bearer") => {
+                Ok(Some(format!("Bearer {}", access.access_token)))
+            }
+            Ok(_) | Err(oauth_contract::OauthAccessAccessInvocationError::Domain(_)) => {
+                Err(protocol_failure("MCP OAuth access is unavailable"))
+            }
+            Err(oauth_contract::OauthAccessAccessInvocationError::Runtime(error)) => Err(error),
+        },
+    }
+}
+
+async fn invalidate_oauth(
+    ready: &ReadyClient,
+    authorization: &HttpAuthorization,
+) -> Result<(), RuntimeFailure> {
+    let HttpAuthorization::Oauth { resource_uri, .. } = authorization else {
+        return Ok(());
+    };
+    ready
+        .oauth
+        .invalidate(oauth_contract::InvalidateRequest {
+            resource_uri: resource_uri.clone(),
+        })
+        .await
+        .map(|_| ())
+        .map_err(|error| match error {
+            oauth_contract::OauthAccessInvalidateInvocationError::Domain(_) => {
+                protocol_failure("MCP OAuth credential could not be invalidated")
+            }
+            oauth_contract::OauthAccessInvalidateInvocationError::Runtime(error) => error,
+        })
 }
 
 async fn read_http_body(response: reqwest::Response) -> Result<Vec<u8>, RuntimeFailure> {
@@ -1822,6 +2075,7 @@ fn project_catalog(
     namespace: &str,
     remote_tools: Vec<Value>,
     enforce_http_headers: bool,
+    parallel_safe_tools: &[String],
 ) -> Result<(CatalogResponse, BTreeMap<String, String>), RuntimeFailure> {
     let mut tools = Vec::with_capacity(remote_tools.len());
     let mut mapping = BTreeMap::new();
@@ -1874,7 +2128,11 @@ fn project_catalog(
             name: exposed_name,
             description: description.to_owned(),
             input_schema_json: input_schema_json.try_into().expect("validated schema JSON"),
-            execution: ToolExecutionClass::Exclusive,
+            execution: if parallel_safe_tools.iter().any(|name| name == remote_name) {
+                ToolExecutionClass::ParallelSafe
+            } else {
+                ToolExecutionClass::Exclusive
+            },
         });
     }
     Ok((CatalogResponse { tools }, mapping))
@@ -2034,6 +2292,10 @@ fn normalize_remote_tool_name(name: &str) -> Option<String> {
     (!normalized.is_empty()).then_some(normalized)
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive MCP content projection keeps validation and bounds aligned"
+)]
 fn map_tool_result(response: &Value) -> Result<ExecuteResponse, ExecuteError> {
     let result = rpc_result(response).map_err(|error| {
         execution_failed(
@@ -2052,31 +2314,136 @@ fn map_tool_result(response: &Value) -> Result<ExecuteResponse, ExecuteError> {
     let content = result["content"].as_array().ok_or_else(|| {
         execution_failed("invalid_result", "MCP Tool result omitted content", result)
     })?;
-    let all_text = content
-        .iter()
-        .all(|item| item["type"].as_str() == Some("text") && item["text"].is_string());
-    if !all_text {
-        return Err(execution_failed(
-            "unsupported_content",
-            "MCP Tool returned content that the text-only Tool Provider contract cannot represent",
-            result,
-        ));
+    let mut output = Vec::new();
+    let mut content_blocks = Vec::new();
+    for item in content {
+        let kind = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        match kind {
+            "text" => {
+                let Some(text) = item.get("text").and_then(Value::as_str) else {
+                    return Err(execution_failed(
+                        "invalid_result",
+                        "MCP text content omitted text",
+                        item,
+                    ));
+                };
+                output.push(text.to_owned());
+                content_blocks.push(json!({"kind": "text", "text": text}));
+            }
+            "image" | "audio" => {
+                let Some(data) = item.get("data").and_then(Value::as_str) else {
+                    return Err(execution_failed(
+                        "invalid_result",
+                        "MCP binary content omitted base64 data",
+                        item,
+                    ));
+                };
+                let Some(mime_type) = item.get("mimeType").and_then(Value::as_str) else {
+                    return Err(execution_failed(
+                        "invalid_result",
+                        "MCP binary content omitted mimeType",
+                        item,
+                    ));
+                };
+                output.push(format!("[{kind}: {mime_type}]"));
+                content_blocks.push(json!({
+                    "kind": kind,
+                    "data_base64": data,
+                    "mime_type": mime_type
+                }));
+            }
+            "resource_link" => {
+                let Some(uri) = item.get("uri").and_then(Value::as_str) else {
+                    return Err(execution_failed(
+                        "invalid_result",
+                        "MCP resource link omitted uri",
+                        item,
+                    ));
+                };
+                let name = item.get("name").and_then(Value::as_str);
+                output.push(format!("[resource: {}]", name.unwrap_or(uri)));
+                content_blocks.push(json!({
+                    "kind": "resource_link",
+                    "uri": uri,
+                    "name": name,
+                    "mime_type": item.get("mimeType").and_then(Value::as_str),
+                    "description": item.get("description").and_then(Value::as_str)
+                }));
+            }
+            "resource" => {
+                let Some(resource) = item.get("resource").and_then(Value::as_object) else {
+                    return Err(execution_failed(
+                        "invalid_result",
+                        "MCP embedded resource omitted resource",
+                        item,
+                    ));
+                };
+                let uri = resource.get("uri").and_then(Value::as_str);
+                let mime_type = resource.get("mimeType").and_then(Value::as_str);
+                if let Some(text) = resource.get("text").and_then(Value::as_str) {
+                    output.push(text.to_owned());
+                    content_blocks.push(json!({
+                        "kind": "text",
+                        "text": text,
+                        "uri": uri,
+                        "mime_type": mime_type
+                    }));
+                } else if let Some(data) = resource.get("blob").and_then(Value::as_str) {
+                    output.push(format!("[embedded resource: {}]", uri.unwrap_or("unnamed")));
+                    content_blocks.push(json!({
+                        "kind": "artifact",
+                        "data_base64": data,
+                        "uri": uri,
+                        "mime_type": mime_type
+                    }));
+                } else {
+                    return Err(execution_failed(
+                        "invalid_result",
+                        "MCP embedded resource omitted text or blob",
+                        item,
+                    ));
+                }
+            }
+            _ => {
+                return Err(execution_failed(
+                    "unsupported_content",
+                    "MCP Tool returned an unsupported content type",
+                    item,
+                ));
+            }
+        }
     }
-    let output = content
-        .iter()
-        .filter_map(|item| item["text"].as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if output.len() > MAX_OUTPUT_BYTES {
+    if let Some(structured) = result.get("structuredContent")
+        && !structured.is_null()
+    {
+        content_blocks.push(json!({
+            "kind": "json",
+            "value_json": structured.to_string()
+        }));
+    }
+    let output = output.join("\n");
+    let content_blocks = Value::Array(content_blocks);
+    if output.len() > MAX_OUTPUT_BYTES || content_blocks.to_string().len() > MAX_OUTPUT_BYTES {
         return Err(ExecuteError::OutputLimitExceeded);
     }
+    let content_blocks = serde_json::from_value(content_blocks).map_err(|error| {
+        execution_failed(
+            "invalid_result",
+            &format!("MCP content blocks could not be normalized: {error}"),
+            result,
+        )
+    })?;
     let metadata = json!({
         "mcp": true,
         "structured_content": result.get("structuredContent").cloned().unwrap_or(Value::Null)
     });
+    if metadata.to_string().len() > 65_536 {
+        return Err(ExecuteError::OutputLimitExceeded);
+    }
     Ok(ExecuteResponse {
         content_type: ContentType::Text,
         content: output,
+        content_blocks: Some(Some(content_blocks)),
         metadata_json: metadata
             .to_string()
             .try_into()
@@ -2279,6 +2646,8 @@ done
             transport: TransportConfig::StreamableHttp {
                 endpoint: format!("http://{address}/mcp"),
                 authorization_environment: None,
+                oauth_resource: None,
+                oauth_scopes: Vec::new(),
             },
             protocol: ProtocolMode::Modern,
             tool_namespace: "fixture".to_owned(),
@@ -2286,6 +2655,8 @@ done
             request_timeout_ms: 1_000,
             allow_elicitation: false,
             allow_sampling: false,
+            roots: Vec::new(),
+            parallel_safe_tools: Vec::new(),
             continuation_max_rounds: default_continuation_rounds(),
             sampling_model: None,
             max_sampling_tokens: default_max_sampling_tokens(),
@@ -2297,6 +2668,7 @@ done
             catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
             exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
             session: Rc::new(Mutex::new(None)),
+            oauth: Port::new(),
         };
         (config, ready, server)
     }
@@ -2315,6 +2687,8 @@ done
             request_timeout_ms: 1_000,
             allow_elicitation: false,
             allow_sampling: false,
+            roots: Vec::new(),
+            parallel_safe_tools: Vec::new(),
             continuation_max_rounds: default_continuation_rounds(),
             sampling_model: None,
             max_sampling_tokens: default_max_sampling_tokens(),
@@ -2341,6 +2715,7 @@ done
             catalog: Rc::new(RefCell::new(CatalogResponse { tools: Vec::new() })),
             exposed_to_remote: Rc::new(RefCell::new(BTreeMap::new())),
             session: Rc::new(Mutex::new(None)),
+            oauth: Port::new(),
         }
     }
 
@@ -2354,7 +2729,8 @@ done
         let remote = list_tools_stdio(&mut session, ready.protocol, config.startup_timeout_ms)
             .await
             .unwrap();
-        let (catalog, mapping) = project_catalog(&config.tool_namespace, remote, false).unwrap();
+        let (catalog, mapping) =
+            project_catalog(&config.tool_namespace, remote, false, &[]).unwrap();
         ready.catalog.replace(catalog);
         ready.exposed_to_remote.replace(mapping);
         ready.session = Rc::new(Mutex::new(Some(session)));
@@ -2371,7 +2747,8 @@ done
         let remote = list_tools_http(&ready, config.startup_timeout_ms)
             .await
             .unwrap();
-        let (catalog, mapping) = project_catalog(&config.tool_namespace, remote, true).unwrap();
+        let (catalog, mapping) =
+            project_catalog(&config.tool_namespace, remote, true, &[]).unwrap();
         assert_eq!(catalog.tools[0].name, "mcp__fixture__ping");
         assert_eq!(mapping["mcp__fixture__ping"], "ping");
         let schema =
@@ -2425,6 +2802,7 @@ done
             ready: Rc::new(RefCell::new(Some(ready))),
             interaction: Port::new(),
             model: Port::new(),
+            oauth: Port::new(),
         };
         let response = plugin
             .execute(
@@ -2474,6 +2852,7 @@ done
             ready: Rc::new(RefCell::new(Some(ready))),
             interaction: Port::new(),
             model: Port::new(),
+            oauth: Port::new(),
         };
         let cancellation = CancellationToken::new();
         let context = InvocationContext::new(9, None, cancellation.clone());
@@ -2544,6 +2923,7 @@ done
             ready: Rc::new(RefCell::new(Some(ready))),
             interaction: Port::new(),
             model: Port::new(),
+            oauth: Port::new(),
         };
         let result = plugin
             .execute(
@@ -2564,7 +2944,7 @@ done
             json!({"name":"same-tool","inputSchema":{"type":"object"}}),
             json!({"name":"same.tool","inputSchema":{"type":"object"}}),
         ];
-        assert!(project_catalog("fixture", duplicate, false).is_err());
+        assert!(project_catalog("fixture", duplicate, false, &[]).is_err());
 
         let error = map_tool_result(&json!({
             "jsonrpc":"2.0",
@@ -2573,6 +2953,19 @@ done
         }))
         .unwrap_err();
         assert!(matches!(error, ExecuteError::ExecutionFailed { .. }));
+
+        let response = map_tool_result(&json!({
+            "jsonrpc":"2.0",
+            "id":1,
+            "result":{
+                "content":[{"type":"image","data":"AA==","mimeType":"image/png"}],
+                "structuredContent":{"width":1},
+                "isError":false
+            }
+        }))
+        .unwrap();
+        assert_eq!(response.content, "[image: image/png]");
+        assert_eq!(response.content_blocks.flatten().unwrap().len(), 2);
     }
 
     #[test]
@@ -2586,11 +2979,16 @@ done
         );
         config.allow_sampling = true;
         config.sampling_model = Some("fixture/readme-summary-v1".to_owned());
+        config.roots = vec![McpRoot {
+            uri: "file:///workspace".to_owned(),
+            name: "workspace".to_owned(),
+        }];
         assert_eq!(
             client_capabilities(&config),
             json!({
                 "elicitation":{"form":{}, "url":{}},
-                "sampling":{}
+                "sampling":{},
+                "roots":{"listChanged":false}
             })
         );
     }
@@ -2637,6 +3035,11 @@ done
             }))
             .is_err()
         );
+        let tools = sampling_tools(&json!({
+            "tools":[{"name":"read","description":"Read text","inputSchema":{"type":"object"}}]
+        }))
+        .unwrap();
+        assert_eq!(tools[0].name, "read");
     }
 
     #[test]
@@ -2663,7 +3066,7 @@ done
                 .as_array()
                 .unwrap()
                 .len(),
-            2
+            3
         );
         assert_eq!(
             descriptor["required_capabilities"][0]["capability_id"],
@@ -2673,10 +3076,45 @@ done
             descriptor["required_capabilities"][1]["capability_id"],
             "lenso.agent.model@2"
         );
+        assert_eq!(
+            descriptor["required_capabilities"][2]["capability_id"],
+            "lenso.agent.oauth-access@1"
+        );
     }
 
     #[test]
-    fn context_projection_preserves_prompt_roles_and_rejects_binary_resources() {
+    fn oauth_resource_may_be_a_same_origin_canonical_uri_only() {
+        let same_origin = McpClientConfig {
+            transport: TransportConfig::StreamableHttp {
+                endpoint: "https://mcp.example.com/v1/mcp".to_owned(),
+                authorization_environment: None,
+                oauth_resource: Some("https://mcp.example.com/".to_owned()),
+                oauth_scopes: vec!["tools:read".to_owned()],
+            },
+            protocol: ProtocolMode::Modern,
+            tool_namespace: "fixture".to_owned(),
+            startup_timeout_ms: 1_000,
+            request_timeout_ms: 1_000,
+            allow_elicitation: false,
+            allow_sampling: false,
+            roots: Vec::new(),
+            parallel_safe_tools: Vec::new(),
+            continuation_max_rounds: default_continuation_rounds(),
+            sampling_model: None,
+            max_sampling_tokens: default_max_sampling_tokens(),
+        };
+        assert!(validate_config(&same_origin).is_ok());
+
+        let mut cross_origin = same_origin;
+        if let TransportConfig::StreamableHttp { oauth_resource, .. } = &mut cross_origin.transport
+        {
+            *oauth_resource = Some("https://auth.example.com/mcp".to_owned());
+        }
+        assert!(validate_config(&cross_origin).is_err());
+    }
+
+    #[test]
+    fn context_projection_preserves_prompt_roles_and_binary_resources() {
         let prompt = project_rendered_prompt(&json!({
             "description":"Review",
             "messages":[
@@ -2688,11 +3126,29 @@ done
         assert_eq!(prompt.messages.len(), 2);
         assert!(matches!(prompt.messages[0].role, ContextRole::User));
 
+        let resources = project_resource_contents(&json!({
+            "contents":[{"uri":"fixture://image","mimeType":"image/png","blob":"AA=="}]
+        }))
+        .unwrap();
+        assert_eq!(
+            resources.contents[0].data_base64,
+            Some(Some("AA==".to_owned()))
+        );
+        assert_eq!(resources.contents[0].text, None);
+    }
+
+    #[test]
+    fn catalog_parallelism_is_explicit_per_remote_tool() {
+        let (catalog, _) = project_catalog(
+            "fixture",
+            vec![json!({"name":"ping","inputSchema":{"type":"object"}})],
+            false,
+            &["ping".to_owned()],
+        )
+        .unwrap();
         assert!(matches!(
-            project_resource_contents(&json!({
-                "contents":[{"uri":"fixture://image","blob":"AA=="}]
-            })),
-            Err(ReadResourceError::UnsupportedContent)
+            catalog.tools[0].execution,
+            ToolExecutionClass::ParallelSafe
         ));
     }
 }

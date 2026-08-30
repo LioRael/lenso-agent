@@ -61,7 +61,12 @@ async fn streams_lists_and_branches_a_durable_session() {
         .json::<serde_json::Value>()
         .await
         .unwrap();
-    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v1");
+    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v2");
+    assert!(
+        models["catalog_revision"]
+            .as_str()
+            .is_some_and(|revision| revision.starts_with("sha256:"))
+    );
     let fixture = models["providers"]
         .as_array()
         .unwrap()
@@ -73,14 +78,39 @@ async fn streams_lists_and_branches_a_durable_session() {
         fixture["selected_instance"],
         "lenso.agent.model.fixture/web"
     );
-    assert_eq!(fixture["capabilities"]["image_input"], false);
-    assert_eq!(fixture["capabilities"]["audio_input"], false);
-    assert!(
-        fixture["models"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|model| model["id"] == "fixture/readme-summary-v1" && model["selected"] == true)
+    assert_eq!(fixture["readiness"]["status"], "unchecked");
+    let selected_model = fixture["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|model| model["id"] == "fixture/readme-summary-v1")
+        .unwrap();
+    assert_eq!(selected_model["selected"], true);
+    assert_eq!(selected_model["wire_protocol"], "fixture");
+    assert_eq!(selected_model["limits"]["context_window_tokens"], 32_768);
+    assert_eq!(
+        selected_model["capabilities"]["input_modalities"],
+        serde_json::json!(["text"])
+    );
+    assert_eq!(
+        selected_model["capabilities"]["reasoning"]["kind"],
+        "unsupported"
+    );
+    assert_eq!(
+        selected_model["capabilities"]["service_tiers"]["kind"],
+        "unsupported"
+    );
+    assert_eq!(
+        models["resolved_turn_profile"]["provider_instance"],
+        "lenso.agent.model.fixture/web"
+    );
+    assert_eq!(
+        models["resolved_turn_profile"]["model"],
+        "fixture/readme-summary-v1"
+    );
+    assert_eq!(
+        models["resolved_turn_profile"]["catalog_revision"],
+        models["catalog_revision"]
     );
     assert!(!models.to_string().contains("credential"));
     fs::write(

@@ -329,6 +329,13 @@ pub(in crate::tui::shell) fn handle_key(key: KeyEvent, state: &mut TuiState) -> 
         handle_interaction_key(key, state);
         return false;
     }
+    if state.focus == Focus::Prompt
+        && (key.code == KeyCode::BackTab
+            || (key.code == KeyCode::Tab && key.modifiers.contains(KeyModifiers::SHIFT)))
+    {
+        state.request_next_mode();
+        return false;
+    }
     if state.pending_interaction.is_none() && state.suggestion_match().is_some() {
         match key.code {
             KeyCode::Esc => {
@@ -388,17 +395,7 @@ pub(in crate::tui::shell) fn handle_key(key: KeyEvent, state: &mut TuiState) -> 
     if let Some(handled) = handle_editor_key(key, state) {
         return handled;
     }
-    match key.code {
-        KeyCode::BackTab => {
-            if state.panel_open {
-                state.selected_panel = (state.selected_panel + 1) % state.panel_count();
-            } else {
-                state.panel_open = true;
-            }
-            false
-        }
-        _ => false,
-    }
+    false
 }
 
 fn handle_scrollback_key(key: KeyEvent, state: &mut TuiState) -> bool {

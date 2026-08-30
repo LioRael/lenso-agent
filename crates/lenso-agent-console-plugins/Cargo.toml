@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+lenso-agent-artifact-file-plugin = { path = "../lenso-agent-artifact-file-plugin" }
 lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plugin" }
 lenso-agent-auth-openai-codex-plugin = { path = "../lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-context-compaction-plugin = { path = "../lenso-agent-context-compaction-plugin" }
@@ -16,6 +17,7 @@ lenso-agent-http-fetch-plugin = { path = "../lenso-agent-http-fetch-plugin" }
 lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
 lenso-agent-memory-sqlite-plugin = { path = "../lenso-agent-memory-sqlite-plugin" }
 lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
+lenso-agent-oauth-client-credentials-plugin = { path = "../lenso-agent-oauth-client-credentials-plugin" }
 lenso-agent-prompt-plugin = { path = "../lenso-agent-prompt-plugin" }
 lenso-agent-prompt-static-plugin = { path = "../lenso-agent-prompt-static-plugin" }
 lenso-agent-session-sqlite-plugin = { path = "../lenso-agent-session-sqlite-plugin" }

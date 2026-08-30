@@ -10,6 +10,7 @@ rust-version.workspace = true
 
 [dependencies]
 lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin" }
+lenso-agent-artifact-file-plugin = { path = "../lenso-agent-artifact-file-plugin" }
 lenso-agent-browser-playwright-plugin = { path = "../lenso-agent-browser-playwright-plugin" }
 lenso-agent-interactive-approval-hook-plugin = { path = "../lenso-agent-interactive-approval-hook-plugin" }
 lenso-agent-ask-user-tools-plugin = { path = "../lenso-agent-ask-user-tools-plugin" }
@@ -29,6 +30,7 @@ lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
 lenso-agent-model-fixture-plugin = { path = "../lenso-agent-model-fixture-plugin" }
 lenso-agent-model-openai-compatible-plugin = { path = "../lenso-agent-model-openai-compatible-plugin" }
 lenso-agent-multimodal-tools-plugin = { path = "../lenso-agent-multimodal-tools-plugin" }
+lenso-agent-oauth-client-credentials-plugin = { path = "../lenso-agent-oauth-client-credentials-plugin" }
 lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
 lenso-agent-process-native-plugin = { path = "../lenso-agent-process-native-plugin" }
 lenso-agent-process-sandbox-plugin = { path = "../lenso-agent-process-sandbox-plugin" }

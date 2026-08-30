@@ -127,6 +127,7 @@ impl FilesystemSkillsProvider {
                 serde_json::from_str::<Arguments>(request.arguments_json.as_str())
                     .map_err(|_| ExecuteError::InvalidArguments)?;
                 Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: state.catalog_json,
                     content_type: ContentType::Text,
                     metadata_json: json_metadata(
@@ -151,6 +152,7 @@ impl FilesystemSkillsProvider {
                     .get(&arguments.name)
                     .ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: skill.content.clone(),
                     content_type: ContentType::Text,
                     metadata_json: json_metadata(&serde_json::json!({
@@ -164,6 +166,7 @@ impl FilesystemSkillsProvider {
                 let name = parse_skill_name(request.arguments_json.as_str())?;
                 let skill = state.skills.get(&name).ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: skill.resource_manifest_json.clone(),
                     content_type: ContentType::Text,
                     metadata_json: json_metadata(&serde_json::json!({
@@ -196,6 +199,7 @@ impl FilesystemSkillsProvider {
                     .get(&arguments.path)
                     .ok_or(ExecuteError::NotFound)?;
                 Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: resource.content.clone(),
                     content_type: ContentType::Text,
                     metadata_json: json_metadata(&serde_json::json!({

@@ -16,7 +16,7 @@
   "$defs": {
     "ResourceContent": {
       "type": "object",
-      "required": ["uri", "mime_type", "text"],
+      "required": ["uri", "mime_type"],
       "properties": {
         "uri": {
           "type": "string",
@@ -28,8 +28,12 @@
           "maxLength": 256
         },
         "text": {
-          "type": "string",
+          "type": ["string", "null"],
           "maxLength": 1048576
+        },
+        "data_base64": {
+          "type": ["string", "null"],
+          "maxLength": 5592408
         }
       },
       "additionalProperties": false

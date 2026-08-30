@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["resources", "request_timeout_ms", "refresh_margin_seconds"],
+  "properties": {
+    "request_timeout_ms": { "type": "integer" },
+    "refresh_margin_seconds": { "type": "integer" },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["resource_uri", "client_id_environment", "client_secret_environment", "client_authentication_method"],
+        "properties": {
+          "resource_uri": { "type": "string" },
+          "client_id_environment": { "type": "string" },
+          "client_secret_environment": { "type": "string" },
+          "scopes": { "type": "array", "items": { "type": "string" } },
+          "protected_resource_metadata_url": { "type": "string" },
+          "authorization_server": { "type": "string" },
+          "client_authentication_method": { "enum": ["basic", "post"] }
+        }
+      }
+    }
+  }
+}

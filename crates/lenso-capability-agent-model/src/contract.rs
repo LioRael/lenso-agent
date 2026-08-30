@@ -15,6 +15,12 @@ pub struct CompleteOpen {
     pub temperature: f64,
     #[schemars(range(min = 1, max = 1_000_000))]
     pub max_output_tokens: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(min = 1, max = 32))]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(min = 1, max = 32))]
+    pub service_tier: Option<String>,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -88,6 +94,9 @@ pub enum CompleteError {
     InvalidRequest,
     UnsupportedModel,
     ContentRejected,
+    RateLimited,
+    Overloaded,
+    ContextOverflow,
     ProviderFailure { payload: ProviderFailurePayload },
 }
 
@@ -104,7 +113,7 @@ pub struct ProviderFailurePayload {
 #[lenso::capability(
     id = "lenso.agent.model",
     major = 2,
-    version = "2.0.0",
+    version = "2.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

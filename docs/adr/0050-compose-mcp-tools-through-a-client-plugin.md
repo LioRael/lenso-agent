@@ -39,9 +39,11 @@ The modern Streamable HTTP transport sends one POST per JSON-RPC request with
 the required protocol, method, and name headers. It accepts bounded JSON or
 request-scoped SSE responses, closes the request on cancellation, rejects
 redirects, supports valid `x-mcp-header` parameter projection, and permits only
-HTTPS endpoints or explicit loopback HTTP. Authorization configuration names
-an environment variable containing the full header value; it never stores the
-credential in Plugin TOML.
+HTTPS endpoints or explicit loopback HTTP. Authorization can name an
+environment variable containing the full header value, or request a
+resource-bound token through `lenso.agent.oauth-access@1`. The latter keeps
+discovery, credentials, caching, and refresh in a removable Auth Plugin. The MCP
+Plugin never persists either credential form in Plugin TOML or Session state.
 
 Activation and each Turn catalog request paginate `tools/list` behind bounded page, count, message, Schema,
 and text limits. Remote names are normalized into lowercase snake case and

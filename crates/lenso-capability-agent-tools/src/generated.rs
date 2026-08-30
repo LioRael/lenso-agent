@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.tools@2";
-pub const DESCRIPTOR_VERSION: &str = "2.1.0";
+pub const DESCRIPTOR_VERSION: &str = "2.2.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TOOLS_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const TOOLS_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_tools { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.1.0\",\"operations\":[\"catalog\",\"execute\",\"execute_stream\"],\"operation_kinds\":{\"execute_stream\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_tools { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.2.0\",\"operations\":[\"catalog\",\"execute\",\"execute_stream\"],\"operation_kinds\":{\"execute_stream\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.2.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_tools_client { () => { "{\"capability_id\":\"lenso.agent.tools@2\",\"descriptor_version\":\"2.2.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const EXECUTE_OPERATION: &str = "execute";
@@ -87,12 +87,62 @@ pub struct ExecuteResponse {
     #[serde(rename = "content")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content: String,
+    #[serde(rename = "content_blocks")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<ExecuteResponseContentBlocksItem>>,
     #[serde(rename = "content_type")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content_type: ExecuteResponseContentType,
     #[serde(rename = "metadata_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub metadata_json: RawJson,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExecuteResponseContentBlocksItem {
+    #[serde(rename = "data_base64")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_base64: Option<String>,
+    #[serde(rename = "description")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(rename = "handle")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    #[serde(rename = "kind")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub kind: ExecuteResponseContentBlocksItemKind,
+    #[serde(rename = "mime_type")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(rename = "name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(rename = "text")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(rename = "uri")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(rename = "value_json")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_json: Option<RawJson>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ExecuteResponseContentBlocksItemKind {
+    #[serde(rename = "text")]
+    Text,
+    #[serde(rename = "json")]
+    Json,
+    #[serde(rename = "image")]
+    Image,
+    #[serde(rename = "audio")]
+    Audio,
+    #[serde(rename = "resource_link")]
+    ResourceLink,
+    #[serde(rename = "artifact")]
+    Artifact,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -137,6 +187,9 @@ pub struct ExecuteStreamResponse {
     #[serde(rename = "content")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content: String,
+    #[serde(rename = "content_blocks")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_blocks: Option<Vec<ExecuteStreamResponseContentBlocksItem>>,
     #[serde(rename = "content_type")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content_type: ExecuteStreamResponseContentType,
@@ -146,6 +199,53 @@ pub struct ExecuteStreamResponse {
     #[serde(rename = "metadata_json")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub metadata_json: RawJson,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExecuteStreamResponseContentBlocksItem {
+    #[serde(rename = "data_base64")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_base64: Option<String>,
+    #[serde(rename = "description")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(rename = "handle")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
+    #[serde(rename = "kind")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub kind: ExecuteStreamResponseContentBlocksItemKind,
+    #[serde(rename = "mime_type")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    #[serde(rename = "name")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(rename = "text")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(rename = "uri")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uri: Option<String>,
+    #[serde(rename = "value_json")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value_json: Option<RawJson>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum ExecuteStreamResponseContentBlocksItemKind {
+    #[serde(rename = "text")]
+    Text,
+    #[serde(rename = "json")]
+    Json,
+    #[serde(rename = "image")]
+    Image,
+    #[serde(rename = "audio")]
+    Audio,
+    #[serde(rename = "resource_link")]
+    ResourceLink,
+    #[serde(rename = "artifact")]
+    Artifact,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

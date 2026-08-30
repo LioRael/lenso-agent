@@ -202,6 +202,7 @@ impl CodeModeToolsPlugin {
                 }
                 let nested_calls = runtime.facts.borrow().values().cloned().collect::<Vec<_>>();
                 Ok(Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: response_content,
                     content_type: ContentType::Text,
                     metadata_json: serde_json::json!({

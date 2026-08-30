@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "unknown_resource" },
+    { "const": "credential_unavailable" },
+    { "const": "discovery_rejected" },
+    { "const": "authorization_rejected" }
+  ]
+}

@@ -399,6 +399,7 @@ fn map_response(
         )));
     }
     Ok(ExecuteResponse {
+        content_blocks: None,
         content: response.stdout,
         content_type: ContentType::Text,
         metadata_json:

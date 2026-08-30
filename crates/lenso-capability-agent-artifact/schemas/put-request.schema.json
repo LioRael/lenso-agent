@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["session_id", "name", "media_type", "data_base64"],
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "media_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "data_base64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 22369624
+    }
+  },
+  "additionalProperties": false,
+  "title": "PutRequest"
+}

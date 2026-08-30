@@ -4,6 +4,9 @@
     { "const": "invalid_request" },
     { "const": "unsupported_model" },
     { "const": "content_rejected" },
+    { "const": "rate_limited" },
+    { "const": "overloaded" },
+    { "const": "context_overflow" },
     {
       "type": "object",
       "required": ["code", "payload"],

@@ -1,0 +1,30 @@
+[package]
+name = "lenso-agent-oauth-client-credentials-plugin"
+version = "0.1.0"
+description = "OAuth client-credentials broker for remote Agent services."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.oauth.client-credentials"
+root-slot = "oauth-access"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-agent-oauth-access = { path = "../lenso-capability-agent-oauth-access" }
+lenso-kernel.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+futures.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -122,6 +122,7 @@ impl ToolsProvider for WorkspaceReadToolsPlugin {
                     .await?;
                     Ok(Ok(ExecuteResponse {
                         content: response.content,
+                        content_blocks: None,
                         content_type: ExecuteResponseContentType::Text,
                         metadata_json: response.metadata_json,
                     }))
@@ -187,6 +188,12 @@ impl ToolsProvider for WorkspaceReadToolsPlugin {
                 kind: ExecuteStreamResponseKind::Completed,
                 content_type: ExecuteStreamResponseContentType::Text,
                 content: response.content,
+                content_blocks: response.content_blocks.map(|blocks| {
+                    serde_json::from_value(
+                        serde_json::to_value(blocks).expect("Tool content blocks serialize"),
+                    )
+                    .expect("Tool content block schemas align")
+                }),
                 metadata_json: response.metadata_json,
             };
             Ok(Box::new(FiniteOutputStream::successful(

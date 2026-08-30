@@ -1,0 +1,22 @@
+{
+  "id": "lenso.agent.oauth-access@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "access",
+      "interaction": "request",
+      "request_schema": "schemas/access-request.schema.json",
+      "response_schema": "schemas/access-response.schema.json",
+      "domain_error_schema": "schemas/access-error.schema.json"
+    },
+    {
+      "name": "invalidate",
+      "interaction": "request",
+      "request_schema": "schemas/invalidate-request.schema.json",
+      "response_schema": "schemas/invalidate-response.schema.json",
+      "domain_error_schema": "schemas/invalidate-error.schema.json"
+    }
+  ]
+}

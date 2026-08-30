@@ -108,6 +108,8 @@ fn model_request(config: &PresentationModelConfig, request: &ProjectRequest) -> 
     .to_string();
     CompleteOpen {
         model: config.model.clone(),
+        reasoning_effort: None,
+        service_tier: None,
         messages: vec![
             CompleteMessageInput {
                 role: CompleteMessageRole::System,

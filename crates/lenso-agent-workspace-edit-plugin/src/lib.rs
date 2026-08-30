@@ -298,6 +298,7 @@ impl WorkspaceEditProvider {
         FileExt::unlock(&lock)
             .map_err(|error| runtime_io("unlock Workspace checkpoints", &error))?;
         Ok(ExecuteResponse {
+            content_blocks: None,
             content: format!("created checkpoint {checkpoint_id}"),
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
@@ -425,6 +426,7 @@ impl WorkspaceEditProvider {
             review.push_str("No changes recorded for this checkpoint.\n");
         }
         Ok(ExecuteResponse {
+            content_blocks: None,
             content: review,
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
@@ -485,6 +487,7 @@ impl WorkspaceEditProvider {
             "checkpoint_accepted"
         };
         Ok(ExecuteResponse {
+            content_blocks: None,
             content: format!("{operation} {checkpoint_id}"),
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
@@ -1029,6 +1032,7 @@ fn success_response(
     start_line: Option<usize>,
 ) -> ExecuteResponse {
     ExecuteResponse {
+        content_blocks: None,
         content: format!("{operation} {path}"),
         content_type: ContentType::Text,
         metadata_json: serde_json::json!({

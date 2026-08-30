@@ -198,6 +198,7 @@ impl ProcessToolsPlugin {
                     return Err(PluginError::domain(ExecuteError::OutputLimitExceeded));
                 }
                 Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: output,
                     content_type: ContentType::Text,
                     metadata_json: serde_json::json!({
@@ -902,6 +903,7 @@ fn background_response(task: &BackgroundProcess) -> ExecuteResponse {
 
 fn json_response(content: &serde_json::Value, metadata: &serde_json::Value) -> ExecuteResponse {
     ExecuteResponse {
+        content_blocks: None,
         content: content.to_string(),
         content_type: ContentType::Text,
         metadata_json: metadata

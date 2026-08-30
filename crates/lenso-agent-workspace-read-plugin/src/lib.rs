@@ -386,6 +386,7 @@ impl WorkspaceProvider {
         let content = fs::read_to_string(&resolved)
             .map_err(|_| execution_failed("not_utf8", "workspace file is not valid UTF-8"))?;
         Ok(ExecuteResponse {
+            content_blocks: None,
             content,
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({"path": arguments.path})
@@ -431,6 +432,7 @@ impl WorkspaceProvider {
             return Err(ExecuteError::OutputLimitExceeded.into());
         }
         Ok(ExecuteResponse {
+            content_blocks: None,
             content,
             content_type: ContentType::Text,
             metadata_json: metadata

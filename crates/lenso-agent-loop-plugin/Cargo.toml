@@ -13,15 +13,18 @@ plugin-id = "lenso.agent.loop"
 root-slot = "agents"
 
 [dependencies]
+base64.workspace = true
 futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
+lenso-capability-agent-artifact = { path = "../lenso-capability-agent-artifact" }
 lenso-capability-agent-context-compaction = { path = "../lenso-capability-agent-context-compaction" }
 lenso-capability-agent-memory = { path = "../lenso-capability-agent-memory" }
 lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle" }
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
+lenso-capability-agent-session-control = { path = "../lenso-capability-agent-session-control" }
 lenso-capability-agent-session-presentation = { path = "../lenso-capability-agent-session-presentation" }
 lenso-capability-agent-turn-input = { path = "../lenso-capability-agent-turn-input" }
 lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
@@ -31,6 +34,7 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 time.workspace = true
+tokio.workspace = true
 uuid.workspace = true
 
 [lints]

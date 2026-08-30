@@ -498,6 +498,7 @@ impl SubagentToolsPlugin {
         }
 
         Ok(Ok(ExecuteResponse {
+            content_blocks: None,
             content: serde_json::json!({
                 "task_id": task_id,
                 "agent": task.borrow().agent,
@@ -566,6 +567,7 @@ impl SubagentToolsPlugin {
         let status = task.borrow_mut().request_cancel();
         let agent = task.borrow().agent.clone();
         Box::pin(ready(Ok(Ok(ExecuteResponse {
+            content_blocks: None,
             content: serde_json::json!({
                 "task_id": arguments.task_id,
                 "agent": agent,
@@ -622,6 +624,7 @@ impl SubagentToolsPlugin {
                 .await
             {
                 Ok(response) => Ok(Ok(ExecuteResponse {
+                    content_blocks: None,
                     content: serde_json::json!({
                         "task_id": arguments.task_id,
                         "agent": agent,
@@ -664,6 +667,7 @@ impl SubagentToolsPlugin {
         let snapshot = self.supervisor_snapshot();
         let task_count = snapshot.tasks.len();
         Box::pin(ready(Ok(Ok(ExecuteResponse {
+            content_blocks: None,
             content: serde_json::json!({
                 "task_count": task_count,
                 "tasks": snapshot.tasks,
@@ -1152,6 +1156,7 @@ fn task_domain_error_response(task_id: &str, agent: &str, error: ExecuteError) -
         ),
     };
     ExecuteResponse {
+        content_blocks: None,
         content: serde_json::json!({
             "task_id": task_id,
             "agent": agent,
@@ -1176,6 +1181,7 @@ fn task_status_response(
     message: &str,
 ) -> ExecuteResponse {
     ExecuteResponse {
+        content_blocks: None,
         content: serde_json::json!({
             "task_id": task_id,
             "agent": agent,
@@ -1304,6 +1310,7 @@ async fn execute_delegation(
         .try_into()
         .expect("subagent Tool metadata must be valid JSON");
     Ok(Ok(ExecuteResponse {
+        content_blocks: None,
         content: progress.output,
         content_type: ContentType::Text,
         metadata_json,
@@ -1698,6 +1705,7 @@ mod tests {
         let mut task =
             SubagentTask::new("lenso.agent.loop/researcher".to_owned(), test_provenance());
         task.terminal = Some(SubagentTaskTerminal::Completed(ExecuteResponse {
+            content_blocks: None,
             content: "界".repeat(MAX_SUPERVISOR_RESULT_BYTES),
             content_type: ContentType::Text,
             metadata_json: "{}".try_into().unwrap(),

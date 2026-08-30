@@ -10,6 +10,7 @@ use std::{
     time::Instant,
 };
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures::{
     StreamExt,
     channel::oneshot,
@@ -23,6 +24,7 @@ use lenso_capability_agent::{
     self as agent_capability, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
     RunTurnResponseProgressChannel,
 };
+use lenso_capability_agent_artifact as artifact_capability;
 use lenso_capability_agent_context_compaction::{
     self as compaction_capability, CompactRequest, CompactResponse, ContextMessage,
     ContextMessageRole,
@@ -48,6 +50,10 @@ use lenso_capability_agent_session::{
     ReadSessionRequest, ReadSessionResponseEventsItem, ReadSessionResponseEventsItemKind,
     SessionAppendInvocationError, SessionOpenInvocationError, SessionReadInvocationError,
 };
+use lenso_capability_agent_session_control::{
+    self as session_control_capability, CompactSessionError, CompactSessionRequest,
+    CompactSessionResponse,
+};
 use lenso_capability_agent_session_presentation::{
     self as presentation_capability, ProjectRequest as PresentationProjectRequest,
 };
@@ -68,7 +74,89 @@ pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-di
 pub const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
 /// Host-issued Invocation Context key for the surface-neutral Agent dependency closure.
 pub const AGENT_BEHAVIOR_PROVENANCE_EXTENSION: &str = "lenso.agent.behavior-provenance@1";
-const DEFAULT_MAX_USER_RESUMES: u32 = 8;
+/// Host-issued Invocation Context key for the exact Provider/model profile of one Turn.
+pub const RESOLVED_TURN_PROFILE_EXTENSION: &str = "lenso.agent.resolved-turn-profile@1";
+const TOOL_SEARCH_NAME: &str = "tool_search";
+const DEFERRED_MCP_TOOL_THRESHOLD: usize = 16;
+const DEFERRED_TOOL_SEARCH_RESULTS: usize = 8;
+const DEFAULT_ARTIFACT_SPILL_THRESHOLD_BYTES: u64 = 262_144;
+
+/// Model limits known to the active Host. `None` is unknown, not unlimited.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelLimits {
+    pub context_window_tokens: Option<u64>,
+    pub max_input_tokens: Option<u64>,
+    pub max_output_tokens: Option<u64>,
+}
+
+/// Input forms accepted by one Provider/model path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelInputModality {
+    Text,
+    Image,
+    Audio,
+}
+
+/// Whether and how one model accepts a reasoning-effort selection.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+pub enum ModelReasoningControl {
+    Unknown,
+    Unsupported,
+    Selectable { efforts: Vec<String> },
+}
+
+/// Whether and how one model accepts a provider service/speed tier.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
+pub enum ModelServiceTierControl {
+    Unknown,
+    Unsupported,
+    Selectable { tiers: Vec<String> },
+}
+
+/// Model features implemented by the exact Provider/model path.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCapabilities {
+    pub input_modalities: Vec<ModelInputModality>,
+    pub text_output: bool,
+    pub tool_calls: bool,
+    pub parallel_tool_calls: bool,
+    pub reasoning: ModelReasoningControl,
+    pub service_tiers: ModelServiceTierControl,
+}
+
+/// Provider wire protocol used for one model path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelWireProtocol {
+    Fixture,
+    OpenaiResponses,
+    OpenaiChatCompletions,
+}
+
+/// Exact inference profile resolved from one active Generation.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolvedTurnProfile {
+    pub catalog_revision: String,
+    pub provider_id: String,
+    pub provider_instance: String,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub service_tier: Option<String>,
+    pub limits: ModelLimits,
+    pub capabilities: ModelCapabilities,
+    pub wire_protocol: ModelWireProtocol,
+    pub compaction_compatibility: String,
+}
+
+impl TypedExtension for ResolvedTurnProfile {
+    const KEY: &'static str = RESOLVED_TURN_PROFILE_EXTENSION;
+}
 
 /// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
@@ -151,6 +239,8 @@ pub struct TurnGenerationProvenance {
     pub generation_spec_digest: String,
     /// Surface-neutral digest of the selected Agent dependency closure, when recorded.
     pub agent_behavior_digest: Option<String>,
+    /// Exact Provider/model profile resolved for the Turn, when recorded.
+    pub resolved_turn_profile: Option<ResolvedTurnProfile>,
 }
 
 /// Interpret one `turn_started` payload owned by this Agent Loop.
@@ -168,6 +258,8 @@ pub fn inspect_turn_generation_provenance(
         input: String,
         #[serde(default)]
         run_scope: Option<RunScope>,
+        #[serde(default)]
+        resolved_turn_profile: Option<ResolvedTurnProfile>,
     }
     let payload = serde_json::from_str::<TurnStartedPayload>(payload_json)
         .map_err(|error| format!("Turn provenance payload is invalid: {error}"))?;
@@ -191,6 +283,7 @@ pub fn inspect_turn_generation_provenance(
             .to_owned(),
         generation_spec_digest: payload.generation_spec_digest,
         agent_behavior_digest: payload.agent_behavior_digest,
+        resolved_turn_profile: payload.resolved_turn_profile,
     })
 }
 
@@ -207,16 +300,35 @@ fn canonical_generation_digest(value: &str) -> bool {
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
     model: String,
-    max_steps: u32,
-    max_tool_calls: u32,
-    #[lenso(default = 8)]
+    max_steps: Option<u32>,
+    max_tool_calls: Option<u32>,
     max_user_resumes: Option<u32>,
+    max_total_steps: Option<u64>,
+    max_total_tool_calls: Option<u64>,
+    max_turn_duration_ms: Option<u64>,
+    max_identical_tool_call_rounds: Option<u32>,
+    final_output_reserve_tokens: Option<i64>,
     max_output_tokens: i64,
     max_history_events: i64,
+    compaction_trigger_mode: Option<String>,
+    compaction_trigger_value: Option<u64>,
+    compaction_fallback_percent: Option<u32>,
     max_compaction_summary_characters: i64,
     max_memory_items: i64,
     max_memory_characters: i64,
     max_parallel_tool_calls: u32,
+    artifact_spill_threshold_bytes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum CompactionTrigger {
+    ModelDefault { fallback_percent: u8 },
+    Percent { value: u8 },
+    Tokens { value: u64 },
+}
+
+const fn default_compaction_percent() -> u8 {
+    85
 }
 
 #[derive(Debug)]
@@ -224,23 +336,40 @@ struct TurnExecutionBudget {
     segment: u32,
     segment_steps: u32,
     segment_tool_calls: u32,
+    total_steps: u64,
+    total_tool_calls: u64,
+    output_token_limit: i64,
     remaining_output_tokens: i64,
     user_resumes: u32,
 }
 
 impl TurnExecutionBudget {
-    fn new(config: &AgentConfig) -> Self {
+    fn new(config: &AgentConfig, profile: Option<&ResolvedTurnProfile>) -> Self {
+        let output_token_limit = profile
+            .and_then(|profile| profile.limits.max_output_tokens)
+            .and_then(|limit| i64::try_from(limit).ok())
+            .map_or(config.max_output_tokens, |limit| {
+                config.max_output_tokens.min(limit)
+            });
         Self {
             segment: 1,
             segment_steps: 0,
             segment_tool_calls: 0,
-            remaining_output_tokens: config.max_output_tokens,
+            total_steps: 0,
+            total_tool_calls: 0,
+            output_token_limit,
+            remaining_output_tokens: output_token_limit,
             user_resumes: 0,
         }
     }
 
-    fn begin_model_step(&mut self) {
+    fn begin_model_step(&mut self, config: &AgentConfig) -> bool {
+        if self.step_limit_reached(config) {
+            return false;
+        }
         self.segment_steps = self.segment_steps.saturating_add(1);
+        self.total_steps = self.total_steps.saturating_add(1);
+        true
     }
 
     fn consume_output(&mut self, output_tokens: u64) {
@@ -249,15 +378,41 @@ impl TurnExecutionBudget {
     }
 
     fn renew_after_user_input(&mut self, config: &AgentConfig) -> bool {
-        if self.user_resumes >= config.max_user_resumes.unwrap_or(DEFAULT_MAX_USER_RESUMES) {
+        if config
+            .max_user_resumes
+            .is_some_and(|limit| self.user_resumes >= limit)
+        {
             return false;
         }
         self.user_resumes = self.user_resumes.saturating_add(1);
         self.segment = self.segment.saturating_add(1);
         self.segment_steps = 0;
         self.segment_tool_calls = 0;
-        self.remaining_output_tokens = config.max_output_tokens;
+        self.remaining_output_tokens = self.output_token_limit;
         true
+    }
+
+    fn step_limit_reached(&self, config: &AgentConfig) -> bool {
+        config
+            .max_steps
+            .is_some_and(|limit| self.segment_steps >= limit)
+            || config
+                .max_total_steps
+                .is_some_and(|limit| self.total_steps >= limit)
+    }
+
+    fn tool_call_limit_exceeded(&self, config: &AgentConfig, requested: u32) -> bool {
+        let requested = u64::from(requested);
+        config.max_tool_calls.is_some_and(|limit| {
+            u64::from(self.segment_tool_calls).saturating_add(requested) > u64::from(limit)
+        }) || config
+            .max_total_tool_calls
+            .is_some_and(|limit| self.total_tool_calls.saturating_add(requested) > limit)
+    }
+
+    fn record_tool_calls(&mut self, requested: u32) {
+        self.segment_tool_calls = self.segment_tool_calls.saturating_add(requested);
+        self.total_tool_calls = self.total_tool_calls.saturating_add(u64::from(requested));
     }
 }
 
@@ -274,6 +429,7 @@ struct AgentLoop {
     compaction: Port<compaction_capability::ContextCompactionClient>,
     memory: Port<memory_capability::MemoryClient>,
     lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
+    artifact: Port<artifact_capability::ArtifactClient>,
     #[tasks]
     tasks: ManagedTasks,
     active: Rc<RefCell<Option<ActiveTurnState>>>,
@@ -281,15 +437,24 @@ struct AgentLoop {
 
 fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
     if config.model.is_empty()
-        || config.max_steps == 0
-        || config.max_steps > 64
-        || config.max_tool_calls > 64
+        || config.max_steps.is_some_and(|max_steps| max_steps == 0)
         || config
-            .max_user_resumes
-            .is_some_and(|max_user_resumes| max_user_resumes > 16)
+            .max_total_steps
+            .is_some_and(|max_total_steps| max_total_steps == 0)
+        || config.max_turn_duration_ms.is_some_and(|value| value == 0)
+        || config
+            .max_identical_tool_call_rounds
+            .is_some_and(|value| value == 0)
+        || config
+            .final_output_reserve_tokens
+            .is_some_and(|value| value < 0 || value >= config.max_output_tokens)
         || !(1..=16).contains(&config.max_parallel_tool_calls)
+        || config
+            .artifact_spill_threshold_bytes
+            .is_some_and(|value| !(1_024..=16_777_216).contains(&value))
         || config.max_output_tokens <= 0
         || !(1..=1000).contains(&config.max_history_events)
+        || configured_compaction_trigger(config).is_none()
         || !(256..=262_144).contains(&config.max_compaction_summary_characters)
         || !(1..=64).contains(&config.max_memory_items)
         || !(256..=262_144).contains(&config.max_memory_characters)
@@ -299,7 +464,35 @@ fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
     Ok(())
 }
 
-#[lenso::provides(agent_capability::Agent, turn_input_capability::TurnInput)]
+fn configured_compaction_trigger(config: &AgentConfig) -> Option<CompactionTrigger> {
+    let fallback_percent = config
+        .compaction_fallback_percent
+        .unwrap_or(u32::from(default_compaction_percent()));
+    let fallback_percent = u8::try_from(fallback_percent).ok()?;
+    if !(1..=99).contains(&fallback_percent) {
+        return None;
+    }
+
+    match (
+        config.compaction_trigger_mode.as_deref(),
+        config.compaction_trigger_value,
+    ) {
+        (None | Some("model_default"), None) => {
+            Some(CompactionTrigger::ModelDefault { fallback_percent })
+        }
+        (Some("percent"), Some(value @ 1..=99)) => Some(CompactionTrigger::Percent {
+            value: u8::try_from(value).ok()?,
+        }),
+        (Some("tokens"), Some(value @ 1..)) => Some(CompactionTrigger::Tokens { value }),
+        _ => None,
+    }
+}
+
+#[lenso::provides(
+    agent_capability::Agent,
+    turn_input_capability::TurnInput,
+    session_control_capability::SessionControl
+)]
 impl AgentLoop {
     async fn run_turn(
         &self,
@@ -330,7 +523,7 @@ impl AgentLoop {
                 active,
                 id: active_id,
             };
-            produce_turn(plugin, context, request, channel).await;
+            produce_turn(plugin, context, request, channel, active_id).await;
         });
         match task {
             Ok(_) => Ok(stream),
@@ -392,6 +585,103 @@ impl AgentLoop {
             session_id: request.session_id,
             accepted_revision,
         })
+    }
+
+    async fn compact_session(
+        &self,
+        context: Ctx,
+        request: CompactSessionRequest,
+    ) -> PluginResult<CompactSessionResponse, CompactSessionError> {
+        if request.session_id.is_empty() {
+            return Err(PluginError::domain(CompactSessionError::InvalidSession));
+        }
+        if self.active.borrow().is_some() {
+            return Err(PluginError::domain(CompactSessionError::ActiveTurn));
+        }
+        let opened = self
+            .session
+            .open_with_context(
+                context.clone(),
+                OpenSessionRequest {
+                    session_id: Some(request.session_id.clone()),
+                },
+            )
+            .await
+            .map_err(map_manual_session_open_error)?;
+        if opened.created {
+            return Err(PluginError::domain(CompactSessionError::InvalidSession));
+        }
+        let current_revision_number = opened.revision.parse::<u64>().map_err(|_| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Session returned an invalid revision".to_owned(),
+            })
+        })?;
+        let source =
+            read_session_events(self, &context, &request.session_id, current_revision_number)
+                .await
+                .map_err(map_manual_compaction_failure)?;
+        let projection = context_projection(&source).map_err(map_manual_compaction_failure)?;
+        if projection.messages.is_empty() {
+            return Err(PluginError::domain(CompactSessionError::EmptyHistory));
+        }
+        let source_message_count = i64::try_from(projection.messages.len()).map_err(|_| {
+            PluginError::runtime(RuntimeFailure::Internal {
+                detail: "manual compaction message count exceeded its contract bound".to_owned(),
+            })
+        })?;
+        let estimated_tokens = estimate_projection_tokens(&projection, "", "");
+        let (_, revision) = compact_projection(
+            self,
+            &self.config,
+            &context,
+            CompactionAttempt {
+                session_id: &request.session_id,
+                current_revision: &opened.revision,
+                current_revision_number,
+                projection,
+                estimated_tokens,
+                threshold_tokens: None,
+                trigger: "manual",
+            },
+        )
+        .await
+        .map_err(map_manual_compaction_failure)?;
+        Ok(CompactSessionResponse {
+            revision,
+            compacted_through_revision: opened.revision,
+            source_message_count,
+        })
+    }
+}
+
+fn map_manual_session_open_error(
+    error: SessionOpenInvocationError,
+) -> PluginError<CompactSessionError> {
+    match error {
+        SessionOpenInvocationError::Domain(OpenError::InvalidSessionId | OpenError::NotFound) => {
+            PluginError::domain(CompactSessionError::InvalidSession)
+        }
+        SessionOpenInvocationError::Domain(error) => {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: format!("Session open failed: {error:?}"),
+            })
+        }
+        SessionOpenInvocationError::Runtime(error) => PluginError::runtime(error),
+    }
+}
+
+fn map_manual_compaction_failure(error: TurnFailure) -> PluginError<CompactSessionError> {
+    match error {
+        PluginError::Domain(RunTurnError::InvalidSession) => {
+            PluginError::domain(CompactSessionError::InvalidSession)
+        }
+        PluginError::Domain(RunTurnError::ConcurrentTurn) => {
+            PluginError::domain(CompactSessionError::ConcurrentSession)
+        }
+        PluginError::Domain(error) => PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: format!("manual Session compaction failed: {error:?}"),
+        }),
+        PluginError::Runtime(error) => PluginError::runtime(error),
     }
 }
 
@@ -486,8 +776,10 @@ async fn produce_turn(
     context: InvocationContext,
     request: RunTurnRequest,
     mut channel: ProviderStreamChannel<agent_capability::Agent>,
+    active_id: uuid::Uuid,
 ) {
     let result = run_turn(&plugin, &plugin.config, &context, request, &mut channel).await;
+    close_active_turn(&plugin.active, active_id);
     let _ = channel.complete(result).await;
 }
 
@@ -502,6 +794,7 @@ async fn run_turn(
     let turn_input = request.input;
     let generation_spec_digest = generation_spec_digest(context)?;
     let agent_behavior = agent_behavior_provenance(context)?;
+    let resolved_turn_profile = resolved_turn_profile(context, generation_spec_digest)?;
     let run_scope = run_scope(context)?;
     let opened = clients
         .session
@@ -540,9 +833,14 @@ async fn run_turn(
         clients,
         config,
         context,
-        &session_id,
-        &opened.revision,
-        &history,
+        ModelContextPreparation {
+            session_id: &session_id,
+            current_revision: &opened.revision,
+            history: &history,
+            system_instruction: &system_instruction.content,
+            pending_user_input: &turn_input,
+            resolved_turn_profile: &resolved_turn_profile,
+        },
     )
     .await?;
     let (turn_id, mut revision) = start_turn(
@@ -557,6 +855,7 @@ async fn run_turn(
             system_instruction: &system_instruction,
             generation_spec_digest,
             agent_behavior_digest: agent_behavior.as_ref().map(|value| value.digest.as_str()),
+            resolved_turn_profile: &resolved_turn_profile,
             input: &turn_input,
             run_scope: run_scope.as_ref(),
         },
@@ -589,6 +888,7 @@ async fn run_turn(
         current_title.as_deref(),
         messages,
         run_scope.as_ref(),
+        &resolved_turn_profile,
         generation_spec_digest,
         channel,
     )
@@ -617,6 +917,7 @@ struct TurnStart<'a> {
     system_instruction: &'a InstalledSystemInstruction,
     generation_spec_digest: &'a str,
     agent_behavior_digest: Option<&'a str>,
+    resolved_turn_profile: &'a ResolvedTurnProfile,
     input: &'a str,
     run_scope: Option<&'a RunScope>,
 }
@@ -692,6 +993,7 @@ async fn start_turn(
         &serde_json::json!({
             "generation_spec_digest": start.generation_spec_digest,
             "agent_behavior_digest": start.agent_behavior_digest,
+            "resolved_turn_profile": start.resolved_turn_profile,
             "input": start.input,
             "run_scope": start.run_scope
         }),
@@ -706,6 +1008,30 @@ fn run_scope(context: &InvocationContext) -> Result<Option<RunScope>, TurnFailur
             detail: format!("Agent Turn has an invalid Run Scope: {error}"),
         })
     })
+}
+
+fn resolved_turn_profile(
+    context: &InvocationContext,
+    generation_spec_digest: &str,
+) -> Result<ResolvedTurnProfile, TurnFailure> {
+    let profile = context
+        .typed_extension::<ResolvedTurnProfile>()
+        .map_err(|error| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: format!("Agent Turn has an invalid resolved model profile: {error}"),
+            })
+        })?
+        .ok_or_else(|| {
+            PluginError::runtime(RuntimeFailure::PluginFailure {
+                detail: "Agent Turn is missing its resolved model profile".to_owned(),
+            })
+        })?;
+    if profile.catalog_revision != generation_spec_digest || profile.provider_instance.is_empty() {
+        return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Agent Turn model profile does not match its immutable Generation".to_owned(),
+        }));
+    }
+    Ok(profile)
 }
 
 async fn recall_memory(
@@ -968,6 +1294,7 @@ async fn execute_steps(
     current_title: Option<&str>,
     mut messages: Vec<CompleteMessageInput>,
     run_scope: Option<&RunScope>,
+    resolved_turn_profile: &ResolvedTurnProfile,
     generation_spec_digest: &str,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
@@ -998,7 +1325,7 @@ async fn execute_steps(
                 detail: format!("Tool catalog failed: {error:?}"),
             })
         })?;
-    let static_tools = catalog
+    let mut static_tools = catalog
         .tools
         .into_iter()
         .map(|tool| (tool.name.clone(), tool))
@@ -1013,26 +1340,71 @@ async fn execute_steps(
             detail: format!("Run Scope requests Tool `{unknown}` outside the Plan-bound catalog"),
         }));
     }
-    let tools = static_tools
+    let deferred_tools = if run_scope.is_none()
+        && static_tools
+            .keys()
+            .filter(|name| name.starts_with("mcp__"))
+            .count()
+            > DEFERRED_MCP_TOOL_THRESHOLD
+    {
+        static_tools
+            .iter()
+            .filter(|(name, _)| name.starts_with("mcp__"))
+            .map(|(name, tool)| (name.clone(), tool.clone()))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        BTreeMap::new()
+    };
+    if !deferred_tools.is_empty() {
+        static_tools.insert(
+            TOOL_SEARCH_NAME.to_owned(),
+            tools_capability::CatalogResponseToolsItem {
+                name: TOOL_SEARCH_NAME.to_owned(),
+                description:
+                    "Search deferred Tools and load matching definitions for subsequent calls."
+                        .to_owned(),
+                input_schema_json: serde_json::json!({
+                    "type": "object",
+                    "required": ["query"],
+                    "properties": { "query": { "type": "string", "minLength": 1 } },
+                    "additionalProperties": false
+                })
+                .to_string()
+                .try_into()
+                .expect("Tool search Schema is valid JSON"),
+                execution: tools_capability::CatalogResponseToolsItemExecution::ParallelSafe,
+            },
+        );
+    }
+    let mut tools = static_tools
         .values()
         .filter(|tool| run_scope.is_none_or(|scope| scope.allowed_tools.contains(&tool.name)))
+        .filter(|tool| !deferred_tools.contains_key(&tool.name))
         .map(|tool| CompleteTool {
             name: tool.name.clone(),
             description: tool.description.clone(),
             input_schema_json: tool.input_schema_json.clone(),
         })
         .collect::<Vec<_>>();
-    let admitted_tools = tools
+    let mut admitted_tools = tools
         .iter()
-        .map(|tool| tool.name.as_str())
+        .map(|tool| tool.name.clone())
         .collect::<BTreeSet<_>>();
     let mut sequence = 0_u64;
     let mut model_step = 0_u32;
-    let mut budget = TurnExecutionBudget::new(config);
+    let mut budget = TurnExecutionBudget::new(config, Some(resolved_turn_profile));
     let mut turn_output = String::new();
     let mut staged_inputs = Vec::new();
+    let started_at = Instant::now();
+    let mut repeated_tool_round: Option<(String, u32)> = None;
 
     loop {
+        if config
+            .max_turn_duration_ms
+            .is_some_and(|limit| started_at.elapsed().as_millis() >= u128::from(limit))
+        {
+            return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
+        }
         model_step = model_step.saturating_add(1);
         let resuming_staged_input = !staged_inputs.is_empty();
         let pending_inputs = if staged_inputs.is_empty() {
@@ -1040,10 +1412,15 @@ async fn execute_steps(
         } else {
             std::mem::take(&mut staged_inputs)
         };
-        if !resuming_staged_input && !pending_inputs.is_empty() {
-            budget.renew_after_user_input(config);
+        if !resuming_staged_input
+            && !pending_inputs.is_empty()
+            && !budget.renew_after_user_input(config)
+        {
+            return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
         }
-        budget.begin_model_step();
+        if !budget.begin_model_step(config) {
+            return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
+        }
         let additional_inputs = pending_inputs
             .iter()
             .map(|pending| pending.input.clone())
@@ -1069,7 +1446,7 @@ async fn execute_steps(
                     "step": model_step,
                     "segment": budget.segment,
                     "segment_step": budget.segment_steps,
-                    "model": config.model,
+                    "model": resolved_turn_profile.model,
                     "message_count": message_count,
                     "tool_count": tool_count,
                     "temperature": 0.0,
@@ -1082,22 +1459,55 @@ async fn execute_steps(
         )
         .await?;
         acknowledge_pending_turn_inputs(pending_inputs, revision);
-        let completion = stream_model(
+        let mut model_request = CompleteOpen {
+            model: resolved_turn_profile.model.clone(),
+            reasoning_effort: resolved_turn_profile.reasoning_effort.clone(),
+            service_tier: resolved_turn_profile.service_tier.clone(),
+            messages: messages.clone(),
+            tools: tools.clone(),
+            temperature: 0.0,
+            max_output_tokens: budget.remaining_output_tokens,
+        };
+        let completion = match stream_model(
             clients,
             context,
-            CompleteOpen {
-                model: config.model.clone(),
-                messages: messages.clone(),
-                tools: tools.clone(),
-                temperature: 0.0,
-                max_output_tokens: budget.remaining_output_tokens,
-            },
+            model_request.clone(),
             session_id,
             &format!("{turn_id}:{model_step}"),
             &mut sequence,
             channel,
         )
-        .await?;
+        .await
+        {
+            Err(PluginError::Domain(RunTurnError::ContextLimitExceeded)) => {
+                let Some(compacted) = compact_after_provider_overflow(
+                    clients,
+                    config,
+                    context,
+                    session_id,
+                    revision,
+                    system_instruction,
+                    &messages[turn_input_message_index..],
+                )
+                .await?
+                else {
+                    return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
+                };
+                messages = compacted;
+                model_request.messages.clone_from(&messages);
+                stream_model(
+                    clients,
+                    context,
+                    model_request,
+                    session_id,
+                    &format!("{turn_id}:{model_step}:overflow-retry"),
+                    &mut sequence,
+                    channel,
+                )
+                .await?
+            }
+            result => result?,
+        };
         if let Some(output_tokens) = completion.output_tokens {
             budget.consume_output(output_tokens);
         }
@@ -1109,7 +1519,7 @@ async fn execute_steps(
                 "step": model_step,
                 "segment": budget.segment,
                 "segment_step": budget.segment_steps,
-                "model": config.model,
+                "model": resolved_turn_profile.model,
                 "text": completion.text,
                 "tool_call_count": completion.tool_calls.len(),
                 "input_tokens": completion.input_tokens,
@@ -1142,10 +1552,7 @@ async fn execute_steps(
                 });
             }
             staged_inputs = drain_pending_turn_inputs(&clients.active, session_id, false)?;
-            if !staged_inputs.is_empty() {
-                budget.renew_after_user_input(config);
-            }
-            if budget.segment_steps == config.max_steps {
+            if !staged_inputs.is_empty() && !budget.renew_after_user_input(config) {
                 reject_pending_turn_inputs(
                     std::mem::take(&mut staged_inputs),
                     &SubmitError::InputClosed,
@@ -1177,8 +1584,7 @@ async fn execute_steps(
                     tool_name: None,
                     arguments_json: None,
                 });
-                budget.renew_after_user_input(config);
-                if budget.segment_steps == config.max_steps {
+                if !budget.renew_after_user_input(config) {
                     reject_pending_turn_inputs(
                         std::mem::take(&mut staged_inputs),
                         &SubmitError::InputClosed,
@@ -1265,17 +1671,34 @@ async fn execute_steps(
                 arguments_json: None,
             });
         }
-        if budget.segment_steps == config.max_steps {
+        if budget.step_limit_reached(config) {
             return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
         }
         let requested = u32::try_from(completion.tool_calls.len()).unwrap_or(u32::MAX);
-        if budget.segment_tool_calls.saturating_add(requested) > config.max_tool_calls {
+        if budget.tool_call_limit_exceeded(config, requested) {
             return Err(PluginError::domain(RunTurnError::ToolCallLimitExceeded));
         }
         if budget.remaining_output_tokens <= 0 {
             return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
         }
-        budget.segment_tool_calls = budget.segment_tool_calls.saturating_add(requested);
+        if config
+            .final_output_reserve_tokens
+            .is_some_and(|reserve| budget.remaining_output_tokens <= reserve)
+        {
+            return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
+        }
+        if let Some(limit) = config.max_identical_tool_call_rounds {
+            let fingerprint = tool_call_round_fingerprint(&completion.tool_calls);
+            let repeats = match &repeated_tool_round {
+                Some((previous, repeats)) if previous == &fingerprint => repeats.saturating_add(1),
+                _ => 1,
+            };
+            repeated_tool_round = Some((fingerprint, repeats));
+            if repeats > limit {
+                return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
+            }
+        }
+        budget.record_tool_calls(requested);
         for tool_call in &completion.tool_calls {
             if !admitted_tools.contains(tool_call.tool_name.as_str()) {
                 return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
@@ -1288,6 +1711,13 @@ async fn execute_steps(
         }
         let mut completed_user_interaction = false;
         for (parallel_safe, wave) in tool_call_waves(completion.tool_calls, &static_tools) {
+            let discoveries = wave
+                .iter()
+                .filter(|call| call.tool_name == TOOL_SEARCH_NAME)
+                .flat_map(|call| {
+                    search_deferred_tools(&deferred_tools, call.arguments_json.as_str())
+                })
+                .collect::<BTreeSet<_>>();
             completed_user_interaction |= execute_tool_wave(
                 clients,
                 context,
@@ -1298,6 +1728,7 @@ async fn execute_steps(
                 channel,
                 &mut messages,
                 wave,
+                &deferred_tools,
                 if parallel_safe {
                     config.max_parallel_tool_calls as usize
                 } else {
@@ -1305,11 +1736,33 @@ async fn execute_steps(
                 },
             )
             .await?;
+            for name in discoveries {
+                if admitted_tools.insert(name.clone())
+                    && let Some(tool) = deferred_tools.get(&name)
+                {
+                    tools.push(CompleteTool {
+                        name: tool.name.clone(),
+                        description: tool.description.clone(),
+                        input_schema_json: tool.input_schema_json.clone(),
+                    });
+                }
+            }
         }
-        if completed_user_interaction {
-            budget.renew_after_user_input(config);
+        if completed_user_interaction && !budget.renew_after_user_input(config) {
+            return Err(PluginError::domain(RunTurnError::StepLimitExceeded));
         }
     }
+}
+
+fn tool_call_round_fingerprint(tool_calls: &[CompleteMessage]) -> String {
+    let mut digest = Sha256::new();
+    for call in tool_calls {
+        digest.update(call.tool_name.as_bytes());
+        digest.update([0]);
+        digest.update(call.arguments_json.as_str().as_bytes());
+        digest.update([0xff]);
+    }
+    format!("sha256:{:x}", digest.finalize())
 }
 
 fn drain_pending_turn_inputs(
@@ -1411,6 +1864,7 @@ async fn execute_tool_wave(
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
     messages: &mut Vec<CompleteMessageInput>,
     tool_calls: Vec<CompleteMessage>,
+    deferred_tools: &BTreeMap<String, tools_capability::CatalogResponseToolsItem>,
     max_parallel: usize,
 ) -> Result<bool, TurnFailure> {
     let requested_events = tool_calls
@@ -1447,11 +1901,13 @@ async fn execute_tool_wave(
 
     let tools = clients.tools.clone();
     let invocation_context = context.clone();
+    let deferred_tools = Rc::new(deferred_tools.clone());
     let progress_sink = Rc::new(Mutex::new(ToolProgressSink { sequence, channel }));
     let outcomes = execute_bounded(tool_calls, max_parallel, move |tool_call| {
         let tools = tools.clone();
         let context = invocation_context.clone();
         let progress_sink = Rc::clone(&progress_sink);
+        let deferred_tools = Rc::clone(&deferred_tools);
         async move {
             let started_at = Instant::now();
             let result = async {
@@ -1466,7 +1922,15 @@ async fn execute_tool_wave(
                             detail: format!("failed to attach Tool task ownership: {error}"),
                         })
                     })?;
-                stream_tool_execution(&tools, &context, &tool_call, session_id, progress_sink).await
+                if tool_call.tool_name == TOOL_SEARCH_NAME {
+                    Ok(tool_search_result(
+                        &deferred_tools,
+                        tool_call.arguments_json.as_str(),
+                    ))
+                } else {
+                    stream_tool_execution(&tools, &context, &tool_call, session_id, progress_sink)
+                        .await
+                }
             }
             .await;
             (elapsed_millis(started_at), result)
@@ -1479,6 +1943,14 @@ async fn execute_tool_wave(
     for (_, tool_call, (duration_ms, outcome)) in outcomes {
         match outcome {
             Ok(tool_result) => {
+                let tool_result = spill_large_tool_result(
+                    clients,
+                    context,
+                    session_id,
+                    &tool_call.tool_name,
+                    tool_result,
+                )
+                .await?;
                 completed_user_interaction |= tools_capability::metadata_completes_user_interaction(
                     tool_result.metadata_json.as_str(),
                 );
@@ -1495,6 +1967,7 @@ async fn execute_tool_wave(
                             "name": tool_call.tool_name,
                             "content": bounded_session_text(&tool_result.content),
                             "content_truncated": tool_result.content.chars().count() > 262_144,
+                            "content_blocks": bounded_tool_content_blocks(&tool_result),
                             "metadata_json": tool_result.metadata_json,
                             "duration_ms": duration_ms,
                             "status": "completed"
@@ -1518,7 +1991,7 @@ async fn execute_tool_wave(
                 messages.push(assistant_tool_message(&tool_call));
                 messages.push(CompleteMessageInput {
                     role: CompleteMessageRole::Tool,
-                    content: tool_result.content,
+                    content: model_tool_result_content(&tool_result),
                     tool_call_id: Some(tool_call.tool_call_id),
                     tool_name: None,
                     arguments_json: None,
@@ -1569,9 +2042,307 @@ async fn execute_tool_wave(
     }
 }
 
+async fn spill_large_tool_result(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    tool_name: &str,
+    mut result: ExecuteResponse,
+) -> Result<ExecuteResponse, TurnFailure> {
+    let threshold = clients
+        .config
+        .artifact_spill_threshold_bytes
+        .unwrap_or(DEFAULT_ARTIFACT_SPILL_THRESHOLD_BYTES);
+    if let Some(blocks) = result.content_blocks.as_mut() {
+        spill_large_content_blocks(clients, context, session_id, tool_name, threshold, blocks)
+            .await?;
+    }
+    if byte_len_at_least(result.content.as_bytes(), threshold) {
+        let media_type = "text/plain";
+        let extension = "txt";
+        let stored = put_artifact(
+            clients,
+            context,
+            session_id,
+            format!("{tool_name}-result.{extension}"),
+            media_type.to_owned(),
+            STANDARD.encode(result.content.as_bytes()),
+        )
+        .await?;
+        result.content = format!(
+            "Large Tool result stored as Artifact `{}` ({} bytes, {}).",
+            stored.handle, stored.size, media_type
+        );
+        let blocks = result.content_blocks.get_or_insert_with(Vec::new);
+        if !blocks
+            .iter()
+            .any(|block| block.handle.as_deref() == Some(stored.handle.as_str()))
+            && blocks.len() < 64
+        {
+            blocks.push(tools_capability::ExecuteResponseContentBlocksItem {
+                data_base64: None,
+                description: Some("Large Tool result stored outside the Session event".to_owned()),
+                handle: Some(stored.handle),
+                kind: tools_capability::ExecuteResponseContentBlocksItemKind::Artifact,
+                mime_type: Some(media_type.to_owned()),
+                name: Some(format!("{tool_name}-result.{extension}")),
+                text: None,
+                uri: None,
+                value_json: None,
+            });
+        }
+    }
+    Ok(result)
+}
+
+async fn spill_large_content_blocks(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    tool_name: &str,
+    threshold: u64,
+    blocks: &mut [tools_capability::ExecuteResponseContentBlocksItem],
+) -> Result<(), TurnFailure> {
+    for (index, block) in blocks.iter_mut().enumerate() {
+        let candidate = match block.kind {
+            tools_capability::ExecuteResponseContentBlocksItemKind::Text => block
+                .text
+                .as_ref()
+                .filter(|text| byte_len_at_least(text.as_bytes(), threshold))
+                .map(|text| {
+                    (
+                        STANDARD.encode(text.as_bytes()),
+                        "text/plain".to_owned(),
+                        format!("{tool_name}-{}.txt", index.saturating_add(1)),
+                    )
+                }),
+            tools_capability::ExecuteResponseContentBlocksItemKind::Json => block
+                .value_json
+                .as_ref()
+                .filter(|json| byte_len_at_least(json.as_str().as_bytes(), threshold))
+                .map(|json| {
+                    (
+                        STANDARD.encode(json.as_str().as_bytes()),
+                        "application/json".to_owned(),
+                        format!("{tool_name}-{}.json", index.saturating_add(1)),
+                    )
+                }),
+            tools_capability::ExecuteResponseContentBlocksItemKind::Image
+            | tools_capability::ExecuteResponseContentBlocksItemKind::Audio => block
+                .data_base64
+                .as_ref()
+                .and_then(|data| STANDARD.decode(data).ok().map(|bytes| (data, bytes)))
+                .filter(|(_, bytes)| byte_len_at_least(bytes, threshold))
+                .map(|(data, _)| {
+                    (
+                        data.clone(),
+                        block
+                            .mime_type
+                            .clone()
+                            .unwrap_or_else(|| "application/octet-stream".to_owned()),
+                        block
+                            .name
+                            .clone()
+                            .unwrap_or_else(|| format!("{tool_name}-{}", index.saturating_add(1))),
+                    )
+                }),
+            tools_capability::ExecuteResponseContentBlocksItemKind::ResourceLink
+            | tools_capability::ExecuteResponseContentBlocksItemKind::Artifact => None,
+        };
+        let Some((data_base64, media_type, name)) = candidate else {
+            continue;
+        };
+        let stored = put_artifact(
+            clients,
+            context,
+            session_id,
+            name.clone(),
+            media_type.clone(),
+            data_base64,
+        )
+        .await?;
+        *block = tools_capability::ExecuteResponseContentBlocksItem {
+            data_base64: None,
+            description: block.description.clone().or_else(|| {
+                Some(format!(
+                    "Large Tool content stored as {} bytes",
+                    stored.size
+                ))
+            }),
+            handle: Some(stored.handle),
+            kind: tools_capability::ExecuteResponseContentBlocksItemKind::Artifact,
+            mime_type: Some(media_type),
+            name: Some(name),
+            text: None,
+            uri: None,
+            value_json: None,
+        };
+    }
+    Ok(())
+}
+
+fn byte_len_at_least(bytes: &[u8], threshold: u64) -> bool {
+    u64::try_from(bytes.len()).unwrap_or(u64::MAX) >= threshold
+}
+
+async fn put_artifact(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    session_id: &str,
+    name: String,
+    media_type: String,
+    data_base64: String,
+) -> Result<artifact_capability::PutResponse, TurnFailure> {
+    clients
+        .artifact
+        .put_with_context(
+            context.clone(),
+            artifact_capability::PutRequest {
+                session_id: session_id.to_owned(),
+                name,
+                media_type,
+                data_base64,
+            },
+        )
+        .await
+        .map_err(|error| match error {
+            artifact_capability::ArtifactPutInvocationError::Runtime(error) => {
+                PluginError::runtime(error)
+            }
+            artifact_capability::ArtifactPutInvocationError::Domain(_) => {
+                PluginError::runtime(RuntimeFailure::PluginFailure {
+                    detail: "Artifact Provider rejected a large Tool result".to_owned(),
+                })
+            }
+        })
+}
+
+fn bounded_tool_content_blocks(result: &ExecuteResponse) -> serde_json::Value {
+    let Some(blocks) = result.content_blocks.as_ref() else {
+        return serde_json::Value::Null;
+    };
+    let mut value = serde_json::to_value(blocks).unwrap_or(serde_json::Value::Null);
+    let Some(blocks) = value.as_array_mut() else {
+        return serde_json::Value::Null;
+    };
+    let omitted_blocks = blocks.len().saturating_sub(16);
+    blocks.truncate(16);
+    for block in &mut *blocks {
+        let Some(block) = block.as_object_mut() else {
+            continue;
+        };
+        if let Some(data) = block
+            .remove("data_base64")
+            .and_then(|value| value.as_str().map(str::len))
+        {
+            block.insert("data_base64_bytes".to_owned(), serde_json::json!(data));
+        }
+        for key in ["text", "value_json"] {
+            if let Some(value) = block.get_mut(key)
+                && let Some(text) = value.as_str()
+                && text.chars().count() > 1_024
+            {
+                *value = serde_json::Value::String(text.chars().take(1_024).collect::<String>());
+                block.insert(format!("{key}_truncated"), serde_json::Value::Bool(true));
+            }
+        }
+    }
+    if omitted_blocks > 0 {
+        blocks.push(serde_json::json!({
+            "kind": "artifact",
+            "description": format!("{omitted_blocks} additional content blocks omitted from the bounded projection")
+        }));
+    }
+    value
+}
+
+fn model_tool_result_content(result: &ExecuteResponse) -> String {
+    let Some(blocks) = result.content_blocks.as_ref() else {
+        return result.content.clone();
+    };
+    let has_non_text = blocks.iter().any(|block| {
+        !matches!(
+            block.kind,
+            tools_capability::ExecuteResponseContentBlocksItemKind::Text
+        )
+    });
+    if !has_non_text {
+        return result.content.clone();
+    }
+    format!(
+        "{}\n\n[structured Tool content]\n{}",
+        result.content,
+        bounded_tool_content_blocks(result)
+    )
+}
+
 struct ToolProgressSink<'a> {
     sequence: &'a mut u64,
     channel: &'a mut ProviderStreamChannel<agent_capability::Agent>,
+}
+
+fn search_deferred_tools(
+    tools: &BTreeMap<String, tools_capability::CatalogResponseToolsItem>,
+    arguments_json: &str,
+) -> Vec<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SearchRequest {
+        query: String,
+    }
+    let Ok(request) = serde_json::from_str::<SearchRequest>(arguments_json) else {
+        return Vec::new();
+    };
+    let terms = request
+        .query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    tools
+        .iter()
+        .filter(|(name, tool)| {
+            let searchable = format!(
+                "{} {}",
+                name.to_lowercase(),
+                tool.description.to_lowercase()
+            );
+            terms.iter().all(|term| searchable.contains(term))
+        })
+        .map(|(name, _)| name.clone())
+        .take(DEFERRED_TOOL_SEARCH_RESULTS)
+        .collect()
+}
+
+fn tool_search_result(
+    tools: &BTreeMap<String, tools_capability::CatalogResponseToolsItem>,
+    arguments_json: &str,
+) -> ExecuteResponse {
+    let matches = search_deferred_tools(tools, arguments_json);
+    let content = if matches.is_empty() {
+        "No deferred Tools matched the query.".to_owned()
+    } else {
+        matches
+            .iter()
+            .filter_map(|name| tools.get(name))
+            .map(|tool| format!("{} — {}", tool.name, tool.description))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    ExecuteResponse {
+        content_type: ExecuteResponseContentType::Text,
+        content,
+        content_blocks: None,
+        metadata_json: serde_json::json!({
+            "schema": "lenso.agent.deferred-tool-search-result.v1",
+            "loaded_tools": matches
+        })
+        .to_string()
+        .try_into()
+        .expect("Tool search metadata is valid JSON"),
+    }
 }
 
 async fn execute_bounded<T, R, F, Fut>(
@@ -1666,6 +2437,13 @@ async fn stream_tool_execution(
                     completed = Some(ExecuteResponse {
                         content_type: ExecuteResponseContentType::Text,
                         content: message.content,
+                        content_blocks: message.content_blocks.map(|blocks| {
+                            serde_json::from_value(
+                                serde_json::to_value(blocks)
+                                    .expect("Tool content blocks are serializable"),
+                            )
+                            .expect("Tool content block schemas are aligned")
+                        }),
                         metadata_json: message.metadata_json,
                     });
                 }
@@ -1766,11 +2544,21 @@ async fn stream_model(
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<ModelStep, TurnFailure> {
     let started_at = Instant::now();
-    let stream = clients
-        .model
-        .complete_with_context(context.clone(), request)
-        .await
-        .map_err(map_model_error)?;
+    let mut retry = 0_u8;
+    let stream = loop {
+        match clients
+            .model
+            .complete_with_context(context.clone(), request.clone())
+            .await
+        {
+            Ok(stream) => break stream,
+            Err(error) if retry == 0 && model_error_is_retryable(&error) => {
+                retry = 1;
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            Err(error) => return Err(map_model_error(error)),
+        }
+    };
     stream.close_send().await.map_err(PluginError::runtime)?;
     let mut completion = ModelStep {
         interrupted_by_input: false,
@@ -1987,13 +2775,28 @@ fn tool_completed_message(
     duration_ms: u64,
     result: &tools_capability::ExecuteResponse,
 ) -> RunTurnResponse {
+    let mut metadata = serde_json::from_str::<serde_json::Value>(result.metadata_json.as_str())
+        .unwrap_or_else(|_| serde_json::json!({}));
+    if result.content_blocks.is_some()
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            "content_blocks".to_owned(),
+            bounded_tool_content_blocks(result),
+        );
+    }
     RunTurnResponse {
         arguments_json: None,
         content: Some(result.content.clone()),
         duration_ms: Some(duration_ms.to_string()),
         error: None,
         kind: Some(RunTurnResponseKind::ToolCompleted),
-        metadata_json: Some(result.metadata_json.clone()),
+        metadata_json: Some(
+            metadata
+                .to_string()
+                .try_into()
+                .expect("bounded Tool completion metadata is valid JSON"),
+        ),
         progress_channel: None,
         reasoning_id: None,
         sequence: sequence.to_string(),
@@ -2206,14 +3009,84 @@ struct ContextProjection {
     compacted_through_revision: u64,
 }
 
+fn compaction_token_threshold(
+    config: &AgentConfig,
+    profile: &ResolvedTurnProfile,
+) -> Result<Option<u64>, TurnFailure> {
+    let safe_input_tokens = profile.limits.max_input_tokens.or_else(|| {
+        profile.limits.context_window_tokens.map(|context| {
+            context.saturating_sub(profile.limits.max_output_tokens.unwrap_or_default())
+        })
+    });
+    let trigger = configured_compaction_trigger(config).ok_or_else(|| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Agent Loop compaction trigger is invalid".to_owned(),
+        })
+    })?;
+    match trigger {
+        CompactionTrigger::Tokens { value } => Ok(Some(
+            safe_input_tokens.map_or(value, |safe_input| value.min(safe_input)),
+        )),
+        CompactionTrigger::Percent { value } => safe_input_tokens
+            .map(|safe_input| safe_input.saturating_mul(u64::from(value)) / 100)
+            .filter(|threshold| *threshold > 0)
+            .map(Some)
+            .ok_or_else(|| {
+                PluginError::runtime(RuntimeFailure::PluginFailure {
+                    detail: "percentage compaction requires a known model input window".to_owned(),
+                })
+            }),
+        CompactionTrigger::ModelDefault { fallback_percent } => Ok(safe_input_tokens
+            .map(|safe_input| safe_input.saturating_mul(u64::from(fallback_percent)) / 100)
+            .filter(|threshold| *threshold > 0)),
+    }
+}
+
+fn estimate_projection_tokens(
+    projection: &ContextProjection,
+    system_instruction: &str,
+    pending_user_input: &str,
+) -> u64 {
+    let mut estimate = estimate_text_tokens(system_instruction)
+        .saturating_add(estimate_text_tokens(pending_user_input));
+    if let Some(summary) = &projection.summary {
+        estimate = estimate.saturating_add(estimate_text_tokens(summary));
+    }
+    for message in &projection.messages {
+        estimate = estimate
+            .saturating_add(8)
+            .saturating_add(estimate_text_tokens(&message.content));
+    }
+    estimate
+}
+
+fn estimate_text_tokens(text: &str) -> u64 {
+    u64::try_from(text.len()).unwrap_or(u64::MAX).div_ceil(3)
+}
+
+struct ModelContextPreparation<'a> {
+    session_id: &'a str,
+    current_revision: &'a str,
+    history: &'a [ReadSessionResponseEventsItem],
+    system_instruction: &'a str,
+    pending_user_input: &'a str,
+    resolved_turn_profile: &'a ResolvedTurnProfile,
+}
+
 async fn prepare_model_context(
     clients: &AgentLoop,
     config: &AgentConfig,
     context: &InvocationContext,
-    session_id: &str,
-    current_revision: &str,
-    history: &[ReadSessionResponseEventsItem],
+    preparation: ModelContextPreparation<'_>,
 ) -> Result<(Vec<CompleteMessageInput>, String), TurnFailure> {
+    let ModelContextPreparation {
+        session_id,
+        current_revision,
+        history,
+        system_instruction,
+        pending_user_input,
+        resolved_turn_profile,
+    } = preparation;
     let current_revision_number = current_revision.parse::<u64>().map_err(|_| {
         PluginError::runtime(RuntimeFailure::PluginFailure {
             detail: "Session returned an invalid revision".to_owned(),
@@ -2232,9 +3105,10 @@ async fn prepare_model_context(
     })?;
     let mut events_since_checkpoint =
         events_after_revision(&source, projection.compacted_through_revision)?;
+    let token_threshold = compaction_token_threshold(config, resolved_turn_profile)?;
     if projection.compacted_through_revision == 0
         && current_revision_number > u64::try_from(source.len()).unwrap_or(u64::MAX)
-        && events_since_checkpoint >= history_limit
+        && (events_since_checkpoint >= history_limit || token_threshold.is_some())
     {
         source = read_session_events(clients, context, session_id, current_revision_number).await?;
         projection = context_projection(&source)?;
@@ -2242,7 +3116,11 @@ async fn prepare_model_context(
             events_after_revision(&source, projection.compacted_through_revision)?;
     }
 
-    if events_since_checkpoint < history_limit || projection.messages.is_empty() {
+    let estimated_tokens =
+        estimate_projection_tokens(&projection, system_instruction, pending_user_input);
+    let token_triggered = token_threshold.is_some_and(|threshold| estimated_tokens >= threshold);
+    let event_triggered = token_threshold.is_none() && events_since_checkpoint >= history_limit;
+    if (!token_triggered && !event_triggered) || projection.messages.is_empty() {
         return Ok((
             projection_model_messages(&projection),
             current_revision.to_owned(),
@@ -2253,24 +3131,95 @@ async fn prepare_model_context(
         clients,
         config,
         context,
-        session_id,
-        current_revision,
-        current_revision_number,
-        projection,
+        CompactionAttempt {
+            session_id,
+            current_revision,
+            current_revision_number,
+            projection,
+            estimated_tokens,
+            threshold_tokens: token_threshold,
+            trigger: if token_triggered { "tokens" } else { "events" },
+        },
     )
     .await?;
     Ok((projection_model_messages(&projection), revision))
+}
+
+async fn compact_after_provider_overflow(
+    clients: &AgentLoop,
+    config: &AgentConfig,
+    context: &InvocationContext,
+    session_id: &str,
+    revision: &mut String,
+    system_instruction: &InstalledSystemInstruction,
+    active_tail: &[CompleteMessageInput],
+) -> Result<Option<Vec<CompleteMessageInput>>, TurnFailure> {
+    let current_revision = revision.clone();
+    let current_revision_number = current_revision.parse::<u64>().map_err(|_| {
+        PluginError::runtime(RuntimeFailure::PluginFailure {
+            detail: "Session returned an invalid revision".to_owned(),
+        })
+    })?;
+    let source = read_session_events(clients, context, session_id, current_revision_number).await?;
+    let projection = context_projection(&source)?;
+    if projection.messages.is_empty() {
+        return Ok(None);
+    }
+    let estimated_tokens = estimate_projection_tokens(&projection, "", "");
+    let (projection, compacted_revision) = compact_projection(
+        clients,
+        config,
+        context,
+        CompactionAttempt {
+            session_id,
+            current_revision: &current_revision,
+            current_revision_number,
+            projection,
+            estimated_tokens,
+            threshold_tokens: None,
+            trigger: "provider_context_overflow",
+        },
+    )
+    .await?;
+    *revision = compacted_revision;
+    let mut messages = Vec::new();
+    messages.push(CompleteMessageInput {
+        role: CompleteMessageRole::System,
+        content: system_instruction.content.clone(),
+        tool_call_id: None,
+        tool_name: None,
+        arguments_json: None,
+    });
+    messages.extend(projection_model_messages(&projection));
+    messages.extend_from_slice(active_tail);
+    Ok(Some(messages))
+}
+
+struct CompactionAttempt<'a> {
+    session_id: &'a str,
+    current_revision: &'a str,
+    current_revision_number: u64,
+    projection: ContextProjection,
+    estimated_tokens: u64,
+    threshold_tokens: Option<u64>,
+    trigger: &'a str,
 }
 
 async fn compact_projection(
     clients: &AgentLoop,
     config: &AgentConfig,
     context: &InvocationContext,
-    session_id: &str,
-    current_revision: &str,
-    current_revision_number: u64,
-    projection: ContextProjection,
+    attempt: CompactionAttempt<'_>,
 ) -> Result<(ContextProjection, String), TurnFailure> {
+    let CompactionAttempt {
+        session_id,
+        current_revision,
+        current_revision_number,
+        projection,
+        estimated_tokens,
+        threshold_tokens,
+        trigger,
+    } = attempt;
     let compaction_id = uuid::Uuid::new_v4().to_string();
     let mut revision = append_events(
         clients,
@@ -2283,7 +3232,10 @@ async fn compact_projection(
             &serde_json::json!({
                 "compaction_id": compaction_id,
                 "compacted_through_revision": current_revision,
-                "source_message_count": projection.messages.len()
+                "source_message_count": projection.messages.len(),
+                "estimated_input_tokens": estimated_tokens,
+                "threshold_tokens": threshold_tokens,
+                "trigger": trigger
             }),
         )?],
     )
@@ -3100,7 +4052,22 @@ fn map_model_error(error: ModelInvocationError) -> TurnFailure {
     }
 }
 
+fn model_error_is_retryable(error: &ModelInvocationError) -> bool {
+    match error {
+        ModelInvocationError::Domain(CompleteError::RateLimited | CompleteError::Overloaded) => {
+            true
+        }
+        ModelInvocationError::Domain(CompleteError::ProviderFailure { payload }) => {
+            payload.retryable
+        }
+        _ => false,
+    }
+}
+
 fn map_model_domain_error(error: CompleteError) -> TurnFailure {
+    if error == CompleteError::ContextOverflow {
+        return PluginError::domain(RunTurnError::ContextLimitExceeded);
+    }
     let detail = match error {
         CompleteError::ProviderFailure { payload } => payload.message,
         error => format!("Model completion failed: {error:?}"),
@@ -3152,7 +4119,11 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 8);
+        assert_eq!(requirements.len(), 9);
+        assert!(requirements.iter().any(|requirement| {
+            requirement["capability_id"] == "lenso.agent.artifact@1"
+                && requirement["cardinality"] == "one"
+        }));
         assert!(
             requirements
                 .iter()
@@ -3176,8 +4147,6 @@ mod tests {
             descriptor["configuration_schema"]["required"],
             serde_json::json!([
                 "model",
-                "max_steps",
-                "max_tool_calls",
                 "max_output_tokens",
                 "max_history_events",
                 "max_compaction_summary_characters",
@@ -3186,7 +4155,36 @@ mod tests {
                 "max_parallel_tool_calls"
             ])
         );
-        assert_eq!(descriptor["configuration_defaults"]["max_user_resumes"], 8);
+        assert!(
+            descriptor["configuration_defaults"]
+                .get("max_user_resumes")
+                .is_none(),
+            "omitted Loop quotas must remain unlimited"
+        );
+        assert!(
+            descriptor["configuration_schema"]["properties"]
+                .get("max_total_steps")
+                .is_some(),
+            "strict policy must be able to bound total Turn steps"
+        );
+        assert!(
+            descriptor["configuration_schema"]["properties"]
+                .get("max_total_tool_calls")
+                .is_some(),
+            "strict policy must be able to bound total Turn Tool calls"
+        );
+        for property in [
+            "compaction_trigger_mode",
+            "compaction_trigger_value",
+            "compaction_fallback_percent",
+        ] {
+            assert!(
+                descriptor["configuration_schema"]["properties"]
+                    .get(property)
+                    .is_some(),
+                "compaction policy field {property} must be configurable"
+            );
+        }
     }
 
     fn history_event(
@@ -3318,15 +4316,24 @@ mod tests {
     fn third_party_compactor_may_summarize_but_not_fabricate_the_retained_tail() {
         let config = AgentConfig {
             model: "fixture".to_owned(),
-            max_steps: 1,
-            max_tool_calls: 0,
+            max_steps: Some(1),
+            max_tool_calls: Some(0),
             max_user_resumes: Some(0),
+            max_total_steps: None,
+            max_total_tool_calls: None,
+            max_turn_duration_ms: None,
+            max_identical_tool_call_rounds: None,
+            final_output_reserve_tokens: None,
             max_output_tokens: 1,
             max_history_events: 1,
+            compaction_trigger_mode: None,
+            compaction_trigger_value: None,
+            compaction_fallback_percent: None,
             max_compaction_summary_characters: 512,
             max_memory_items: 4,
             max_memory_characters: 4096,
             max_parallel_tool_calls: 1,
+            artifact_spill_threshold_bytes: None,
         };
         let source = vec![
             ContextMessage {
@@ -3367,18 +4374,27 @@ mod tests {
     fn user_resume_renews_one_bounded_execution_segment() {
         let config = AgentConfig {
             model: "fixture".to_owned(),
-            max_steps: 8,
-            max_tool_calls: 4,
+            max_steps: Some(8),
+            max_tool_calls: Some(4),
             max_user_resumes: Some(1),
+            max_total_steps: None,
+            max_total_tool_calls: None,
+            max_turn_duration_ms: None,
+            max_identical_tool_call_rounds: None,
+            final_output_reserve_tokens: None,
             max_output_tokens: 1_024,
             max_history_events: 200,
+            compaction_trigger_mode: None,
+            compaction_trigger_value: None,
+            compaction_fallback_percent: None,
             max_compaction_summary_characters: 8_192,
             max_memory_items: 8,
             max_memory_characters: 16_384,
             max_parallel_tool_calls: 4,
+            artifact_spill_threshold_bytes: None,
         };
-        let mut budget = TurnExecutionBudget::new(&config);
-        budget.begin_model_step();
+        let mut budget = TurnExecutionBudget::new(&config, None);
+        assert!(budget.begin_model_step(&config));
         budget.segment_tool_calls = 4;
         budget.consume_output(1_000);
 
@@ -3388,7 +4404,7 @@ mod tests {
         assert_eq!(budget.segment_tool_calls, 0);
         assert_eq!(budget.remaining_output_tokens, 1_024);
 
-        budget.begin_model_step();
+        assert!(budget.begin_model_step(&config));
         budget.segment_tool_calls = 1;
         assert!(!budget.renew_after_user_input(&config));
         assert_eq!(budget.segment, 2);
@@ -3397,7 +4413,7 @@ mod tests {
     }
 
     #[test]
-    fn omitted_user_resume_limit_keeps_legacy_configurations_bounded() {
+    fn omitted_user_resume_limit_is_unlimited() {
         let config = serde_json::from_value::<AgentConfig>(serde_json::json!({
             "model": "fixture",
             "max_steps": 8,
@@ -3410,12 +4426,212 @@ mod tests {
             "max_parallel_tool_calls": 4
         }))
         .expect("legacy Agent configuration should remain readable");
-        let mut budget = TurnExecutionBudget::new(&config);
+        let mut budget = TurnExecutionBudget::new(&config, None);
 
-        for _ in 0..DEFAULT_MAX_USER_RESUMES {
+        for _ in 0..32 {
             assert!(budget.renew_after_user_input(&config));
         }
-        assert!(!budget.renew_after_user_input(&config));
+        assert!(budget.renew_after_user_input(&config));
+    }
+
+    #[test]
+    fn user_resume_does_not_reset_the_total_step_limit() {
+        let config = serde_json::from_value::<AgentConfig>(serde_json::json!({
+            "model": "fixture",
+            "max_total_steps": 2,
+            "max_output_tokens": 1_024,
+            "max_history_events": 200,
+            "max_compaction_summary_characters": 8_192,
+            "max_memory_items": 8,
+            "max_memory_characters": 16_384,
+            "max_parallel_tool_calls": 4
+        }))
+        .expect("total-only strict Agent configuration should be readable");
+        let mut budget = TurnExecutionBudget::new(&config, None);
+
+        assert!(budget.begin_model_step(&config));
+        assert!(budget.renew_after_user_input(&config));
+        assert!(budget.begin_model_step(&config));
+        assert!(budget.renew_after_user_input(&config));
+        assert!(!budget.begin_model_step(&config));
+        assert_eq!(budget.total_steps, 2);
+    }
+
+    #[test]
+    fn resolved_model_output_limit_narrows_the_agent_limit() {
+        let config = serde_json::from_value::<AgentConfig>(serde_json::json!({
+            "model": "fixture",
+            "max_output_tokens": 1_024,
+            "max_history_events": 200,
+            "max_compaction_summary_characters": 8_192,
+            "max_memory_items": 8,
+            "max_memory_characters": 16_384,
+            "max_parallel_tool_calls": 4
+        }))
+        .unwrap();
+        let profile = ResolvedTurnProfile {
+            catalog_revision: format!("sha256:{}", "a".repeat(64)),
+            provider_id: "fixture".to_owned(),
+            provider_instance: "lenso.agent.model.fixture/model".to_owned(),
+            model: "fixture".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
+            limits: ModelLimits {
+                context_window_tokens: Some(4_096),
+                max_input_tokens: Some(3_584),
+                max_output_tokens: Some(512),
+            },
+            capabilities: ModelCapabilities {
+                input_modalities: vec![ModelInputModality::Text],
+                text_output: true,
+                tool_calls: true,
+                parallel_tool_calls: true,
+                reasoning: ModelReasoningControl::Unsupported,
+                service_tiers: ModelServiceTierControl::Unsupported,
+            },
+            wire_protocol: ModelWireProtocol::Fixture,
+            compaction_compatibility: "generic-text-v1".to_owned(),
+        };
+
+        let mut budget = TurnExecutionBudget::new(&config, Some(&profile));
+        assert_eq!(budget.remaining_output_tokens, 512);
+        budget.consume_output(500);
+        assert!(budget.renew_after_user_input(&config));
+        assert_eq!(budget.remaining_output_tokens, 512);
+    }
+
+    fn compaction_test_config(mode: Option<&str>, value: Option<u64>) -> AgentConfig {
+        serde_json::from_value(serde_json::json!({
+            "model": "fixture",
+            "max_output_tokens": 1_024,
+            "max_history_events": 200,
+            "compaction_trigger_mode": mode,
+            "compaction_trigger_value": value,
+            "max_compaction_summary_characters": 8_192,
+            "max_memory_items": 8,
+            "max_memory_characters": 16_384,
+            "max_parallel_tool_calls": 4
+        }))
+        .unwrap()
+    }
+
+    fn compaction_test_profile(max_input_tokens: Option<u64>) -> ResolvedTurnProfile {
+        ResolvedTurnProfile {
+            catalog_revision: format!("sha256:{}", "a".repeat(64)),
+            provider_id: "fixture".to_owned(),
+            provider_instance: "lenso.agent.model.fixture/model".to_owned(),
+            model: "fixture".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
+            limits: ModelLimits {
+                context_window_tokens: None,
+                max_input_tokens,
+                max_output_tokens: None,
+            },
+            capabilities: ModelCapabilities {
+                input_modalities: vec![ModelInputModality::Text],
+                text_output: true,
+                tool_calls: true,
+                parallel_tool_calls: true,
+                reasoning: ModelReasoningControl::Unsupported,
+                service_tiers: ModelServiceTierControl::Unsupported,
+            },
+            wire_protocol: ModelWireProtocol::Fixture,
+            compaction_compatibility: "generic-text-v1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn retry_policy_is_limited_to_transient_open_failures() {
+        assert!(model_error_is_retryable(&ModelInvocationError::Domain(
+            CompleteError::RateLimited
+        )));
+        assert!(model_error_is_retryable(&ModelInvocationError::Domain(
+            CompleteError::Overloaded
+        )));
+        assert!(!model_error_is_retryable(&ModelInvocationError::Domain(
+            CompleteError::ContextOverflow
+        )));
+        assert!(!model_error_is_retryable(&ModelInvocationError::Domain(
+            CompleteError::InvalidRequest
+        )));
+    }
+
+    #[test]
+    fn identical_tool_rounds_have_a_stable_order_sensitive_fingerprint() {
+        let call = |name: &str| CompleteMessage {
+            kind: CompleteMessageKind::ToolCall,
+            text: String::new(),
+            tool_call_id: "call".to_owned(),
+            tool_name: name.to_owned(),
+            arguments_json: "{}".to_owned().try_into().unwrap(),
+            input_tokens: String::new(),
+            output_tokens: String::new(),
+            sequence: String::new(),
+        };
+        assert_eq!(
+            tool_call_round_fingerprint(&[call("read"), call("write")]),
+            tool_call_round_fingerprint(&[call("read"), call("write")])
+        );
+        assert_ne!(
+            tool_call_round_fingerprint(&[call("read"), call("write")]),
+            tool_call_round_fingerprint(&[call("write"), call("read")])
+        );
+    }
+
+    #[test]
+    fn model_default_compaction_uses_eighty_five_percent_of_the_safe_input_window() {
+        let config = compaction_test_config(None, None);
+        let profile = compaction_test_profile(Some(20_000));
+
+        assert_eq!(
+            compaction_token_threshold(&config, &profile).unwrap(),
+            Some(17_000)
+        );
+    }
+
+    #[test]
+    fn explicit_percentage_compaction_requires_a_known_safe_input_window() {
+        let config = compaction_test_config(Some("percent"), Some(70));
+        let profile = compaction_test_profile(None);
+
+        assert!(compaction_token_threshold(&config, &profile).is_err());
+    }
+
+    #[test]
+    fn explicit_token_compaction_is_capped_by_the_safe_input_window() {
+        let config = compaction_test_config(Some("tokens"), Some(30_000));
+        let profile = compaction_test_profile(Some(20_000));
+
+        assert_eq!(
+            compaction_token_threshold(&config, &profile).unwrap(),
+            Some(20_000)
+        );
+    }
+
+    #[test]
+    fn token_estimate_grows_with_projected_context() {
+        let short = ContextProjection {
+            summary: None,
+            messages: vec![ContextMessage {
+                role: ContextMessageRole::User,
+                content: "short".to_owned(),
+            }],
+            compacted_through_revision: 0,
+        };
+        let long = ContextProjection {
+            summary: Some("prior summary".repeat(10)),
+            messages: vec![ContextMessage {
+                role: ContextMessageRole::User,
+                content: "long context".repeat(100),
+            }],
+            compacted_through_revision: 0,
+        };
+
+        assert!(
+            estimate_projection_tokens(&long, "system", "pending")
+                > estimate_projection_tokens(&short, "system", "pending")
+        );
     }
 
     #[test]
@@ -3452,6 +4668,7 @@ mod tests {
 
         let result = tools_capability::ExecuteResponse {
             content: "source".to_owned(),
+            content_blocks: None,
             content_type: tools_capability::ExecuteResponseContentType::Text,
             metadata_json: r#"{"path":"src/lib.rs"}"#.to_owned().try_into().unwrap(),
         };
@@ -3527,6 +4744,7 @@ mod tests {
             provenance.agent_behavior_digest.as_deref(),
             Some(behavior_digest.as_str())
         );
+        assert!(provenance.resolved_turn_profile.is_none());
 
         let unknown = serde_json::json!({
             "generation_spec_digest": digest,

@@ -1,0 +1,22 @@
+{
+  "id": "lenso.agent.artifact@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "put",
+      "interaction": "request",
+      "request_schema": "schemas/put-request.schema.json",
+      "response_schema": "schemas/put-response.schema.json",
+      "domain_error_schema": "schemas/put-error.schema.json"
+    },
+    {
+      "name": "read",
+      "interaction": "request",
+      "request_schema": "schemas/read-request.schema.json",
+      "response_schema": "schemas/read-response.schema.json",
+      "domain_error_schema": "schemas/read-error.schema.json"
+    }
+  ]
+}

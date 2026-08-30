@@ -321,6 +321,9 @@ fn default_fixture_response(
     if current_user == "Read README.md twice." && tool_results.len() < 2 {
         return Ok(tool_request(tool_results.len() + 1));
     }
+    if current_user == "Read README.md seventeen times." && tool_results.len() < 17 {
+        return Ok(tool_request(tool_results.len() + 1));
+    }
     let tool_result = tool_results.last().copied();
     if let Some(tool_result) = tool_result {
         let first_line = tool_result

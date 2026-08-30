@@ -28,7 +28,9 @@ fn renders_composed_panel_and_input() {
         &mut state,
     );
     terminal.draw(|frame| render(frame, &mut state)).unwrap();
-    assert!(terminal.backend().to_string().contains("Esc quits"));
+    let content = terminal.backend().to_string();
+    assert!(!content.contains("Esc quits"));
+    assert!(content.contains("plan…"));
 }
 
 #[test]

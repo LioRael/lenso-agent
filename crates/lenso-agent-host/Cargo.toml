@@ -21,15 +21,18 @@ lenso-plugin-bundle.workspace = true
 lenso-plugin-control-plane.workspace = true
 lenso-runtime-codec.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
+lenso-capability-agent-artifact = { path = "../lenso-capability-agent-artifact" }
 lenso-capability-agent-context-compaction = { path = "../lenso-capability-agent-context-compaction" }
 lenso-capability-agent-context-source = { path = "../lenso-capability-agent-context-source" }
 lenso-capability-agent-memory = { path = "../lenso-capability-agent-memory" }
 lenso-capability-agent-http-fetch = { path = "../lenso-capability-agent-http-fetch" }
 lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle" }
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-oauth-access = { path = "../lenso-capability-agent-oauth-access" }
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-session-presentation = { path = "../lenso-capability-agent-session-presentation" }
+lenso-capability-agent-session-control = { path = "../lenso-capability-agent-session-control" }
 lenso-capability-agent-task-supervisor = { path = "../lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }

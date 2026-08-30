@@ -10,6 +10,13 @@
       "type": "string",
       "maxLength": 1048576
     },
+    "content_blocks": {
+      "type": ["array", "null"],
+      "maxItems": 64,
+      "items": {
+        "$ref": "#/$defs/ContentBlock"
+      }
+    },
     "metadata_json": {
       "type": "string",
       "minLength": 2,
@@ -18,6 +25,53 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "ContentBlock": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/ContentBlockKind"
+        },
+        "text": {
+          "type": ["string", "null"],
+          "maxLength": 1048576
+        },
+        "value_json": {
+          "type": ["string", "null"],
+          "minLength": 2,
+          "maxLength": 1048576
+        },
+        "mime_type": {
+          "type": ["string", "null"],
+          "maxLength": 128
+        },
+        "data_base64": {
+          "type": ["string", "null"],
+          "maxLength": 5592408
+        },
+        "uri": {
+          "type": ["string", "null"],
+          "maxLength": 4096
+        },
+        "name": {
+          "type": ["string", "null"],
+          "maxLength": 256
+        },
+        "handle": {
+          "type": ["string", "null"],
+          "maxLength": 4096
+        },
+        "description": {
+          "type": ["string", "null"],
+          "maxLength": 4096
+        }
+      },
+      "additionalProperties": false
+    },
+    "ContentBlockKind": {
+      "type": "string",
+      "enum": ["text", "json", "image", "audio", "resource_link", "artifact"]
+    },
     "ContentType": {
       "type": "string",
       "enum": ["text"]
