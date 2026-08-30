@@ -14,7 +14,6 @@ name = "lenso-agent-cli"
 path = "src/main.rs"
 
 [dependencies]
-clap.workspace = true
 lenso-agent-approval-hook-plugin = { path = "../../crates/lenso-agent-approval-hook-plugin" }
 lenso-agent-auth-openai-codex-plugin = { path = "../../crates/lenso-agent-auth-openai-codex-plugin" }
 lenso-agent-cli-plugin = { path = "../../crates/lenso-agent-cli-plugin" }
@@ -22,8 +21,13 @@ lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins
 lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }
 lenso-agent-session-file-plugin = { path = "../../crates/lenso-agent-session-file-plugin" }
+lenso-agent-session-terminal-plugin = { path = "../../crates/lenso-agent-session-terminal-plugin" }
+lenso-terminal-cli-plugin = { path = "../../crates/lenso-terminal-cli-plugin" }
+lenso-terminal-cli-surface = { path = "../../crates/lenso-terminal-cli-surface" }
+lenso-terminal-command-plugin = { path = "../../crates/lenso-terminal-command-plugin" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-context-source = { path = "../../crates/lenso-capability-agent-context-source" }
+lenso-capability-terminal-command = { path = "../../crates/lenso-capability-terminal-command" }
 lenso-kernel.workspace = true
 serde.workspace = true
 serde_json.workspace = true

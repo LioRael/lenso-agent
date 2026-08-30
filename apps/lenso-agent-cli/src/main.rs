@@ -16,11 +16,16 @@ use lenso_agent_host::{
     AgentDirectories, AgentHost, HeadlessSurface, Profile, generation, provenance,
 };
 use lenso_agent_loop_plugin::RunScope;
+use lenso_agent_session_terminal_plugin as _;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_capability_agent_context_source::{
     ContextRole, ReadResourceRequest, RenderPromptRequest,
 };
 use lenso_kernel::StreamEvent;
+use lenso_terminal_cli_plugin as _;
+use lenso_terminal_command_plugin as _;
+
+mod terminal;
 
 #[derive(Debug)]
 struct Args {
@@ -92,7 +97,11 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
-    let args = match parse_args()? {
+    let raw = env::args().skip(1).collect::<Vec<_>>();
+    if terminal::should_try_composed_surface(&raw) {
+        return terminal::run_composed_surface(raw).await;
+    }
+    let args = match parse_command(raw)? {
         CliCommand::Run(args) => args,
         CliCommand::Help => {
             println!("{}", run_usage());
@@ -289,11 +298,6 @@ async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), Str
             }
         }
     }
-}
-
-fn parse_args() -> Result<CliCommand, String> {
-    let raw = env::args().skip(1).collect::<Vec<_>>();
-    parse_command(raw)
 }
 
 fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {

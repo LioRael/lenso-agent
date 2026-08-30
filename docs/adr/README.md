@@ -89,3 +89,4 @@
 - [0087 — Compose remote OAuth and large Artifacts](0087-compose-remote-oauth-and-large-artifacts.md)
 - [0088 — Compose dynamic model selection per Turn](0088-compose-dynamic-model-selection-per-turn.md)
 - [0089 — Name the product Lenso Agent](0089-name-the-product-lenso-agent.md)
+- [0090 — Compose terminal commands through Capabilities](0090-compose-terminal-commands-through-capabilities.md)

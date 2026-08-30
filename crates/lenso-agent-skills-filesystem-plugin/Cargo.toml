@@ -17,7 +17,7 @@ directories.workspace = true
 lenso.workspace = true
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
-lenso-capability-agent-tui-suggestion = { path = "../lenso-capability-agent-tui-suggestion" }
+lenso-capability-tui-suggestion = { path = "../lenso-capability-tui-suggestion" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

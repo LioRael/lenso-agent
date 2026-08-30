@@ -2944,7 +2944,6 @@ dependencies = [
 name = "lenso-agent-cli"
 version = "0.1.0"
 dependencies = [
- "clap",
  "lenso-agent-approval-hook-plugin",
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-cli-plugin",
@@ -2954,10 +2953,15 @@ dependencies = [
  "lenso-agent-session-file-plugin",
  "lenso-agent-session-inspection",
  "lenso-agent-session-sqlite-plugin",
+ "lenso-agent-session-terminal-plugin",
  "lenso-capability-agent",
  "lenso-capability-agent-context-source",
+ "lenso-capability-terminal-command",
  "lenso-kernel",
  "lenso-plugin-control-plane",
+ "lenso-terminal-cli-plugin",
+ "lenso-terminal-cli-surface",
+ "lenso-terminal-command-plugin",
  "rusqlite",
  "serde",
  "serde_json",
@@ -3160,11 +3164,12 @@ dependencies = [
  "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tools",
- "lenso-capability-agent-tui-contribution",
- "lenso-capability-agent-tui-suggestion",
  "lenso-capability-agent-turn-input",
  "lenso-capability-agent-user-interaction",
  "lenso-capability-agent-workspace-read",
+ "lenso-capability-terminal-command",
+ "lenso-capability-tui-panel",
+ "lenso-capability-tui-suggestion",
  "lenso-kernel",
  "lenso-native-adapter",
  "lenso-plugin-bundle",
@@ -3581,6 +3586,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-session-terminal-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-agent-native-support",
+ "lenso-capability-agent-session",
+ "lenso-capability-terminal-command-provider",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-skills-filesystem-plugin"
 version = "0.2.0"
 dependencies = [
@@ -3588,7 +3607,7 @@ dependencies = [
  "lenso",
  "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-tool-provider",
- "lenso-capability-agent-tui-suggestion",
+ "lenso-capability-tui-suggestion",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3686,7 +3705,7 @@ dependencies = [
  "lenso-agent-default-plugins",
  "lenso-agent-host",
  "lenso-agent-loop-plugin",
- "lenso-agent-tui-command-suggestions-plugin",
+ "lenso-agent-session-terminal-plugin",
  "lenso-agent-tui-plugin",
  "lenso-agent-tui-static-plugin",
  "lenso-agent-tui-workspace-suggestions-plugin",
@@ -3694,26 +3713,19 @@ dependencies = [
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-progress",
- "lenso-capability-agent-tui-contribution",
- "lenso-capability-agent-tui-suggestion",
  "lenso-capability-agent-user-interaction",
+ "lenso-capability-terminal-command",
+ "lenso-capability-tui-panel",
+ "lenso-capability-tui-suggestion",
  "lenso-kernel",
+ "lenso-terminal-cli-surface",
+ "lenso-terminal-command-plugin",
+ "lenso-terminal-tui-plugin",
  "ratatui",
  "serde_json",
  "tempfile",
  "time",
  "tokio",
-]
-
-[[package]]
-name = "lenso-agent-tui-command-suggestions-plugin"
-version = "0.1.0"
-dependencies = [
- "futures",
- "lenso",
- "lenso-capability-agent-tui-suggestion",
- "lenso-kernel",
- "serde",
 ]
 
 [[package]]
@@ -3726,8 +3738,6 @@ dependencies = [
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-control",
  "lenso-capability-agent-task-supervisor",
- "lenso-capability-agent-tui-contribution",
- "lenso-capability-agent-tui-suggestion",
  "lenso-capability-agent-user-interaction",
  "serde_json",
 ]
@@ -3738,7 +3748,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
- "lenso-capability-agent-tui-contribution",
+ "lenso-capability-tui-panel",
  "lenso-kernel",
  "serde",
 ]
@@ -3749,7 +3759,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso",
- "lenso-capability-agent-tui-suggestion",
+ "lenso-capability-tui-suggestion",
  "lenso-kernel",
  "serde",
  "tempfile",
@@ -4299,36 +4309,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lenso-capability-agent-tui-contribution"
-version = "0.1.0"
-dependencies = [
- "futures",
- "lenso-contract-codegen",
- "lenso-contract-runtime",
- "lenso-kernel",
- "lenso-plugin-authoring",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "lenso-capability-agent-tui-suggestion"
-version = "0.1.0"
-dependencies = [
- "futures",
- "lenso-contract-authoring",
- "lenso-contract-codegen",
- "lenso-contract-runtime",
- "lenso-guest-sdk",
- "lenso-kernel",
- "lenso-plugin-authoring",
- "lenso-runtime-codec",
- "schemars 1.2.2",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "lenso-capability-agent-turn-input"
 version = "0.1.0"
 dependencies = [
@@ -4409,6 +4389,74 @@ dependencies = [
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-plugin-authoring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-terminal-command"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-terminal-command-provider"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-tui-panel"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-tui-suggestion"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
 ]
@@ -4712,6 +4760,49 @@ dependencies = [
  "secrecy",
  "security-framework",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-terminal-cli-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-terminal-command",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-terminal-cli-surface"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "lenso-capability-terminal-command",
+ "serde_json",
+ "shell-words",
+]
+
+[[package]]
+name = "lenso-terminal-command-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-terminal-command",
+ "lenso-capability-terminal-command-provider",
+ "lenso-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-terminal-tui-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-terminal-command",
+ "lenso-capability-tui-panel",
+ "lenso-capability-tui-suggestion",
  "serde_json",
 ]
 

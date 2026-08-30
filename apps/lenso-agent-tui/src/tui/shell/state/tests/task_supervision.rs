@@ -35,7 +35,7 @@ fn task_snapshot_projects_without_overwriting_a_plugin_panel() {
         }]
     }))
     .unwrap();
-    let plugin_panel = SnapshotResponsePanelsItem {
+    let plugin_panel = PanelItem {
         body: "Plugin-owned body".to_owned(),
         id: "agent.tasks.supervisor".to_owned(),
         title: "Plugin-owned title".to_owned(),
@@ -167,7 +167,7 @@ fn completed_turn_projection_does_not_leak_into_current_generation() {
 fn plugin_panel_refresh_preserves_the_system_tasks_selection() {
     let mut state = TuiState::new(
         &TuiOptions::default(),
-        vec![SnapshotResponsePanelsItem {
+        vec![PanelItem {
             body: "old".to_owned(),
             id: "old".to_owned(),
             title: "Old".to_owned(),
@@ -176,12 +176,12 @@ fn plugin_panel_refresh_preserves_the_system_tasks_selection() {
     state.selected_panel = state.panels.len();
 
     state.replace_plugin_panels(vec![
-        SnapshotResponsePanelsItem {
+        PanelItem {
             body: "first".to_owned(),
             id: "first".to_owned(),
             title: "First".to_owned(),
         },
-        SnapshotResponsePanelsItem {
+        PanelItem {
             body: "second".to_owned(),
             id: "second".to_owned(),
             title: "Second".to_owned(),

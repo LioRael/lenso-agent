@@ -43,6 +43,18 @@ cargo run -p lenso-agent-cli -- \
   "Summarize this workspace README."
 ```
 
+Feature Plugins can also contribute commands shared by the headless CLI and
+TUI. The built-in Session projection is the first complete slice:
+
+```sh
+cargo run -p lenso-agent-cli -- sessions list
+cargo run -p lenso-agent-cli -- sessions list --json
+cargo run -p lenso-agent-cli -- sessions show --help
+```
+
+The TUI discovers the same catalog as `/sessions list` and
+`/sessions show ...`; neither surface owns Session storage.
+
 ## Agent Home and Workspace
 
 The installed Agent keeps its configuration and durable state in one global
@@ -782,6 +794,7 @@ surfaces are needed. Each executable links only its own surface Plugin Catalog.
 
 - [Documentation map](docs/README.md)
 - [Plugin tutorial](docs/tutorials/10-minute-tool-provider.md)
+- [Terminal command Plugin tutorial](docs/tutorials/add-terminal-command-provider.md)
 - [Control-plane glossary](docs/glossary.md)
 - [Host implementation and operational reference](docs/architecture/host-internals.md)
 

@@ -21,10 +21,10 @@ use lenso_capability_agent_tool_provider::{
     CatalogError, CatalogRequest, CatalogResponse, ContentType, ExecuteError, ExecuteRequest,
     ExecuteResponse, ToolDefinition, ToolExecutionClass,
 };
-use lenso_capability_agent_tui_suggestion as tui_suggestion;
-use lenso_capability_agent_tui_suggestion::{
+use lenso_capability_tui_suggestion as tui_suggestion;
+use lenso_capability_tui_suggestion::{
     SnapshotError as SuggestionSnapshotError, SnapshotRequest as SuggestionSnapshotRequest,
-    SnapshotResponse as SuggestionSnapshotResponse, Suggestion, SuggestionKind,
+    SnapshotResponse as SuggestionSnapshotResponse, SuggestionItem as Suggestion, SuggestionKind,
     validate_snapshot_suggestions,
 };
 use sha2::{Digest, Sha256};
@@ -283,7 +283,7 @@ impl From<RuntimeFailure> for ProviderFailure {
 #[lenso::provides(
     tool_provider::ToolProvider,
     prompt_provider::PromptProvider,
-    tui_suggestion::TuiSuggestion
+    tui_suggestion::Suggestion
 )]
 impl FilesystemSkillsPlugin {
     #[allow(clippy::unused_self)]
@@ -1013,7 +1013,7 @@ mod tests {
             provided[1]["capability_id"],
             "lenso.agent.prompt-provider@1"
         );
-        assert_eq!(provided[2]["capability_id"], "lenso.agent.tui-suggestion@1");
+        assert_eq!(provided[2]["capability_id"], "lenso.tui.suggestion@1");
     }
 
     fn write_skill(root: &Path, name: &str, description: &str, body: &str) {

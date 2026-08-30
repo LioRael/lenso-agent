@@ -1,7 +1,7 @@
 [package]
 name = "lenso-agent-tui-static-plugin"
 version = "0.1.0"
-description = "Static semantic panel contribution Plugin for the Lenso Agent TUI."
+description = "Static semantic panel provider Plugin for the Lenso Agent TUI."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
@@ -10,12 +10,12 @@ rust-version.workspace = true
 
 [package.metadata.lenso]
 plugin-id = "lenso.agent.tui.static"
-root-slot = "tui-contributions"
+root-slot = "tui-panels"
 
 [dependencies]
 futures.workspace = true
 lenso.workspace = true
-lenso-capability-agent-tui-contribution = { path = "../lenso-capability-agent-tui-contribution" }
+lenso-capability-tui-panel = { path = "../lenso-capability-tui-panel" }
 lenso-kernel.workspace = true
 serde.workspace = true
 

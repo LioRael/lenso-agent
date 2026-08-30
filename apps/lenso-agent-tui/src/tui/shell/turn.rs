@@ -1,9 +1,11 @@
 //! Turn submission, local commands, and explicit Context Source composition.
 
 use super::{
-    ActiveTurn, AgentApp, ContextRole, Instant, MAX_INPUT_CHARACTERS, RUN_TURN_OPERATION,
+    ActiveTerminalCommand, ActiveTurn, AgentApp, ContextRole, ExecuteError, ExecuteMessage,
+    ExecuteOpen, Instant, MAX_INPUT_CHARACTERS, OutputKind, ParseOutcome, RUN_TURN_OPERATION,
     ReadResourceRequest, RenderPromptRequest, RunScope, RunTurnRequest, ScrollState, SessionMode,
-    TranscriptEntry, TuiOptions, TuiState, UiPhase, current_timestamp,
+    StreamEvent, TranscriptEntry, TuiOptions, TuiState, UiPhase, current_timestamp,
+    parse_terminal_line,
 };
 use std::rc::Rc;
 
@@ -36,7 +38,10 @@ pub(super) async fn submit(
             "Agent input exceeds the {MAX_INPUT_CHARACTERS}-character limit"
         ));
     }
-    if handle_builtin_command(state, &input) || handle_control_command(app, state, &input).await? {
+    if handle_builtin_command(state, &input)
+        || handle_control_command(app, state, &input).await?
+        || handle_terminal_command(state, &input).await?
+    {
         return Ok(());
     }
     let model_input = compose_tui_context(app, &input).await?;
@@ -85,6 +90,114 @@ pub(super) async fn submit(
         started_at,
     });
     Ok(())
+}
+
+async fn handle_terminal_command(state: &mut TuiState, input: &str) -> Result<bool, String> {
+    let Some(line) = input.trim().strip_prefix('/') else {
+        return Ok(false);
+    };
+    let outcome = match parse_terminal_line(&state.command_catalog, "lenso-agent", line) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            state.transcript.push(TranscriptEntry::Error {
+                text: error.to_string(),
+            });
+            state.phase = UiPhase::Idle;
+            return Ok(true);
+        }
+    };
+    let command = match outcome {
+        ParseOutcome::NoMatch => return Ok(false),
+        ParseOutcome::Help(help) => {
+            state.push_system(help);
+            state.phase = UiPhase::Idle;
+            return Ok(true);
+        }
+        ParseOutcome::Command(command) => command,
+    };
+
+    let lease = state
+        .terminal_generation
+        .clone()
+        .ok_or_else(|| "terminal command Generation is unavailable".to_owned())?;
+    let stream = lease
+        .execute(ExecuteOpen {
+            id: command.id,
+            arguments_json: command
+                .arguments_json
+                .try_into()
+                .map_err(|_| "terminal command arguments are not valid JSON".to_owned())?,
+            output_format: command.output_format,
+        })
+        .await?;
+    stream
+        .close_send()
+        .await
+        .map_err(|error| format!("failed to half-close terminal command input: {error:?}"))?;
+    if state.input_history.last().map(String::as_str) != Some(input) {
+        state.input_history.push(input.to_owned());
+    }
+    state.active_command = Some(ActiveTerminalCommand {
+        stream,
+        _lease: lease,
+        emitted_output: false,
+    });
+    state.phase = UiPhase::Active;
+    Ok(true)
+}
+
+pub(in crate::tui::shell) fn handle_terminal_command_event(
+    event: Result<StreamEvent<ExecuteMessage, ExecuteError>, lenso_kernel::RuntimeFailure>,
+    state: &mut TuiState,
+) {
+    let event = match event {
+        Ok(event) => event,
+        Err(error) => {
+            state.active_command = None;
+            state.transcript.push(TranscriptEntry::Error {
+                text: format!("Terminal command stopped — {error:?}"),
+            });
+            state.phase = UiPhase::Failed;
+            return;
+        }
+    };
+    match event {
+        StreamEvent::Message(message) => {
+            if let Some(active) = state.active_command.as_mut() {
+                active.emitted_output = true;
+            }
+            if message.content.is_empty() {
+                return;
+            }
+            match message.kind {
+                OutputKind::Stderr => state.transcript.push(TranscriptEntry::Error {
+                    text: message.content,
+                }),
+                OutputKind::Progress => {
+                    state.push_system(format!("Progress: {}", message.content));
+                }
+                OutputKind::Stdout | OutputKind::Result => state.push_system(message.content),
+            }
+        }
+        StreamEvent::PeerHalfClosed => {}
+        StreamEvent::Terminal(Ok(())) => {
+            let emitted_output = state
+                .active_command
+                .take()
+                .is_some_and(|active| active.emitted_output);
+            if !emitted_output {
+                state.push_system("Command completed.");
+            }
+            state.phase = UiPhase::Idle;
+        }
+        StreamEvent::Terminal(Err(error)) => {
+            state.active_command = None;
+            state.transcript.push(TranscriptEntry::Error {
+                text: format!("Terminal command failed: {error:?}"),
+            });
+            state.phase = UiPhase::Failed;
+        }
+    }
 }
 
 fn handle_builtin_command(state: &mut TuiState, input: &str) -> bool {
