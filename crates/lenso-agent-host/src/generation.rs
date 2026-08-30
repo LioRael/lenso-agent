@@ -89,7 +89,7 @@ pub use crate::online_generation::{
 };
 use crate::online_generation::{OnlineGenerationEventLog, OnlineGenerationTracker};
 use crate::runtime_state::{LedgerControlStateStore, RuntimeAttachment, RuntimeState};
-use crate::{AgentDirectories, AgentSurfaceKind};
+use crate::{AgentDirectories, AgentSurfaceKind, official_prompts};
 
 mod online_reconciler;
 use online_reconciler::GenerationReconciler;
@@ -98,6 +98,9 @@ pub use online_reconciler::OnlineReconcileTelemetry;
 const APP_ID: &str = "lenso.agent.harness";
 const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 const DEFAULT_MODEL: &str = "gpt-5.6-luna";
+const DEFAULT_AGENT_INSTRUCTION: &str = r"Work persistently toward the user's requested outcome. Answer simple requests directly. When correctness depends on workspace or runtime facts, inspect them with the supplied Tools, distinguish observation from inference, and never claim an action or validation that did not happen.
+
+For longer work, state the immediate next action before Tool use and send brief progress updates when the direction or status changes. Continue until the outcome is complete or a concrete blocker requires the user. Finish with the outcome first, then the material evidence or validation, and any remaining blocker.";
 const NATIVE_EXECUTION_CLASS: &str = "lenso.native-rust@1";
 const QUICKJS_EXECUTION_CLASS: &str = "lenso.quickjs@1";
 const PROCESS_EXECUTION_CLASS: &str = "lenso.process@1";
@@ -2027,9 +2030,9 @@ fn default_interactive_plugins() -> [HostDefaultPlugin; 3] {
             serde_json::json!({
                 "contributions": [{
                     "id": "harness.default",
-                    "version": "1.0.0",
+                    "version": "1.1.0",
                     "kind": "instruction",
-                    "content": "Be concise, follow explicit user instructions, and use only the Tools supplied by this App."
+                    "content": DEFAULT_AGENT_INSTRUCTION
                 }]
             }),
         ),
@@ -2092,6 +2095,7 @@ fn default_skills_plugin() -> HostDefaultPlugin {
 fn host_catalog_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
     let mut configurations = local_tool_configurations(directories);
     configurations.extend(model_and_auth_configurations(directories));
+    configurations.extend(official_prompts::configurations());
     configurations.extend(["worker-a", "worker-b"].into_iter().map(|instance| {
         HostPluginConfiguration::new(
             "lenso.agent.loop",
@@ -2634,6 +2638,80 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_agent_instruction_requires_evidence_progress_and_handoff() {
+        for required in [
+            "distinguish observation from inference",
+            "never claim an action or validation that did not happen",
+            "brief progress updates",
+            "Finish with the outcome first",
+        ] {
+            assert!(DEFAULT_AGENT_INSTRUCTION.contains(required));
+        }
+    }
+
+    #[test]
+    fn official_prompt_instance_resolves_the_host_shipped_instruction() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [lenso_app_plan::authoring::PluginRootInstance::new(
+                "lenso.agent.prompt.static",
+                "coding",
+            )],
+            [],
+        );
+
+        let plan = resolve_host_plan(&root).unwrap();
+        let prompt = plan
+            .plugin_instances()
+            .iter()
+            .find(|plugin| plugin.instance_key() == "lenso.agent.prompt.static/coding")
+            .unwrap();
+        let configuration: serde_json::Value =
+            serde_json::from_str(prompt.configuration()).unwrap();
+
+        assert_eq!(
+            configuration["contributions"][0]["content"],
+            official_prompts::CODING_INSTRUCTION
+        );
+        assert_eq!(
+            configuration["contributions"][1]["id"],
+            "harness.execution.native"
+        );
+    }
+
+    #[test]
+    fn explicit_prompt_content_opts_out_of_the_host_shipped_instruction() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [lenso_app_plan::authoring::PluginRootInstance::new(
+                "lenso.agent.prompt.static",
+                "coding",
+            )
+            .with_configuration(serde_json::json!({
+                "contributions": [{
+                    "id": "company.coding",
+                    "version": "1.0.0",
+                    "kind": "instruction",
+                    "content": "Use the company coding workflow."
+                }]
+            }))],
+            [],
+        );
+
+        let plan = resolve_host_plan(&root).unwrap();
+        let prompt = plan
+            .plugin_instances()
+            .iter()
+            .find(|plugin| plugin.instance_key() == "lenso.agent.prompt.static/coding")
+            .unwrap();
+        let configuration: serde_json::Value =
+            serde_json::from_str(prompt.configuration()).unwrap();
+
+        assert_eq!(configuration["contributions"].as_array().unwrap().len(), 1);
+        assert_eq!(configuration["contributions"][0]["id"], "company.coding");
+    }
 
     #[test]
     fn console_is_an_optional_host_slot() {

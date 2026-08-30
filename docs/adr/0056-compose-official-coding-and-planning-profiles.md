@@ -20,7 +20,9 @@ provider a sandbox would overstate its authority boundary.
 `lenso-agent-cli profiles install coding` installs two reviewed, inspectable
 Session Profiles and their Plugin Instance configurations under Agent Home. It
 is idempotent for exact official content and refuses to overwrite a customized
-file.
+file. ADR 0079 later moves the official Prompt bytes into Host-owned
+configuration defaults so new Sessions receive Prompt improvements with a Host
+update while visible empty Instance files retain local override semantics.
 
 The `code` Profile selects Workspace edit, constrained native Process, semantic
 Git, Code Mode, bounded subagents, hierarchical Workspace instructions, one

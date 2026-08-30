@@ -78,3 +78,4 @@
 - [0076 — Compare Agent behavior across surface-specific Generations](0076-compare-agent-behavior-across-surface-generations.md)
 - [0077 — Bound idle Plugin reconciliation I/O](0077-bound-idle-plugin-reconciliation-io.md)
 - [0078 — Project Plugin control as observable operations](0078-project-plugin-control-as-observable-operations.md)
+- [0079 — Update official Prompts with the Host](0079-update-official-prompts-with-the-host.md)
