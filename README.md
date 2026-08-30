@@ -147,6 +147,14 @@ The control route accepts only the matching bearer token. Updates validate
 against the active Plan-bound Tool catalog, use an expected revision, persist
 before activation, and affect only Turns admitted after the update.
 
+Loopback listeners preserve token-free local Agent requests. A standalone
+listener on any non-loopback address fails startup unless
+`LENSO_AGENT_WEB_TOKEN` is non-empty; every Agent data-plane request must then
+send that value as its bearer token. Keep TLS in front of remote deployments.
+Embedded surfaces default to a disabled data plane: the embedding Host must
+explicitly select `Local`, `Bearer`, or `HostAuthorized`, and may select `Local`
+only after it has pinned the transport to loopback.
+
 Plugin configuration control can additionally select an explicit durable
 authority. Proposals remain read-only, while publication uses revision CAS,
 materializes the reviewed Plugin Root, and records durable history:
@@ -221,6 +229,7 @@ or other product behavior for the Host:
 ```rust,ignore
 let mut config = AgentWebConfig::new(my_product_plugins::link);
 config.agent_home = Some(agent_home);
+config.access = AgentWebAccess::HostAuthorized;
 config.control = AgentWebControl::HostAuthorized;
 
 let surface = AgentWebSurface::start(config).await?;

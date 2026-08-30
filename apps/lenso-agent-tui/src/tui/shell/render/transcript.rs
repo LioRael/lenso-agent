@@ -3,9 +3,9 @@ use super::{
     EntryHitTarget, Frame, Line, LinkHitTarget, Modifier, OffsetDateTime, Padding, Palette,
     Paragraph, PromptAnchor, Rect, RenderedEntryRow, RenderedLinkRow, RenderedThinkingRow,
     RenderedToolRow, RenderedUserRow, ScrollState, Scrollbar, ScrollbarOrientation, ScrollbarState,
-    Span, Style, Text, ThinkingHitTarget, ToolCard, ToolHitTarget, ToolSelection, ToolStatus,
-    TranscriptEntry, TranscriptRender, TuiState, UserEntryRender, UserHitTarget, Wrap, blocks,
-    markdown, markdown_lines_with_width, render_grouped_tool_block, render_thinking_block,
+    Span, Style, Text, ThinkingCard, ThinkingHitTarget, ToolCard, ToolHitTarget, ToolSelection,
+    ToolStatus, TranscriptEntry, TranscriptRender, TuiState, UserEntryRender, UserHitTarget, Wrap,
+    blocks, markdown, markdown_lines_with_width, render_grouped_tool_block, render_thinking_block,
     render_tool_block, render_tool_group,
 };
 
@@ -28,6 +28,7 @@ pub(in crate::tui::shell) fn render_transcript(
     };
     let TranscriptRender {
         lines,
+        row_count: rendered_line_count,
         entry_rows,
         link_rows,
         tool_rows,
@@ -35,7 +36,6 @@ pub(in crate::tui::shell) fn render_transcript(
         user_rows,
         prompt_anchors,
     } = transcript_lines(state, usize::from(text_area.width));
-    let rendered_line_count = visual_rows(&lines, usize::from(text_area.width));
     state
         .scroll
         .update_metrics(rendered_line_count, usize::from(text_area.height));
@@ -228,6 +228,7 @@ fn render_collapsed_header_hover(frame: &mut Frame<'_>, target: EntryHitTarget) 
 pub(in crate::tui::shell) fn transcript_lines(state: &TuiState, width: usize) -> TranscriptRender {
     let mut rendered = TranscriptRender {
         lines: Vec::new(),
+        row_count: 0,
         entry_rows: Vec::new(),
         link_rows: Vec::new(),
         tool_rows: Vec::new(),
@@ -239,6 +240,7 @@ pub(in crate::tui::shell) fn transcript_lines(state: &TuiState, width: usize) ->
     while entry_index < state.transcript.len() {
         entry_index = render_transcript_entry(state, entry_index, width, &mut rendered);
         rendered.lines.push(Line::default());
+        rendered.row_count = rendered.row_count.saturating_add(1);
     }
     rendered
 }
@@ -249,76 +251,52 @@ fn render_transcript_entry(
     width: usize,
     rendered: &mut TranscriptRender,
 ) -> usize {
-    let start_row = visual_rows(&rendered.lines, width);
+    let start_row = rendered.row_count;
     match &state.transcript[entry_index] {
-        TranscriptEntry::User { text, created_at } => render_user_entry(
-            &mut rendered.lines,
-            &mut rendered.user_rows,
-            &mut rendered.prompt_anchors,
-            UserEntryRender {
+        TranscriptEntry::User { text, created_at } => {
+            render_user_transcript_entry(
+                state,
+                entry_index,
                 text,
                 created_at,
                 width,
-                entry_index,
-                expanded: state.expanded_user_entries.contains(&entry_index),
-            },
-        ),
-        TranscriptEntry::Agent { text, created_at } => {
-            let first_line = rendered.lines.len();
-            append_timestamped_entry_lines(
-                &mut rendered.lines,
-                markdown_lines_with_width(text, entry_content_width(width))
-                    .into_iter()
-                    .map(|line| line.style(Style::default().fg(Palette::SECONDARY_TEXT)))
-                    .collect(),
-                width,
-                EntryChrome::plain(),
-                created_at,
-            );
-            collect_markdown_link_rows(
-                &rendered.lines[first_line..],
+                rendered,
                 start_row,
-                &markdown::links(text),
-                &mut rendered.link_rows,
             );
+        }
+        TranscriptEntry::Agent { text, created_at } => {
+            render_agent_transcript_entry(text, created_at, width, rendered, start_row);
         }
         TranscriptEntry::Thinking(card) => {
-            let mut content = Vec::new();
-            render_thinking_block(&mut content, card, state.animation_tick);
-            append_entry_lines(
-                &mut rendered.lines,
-                content,
-                width,
-                EntryChrome {
-                    accent: (card.is_running() && !card.text.is_empty()).then_some(Palette::ACCENT),
-                    ..EntryChrome::plain()
-                },
-            );
-            rendered.thinking_rows.push(RenderedThinkingRow {
-                start_row,
-                end_row: visual_rows(&rendered.lines, width).saturating_sub(1),
+            render_thinking_transcript_entry(
+                card,
+                state.animation_tick,
                 entry_index,
-            });
+                width,
+                rendered,
+                start_row,
+            );
         }
-        TranscriptEntry::System { text } => append_entry_lines(
-            &mut rendered.lines,
-            vec![Line::from(Span::styled(
+        TranscriptEntry::System { text } => render_system_transcript_entry(
+            Line::from(Span::styled(
                 text.to_owned(),
                 Style::default().fg(Palette::MUTED),
-            ))],
+            )),
             width,
-            EntryChrome::plain(),
+            rendered,
+            start_row,
         ),
-        TranscriptEntry::Error { text } => append_entry_lines(
-            &mut rendered.lines,
-            vec![Line::from(vec![
+        TranscriptEntry::Error { text } => render_system_transcript_entry(
+            Line::from(vec![
                 Span::styled("× ", Style::default().fg(Palette::ERROR)),
                 Span::styled(text.to_owned(), Style::default().fg(Palette::ERROR)),
-            ])],
+            ]),
             width,
-            EntryChrome::plain(),
+            rendered,
+            start_row,
         ),
         TranscriptEntry::Tool(card) => {
+            let mut row_cursor = start_row;
             let next = render_tool_entry(
                 state,
                 entry_index,
@@ -326,29 +304,140 @@ fn render_transcript_entry(
                 &mut rendered.lines,
                 &mut rendered.tool_rows,
                 width,
+                &mut row_cursor,
             )
             .unwrap_or(entry_index + 1);
+            rendered.row_count = row_cursor;
             record_entry_row(
                 &mut rendered.entry_rows,
-                &rendered.lines,
-                width,
                 start_row,
+                rendered.row_count.saturating_sub(1),
                 entry_index,
             );
             return next;
         }
         TranscriptEntry::TurnCompleted { elapsed } => {
+            let first_line = rendered.lines.len();
             append_turn_completed_entry(&mut rendered.lines, width, *elapsed);
+            rendered.row_count = appended_row_end(&rendered.lines, first_line, width, start_row);
         }
     }
     record_entry_row(
         &mut rendered.entry_rows,
-        &rendered.lines,
-        width,
         start_row,
+        rendered.row_count.saturating_sub(1),
         entry_index,
     );
     entry_index + 1
+}
+
+fn render_user_transcript_entry(
+    state: &TuiState,
+    entry_index: usize,
+    text: &str,
+    created_at: &str,
+    width: usize,
+    rendered: &mut TranscriptRender,
+    start_row: usize,
+) {
+    let first_line = rendered.lines.len();
+    let foldable = render_user_entry(
+        &mut rendered.lines,
+        UserEntryRender {
+            text,
+            created_at,
+            width,
+            expanded: state.expanded_user_entries.contains(&entry_index),
+        },
+    );
+    rendered.row_count = appended_row_end(&rendered.lines, first_line, width, start_row);
+    let end_row = rendered.row_count.saturating_sub(1);
+    rendered.prompt_anchors.push(PromptAnchor {
+        start_row,
+        end_row,
+        text: text.to_owned(),
+    });
+    rendered.user_rows.push(RenderedUserRow {
+        start_row,
+        end_row,
+        entry_index,
+        foldable,
+    });
+}
+
+fn render_agent_transcript_entry(
+    text: &str,
+    created_at: &str,
+    width: usize,
+    rendered: &mut TranscriptRender,
+    start_row: usize,
+) {
+    let first_line = rendered.lines.len();
+    append_timestamped_entry_lines(
+        &mut rendered.lines,
+        markdown_lines_with_width(text, entry_content_width(width))
+            .into_iter()
+            .map(|line| line.style(Style::default().fg(Palette::SECONDARY_TEXT)))
+            .collect(),
+        width,
+        EntryChrome::plain(),
+        created_at,
+    );
+    rendered.row_count = appended_row_end(&rendered.lines, first_line, width, start_row);
+    collect_markdown_link_rows(
+        &rendered.lines[first_line..],
+        start_row,
+        &markdown::links(text),
+        &mut rendered.link_rows,
+    );
+}
+
+fn render_thinking_transcript_entry(
+    card: &ThinkingCard,
+    animation_tick: u64,
+    entry_index: usize,
+    width: usize,
+    rendered: &mut TranscriptRender,
+    start_row: usize,
+) {
+    let first_line = rendered.lines.len();
+    let mut content = Vec::new();
+    render_thinking_block(&mut content, card, animation_tick);
+    append_entry_lines(
+        &mut rendered.lines,
+        content,
+        width,
+        EntryChrome {
+            accent: (card.is_running() && !card.text.is_empty()).then_some(Palette::ACCENT),
+            ..EntryChrome::plain()
+        },
+    );
+    rendered.row_count = appended_row_end(&rendered.lines, first_line, width, start_row);
+    rendered.thinking_rows.push(RenderedThinkingRow {
+        start_row,
+        end_row: rendered.row_count.saturating_sub(1),
+        entry_index,
+    });
+}
+
+fn render_system_transcript_entry(
+    line: Line<'static>,
+    width: usize,
+    rendered: &mut TranscriptRender,
+    start_row: usize,
+) {
+    let first_line = rendered.lines.len();
+    append_entry_lines(&mut rendered.lines, vec![line], width, EntryChrome::plain());
+    rendered.row_count = appended_row_end(&rendered.lines, first_line, width, start_row);
+}
+
+fn appended_row_end(
+    lines: &[Line<'_>],
+    first_line: usize,
+    width: usize,
+    start_row: usize,
+) -> usize {
+    start_row.saturating_add(visual_rows(&lines[first_line..], width))
 }
 
 fn append_turn_completed_entry(lines: &mut Vec<Line<'static>>, width: usize, elapsed: Duration) {
@@ -365,14 +454,13 @@ fn append_turn_completed_entry(lines: &mut Vec<Line<'static>>, width: usize, ela
 
 fn record_entry_row(
     rows: &mut Vec<RenderedEntryRow>,
-    lines: &[Line<'_>],
-    width: usize,
     start_row: usize,
+    end_row: usize,
     entry_index: usize,
 ) {
     rows.push(RenderedEntryRow {
         start_row,
-        end_row: visual_rows(lines, width).saturating_sub(1),
+        end_row,
         entry_index,
     });
 }
@@ -448,20 +536,13 @@ fn visible_link_targets(
         .collect()
 }
 
-fn render_user_entry(
-    lines: &mut Vec<Line<'static>>,
-    user_rows: &mut Vec<RenderedUserRow>,
-    prompt_anchors: &mut Vec<PromptAnchor>,
-    entry: UserEntryRender<'_>,
-) {
+fn render_user_entry(lines: &mut Vec<Line<'static>>, entry: UserEntryRender<'_>) -> bool {
     let UserEntryRender {
         text,
         created_at,
         width,
-        entry_index,
         expanded,
     } = entry;
-    let start_row = visual_rows(lines, width);
     let content = text
         .lines()
         .enumerate()
@@ -497,17 +578,7 @@ fn render_user_entry(
         },
         created_at,
     );
-    prompt_anchors.push(PromptAnchor {
-        start_row,
-        end_row: visual_rows(lines, width).saturating_sub(1),
-        text: text.to_owned(),
-    });
-    user_rows.push(RenderedUserRow {
-        start_row,
-        end_row: visual_rows(lines, width).saturating_sub(1),
-        entry_index,
-        foldable,
-    });
+    foldable
 }
 
 fn render_tool_entry(
@@ -517,6 +588,7 @@ fn render_tool_entry(
     lines: &mut Vec<Line<'static>>,
     tool_rows: &mut Vec<RenderedToolRow>,
     width: usize,
+    row_cursor: &mut usize,
 ) -> Option<usize> {
     let Some((kind, group_end)) = tool_group_at(&state.transcript, entry_index) else {
         let selection = ToolSelection::Tool(entry_index);
@@ -527,6 +599,7 @@ fn render_tool_entry(
             selection,
             state.selected_block,
             width,
+            row_cursor,
         );
         return None;
     };
@@ -542,7 +615,8 @@ fn render_tool_entry(
             _ => None,
         })
         .collect::<Vec<_>>();
-    let start_row = visual_rows(lines, width);
+    let start_row = *row_cursor;
+    let first_line = lines.len();
     let mut content = Vec::new();
     render_tool_group(
         &mut content,
@@ -552,9 +626,10 @@ fn render_tool_entry(
         selection_is(state.selected_block, selection),
     );
     append_entry_lines(lines, content, width, EntryChrome::plain());
+    *row_cursor = appended_row_end(lines, first_line, width, start_row);
     tool_rows.push(RenderedToolRow {
         start_row,
-        end_row: visual_rows(lines, width).saturating_sub(1),
+        end_row: row_cursor.saturating_sub(1),
         selection,
     });
     if expanded {
@@ -566,6 +641,7 @@ fn render_tool_entry(
                 ToolSelection::Tool(entry_index + offset),
                 state.selected_block,
                 width,
+                row_cursor,
             );
         }
     }
@@ -748,8 +824,10 @@ fn push_tool_row(
     selection: ToolSelection,
     selected: Option<ToolSelection>,
     width: usize,
+    row_cursor: &mut usize,
 ) {
-    let start_row = visual_rows(lines, width);
+    let start_row = *row_cursor;
+    let first_line = lines.len();
     let mut content = Vec::new();
     render_tool_block(&mut content, card, selection_is(selected, selection));
     append_entry_lines(
@@ -765,9 +843,10 @@ fn push_tool_row(
             ..EntryChrome::plain()
         },
     );
+    *row_cursor = appended_row_end(lines, first_line, width, start_row);
     tool_rows.push(RenderedToolRow {
         start_row,
-        end_row: visual_rows(lines, width).saturating_sub(1),
+        end_row: row_cursor.saturating_sub(1),
         selection,
     });
 }
@@ -779,14 +858,17 @@ fn push_nested_tool_row(
     selection: ToolSelection,
     selected: Option<ToolSelection>,
     width: usize,
+    row_cursor: &mut usize,
 ) {
-    let start_row = visual_rows(lines, width);
+    let start_row = *row_cursor;
+    let first_line = lines.len();
     let mut content = Vec::new();
     render_grouped_tool_block(&mut content, card, selection_is(selected, selection));
     append_entry_lines(lines, content, width, EntryChrome::plain());
+    *row_cursor = appended_row_end(lines, first_line, width, start_row);
     tool_rows.push(RenderedToolRow {
         start_row,
-        end_row: visual_rows(lines, width).saturating_sub(1),
+        end_row: row_cursor.saturating_sub(1),
         selection,
     });
 }
@@ -883,3 +965,38 @@ use format::{
     entry_content_width, user_prompt_is_foldable, visual_rows,
 };
 pub(in crate::tui::shell) use format::{current_timestamp, format_turn_duration};
+#[cfg(test)]
+use format::{reset_visual_row_line_visits, visual_row_line_visits};
+
+#[cfg(test)]
+mod performance_tests {
+    use super::*;
+    use crate::tui::shell::TuiOptions;
+
+    #[test]
+    fn transcript_row_measurement_scales_linearly_with_entry_count() {
+        let entries = 2_000;
+        let mut state = TuiState::new(&TuiOptions::default(), Vec::new());
+        state.transcript = (0..entries)
+            .map(|index| TranscriptEntry::System {
+                text: format!("status-{index}"),
+            })
+            .collect();
+
+        reset_visual_row_line_visits();
+        let rendered = transcript_lines(&state, 100);
+        let line_visits = visual_row_line_visits();
+
+        eprintln!(
+            "transcript_layout entries={entries} row_count={} visual_row_line_visits={line_visits}",
+            rendered.row_count
+        );
+
+        assert_eq!(rendered.entry_rows.len(), entries);
+        assert_eq!(rendered.row_count, entries * 2);
+        assert!(
+            line_visits <= entries,
+            "row measurement revisited {line_visits} lines for {entries} entries"
+        );
+    }
+}

@@ -77,15 +77,17 @@ use lenso_plugin_control_plane::{
     KernelGenerationRuntime, MultiExecutionCatalogFactory, PlanGenerationInput, ReplacementMode,
     ResolvedGeneration, RolloutPolicy, resolve_plan_generation, sha256_digest,
 };
+use sha2::{Digest, Sha256};
 use std::{
     any::Any,
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet},
     env, fs,
+    io::Read,
     path::{Path, PathBuf},
     rc::Rc,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 pub use crate::online_generation::{
@@ -103,6 +105,33 @@ pub use online_reconciler::OnlineReconcileTelemetry;
 const APP_ID: &str = "lenso.agent.harness";
 const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
 const DEFAULT_MODEL: &str = "gpt-5.6-luna";
+const HOST_BUILD_HASH_BUFFER_BYTES: usize = 256 * 1024;
+static HOST_BUILD_HASHES: AtomicU64 = AtomicU64::new(0);
+static HOST_BUILD_HASHED_BYTES: AtomicU64 = AtomicU64::new(0);
+static HOST_BUILD_LOCATE_MICROS: AtomicU64 = AtomicU64::new(0);
+static HOST_BUILD_OPEN_MICROS: AtomicU64 = AtomicU64::new(0);
+static HOST_BUILD_HASH_MICROS: AtomicU64 = AtomicU64::new(0);
+
+/// Cumulative process-local evidence for exact Host executable identity work.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HostBuildIdentityTelemetry {
+    pub hashes: u64,
+    pub hashed_bytes: u64,
+    pub locate_micros: u64,
+    pub open_micros: u64,
+    pub hash_micros: u64,
+}
+
+/// Returns cumulative process-local Host executable identity telemetry.
+pub fn host_build_identity_telemetry() -> HostBuildIdentityTelemetry {
+    HostBuildIdentityTelemetry {
+        hashes: HOST_BUILD_HASHES.load(Ordering::Relaxed),
+        hashed_bytes: HOST_BUILD_HASHED_BYTES.load(Ordering::Relaxed),
+        locate_micros: HOST_BUILD_LOCATE_MICROS.load(Ordering::Relaxed),
+        open_micros: HOST_BUILD_OPEN_MICROS.load(Ordering::Relaxed),
+        hash_micros: HOST_BUILD_HASH_MICROS.load(Ordering::Relaxed),
+    }
+}
 const DEFAULT_AGENT_INSTRUCTION: &str = r"Work persistently toward the user's requested outcome. Answer simple requests directly. When correctness depends on workspace or runtime facts, inspect them with the supplied Tools, distinguish observation from inference, and never claim an action or validation that did not happen.
 
 For longer work, state the immediate next action before Tool use and send brief progress updates when the direction or status changes. Continue until the outcome is complete or a concrete blocker requires the user. Finish with the outcome first, then the material evidence or validation, and any remaining blocker.";
@@ -245,18 +274,54 @@ impl DesiredGeneration {
 
 impl HostBuildIdentity {
     pub(crate) fn current() -> Result<Self, String> {
+        let locate_started = Instant::now();
         let executable = env::current_exe()
             .map_err(|error| format!("failed to locate Host executable: {error}"))?;
-        let executable_bytes = fs::read(&executable).map_err(|error| {
+        HOST_BUILD_LOCATE_MICROS.fetch_add(elapsed_micros(locate_started), Ordering::Relaxed);
+        Self::from_path(&executable)
+    }
+
+    fn from_path(executable: &Path) -> Result<Self, String> {
+        let open_started = Instant::now();
+        let mut file = fs::File::open(executable).map_err(|error| {
             format!(
                 "failed to read Host executable {}: {error}",
                 executable.display()
             )
         })?;
+        HOST_BUILD_OPEN_MICROS.fetch_add(elapsed_micros(open_started), Ordering::Relaxed);
+        let hash_started = Instant::now();
+        let mut hasher = Sha256::new();
+        let mut bytes = 0_u64;
+        let mut buffer = vec![0_u8; HOST_BUILD_HASH_BUFFER_BYTES];
+        loop {
+            let read = file.read(&mut buffer).map_err(|error| {
+                format!(
+                    "failed to read Host executable {}: {error}",
+                    executable.display()
+                )
+            })?;
+            if read == 0 {
+                break;
+            }
+            let read_u64 = u64::try_from(read)
+                .map_err(|_| "Host executable byte count overflowed".to_owned())?;
+            bytes = bytes
+                .checked_add(read_u64)
+                .ok_or_else(|| "Host executable byte count overflowed".to_owned())?;
+            hasher.update(&buffer[..read]);
+        }
+        HOST_BUILD_HASHES.fetch_add(1, Ordering::Relaxed);
+        HOST_BUILD_HASHED_BYTES.fetch_add(bytes, Ordering::Relaxed);
+        HOST_BUILD_HASH_MICROS.fetch_add(elapsed_micros(hash_started), Ordering::Relaxed);
         Ok(Self {
-            executable_digest: sha256_digest(&executable_bytes),
+            executable_digest: format!("sha256:{:x}", hasher.finalize()),
         })
     }
+}
+
+fn elapsed_micros(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
 fn framework_host_builder<F: CatalogFactory>(
@@ -2811,6 +2876,55 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_build_identity_streams_the_exact_executable_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("fixture-host");
+        let bytes = vec![0x5a; HOST_BUILD_HASH_BUFFER_BYTES * 3 + 17];
+        fs::write(&executable, &bytes).unwrap();
+        let before = host_build_identity_telemetry();
+
+        let identity = HostBuildIdentity::from_path(&executable).unwrap();
+        let after = host_build_identity_telemetry();
+
+        assert_eq!(identity.executable_digest, sha256_digest(&bytes));
+        assert!(after.hashes >= before.hashes.saturating_add(1));
+        assert!(
+            after.hashed_bytes
+                >= before
+                    .hashed_bytes
+                    .saturating_add(u64::try_from(bytes.len()).unwrap())
+        );
+    }
+
+    #[test]
+    fn host_build_identity_fails_closed_when_the_executable_cannot_be_opened() {
+        let directory = tempfile::tempdir().unwrap();
+        let error = HostBuildIdentity::from_path(&directory.path().join("missing")).unwrap_err();
+        assert!(error.contains("failed to read Host executable"));
+    }
+
+    #[test]
+    #[ignore = "manual Host executable hashing measurement; run with --ignored --nocapture"]
+    fn reports_host_build_identity_measurement() {
+        let before = host_build_identity_telemetry();
+        HostBuildIdentity::current().unwrap();
+        let after = host_build_identity_telemetry();
+
+        let hashes = after.hashes.saturating_sub(before.hashes);
+        let hashed_bytes = after.hashed_bytes.saturating_sub(before.hashed_bytes);
+        let locate_micros = after.locate_micros.saturating_sub(before.locate_micros);
+        let open_micros = after.open_micros.saturating_sub(before.open_micros);
+        let hash_micros = after.hash_micros.saturating_sub(before.hash_micros);
+        eprintln!(
+            "host_build_identity hashes={hashes} hashed_bytes={hashed_bytes} \
+             locate_micros={locate_micros} open_micros={open_micros} \
+             hash_micros={hash_micros} buffer_bytes={HOST_BUILD_HASH_BUFFER_BYTES}"
+        );
+        assert_eq!(hashes, 1);
+        assert!(hashed_bytes > 0);
+    }
 
     #[test]
     fn default_agent_instruction_requires_evidence_progress_and_handoff() {

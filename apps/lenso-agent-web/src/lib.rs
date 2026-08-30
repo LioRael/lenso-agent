@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     convert::Infallible,
+    fmt,
     path::{Path as FsPath, PathBuf},
     sync::{Arc, RwLock},
     time::Duration,
@@ -9,7 +10,8 @@ use std::{
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, Request, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response, sse::Event, sse::Sse},
     routing::{get, post},
 };
@@ -34,6 +36,7 @@ use lenso_capability_agent_user_interaction::{
 };
 use lenso_kernel::{CancellationToken, StreamEvent};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -61,15 +64,19 @@ use plugin_control::{PluginControl, PluginMutationCoordinator};
 use plugin_control_api::{PluginRuntimeCommand, PluginRuntimeState};
 
 const MAX_REQUEST_BYTES: usize = 65_536;
+const MAX_DEFERRED_RUNTIME_COMMANDS: usize = 16;
+const SESSION_READ_PAGE_LIMIT: i64 = 1000;
 const REMOTE_CONFIGURATION_WATCH_WAIT: Duration = Duration::from_secs(5);
 const REMOTE_CONFIGURATION_RETRY_DELAY: Duration = Duration::from_secs(1);
 const MAX_PROMPT_BYTES: usize = 65_536;
 const TOOL_POLICY_SCHEMA: &str = "lenso.agent.tool-policy.v1";
 /// Environment variable used by the standalone server for Tool policy control.
 pub const CONTROL_TOKEN_ENV: &str = "LENSO_AGENT_CONTROL_TOKEN";
+/// Environment variable used by the standalone server for Agent data-plane authorization.
+pub const DATA_PLANE_TOKEN_ENV: &str = "LENSO_AGENT_WEB_TOKEN";
 
 /// Selects which Host seam authorizes Tool policy control requests.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub enum AgentWebControl {
     /// Policy mutation is not exposed by this Surface.
     #[default]
@@ -78,6 +85,41 @@ pub enum AgentWebControl {
     Bearer(String),
     /// An embedding Host has already authorized requests before mounting the router.
     HostAuthorized,
+}
+
+impl fmt::Debug for AgentWebControl {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::Bearer(_) => formatter.write_str("Bearer([REDACTED])"),
+            Self::HostAuthorized => formatter.write_str("HostAuthorized"),
+        }
+    }
+}
+
+/// Selects which Host seam authorizes Agent Web data-plane requests.
+#[derive(Clone, Default)]
+pub enum AgentWebAccess {
+    #[default]
+    /// Data-plane routes are unavailable until the Host selects an authorization seam.
+    Disabled,
+    /// A Host-proven loopback listener accepts requests from the local user.
+    Local,
+    /// The standalone HTTP Adapter checks one exact bearer secret.
+    Bearer(String),
+    /// An embedding Host has already authorized requests before mounting the router.
+    HostAuthorized,
+}
+
+impl fmt::Debug for AgentWebAccess {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::Local => formatter.write_str("Local"),
+            Self::Bearer(_) => formatter.write_str("Bearer([REDACTED])"),
+            Self::HostAuthorized => formatter.write_str("HostAuthorized"),
+        }
+    }
 }
 
 /// Host-owned configuration for one embedded Agent Web Surface.
@@ -97,6 +139,8 @@ pub struct AgentWebConfig {
     pub allowed_tools: Vec<String>,
     /// Durable Tool policy file. Omit to keep policy immutable for this process.
     pub tool_policy: Option<PathBuf>,
+    /// Host-selected authorization seam for Agent data-plane routes.
+    pub access: AgentWebAccess,
     /// Host-selected authorization seam for Tool policy control routes.
     pub control: AgentWebControl,
     /// Enables Host-authorized mutation of the visible App Plugin Root.
@@ -130,6 +174,7 @@ impl AgentWebConfig {
     /// Creates an embedded Surface configuration with an explicit Host Plugin inventory.
     pub fn new(plugins: fn()) -> Self {
         Self {
+            access: AgentWebAccess::Disabled,
             agent_home: None,
             managed_app_root: None,
             plan: None,
@@ -155,9 +200,10 @@ pub struct AgentWebSurface {
 
 #[derive(Clone, Debug)]
 struct WebRuntime {
+    access: AgentWebAccessPolicy,
     available_tools: Vec<BootstrapTool>,
     commands: mpsc::Sender<RuntimeCommand>,
-    control: AgentWebControl,
+    control: AgentWebControlPolicy,
     policy: Arc<RwLock<ToolPolicyDocument>>,
     policy_path: Option<PathBuf>,
     profile: Option<String>,
@@ -165,8 +211,70 @@ struct WebRuntime {
     plugin_mutations: PluginMutationCoordinator,
 }
 
+#[derive(Clone)]
+enum AgentWebAccessPolicy {
+    Disabled,
+    Local,
+    Bearer([u8; 32]),
+    HostAuthorized,
+}
+
+impl fmt::Debug for AgentWebAccessPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::Local => formatter.write_str("Local"),
+            Self::Bearer(_) => formatter.write_str("Bearer([REDACTED])"),
+            Self::HostAuthorized => formatter.write_str("HostAuthorized"),
+        }
+    }
+}
+
+impl From<AgentWebAccess> for AgentWebAccessPolicy {
+    fn from(access: AgentWebAccess) -> Self {
+        match access {
+            AgentWebAccess::Local => Self::Local,
+            AgentWebAccess::Bearer(expected) if !expected.trim().is_empty() => {
+                Self::Bearer(bearer_digest(&expected))
+            }
+            AgentWebAccess::Disabled | AgentWebAccess::Bearer(_) => Self::Disabled,
+            AgentWebAccess::HostAuthorized => Self::HostAuthorized,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum AgentWebControlPolicy {
+    Disabled,
+    Bearer([u8; 32]),
+    HostAuthorized,
+}
+
+impl fmt::Debug for AgentWebControlPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => formatter.write_str("Disabled"),
+            Self::Bearer(_) => formatter.write_str("Bearer([REDACTED])"),
+            Self::HostAuthorized => formatter.write_str("HostAuthorized"),
+        }
+    }
+}
+
+impl From<AgentWebControl> for AgentWebControlPolicy {
+    fn from(control: AgentWebControl) -> Self {
+        match control {
+            AgentWebControl::Bearer(expected) if !expected.trim().is_empty() => {
+                Self::Bearer(bearer_digest(&expected))
+            }
+            AgentWebControl::Disabled | AgentWebControl::Bearer(_) => Self::Disabled,
+            AgentWebControl::HostAuthorized => Self::HostAuthorized,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct WebRuntimeConfig {
+    access: AgentWebAccess,
     available_tools: Vec<BootstrapTool>,
     control: AgentWebControl,
     plugin_control: Option<PluginControl>,
@@ -501,6 +609,7 @@ impl AgentWebSurface {
     /// Resolves the selected App, starts its Generation, and creates an embeddable Web Surface.
     pub async fn start(config: AgentWebConfig) -> Result<Self, String> {
         let AgentWebConfig {
+            access,
             agent_home,
             managed_app_root,
             plan,
@@ -580,6 +689,7 @@ impl AgentWebSurface {
         let runtime = WebRuntime::start(
             app,
             WebRuntimeConfig {
+                access,
                 available_tools,
                 control,
                 plugin_control,
@@ -726,7 +836,7 @@ fn validate_plugin_control_configuration(
 }
 
 fn router(runtime: WebRuntime) -> Router {
-    Router::new()
+    let data_plane = Router::new()
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
         .route("/api/console/v1/agent/models", get(model_catalog))
         .route("/api/console/v1/agent/turns", post(run_turn))
@@ -745,10 +855,6 @@ fn router(runtime: WebRuntime) -> Router {
         .route("/api/console/v1/agent/sessions", get(list_sessions))
         .route("/api/console/v1/agent/tasks", get(task_snapshot))
         .route(
-            "/api/console/v1/agent/control/tool-policy",
-            get(read_tool_policy).put(update_tool_policy),
-        )
-        .route(
             "/api/console/v1/agent/sessions/{session_id}",
             get(read_session).patch(rename_session),
         )
@@ -756,9 +862,27 @@ fn router(runtime: WebRuntime) -> Router {
             "/api/console/v1/agent/sessions/{session_id}/trajectory",
             get(read_trajectory),
         )
+        .route_layer(middleware::from_fn_with_state(
+            runtime.clone(),
+            authorize_data_plane,
+        ));
+    data_plane
+        .route(
+            "/api/console/v1/agent/control/tool-policy",
+            get(read_tool_policy).put(update_tool_policy),
+        )
         .merge(plugin_control::routes())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(runtime)
+}
+
+async fn authorize_data_plane(
+    State(runtime): State<WebRuntime>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Result<Response, ApiProblem> {
+    runtime.authorize_data_plane(request.headers())?;
+    Ok(next.run(request).await)
 }
 
 async fn model_catalog(
@@ -1132,6 +1256,7 @@ async fn resolve_tool_policy(
 impl WebRuntime {
     fn start(app: AgentApp, config: WebRuntimeConfig) -> Self {
         let WebRuntimeConfig {
+            access,
             available_tools,
             control,
             plugin_control,
@@ -1155,9 +1280,10 @@ impl WebRuntime {
             remote_sync,
         ));
         Self {
+            access: access.into(),
             available_tools,
             commands,
-            control,
+            control: control.into(),
             policy,
             policy_path,
             profile,
@@ -1168,21 +1294,21 @@ impl WebRuntime {
 
     fn authorize_control(&self, headers: &HeaderMap) -> Result<(), ApiProblem> {
         match &self.control {
-            AgentWebControl::Disabled => {
+            AgentWebControlPolicy::Disabled => {
                 Err(ApiProblem::not_found("Agent control is not configured"))
             }
-            AgentWebControl::HostAuthorized => Ok(()),
-            AgentWebControl::Bearer(expected) => {
-                let supplied = headers
-                    .get(header::AUTHORIZATION)
-                    .and_then(|value| value.to_str().ok())
-                    .and_then(|value| value.strip_prefix("Bearer "));
-                if supplied.is_some_and(|supplied| constant_time_eq(supplied, expected)) {
-                    Ok(())
-                } else {
-                    Err(ApiProblem::forbidden("Agent control token is invalid"))
-                }
+            AgentWebControlPolicy::HostAuthorized => Ok(()),
+            AgentWebControlPolicy::Bearer(expected) => authorize_bearer(headers, expected),
+        }
+    }
+
+    fn authorize_data_plane(&self, headers: &HeaderMap) -> Result<(), ApiProblem> {
+        match &self.access {
+            AgentWebAccessPolicy::Disabled => {
+                Err(ApiProblem::not_found("Agent data plane is not configured"))
             }
+            AgentWebAccessPolicy::Local | AgentWebAccessPolicy::HostAuthorized => Ok(()),
+            AgentWebAccessPolicy::Bearer(expected) => authorize_bearer(headers, expected),
         }
     }
 
@@ -1223,12 +1349,28 @@ impl WebRuntime {
     }
 }
 
-fn constant_time_eq(left: &str, right: &str) -> bool {
-    if left.len() != right.len() {
-        return false;
+fn authorize_bearer(headers: &HeaderMap, expected: &[u8; 32]) -> Result<(), ApiProblem> {
+    let supplied = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "));
+    if supplied.is_some_and(|supplied| constant_time_digest_eq(&bearer_digest(supplied), expected))
+    {
+        Ok(())
+    } else {
+        Err(ApiProblem::forbidden(
+            "Agent authorization token is invalid",
+        ))
     }
-    left.bytes()
-        .zip(right.bytes())
+}
+
+fn bearer_digest(token: &str) -> [u8; 32] {
+    Sha256::digest(token.as_bytes()).into()
+}
+
+fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
+    left.iter()
+        .zip(right.iter())
         .fold(0_u8, |difference, (left, right)| {
             difference | (left ^ right)
         })
@@ -1358,6 +1500,9 @@ async fn runtime_actor(
                                     RuntimeCommand::Plugin(command) => {
                                         plugin_runtime.dispatch(&app, command);
                                     }
+                                    RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
+                                        app.report_plugin_watch_degraded(detail);
+                                    }
                                     RuntimeCommand::TaskSnapshot { reply } => {
                                         let _ = reply.send(turn.task_snapshot().await);
                                     }
@@ -1387,19 +1532,20 @@ async fn runtime_actor(
                                         let _ = reply.send(result);
                                     }
                                     RuntimeCommand::CancelTurn { reply, request_id: cancelled_id } => {
-                                        let found = cancelled_id == request_id || pending.iter().any(|command| matches!(command, RuntimeCommand::RunTurn { request, .. } if request.request_id == cancelled_id));
-                                        if cancelled_id == request_id {
-                                            cancellation.cancel();
-                                        } else if found {
-                                            pre_cancelled.insert(cancelled_id);
-                                        }
+                                        let found = cancel_active_or_deferred_turn(
+                                            &request_id,
+                                            &cancelled_id,
+                                            &pending,
+                                            &mut pre_cancelled,
+                                            &cancellation,
+                                        );
                                         let _ = reply.send(found);
                                     }
                                     RuntimeCommand::Shutdown { reply } => {
                                         cancellation.cancel();
                                         shutdown = Some(reply);
                                     }
-                                    command => pending.push_back(command),
+                                    command => defer_runtime_command(&mut pending, command),
                                 }
                             }
                         }
@@ -1423,6 +1569,65 @@ async fn runtime_actor(
     }
     let _ = stop_remote_configuration_sync(&mut remote_sync).await;
     let _ = app.shutdown().await;
+}
+
+fn cancel_active_or_deferred_turn(
+    active_request_id: &str,
+    cancelled_request_id: &str,
+    pending: &VecDeque<RuntimeCommand>,
+    pre_cancelled: &mut BTreeSet<String>,
+    cancellation: &CancellationToken,
+) -> bool {
+    if cancelled_request_id == active_request_id {
+        cancellation.cancel();
+        return true;
+    }
+    if pending.iter().any(|command| {
+        matches!(command, RuntimeCommand::RunTurn { request, .. } if request.request_id == cancelled_request_id)
+    }) {
+        pre_cancelled.insert(cancelled_request_id.to_owned());
+        return true;
+    }
+    false
+}
+
+fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: RuntimeCommand) {
+    if pending.len() < MAX_DEFERRED_RUNTIME_COMMANDS {
+        pending.push_back(command);
+        return;
+    }
+    let detail = "Agent runtime deferred-command capacity is exhausted";
+    match command {
+        RuntimeCommand::ListSessions { reply } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
+        RuntimeCommand::ReadSession { reply, .. } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
+        RuntimeCommand::ReadTrajectory { reply, .. } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
+        RuntimeCommand::RenameSession { reply, .. } => {
+            let _ = reply.send(Err(RenameSessionFailure::Runtime(detail.to_owned())));
+        }
+        RuntimeCommand::RunTurn { events, .. } => {
+            if let Some(event) =
+                stream_event("turn.failed", None, &WebStreamEvent::Failed { detail })
+            {
+                let _ = events.try_send(Ok(event));
+            }
+        }
+        RuntimeCommand::ModelCatalog { .. }
+        | RuntimeCommand::Plugin(_)
+        | RuntimeCommand::RemoteConfigurationWatchDegraded { .. }
+        | RuntimeCommand::AnswerInteraction { .. }
+        | RuntimeCommand::CancelTurn { .. }
+        | RuntimeCommand::TaskSnapshot { .. }
+        | RuntimeCommand::PendingInteractions { .. }
+        | RuntimeCommand::Shutdown { .. } => {
+            unreachable!("active-Turn priority command reached the deferred queue")
+        }
+    }
 }
 
 fn start_remote_configuration_sync(
@@ -1644,7 +1849,68 @@ async fn read_session_from_app(
     session_id: String,
 ) -> Result<ReadSessionResponse, String> {
     let turn = app.lease_web_turn().await?;
-    turn.read_session(session_id, 0, 1000).await
+    collect_session_pages(&session_id, |cursor| {
+        turn.read_session(session_id.clone(), cursor, SESSION_READ_PAGE_LIMIT)
+    })
+    .await
+}
+
+async fn collect_session_pages<F, Fut>(
+    session_id: &str,
+    mut read: F,
+) -> Result<ReadSessionResponse, String>
+where
+    F: FnMut(u64) -> Fut,
+    Fut: std::future::Future<Output = Result<ReadSessionResponse, String>>,
+{
+    let mut cursor = 0_u64;
+    let mut complete: Option<ReadSessionResponse> = None;
+    let mut expected_revision = None;
+    loop {
+        let mut page = read(cursor).await?;
+        if page.session_id != session_id {
+            return Err("Session read returned a different Session ID".to_owned());
+        }
+        let revision = page
+            .revision
+            .parse::<u64>()
+            .map_err(|_| "Session returned an invalid revision".to_owned())?;
+        match expected_revision {
+            Some(expected) if revision != expected => {
+                return Err("Session changed while its history was being read".to_owned());
+            }
+            None => expected_revision = Some(revision),
+            _ => {}
+        }
+        if let Some(first) = complete.as_ref()
+            && (page.title != first.title || page.title_revision != first.title_revision)
+        {
+            return Err("Session metadata changed while its history was being read".to_owned());
+        }
+        for event in &page.events {
+            let event_revision = event
+                .revision
+                .parse::<u64>()
+                .map_err(|_| "Session returned an invalid event revision".to_owned())?;
+            let next = cursor
+                .checked_add(1)
+                .ok_or_else(|| "Session revision overflowed".to_owned())?;
+            if event_revision != next || event_revision > revision {
+                return Err("Session read returned non-contiguous events".to_owned());
+            }
+            cursor = event_revision;
+        }
+        if page.events.is_empty() && cursor != revision {
+            return Err("Session read ended before its advertised revision".to_owned());
+        }
+        match complete.as_mut() {
+            Some(complete) => complete.events.append(&mut page.events),
+            None => complete = Some(page),
+        }
+        if cursor == revision {
+            return complete.ok_or_else(|| "Session read returned no page".to_owned());
+        }
+    }
 }
 
 fn project_web_trajectory(session: &ReadSessionResponse) -> Result<Trajectory, String> {
@@ -1875,24 +2141,37 @@ async fn send_stream_event(
     id: Option<&str>,
     payload: &WebStreamEvent<'_>,
 ) -> bool {
-    let Ok(data) = serde_json::to_string(payload) else {
+    let Some(event) = stream_event(kind, id, payload) else {
         return false;
     };
+    events.send(Ok(event)).await.is_ok()
+}
+
+fn stream_event(
+    kind: &'static str,
+    id: Option<&str>,
+    payload: &WebStreamEvent<'_>,
+) -> Option<Event> {
+    let data = serde_json::to_string(payload).ok()?;
     let mut event = Event::default().event(kind).data(data);
     if let Some(id) = id {
         event = event.id(id);
     }
-    events.send(Ok(event)).await.is_ok()
+    Some(event)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::future::ready;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use lenso_app_authoring::{
         LocalPluginRootAuthority, PluginConfigurationAuthoritySource, PluginConfigurationProposal,
         PluginRootAuthoringState, PluginRootRevision,
     };
+    use tower::ServiceExt as _;
 
     use super::*;
 
@@ -1932,6 +2211,169 @@ mod tests {
         }
     }
 
+    fn runtime_with_access(access: AgentWebAccess) -> WebRuntime {
+        let (commands, _receiver) = mpsc::channel(1);
+        WebRuntime {
+            access: access.into(),
+            available_tools: Vec::new(),
+            commands,
+            control: AgentWebControl::Disabled.into(),
+            policy: Arc::new(RwLock::new(ToolPolicyDocument {
+                allowed: Vec::new(),
+                revision: 0,
+                schema: TOOL_POLICY_SCHEMA.to_owned(),
+            })),
+            policy_path: None,
+            profile: None,
+            plugin_control: None,
+            plugin_mutations: PluginMutationCoordinator::default(),
+        }
+    }
+
+    async fn bootstrap_status(access: AgentWebAccess, token: Option<&str>) -> StatusCode {
+        let mut request = Request::builder().uri("/api/console/v1/agent/bootstrap");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        router(runtime_with_access(access))
+            .oneshot(request.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    async fn control_status(
+        access: AgentWebAccess,
+        control: AgentWebControl,
+        token: Option<&str>,
+    ) -> StatusCode {
+        let mut runtime = runtime_with_access(access);
+        runtime.control = control.into();
+        let mut request = Request::builder().uri("/api/console/v1/agent/control/tool-policy");
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        router(runtime)
+            .oneshot(request.body(axum::body::Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn data_plane_middleware_enforces_bearer_and_preserves_host_authorized_local_access() {
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::Bearer("secret".to_owned()), None).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::Bearer("secret".to_owned()), Some("wrong")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::Bearer("secret".to_owned()), Some("secret")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::Bearer("   ".to_owned()), None).await,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::Local, None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::HostAuthorized, None).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            bootstrap_status(AgentWebAccess::Disabled, None).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    #[test]
+    fn embedded_web_config_disables_the_data_plane_by_default() {
+        let config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+        assert!(matches!(config.access, AgentWebAccess::Disabled));
+    }
+
+    #[test]
+    fn authorization_token_comparison_covers_equal_and_unequal_lengths() {
+        let expected = bearer_digest("same-secret");
+        assert!(constant_time_digest_eq(
+            &bearer_digest("same-secret"),
+            &expected
+        ));
+        assert!(!constant_time_digest_eq(
+            &bearer_digest("same-secreu"),
+            &expected
+        ));
+        assert!(!constant_time_digest_eq(
+            &bearer_digest("a-different-length"),
+            &bearer_digest("short")
+        ));
+    }
+
+    #[test]
+    fn authorization_debug_output_redacts_bearer_secrets() {
+        let data_secret = "data-secret-must-not-leak";
+        let control_secret = "control-secret-must-not-leak";
+        let access = AgentWebAccess::Bearer(data_secret.to_owned());
+        let control = AgentWebControl::Bearer(control_secret.to_owned());
+        let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+        config.access = access.clone();
+        config.control = control.clone();
+        let mut runtime = runtime_with_access(access.clone());
+        runtime.control = control.clone().into();
+        let surface = AgentWebSurface {
+            runtime: runtime.clone(),
+        };
+
+        for rendered in [
+            format!("{access:?}"),
+            format!("{control:?}"),
+            format!("{config:?}"),
+            format!("{runtime:?}"),
+            format!("{surface:?}"),
+        ] {
+            assert!(rendered.contains("REDACTED") || !rendered.contains("Bearer"));
+            assert!(!rendered.contains(data_secret));
+            assert!(!rendered.contains(control_secret));
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn data_plane_authorization_is_independent_from_control_authorization() {
+        assert_eq!(
+            control_status(
+                AgentWebAccess::Disabled,
+                AgentWebControl::HostAuthorized,
+                None,
+            )
+            .await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            control_status(
+                AgentWebAccess::Bearer("data-secret".to_owned()),
+                AgentWebControl::Bearer("control-secret".to_owned()),
+                Some("data-secret"),
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            control_status(
+                AgentWebAccess::Bearer("data-secret".to_owned()),
+                AgentWebControl::Bearer("control-secret".to_owned()),
+                Some("control-secret"),
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+
     #[test]
     fn console_tool_policy_is_explicit_sorted_and_deduplicated() {
         assert_eq!(
@@ -1949,6 +2391,250 @@ mod tests {
     fn console_tool_policy_defaults_to_no_tools_and_rejects_invalid_names() {
         assert!(normalize_allowed_tools(Vec::new()).unwrap().is_empty());
         assert!(normalize_allowed_tools(vec![String::new()]).is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn active_turn_deferred_commands_are_bounded_and_overflow_fails_closed() {
+        let mut pending = VecDeque::new();
+        for index in 0..MAX_DEFERRED_RUNTIME_COMMANDS {
+            let (events, receiver) = mpsc::channel(1);
+            defer_runtime_command(
+                &mut pending,
+                RuntimeCommand::RunTurn {
+                    events,
+                    request: WebTurnRequest {
+                        edit_turn_id: None,
+                        input: "queued".to_owned(),
+                        request_id: format!("queued-{index}"),
+                        session_id: None,
+                    },
+                },
+            );
+            drop(receiver);
+        }
+        let (events, mut receiver) = mpsc::channel(1);
+        defer_runtime_command(
+            &mut pending,
+            RuntimeCommand::RunTurn {
+                events,
+                request: WebTurnRequest {
+                    edit_turn_id: None,
+                    input: "overflow".to_owned(),
+                    request_id: "overflow".to_owned(),
+                    session_id: None,
+                },
+            },
+        );
+
+        assert_eq!(pending.len(), MAX_DEFERRED_RUNTIME_COMMANDS);
+        assert!(matches!(receiver.recv().await, Some(Ok(_))));
+    }
+
+    #[test]
+    fn deferred_turn_overflow_never_waits_for_a_slow_sse_consumer() {
+        let mut pending = (0..MAX_DEFERRED_RUNTIME_COMMANDS)
+            .map(|index| {
+                let (events, _receiver) = mpsc::channel(1);
+                RuntimeCommand::RunTurn {
+                    events,
+                    request: WebTurnRequest {
+                        edit_turn_id: None,
+                        input: "queued".to_owned(),
+                        request_id: format!("queued-{index}"),
+                        session_id: None,
+                    },
+                }
+            })
+            .collect::<VecDeque<_>>();
+        let (events, receiver) = mpsc::channel(1);
+        events.try_send(Ok(Event::default())).unwrap();
+
+        defer_runtime_command(
+            &mut pending,
+            RuntimeCommand::RunTurn {
+                events,
+                request: WebTurnRequest {
+                    edit_turn_id: None,
+                    input: "overflow".to_owned(),
+                    request_id: "overflow".to_owned(),
+                    session_id: None,
+                },
+            },
+        );
+
+        assert_eq!(pending.len(), MAX_DEFERRED_RUNTIME_COMMANDS);
+        assert_eq!(receiver.len(), 1);
+    }
+
+    #[test]
+    fn deferred_turns_drain_in_admission_order() {
+        let mut pending = VecDeque::new();
+        for request_id in ["first", "second", "third"] {
+            let (events, _receiver) = mpsc::channel(1);
+            defer_runtime_command(
+                &mut pending,
+                RuntimeCommand::RunTurn {
+                    events,
+                    request: WebTurnRequest {
+                        edit_turn_id: None,
+                        input: "queued".to_owned(),
+                        request_id: request_id.to_owned(),
+                        session_id: None,
+                    },
+                },
+            );
+        }
+
+        let mut drained = Vec::new();
+        while let Some(command) = pending.pop_front() {
+            let RuntimeCommand::RunTurn { request, .. } = command else {
+                panic!("unexpected deferred command")
+            };
+            drained.push(request.request_id);
+        }
+        assert_eq!(drained, ["first", "second", "third"]);
+    }
+
+    #[test]
+    fn active_turn_cancellation_prioritizes_active_and_marks_admitted_deferred_turns() {
+        let mut pending = VecDeque::new();
+        for request_id in ["queued-a", "queued-b"] {
+            let (events, _receiver) = mpsc::channel(1);
+            pending.push_back(RuntimeCommand::RunTurn {
+                events,
+                request: WebTurnRequest {
+                    edit_turn_id: None,
+                    input: "queued".to_owned(),
+                    request_id: request_id.to_owned(),
+                    session_id: None,
+                },
+            });
+        }
+        let cancellation = CancellationToken::new();
+        let mut pre_cancelled = BTreeSet::new();
+
+        assert!(cancel_active_or_deferred_turn(
+            "active",
+            "queued-b",
+            &pending,
+            &mut pre_cancelled,
+            &cancellation,
+        ));
+        assert!(!cancellation.is_cancelled());
+        assert_eq!(pre_cancelled, BTreeSet::from(["queued-b".to_owned()]));
+
+        assert!(cancel_active_or_deferred_turn(
+            "active",
+            "active",
+            &pending,
+            &mut pre_cancelled,
+            &cancellation,
+        ));
+        assert!(cancellation.is_cancelled());
+
+        let unrelated = CancellationToken::new();
+        assert!(!cancel_active_or_deferred_turn(
+            "another-active",
+            "missing",
+            &pending,
+            &mut pre_cancelled,
+            &unrelated,
+        ));
+        assert!(!unrelated.is_cancelled());
+    }
+
+    fn session_page(
+        revision: u64,
+        title: &str,
+        title_revision: u64,
+        event_revisions: impl IntoIterator<Item = u64>,
+    ) -> ReadSessionResponse {
+        let events = event_revisions
+            .into_iter()
+            .map(|event_revision| {
+                serde_json::json!({
+                    "revision": event_revision.to_string(),
+                    "event_id": format!("event-{event_revision}"),
+                    "kind": "turn_started",
+                    "turn_id": format!("turn-{event_revision}"),
+                    "occurred_at": "2026-08-30T00:00:00Z",
+                    "payload_json": "{}",
+                })
+            })
+            .collect::<Vec<_>>();
+        serde_json::from_value(serde_json::json!({
+            "session_id": "session-a",
+            "revision": revision.to_string(),
+            "title": title,
+            "title_revision": title_revision.to_string(),
+            "events": events,
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_read_collects_more_than_one_bounded_page() {
+        let mut pages = VecDeque::from([
+            session_page(1001, "Stable title", 1, 1..=1000),
+            session_page(1001, "Stable title", 1, 1001..=1001),
+        ]);
+        let cursors = Rc::new(RefCell::new(Vec::new()));
+        let observed = Rc::clone(&cursors);
+
+        let session = collect_session_pages("session-a", move |cursor| {
+            observed.borrow_mut().push(cursor);
+            ready(
+                pages
+                    .pop_front()
+                    .ok_or_else(|| "unexpected extra Session page".to_owned()),
+            )
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(&*cursors.borrow(), &[0, 1000]);
+        assert_eq!(session.events.len(), 1001);
+        assert_eq!(session.events.last().unwrap().revision, "1001");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_read_rejects_metadata_changes_between_pages() {
+        let mut pages = VecDeque::from([
+            session_page(2, "First title", 1, 1..=1),
+            session_page(2, "Changed title", 2, 2..=2),
+        ]);
+
+        let error = collect_session_pages("session-a", move |_| {
+            ready(
+                pages
+                    .pop_front()
+                    .ok_or_else(|| "unexpected extra Session page".to_owned()),
+            )
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("metadata changed"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_read_rejects_non_contiguous_event_revisions() {
+        let mut pages = VecDeque::from([
+            session_page(3, "Stable title", 1, 1..=1),
+            session_page(3, "Stable title", 1, 3..=3),
+        ]);
+
+        let error = collect_session_pages("session-a", move |_| {
+            ready(
+                pages
+                    .pop_front()
+                    .ok_or_else(|| "unexpected extra Session page".to_owned()),
+            )
+        })
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("non-contiguous"));
     }
 
     #[tokio::test(flavor = "current_thread")]

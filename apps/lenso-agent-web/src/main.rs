@@ -2,8 +2,8 @@ use std::{net::SocketAddr, path::PathBuf, process::ExitCode};
 
 use clap::{ArgAction, Parser};
 use lenso_agent_web::{
-    AgentWebConfig, AgentWebControl, AgentWebSurface, CONTROL_TOKEN_ENV,
-    PluginConfigurationStoreConfig, RemotePluginConfigurationConfig,
+    AgentWebAccess, AgentWebConfig, AgentWebControl, AgentWebSurface, CONTROL_TOKEN_ENV,
+    DATA_PLANE_TOKEN_ENV, PluginConfigurationStoreConfig, RemotePluginConfigurationConfig,
     RemotePluginConfigurationResource,
 };
 
@@ -79,6 +79,10 @@ async fn main() -> ExitCode {
 }
 
 async fn run(args: Args) -> Result<(), String> {
+    let data_plane_token = std::env::var(DATA_PLANE_TOKEN_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let access = access_for_listener(args.listen, data_plane_token)?;
     let mut config = AgentWebConfig::new(lenso_agent_default_plugins::link);
     config.plan = args.plan;
     config.profile = args.profile;
@@ -110,9 +114,10 @@ async fn run(args: Args) -> Result<(), String> {
             );
         }
     };
+    config.access = access;
     config.control = std::env::var(CONTROL_TOKEN_ENV)
         .ok()
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .map_or(AgentWebControl::Disabled, AgentWebControl::Bearer);
     let surface = AgentWebSurface::start(config).await?;
     let listener = tokio::net::TcpListener::bind(args.listen)
@@ -126,6 +131,50 @@ async fn run(args: Args) -> Result<(), String> {
     surface.shutdown().await
 }
 
+fn access_for_listener(
+    listen: SocketAddr,
+    token: Option<String>,
+) -> Result<AgentWebAccess, String> {
+    match token {
+        Some(token) if !token.trim().is_empty() => Ok(AgentWebAccess::Bearer(token)),
+        None | Some(_) if listen.ip().is_loopback() => Ok(AgentWebAccess::Local),
+        None | Some(_) => Err(format!(
+            "{DATA_PLANE_TOKEN_ENV} is required when Agent Web listens beyond loopback"
+        )),
+    }
+}
+
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_listener_preserves_token_free_local_startup() {
+        let access = access_for_listener("127.0.0.1:8787".parse().unwrap(), None).unwrap();
+        assert!(matches!(access, AgentWebAccess::Local));
+    }
+
+    #[test]
+    fn non_loopback_listener_requires_a_token() {
+        let error = access_for_listener("0.0.0.0:8787".parse().unwrap(), None).unwrap_err();
+        assert!(error.contains(DATA_PLANE_TOKEN_ENV));
+        let whitespace =
+            access_for_listener("0.0.0.0:8787".parse().unwrap(), Some(" \t".to_owned()))
+                .unwrap_err();
+        assert!(whitespace.contains(DATA_PLANE_TOKEN_ENV));
+    }
+
+    #[test]
+    fn non_loopback_listener_uses_bearer_authorization() {
+        let access = access_for_listener(
+            "0.0.0.0:8787".parse().unwrap(),
+            Some("fixture-token".to_owned()),
+        )
+        .unwrap();
+        assert!(matches!(access, AgentWebAccess::Bearer(token) if token == "fixture-token"));
+    }
 }

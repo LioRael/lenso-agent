@@ -8,10 +8,10 @@ use super::{
     Padding, Palette, Paragraph, PromptAnchor, QueueHitTarget, Rect, RenderedEntryRow,
     RenderedLinkRow, RenderedThinkingRow, RenderedToolRow, RenderedUserRow, ScrollState, Scrollbar,
     ScrollbarOrientation, ScrollbarState, SessionMode, ShortcutAction, ShortcutHitTarget, Span,
-    Style, SuggestionHitTarget, Text, ThinkingHitTarget, ToolCard, ToolHitTarget, ToolSelection,
-    ToolStatus, TranscriptEntry, TranscriptRender, TuiState, UiPhase, UserEntryRender,
-    UserHitTarget, Wrap, blocks, markdown, markdown_lines_with_width, render_grouped_tool_block,
-    render_thinking_block, render_tool_block, render_tool_group,
+    Style, SuggestionHitTarget, Text, ThinkingCard, ThinkingHitTarget, ToolCard, ToolHitTarget,
+    ToolSelection, ToolStatus, TranscriptEntry, TranscriptRender, TuiState, UiPhase,
+    UserEntryRender, UserHitTarget, Wrap, blocks, markdown, markdown_lines_with_width,
+    render_grouped_tool_block, render_thinking_block, render_tool_block, render_tool_group,
 };
 
 const ENTRY_ACCENT_WIDTH: usize = 1;
