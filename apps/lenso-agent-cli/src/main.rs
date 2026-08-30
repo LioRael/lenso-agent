@@ -524,7 +524,7 @@ fn run_profile(command: &ProfileCommand) -> Result<(), String> {
         ProfileCommand::InstallCoding => {
             let home = AgentDirectories::resolve()?.home().to_path_buf();
             install_coding_profiles(&home)?;
-            println!("Installed coding Profiles in {}", home.display());
+            println!("Installed or updated coding Profiles in {}", home.display());
             println!(
                 "Run `lenso-agent --profile code`, `lenso-agent --profile code-sandbox`, or `lenso-agent --profile plan`."
             );
@@ -534,11 +534,12 @@ fn run_profile(command: &ProfileCommand) -> Result<(), String> {
 }
 
 fn install_coding_profiles(home: &Path) -> Result<(), String> {
+    lenso_agent_host::migrate_legacy_official_files(home)?;
     let files = coding_profile_files();
     for (relative, content) in &files {
         let path = home.join(relative);
         match fs::read_to_string(&path) {
-            Ok(existing) if existing == *content => {}
+            Ok(existing) if existing == content.as_str() => {}
             Ok(_) => {
                 return Err(format!(
                     "refusing to overwrite customized coding Profile file: {}",
@@ -577,8 +578,12 @@ fn install_coding_profiles(home: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
-    vec![
+#[allow(
+    clippy::too_many_lines,
+    reason = "one reviewed list keeps the official Profile installation auditable"
+)]
+fn coding_profile_files() -> Vec<(&'static str, String)> {
+    let mut files = vec![
         (
             "plugins/lenso.agent.workspace-instructions/default.toml",
             "working_directory = \".\"\nfile_name = \"AGENTS.md\"\nmax_ancestor_depth = 32\nmax_file_bytes = 262144\nmax_total_bytes = 1048576\n",
@@ -640,18 +645,6 @@ fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
             "default_decision = \"ask\"\nallow_tools = [\"read_text\", \"skill_list\", \"skill\", \"skill_resources\", \"skill_resource\", \"ask_user\", \"git_status\", \"git_diff\", \"git_log\", \"list_subagents\", \"list_worktrees\", \"review_worktree\", \"checkpoint_create\", \"checkpoint_review\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n",
         ),
         (
-            "plugins/lenso.agent.prompt.static/coding.toml",
-            "[[contributions]]\nid = \"harness.coding\"\nversion = \"1.1.0\"\nkind = \"instruction\"\ncontent = \"Work as a coding agent. Inspect before editing and preserve unrelated work. Before the first file mutation, create a Workspace checkpoint and pass its ID to every edit or create_file call. Review the checkpoint after changes, then ask the user to accept or restore it when that decision is not already explicit. Keep changes bounded and verify the result. Treat native processes as trusted execution, not as a security sandbox.\"\n",
-        ),
-        (
-            "plugins/lenso.agent.prompt.static/sandbox-coding.toml",
-            "[[contributions]]\nid = \"harness.sandbox-coding\"\nversion = \"1.0.0\"\nkind = \"instruction\"\ncontent = \"Work as a coding agent inside the selected OS sandbox. Inspect before editing and preserve unrelated work. Before the first file mutation, create a Workspace checkpoint and pass its ID to every edit or create_file call. Review the checkpoint after changes, then ask the user to accept or restore it when that decision is not already explicit. Keep changes bounded and verify the result. The process sandbox grants read-only host files, Workspace and private temporary writes, and no network by default; do not claim stronger isolation than the selected backend provides.\"\n",
-        ),
-        (
-            "plugins/lenso.agent.prompt.static/plan.toml",
-            "[[contributions]]\nid = \"harness.plan\"\nversion = \"1.0.0\"\nkind = \"instruction\"\ncontent = \"Work in read-only planning mode. Inspect the workspace, explain evidence and tradeoffs, and produce an executable plan. Do not claim to have changed files or external state.\"\n",
-        ),
-        (
             "profiles/code.toml",
             "description = \"Official coding agent with workspace instructions, isolated child worktrees, and inline approval\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.workspace-edit/default\",\n  \"lenso.agent.process.native/default\",\n  \"lenso.agent.process-tools/default\",\n  \"lenso.agent.git-tools/default\",\n  \"lenso.agent.code-mode-tools/default\",\n  \"lenso.agent.worktree-provider/default\",\n  \"lenso.agent.subagent-tools/worktree\",\n  \"lenso.agent.tools/worker-tools\",\n  \"lenso.agent.loop/researcher\",\n  \"lenso.agent.loop/reviewer\",\n  \"lenso.agent.loop/worker-a\",\n  \"lenso.agent.loop/worker-b\",\n  \"lenso.agent.interactive-approval-hook/default\",\n  \"lenso.agent.prompt.static/coding\",\n]\n",
         ),
@@ -664,6 +657,21 @@ fn coding_profile_files() -> Vec<(&'static str, &'static str)> {
             "description = \"Official read-only planning agent\"\ninstances = [\n  \"lenso.agent.workspace-instructions/default\",\n  \"lenso.agent.prompt.static/plan\",\n]\n",
         ),
     ]
+    .into_iter()
+    .map(|(path, content)| (path, content.to_owned()))
+    .collect::<Vec<_>>();
+    files.extend([
+        (
+            "plugins/lenso.agent.prompt.static/coding.toml",
+            String::new(),
+        ),
+        (
+            "plugins/lenso.agent.prompt.static/sandbox-coding.toml",
+            String::new(),
+        ),
+        ("plugins/lenso.agent.prompt.static/plan.toml", String::new()),
+    ]);
+    files
 }
 
 fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
@@ -820,6 +828,21 @@ mod profile_tests {
         let code = fs::read_to_string(home.path().join("profiles/code.toml")).unwrap();
         let sandbox = fs::read_to_string(home.path().join("profiles/code-sandbox.toml")).unwrap();
         let plan = fs::read_to_string(home.path().join("profiles/plan.toml")).unwrap();
+        let coding_prompt = fs::read_to_string(
+            home.path()
+                .join("plugins/lenso.agent.prompt.static/coding.toml"),
+        )
+        .unwrap();
+        let sandbox_prompt = fs::read_to_string(
+            home.path()
+                .join("plugins/lenso.agent.prompt.static/sandbox-coding.toml"),
+        )
+        .unwrap();
+        let plan_prompt = fs::read_to_string(
+            home.path()
+                .join("plugins/lenso.agent.prompt.static/plan.toml"),
+        )
+        .unwrap();
         let native_process = fs::read_to_string(
             home.path()
                 .join("plugins/lenso.agent.process.native/default.toml"),
@@ -842,6 +865,9 @@ mod profile_tests {
         assert!(!sandbox.contains("lenso.agent.process.native/default"));
         assert!(!plan.contains("workspace-edit"));
         assert!(plan.contains("lenso.agent.workspace-instructions/default"));
+        assert!(coding_prompt.is_empty());
+        assert!(sandbox_prompt.is_empty());
+        assert!(plan_prompt.is_empty());
         for configuration in [native_process, sandbox_process] {
             assert!(configuration.contains(
                 "program_presets = [\"rust\", \"javascript\", \"python\", \"go\", \"build\"]"

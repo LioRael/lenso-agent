@@ -8,6 +8,7 @@ mod directories;
 pub mod generation;
 mod generation_authority;
 mod host;
+mod official_prompts;
 mod online_generation;
 mod plugin_root;
 mod profile;
@@ -23,6 +24,7 @@ pub use host::{
     ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,
     WebSurface,
 };
+pub use official_prompts::migrate_legacy_official_files;
 pub use provider_catalog::{
     ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelProviderCatalogEntry,
     ProviderModelCatalog,
@@ -92,6 +94,9 @@ fn resolve_base_plan(
     directories: &AgentDirectories,
     profile_name: Option<&str>,
 ) -> Result<Vec<u8>, String> {
+    if let Some(profile_name) = profile_name {
+        official_prompts::prepare_named_profile(directories.home(), profile_name)?;
+    }
     let plugin_root = directories.plugins();
     let snapshot = plugin_root::snapshot(&plugin_root)?;
     let plan = if let Some(profile_name) = profile_name {
