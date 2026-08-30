@@ -22,6 +22,15 @@ use lenso_capability_agent_model::{
 use lenso_capability_secrets::{self as secrets_contract, ResolveRequest};
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
+const MAX_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_TOOL_CALLS: usize = 128;
+const MAX_TOOL_CALL_ID_BYTES: usize = 1024;
+const MAX_TOOL_NAME_BYTES: usize = 256;
+const MAX_TOOL_ARGUMENT_BYTES: usize = 1024 * 1024;
+const MAX_TOOL_CALL_TOTAL_BYTES: usize = 4 * 1024 * 1024;
+const MAX_PUSH_OUTPUT_ITEMS: usize = 1024;
+const MAX_PUSH_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OpenAiConfig {
@@ -405,40 +414,106 @@ impl NativeStreamSession for OpenAiStream {
 #[derive(Debug, Default)]
 struct SseDecoder {
     buffer: Vec<u8>,
+    separator: Vec<u8>,
     tool_calls: BTreeMap<u64, ToolCallAccumulator>,
+    tool_call_count: usize,
+    tool_call_bytes: usize,
+    tool_calls_finished: bool,
     sequence: u64,
     terminal: bool,
 }
 
+#[derive(Debug, Default)]
+struct PushOutputBudget {
+    items: usize,
+    bytes: usize,
+}
+
+impl PushOutputBudget {
+    fn reserve(&mut self, bytes: usize) -> Result<(), RuntimeFailure> {
+        self.items = self
+            .items
+            .checked_add(1)
+            .filter(|items| *items <= MAX_PUSH_OUTPUT_ITEMS)
+            .ok_or_else(provider_protocol_failure)?;
+        self.bytes = self
+            .bytes
+            .checked_add(bytes)
+            .filter(|total| *total <= MAX_PUSH_OUTPUT_BYTES)
+            .ok_or_else(provider_protocol_failure)?;
+        Ok(())
+    }
+}
+
 impl SseDecoder {
     fn push(&mut self, bytes: &[u8]) -> Result<Vec<NativeStreamItem>, RuntimeFailure> {
-        self.buffer.extend_from_slice(bytes);
         let mut output = Vec::new();
-        while let Some((end, delimiter)) = frame_boundary(&self.buffer) {
-            let frame = self.buffer.drain(..end).collect::<Vec<_>>();
-            self.buffer.drain(..delimiter);
-            self.decode_frame(&frame, &mut output)?;
+        let mut budget = PushOutputBudget::default();
+        for byte in bytes {
+            self.push_byte(*byte, &mut output, &mut budget)?;
         }
         Ok(output)
     }
 
     fn finish(&mut self) -> Result<Vec<NativeStreamItem>, RuntimeFailure> {
         let mut output = Vec::new();
+        let mut budget = PushOutputBudget::default();
+        while !self.separator.is_empty() {
+            let byte = self.separator.remove(0);
+            self.push_content_byte(byte)?;
+        }
         if !self.buffer.iter().all(u8::is_ascii_whitespace) {
             let frame = std::mem::take(&mut self.buffer);
-            self.decode_frame(&frame, &mut output)?;
+            self.decode_frame(&frame, &mut output, &mut budget)?;
         }
         if !self.terminal {
-            self.finish_success(&mut output)?;
+            self.finish_success(&mut output, &mut budget)?;
         }
         Ok(output)
+    }
+
+    fn push_byte(
+        &mut self,
+        byte: u8,
+        output: &mut Vec<NativeStreamItem>,
+        budget: &mut PushOutputBudget,
+    ) -> Result<(), RuntimeFailure> {
+        self.separator.push(byte);
+        loop {
+            if matches!(self.separator.as_slice(), b"\n\n" | b"\r\n\r\n") {
+                self.separator.clear();
+                let frame = std::mem::take(&mut self.buffer);
+                self.decode_frame(&frame, output, budget)?;
+                return Ok(());
+            }
+            if [b"\n\n".as_slice(), b"\r\n\r\n".as_slice()]
+                .iter()
+                .any(|delimiter| delimiter.starts_with(&self.separator))
+            {
+                return Ok(());
+            }
+            let content = self.separator.remove(0);
+            self.push_content_byte(content)?;
+        }
+    }
+
+    fn push_content_byte(&mut self, byte: u8) -> Result<(), RuntimeFailure> {
+        if self.buffer.len() >= MAX_EVENT_BYTES {
+            return Err(provider_protocol_failure());
+        }
+        self.buffer.push(byte);
+        Ok(())
     }
 
     fn decode_frame(
         &mut self,
         frame: &[u8],
         output: &mut Vec<NativeStreamItem>,
+        budget: &mut PushOutputBudget,
     ) -> Result<(), RuntimeFailure> {
+        if frame.len() > MAX_EVENT_BYTES {
+            return Err(provider_protocol_failure());
+        }
         let frame = std::str::from_utf8(frame).map_err(|_| provider_protocol_failure())?;
         let data = frame
             .lines()
@@ -449,68 +524,25 @@ impl SseDecoder {
         if data.is_empty() {
             return Ok(());
         }
+        if self.terminal {
+            return Err(provider_protocol_failure());
+        }
         if data == "[DONE]" {
-            if !self.terminal {
-                self.finish_success(output)?;
-            }
+            self.finish_success(output, budget)?;
             return Ok(());
         }
         let chunk =
             serde_json::from_str::<ChatChunk>(&data).map_err(|_| provider_protocol_failure())?;
         for choice in chunk.choices {
-            if let Some(reasoning) = choice
-                .delta
-                .reasoning_content
-                .filter(|value| !value.is_empty())
-            {
-                output.push(self.message(
-                    CompleteMessageKind::ReasoningSummaryDelta,
-                    reasoning,
-                    "",
-                    "",
-                    "{}",
-                    0,
-                    0,
-                ));
-            }
-            if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
-                output.push(self.message(
-                    CompleteMessageKind::TextDelta,
-                    content,
-                    "",
-                    "",
-                    "{}",
-                    0,
-                    0,
-                ));
-            }
-            for tool_call in choice.delta.tool_calls {
-                let accumulator = self.tool_calls.entry(tool_call.index).or_default();
-                if let Some(id) = tool_call.id {
-                    accumulator.id.push_str(&id);
-                }
-                if let Some(function) = tool_call.function {
-                    if let Some(name) = function.name {
-                        accumulator.name.push_str(&name);
-                    }
-                    if let Some(arguments) = function.arguments {
-                        accumulator.arguments.push_str(&arguments);
-                    }
-                }
-            }
-            if choice.finish_reason.as_deref() == Some("tool_calls") {
-                self.flush_tool_calls(output)?;
-            } else if choice.finish_reason.as_deref() == Some("content_filter") {
-                self.tool_calls.clear();
-                self.terminal = true;
-                output.push(NativeStreamItem::PeerHalfClosed);
-                output.push(NativeStreamItem::Terminal(Err(Box::new(
-                    CompleteError::ContentRejected,
-                ))));
+            self.decode_choice(choice, output, budget)?;
+            if self.terminal {
                 return Ok(());
             }
         }
         if let Some(usage) = chunk.usage {
+            budget.reserve(
+                usage.prompt_tokens.to_string().len() + usage.completion_tokens.to_string().len(),
+            )?;
             output.push(self.message(
                 CompleteMessageKind::Usage,
                 "",
@@ -524,10 +556,114 @@ impl SseDecoder {
         Ok(())
     }
 
-    fn finish_success(&mut self, output: &mut Vec<NativeStreamItem>) -> Result<(), RuntimeFailure> {
-        self.flush_tool_calls(output)?;
+    fn decode_choice(
+        &mut self,
+        choice: ChatChoice,
+        output: &mut Vec<NativeStreamItem>,
+        budget: &mut PushOutputBudget,
+    ) -> Result<(), RuntimeFailure> {
+        if let Some(reasoning) = choice
+            .delta
+            .reasoning_content
+            .filter(|value| !value.is_empty())
+        {
+            budget.reserve(reasoning.len())?;
+            output.push(self.message(
+                CompleteMessageKind::ReasoningSummaryDelta,
+                reasoning,
+                "",
+                "",
+                "{}",
+                0,
+                0,
+            ));
+        }
+        if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
+            budget.reserve(content.len())?;
+            output.push(self.message(CompleteMessageKind::TextDelta, content, "", "", "{}", 0, 0));
+        }
+        for tool_call in choice.delta.tool_calls {
+            self.accumulate_tool_call(tool_call)?;
+        }
+        match choice.finish_reason.as_deref() {
+            Some("tool_calls") => {
+                self.flush_tool_calls(output, budget)?;
+                self.tool_calls_finished = true;
+            }
+            Some("content_filter") => {
+                self.tool_calls.clear();
+                self.terminal = true;
+                budget.reserve(0)?;
+                output.push(NativeStreamItem::PeerHalfClosed);
+                budget.reserve(0)?;
+                output.push(NativeStreamItem::Terminal(Err(Box::new(
+                    CompleteError::ContentRejected,
+                ))));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn accumulate_tool_call(&mut self, tool_call: ToolCallDelta) -> Result<(), RuntimeFailure> {
+        let ToolCallDelta {
+            index,
+            id,
+            function,
+        } = tool_call;
+        if self.tool_calls_finished {
+            return Err(provider_protocol_failure());
+        }
+        if !self.tool_calls.contains_key(&index) {
+            self.tool_call_count = self
+                .tool_call_count
+                .checked_add(1)
+                .filter(|count| *count <= MAX_TOOL_CALLS)
+                .ok_or_else(provider_protocol_failure)?;
+        }
+        let added_bytes = id.as_ref().map_or(0, String::len)
+            + function
+                .as_ref()
+                .and_then(|value| value.name.as_ref())
+                .map_or(0, String::len)
+            + function
+                .as_ref()
+                .and_then(|value| value.arguments.as_ref())
+                .map_or(0, String::len);
+        self.tool_call_bytes = self
+            .tool_call_bytes
+            .checked_add(added_bytes)
+            .filter(|total| *total <= MAX_TOOL_CALL_TOTAL_BYTES)
+            .ok_or_else(provider_protocol_failure)?;
+        let accumulator = self.tool_calls.entry(index).or_default();
+        if let Some(id) = id {
+            append_bounded(&mut accumulator.id, &id, MAX_TOOL_CALL_ID_BYTES)?;
+        }
+        if let Some(function) = function {
+            if let Some(name) = function.name {
+                append_bounded(&mut accumulator.name, &name, MAX_TOOL_NAME_BYTES)?;
+            }
+            if let Some(arguments) = function.arguments {
+                append_bounded(
+                    &mut accumulator.arguments,
+                    &arguments,
+                    MAX_TOOL_ARGUMENT_BYTES,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_success(
+        &mut self,
+        output: &mut Vec<NativeStreamItem>,
+        budget: &mut PushOutputBudget,
+    ) -> Result<(), RuntimeFailure> {
+        self.flush_tool_calls(output, budget)?;
         self.terminal = true;
+        budget.reserve(0)?;
         output.push(NativeStreamItem::PeerHalfClosed);
+        budget.reserve(0)?;
         output.push(NativeStreamItem::Terminal(Ok(())));
         Ok(())
     }
@@ -535,6 +671,7 @@ impl SseDecoder {
     fn flush_tool_calls(
         &mut self,
         output: &mut Vec<NativeStreamItem>,
+        budget: &mut PushOutputBudget,
     ) -> Result<(), RuntimeFailure> {
         let calls = std::mem::take(&mut self.tool_calls);
         for call in calls.into_values() {
@@ -544,6 +681,13 @@ impl SseDecoder {
             {
                 return Err(provider_protocol_failure());
             }
+            budget.reserve(
+                call.id
+                    .len()
+                    .checked_add(call.name.len())
+                    .and_then(|bytes| bytes.checked_add(call.arguments.len()))
+                    .ok_or_else(provider_protocol_failure)?,
+            )?;
             output.push(self.message(
                 CompleteMessageKind::ToolCall,
                 "",
@@ -585,17 +729,16 @@ impl SseDecoder {
     }
 }
 
-fn frame_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
-    buffer
-        .windows(2)
-        .position(|window| window == b"\n\n")
-        .map(|position| (position, 2))
-        .or_else(|| {
-            buffer
-                .windows(4)
-                .position(|window| window == b"\r\n\r\n")
-                .map(|position| (position, 4))
-        })
+fn append_bounded(target: &mut String, value: &str, limit: usize) -> Result<(), RuntimeFailure> {
+    if target
+        .len()
+        .checked_add(value.len())
+        .is_none_or(|length| length > limit)
+    {
+        return Err(provider_protocol_failure());
+    }
+    target.push_str(value);
+    Ok(())
 }
 
 fn provider_protocol_failure() -> RuntimeFailure {
@@ -726,6 +869,240 @@ data: [DONE]
         );
         assert_eq!(messages[1].kind, CompleteMessageKind::Usage);
         assert_eq!(messages[1].input_tokens, "12");
+    }
+
+    #[test]
+    fn decoder_rejects_a_huge_chunk_without_allocating_past_the_event_bound() {
+        let mut decoder = SseDecoder::default();
+        let error = decoder.push(&vec![b'x'; MAX_EVENT_BYTES * 4]).unwrap_err();
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert_eq!(decoder.buffer.len(), MAX_EVENT_BYTES);
+        assert!(decoder.buffer.capacity() <= MAX_EVENT_BYTES);
+    }
+
+    #[test]
+    fn decoder_rechecks_an_oversized_tail_after_a_complete_frame() {
+        let mut bytes = br#"data: {"choices":[{"delta":{"content":"ok"},"finish_reason":null}]}
+
+"#
+        .to_vec();
+        bytes.extend(std::iter::repeat_n(b'x', MAX_EVENT_BYTES + 1));
+        let mut decoder = SseDecoder::default();
+
+        let error = decoder.push(&bytes).unwrap_err();
+
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert_eq!(decoder.buffer.len(), MAX_EVENT_BYTES);
+    }
+
+    #[test]
+    fn decoder_rejects_too_many_accumulated_tool_calls() {
+        let calls = (0..=MAX_TOOL_CALLS)
+            .map(|index| {
+                serde_json::json!({
+                    "index": index,
+                    "id": format!("call-{index}"),
+                    "function": {"name": "read", "arguments": "{}"},
+                })
+            })
+            .collect::<Vec<_>>();
+        let frame = format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "choices": [{"delta": {"tool_calls": calls}, "finish_reason": null}]
+            })
+        );
+        let error = SseDecoder::default().push(frame.as_bytes()).unwrap_err();
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+    }
+
+    #[test]
+    fn decoder_rejects_cumulative_tool_arguments_over_the_bound() {
+        let fragment = "x".repeat(MAX_TOOL_ARGUMENT_BYTES / 2 + 1);
+        let frame = |include_identity: bool| {
+            let mut call = serde_json::json!({
+                "index": 0,
+                "function": {"arguments": fragment},
+            });
+            if include_identity {
+                call["id"] = "call-1".into();
+                call["function"]["name"] = "read".into();
+            }
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({
+                    "choices": [{"delta": {"tool_calls": [call]}, "finish_reason": null}]
+                })
+            )
+        };
+        let mut decoder = SseDecoder::default();
+        decoder.push(frame(true).as_bytes()).unwrap();
+        let error = decoder.push(frame(false).as_bytes()).unwrap_err();
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+    }
+
+    #[test]
+    fn decoder_bounds_total_tool_bytes_across_multiple_calls() {
+        let fragment = "x".repeat(128 * 1024);
+        let mut decoder = SseDecoder::default();
+        let mut rejected = false;
+        for index in 0_u64..MAX_TOOL_CALLS as u64 {
+            let frame = format!(
+                "data: {}\n\n",
+                serde_json::json!({
+                    "choices": [{
+                        "delta": {"tool_calls": [{
+                            "index": index,
+                            "id": format!("call-{index}"),
+                            "function": {"name": "read", "arguments": fragment},
+                        }]},
+                        "finish_reason": null,
+                    }]
+                })
+            );
+            if decoder.push(frame.as_bytes()).is_err() {
+                rejected = true;
+                assert!(index > 1, "the total bound must span multiple Tool calls");
+                break;
+            }
+        }
+        assert!(rejected);
+    }
+
+    #[test]
+    fn decoder_rejects_a_second_tool_batch_after_the_first_finish() {
+        let batch = |index: u64, id: &str| {
+            format!(
+                "data: {}\n\n",
+                serde_json::json!({
+                    "choices": [{
+                        "delta": {"tool_calls": [{
+                            "index": index,
+                            "id": id,
+                            "function": {"name": "read", "arguments": "{}"},
+                        }]},
+                        "finish_reason": "tool_calls",
+                    }]
+                })
+            )
+        };
+        let mut decoder = SseDecoder::default();
+
+        let first = decoder.push(batch(0, "call-1").as_bytes()).unwrap();
+        assert_eq!(first.len(), 1);
+        assert_eq!(decoder.tool_call_count, 1);
+        assert!(decoder.tool_call_bytes > 0);
+
+        let error = decoder.push(batch(0, "call-2").as_bytes()).unwrap_err();
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert_eq!(decoder.tool_call_count, 1);
+    }
+
+    #[test]
+    fn decoder_accepts_usage_and_done_after_tool_calls_finish() {
+        let mut decoder = SseDecoder::default();
+        let tool = br#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}
+
+"#;
+        decoder.push(tool).unwrap();
+
+        let usage = decoder
+            .push(
+                br#"data: {"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":4}}
+
+"#,
+            )
+            .unwrap();
+        assert_eq!(usage.len(), 1);
+        let done = decoder.push(b"data: [DONE]\n\n").unwrap();
+        assert_eq!(done.len(), 2);
+        assert!(decoder.terminal);
+    }
+
+    #[test]
+    fn decoder_rejects_a_frame_after_done_in_the_same_push() {
+        let mut decoder = SseDecoder::default();
+        let error = decoder
+            .push(
+                concat!(
+                    "data: [DONE]\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"late\"},",
+                    "\"finish_reason\":null}]}\n\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert!(decoder.terminal);
+        assert_eq!(decoder.sequence, 0);
+    }
+
+    #[test]
+    fn decoder_rejects_a_frame_after_done_in_a_later_push() {
+        let mut decoder = SseDecoder::default();
+        let done = decoder.push(b"data: [DONE]\n\n").unwrap();
+        assert_eq!(done.len(), 2);
+
+        let error = decoder
+            .push(
+                concat!(
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"late\"},",
+                    "\"finish_reason\":null}]}\n\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert_eq!(decoder.sequence, 0);
+    }
+
+    #[test]
+    fn decoder_bounds_output_items_from_many_valid_frames_in_one_push() {
+        let frame = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"x\"},",
+            "\"finish_reason\":null}]}\n\n"
+        );
+        let chunk = frame.repeat(MAX_PUSH_OUTPUT_ITEMS + 1);
+        let mut decoder = SseDecoder::default();
+
+        let error = decoder.push(chunk.as_bytes()).unwrap_err();
+
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert_eq!(decoder.sequence, MAX_PUSH_OUTPUT_ITEMS as u64);
+    }
+
+    #[test]
+    fn decoder_bounds_output_bytes_from_valid_frames_in_one_push() {
+        let content = "x".repeat(MAX_EVENT_BYTES / 2);
+        let frame = format!(
+            "data: {}\n\n",
+            serde_json::json!({
+                "choices": [{"delta": {"content": content}, "finish_reason": null}]
+            })
+        );
+        let frame_count = MAX_PUSH_OUTPUT_BYTES / (MAX_EVENT_BYTES / 2) + 1;
+        let chunk = frame.repeat(frame_count);
+        let mut decoder = SseDecoder::default();
+
+        let error = decoder.push(chunk.as_bytes()).unwrap_err();
+
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+        assert!(decoder.sequence < frame_count as u64);
+    }
+
+    #[test]
+    fn bounded_accumulator_accepts_the_limit_and_rejects_one_more_byte() {
+        for limit in [
+            MAX_TOOL_CALL_ID_BYTES,
+            MAX_TOOL_NAME_BYTES,
+            MAX_TOOL_ARGUMENT_BYTES,
+        ] {
+            let mut value = String::new();
+            append_bounded(&mut value, &"x".repeat(limit), limit).unwrap();
+            assert!(append_bounded(&mut value, "x", limit).is_err());
+        }
     }
 
     #[test]

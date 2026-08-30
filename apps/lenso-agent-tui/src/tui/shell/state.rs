@@ -301,6 +301,7 @@ struct LinkHitTarget {
 
 struct TranscriptRender {
     lines: Vec<Line<'static>>,
+    row_count: usize,
     entry_rows: Vec<RenderedEntryRow>,
     link_rows: Vec<RenderedLinkRow>,
     tool_rows: Vec<RenderedToolRow>,
@@ -314,7 +315,6 @@ struct UserEntryRender<'a> {
     text: &'a str,
     created_at: &'a str,
     width: usize,
-    entry_index: usize,
     expanded: bool,
 }
 

@@ -7,6 +7,7 @@ use std::{
 };
 
 static WEB_SERVER_TEST: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const WEB_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test(flavor = "current_thread")]
 #[allow(
@@ -2245,7 +2246,8 @@ fn available_address() -> SocketAddr {
 
 async fn wait_until_ready(client: &reqwest::Client, address: SocketAddr, child: &mut Child) {
     let url = format!("http://{address}/api/console/v1/agent/bootstrap");
-    for _ in 0..100 {
+    let deadline = Instant::now() + WEB_SERVER_READY_TIMEOUT;
+    loop {
         if let Some(status) = child.try_wait().unwrap() {
             let stderr = child
                 .stderr
@@ -2262,9 +2264,12 @@ async fn wait_until_ready(client: &reqwest::Client, address: SocketAddr, child: 
         {
             return;
         }
+        assert!(
+            Instant::now() < deadline,
+            "Agent Web did not become ready at {url} within {WEB_SERVER_READY_TIMEOUT:?} while the child process remained alive"
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("Agent Web did not become ready at {url}");
 }
 
 fn stream_session_id(body: &str) -> String {

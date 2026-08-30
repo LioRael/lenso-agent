@@ -3,6 +3,21 @@ use super::{
     Palette, Span, Style,
 };
 
+#[cfg(test)]
+thread_local! {
+    static VISUAL_ROW_LINE_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn reset_visual_row_line_visits() {
+    VISUAL_ROW_LINE_VISITS.set(0);
+}
+
+#[cfg(test)]
+pub(super) fn visual_row_line_visits() -> usize {
+    VISUAL_ROW_LINE_VISITS.get()
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct EntryChrome {
     pub(super) accent: Option<Color>,
@@ -232,6 +247,8 @@ fn truncate_line(line: Line<'static>, max_width: usize) -> Line<'static> {
 }
 
 pub(super) fn visual_rows(lines: &[Line<'_>], width: usize) -> usize {
+    #[cfg(test)]
+    VISUAL_ROW_LINE_VISITS.set(VISUAL_ROW_LINE_VISITS.get().saturating_add(lines.len()));
     let width = width.max(1);
     lines
         .iter()

@@ -6,6 +6,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     rc::Rc,
+    thread::JoinHandle,
 };
 
 use futures::future::ready;
@@ -23,8 +24,11 @@ use lenso_capability_agent_session::{
     RenameErrorRevisionConflictPayload, RenameSessionRequest, RenameSessionResponse, SessionAppend,
     SessionList, SessionOpen, SessionProvider, SessionRead, SessionRename,
 };
-use lenso_kernel::{InvocationContext, RuntimeFailure};
+use lenso_kernel::{DeactivateContext, InvocationContext, RuntimeFailure};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use tokio::sync::{mpsc, oneshot};
+
+const SESSION_WORKER_QUEUE_CAPACITY: usize = 32;
 
 const SCHEMA: &str = r"
 PRAGMA foreign_keys = ON;
@@ -50,7 +54,30 @@ CREATE TABLE IF NOT EXISTS session_titles (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS events_turn_started
 ON events(session_id, revision) WHERE kind = 'turn_started';
+CREATE INDEX IF NOT EXISTS events_turn_completed_presentation
+ON events(session_id, revision DESC) WHERE kind = 'turn_completed';
 ";
+
+const LIST_SESSIONS_SQL: &str = "SELECT s.session_id, s.revision, e.occurred_at, \
+    COALESCE(t.title, (SELECT json_extract(p.payload_json, '$.presentation.title') \
+     FROM events p \
+     WHERE p.session_id = s.session_id \
+       AND p.kind = 'turn_completed' \
+       AND json_type(p.payload_json, '$.presentation.title') = 'text' \
+     ORDER BY p.revision DESC LIMIT 1)), \
+    COALESCE(t.title_revision, 0), \
+    (SELECT json_extract(p.payload_json, '$.presentation.latest_preview') \
+     FROM events p \
+     WHERE p.session_id = s.session_id \
+       AND p.kind = 'turn_completed' \
+       AND json_type(p.payload_json, '$.presentation.latest_preview') = 'text' \
+     ORDER BY p.revision DESC LIMIT 1) \
+ FROM sessions s \
+ JOIN events e ON e.session_id = s.session_id AND e.revision = s.revision \
+ LEFT JOIN session_titles t ON t.session_id = s.session_id \
+ WHERE s.revision > 0 \
+ ORDER BY e.occurred_at DESC, s.session_id DESC \
+ LIMIT ?1";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -74,13 +101,178 @@ fn validate_config(config: &SqliteSessionConfig) -> Result<(), RuntimeFailure> {
 struct SqliteSessionPlugin {
     #[config]
     config: SqliteSessionConfig,
-    provider: Rc<RefCell<Option<SqliteSessionProvider>>>,
+    provider: Rc<RefCell<Option<SqliteSessionRuntime>>>,
+    worker: Rc<RefCell<Option<SqliteSessionWorker>>>,
+}
+
+#[derive(Clone, Debug)]
+struct SqliteSessionRuntime {
+    commands: mpsc::Sender<SqliteSessionCommand>,
+}
+
+#[derive(Debug)]
+struct SqliteSessionWorker {
+    commands: mpsc::Sender<SqliteSessionCommand>,
+    thread: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+enum SqliteSessionCommand {
+    #[cfg(test)]
+    Block {
+        started: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    },
+    Append {
+        request: AppendSessionRequest,
+        reply: oneshot::Sender<Result<Result<AppendSessionResponse, AppendError>, RuntimeFailure>>,
+    },
+    Open {
+        request: OpenSessionRequest,
+        reply: oneshot::Sender<Result<Result<OpenSessionResponse, OpenError>, RuntimeFailure>>,
+    },
+    List {
+        request: ListSessionsRequest,
+        reply: oneshot::Sender<Result<Result<ListSessionsResponse, ListError>, RuntimeFailure>>,
+    },
+    Read {
+        request: ReadSessionRequest,
+        reply: oneshot::Sender<Result<Result<ReadSessionResponse, ReadError>, RuntimeFailure>>,
+    },
+    Rename {
+        request: RenameSessionRequest,
+        reply: oneshot::Sender<Result<Result<RenameSessionResponse, RenameError>, RuntimeFailure>>,
+    },
+    Shutdown {
+        reply: oneshot::Sender<()>,
+    },
 }
 
 #[derive(Clone, Debug)]
 struct SqliteSessionProvider {
     database: PathBuf,
     operation_lock: Rc<RefCell<()>>,
+}
+
+impl SqliteSessionWorker {
+    async fn start(
+        database: PathBuf,
+    ) -> Result<(SqliteSessionRuntime, SqliteSessionWorker), RuntimeFailure> {
+        let (commands, mut receiver) = mpsc::channel(SESSION_WORKER_QUEUE_CAPACITY);
+        let (ready, readiness) = oneshot::channel();
+        let thread = std::thread::Builder::new()
+            .name("lenso-session-sqlite".to_owned())
+            .spawn(move || {
+                let provider = SqliteSessionProvider {
+                    database,
+                    operation_lock: Rc::new(RefCell::new(())),
+                };
+                let prepared = provider.prepare_store();
+                let run = prepared.is_ok();
+                let _ = ready.send(prepared);
+                if !run {
+                    return;
+                }
+                while let Some(command) = receiver.blocking_recv() {
+                    match command {
+                        #[cfg(test)]
+                        SqliteSessionCommand::Block { started, release } => {
+                            let _ = started.send(());
+                            let _ = release.recv();
+                        }
+                        SqliteSessionCommand::Append { request, reply } => {
+                            let _ = reply.send(native_result(provider.append_now(request)));
+                        }
+                        SqliteSessionCommand::Open { request, reply } => {
+                            let _ = reply.send(native_result(provider.open_now(request)));
+                        }
+                        SqliteSessionCommand::List { request, reply } => {
+                            let _ = reply.send(native_result(provider.list_now(&request)));
+                        }
+                        SqliteSessionCommand::Read { request, reply } => {
+                            let _ = reply.send(native_result(provider.read_now(request)));
+                        }
+                        SqliteSessionCommand::Rename { request, reply } => {
+                            let _ = reply.send(native_result(provider.rename_now(&request)));
+                        }
+                        SqliteSessionCommand::Shutdown { reply } => {
+                            let _ = reply.send(());
+                            break;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| {
+                store_failure(format!("Session database worker failed to start: {error}"))
+            })?;
+        match readiness.await {
+            Ok(Ok(())) => {
+                let runtime = SqliteSessionRuntime {
+                    commands: commands.clone(),
+                };
+                Ok((
+                    runtime,
+                    Self {
+                        commands,
+                        thread: Some(thread),
+                    },
+                ))
+            }
+            Ok(Err(error)) => {
+                let _ = thread.join();
+                Err(error)
+            }
+            Err(_) => {
+                let _ = thread.join();
+                Err(store_failure(
+                    "Session database worker stopped before reporting readiness",
+                ))
+            }
+        }
+    }
+
+    async fn shutdown(mut self) -> Result<(), RuntimeFailure> {
+        let (reply, response) = oneshot::channel();
+        let shutdown = match self
+            .commands
+            .send(SqliteSessionCommand::Shutdown { reply })
+            .await
+        {
+            Ok(()) => response
+                .await
+                .map_err(|_| store_failure("Session database worker stopped during shutdown")),
+            Err(_) => Err(store_failure("Session database worker already stopped")),
+        };
+        let thread = self
+            .thread
+            .take()
+            .ok_or_else(|| store_failure("Session database worker handle is unavailable"))?;
+        let joined = tokio::task::spawn_blocking(move || thread.join())
+            .await
+            .map_err(|error| store_failure(format!("Session database join failed: {error}")))?
+            .map_err(|_| store_failure("Session database worker panicked"));
+        shutdown?;
+        joined?;
+        Ok(())
+    }
+}
+
+impl SqliteSessionRuntime {
+    async fn invoke<T>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<Result<T, RuntimeFailure>>) -> SqliteSessionCommand,
+    ) -> Result<T, RuntimeFailure> {
+        let (reply, response) = oneshot::channel();
+        // Admission transfers the operation to the serialized durable worker. Dropping the
+        // invocation future may discard its response, but never interrupts a transaction midway.
+        self.commands
+            .send(command(reply))
+            .await
+            .map_err(|_| store_failure("Session database worker is unavailable"))?;
+        response
+            .await
+            .map_err(|_| store_failure("Session database worker stopped before replying"))?
+    }
 }
 
 #[derive(Debug)]
@@ -375,28 +567,7 @@ impl SqliteSessionProvider {
         }
         let connection = self.connect().map_err(OperationFailure::Runtime)?;
         let mut statement = connection
-            .prepare(
-                "SELECT s.session_id, s.revision, e.occurred_at, \
-                    COALESCE(t.title, (SELECT json_extract(p.payload_json, '$.presentation.title') \
-                     FROM events p \
-                     WHERE p.session_id = s.session_id \
-                       AND p.kind = 'turn_completed' \
-                       AND json_type(p.payload_json, '$.presentation.title') = 'text' \
-                     ORDER BY p.revision DESC LIMIT 1)), \
-                    COALESCE(t.title_revision, 0), \
-                    (SELECT json_extract(p.payload_json, '$.presentation.latest_preview') \
-                     FROM events p \
-                     WHERE p.session_id = s.session_id \
-                       AND p.kind = 'turn_completed' \
-                       AND json_type(p.payload_json, '$.presentation.latest_preview') = 'text' \
-                     ORDER BY p.revision DESC LIMIT 1) \
-                 FROM sessions s \
-                 JOIN events e ON e.session_id = s.session_id AND e.revision = s.revision \
-                 LEFT JOIN session_titles t ON t.session_id = s.session_id \
-                 WHERE s.revision > 0 \
-                 ORDER BY e.occurred_at DESC, s.session_id DESC \
-                 LIMIT ?1",
-            )
+            .prepare(LIST_SESSIONS_SQL)
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
         let rows = statement
             .query_map([request.limit], |row| {
@@ -682,88 +853,116 @@ impl SessionProvider for SqliteSessionPlugin {
         _: InvocationContext,
         request: AppendSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionAppend> {
-        let result = self
-            .provider
-            .borrow()
-            .as_ref()
-            .ok_or(RuntimeFailure::Unavailable {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => Box::pin(async move {
+                provider
+                    .invoke(|reply| SqliteSessionCommand::Append { reply, request })
+                    .await
+            }),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
                 capability: session_contract::CAPABILITY_ID,
-            })
-            .and_then(|provider| native_result(provider.append_now(request)));
-        Box::pin(ready(result))
+            }))),
+        }
     }
     fn open(
         &self,
         _: InvocationContext,
         request: OpenSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
-        let result = self
-            .provider
-            .borrow()
-            .as_ref()
-            .ok_or(RuntimeFailure::Unavailable {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => Box::pin(async move {
+                provider
+                    .invoke(|reply| SqliteSessionCommand::Open { reply, request })
+                    .await
+            }),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
                 capability: session_contract::CAPABILITY_ID,
-            })
-            .and_then(|provider| native_result(provider.open_now(request)));
-        Box::pin(ready(result))
+            }))),
+        }
     }
     fn list(
         &self,
         _: InvocationContext,
         request: ListSessionsRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionList> {
-        let result = self
-            .provider
-            .borrow()
-            .as_ref()
-            .ok_or(RuntimeFailure::Unavailable {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => Box::pin(async move {
+                provider
+                    .invoke(|reply| SqliteSessionCommand::List { reply, request })
+                    .await
+            }),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
                 capability: session_contract::CAPABILITY_ID,
-            })
-            .and_then(|provider| native_result(provider.list_now(&request)));
-        Box::pin(ready(result))
+            }))),
+        }
     }
     fn read(
         &self,
         _: InvocationContext,
         request: ReadSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
-        let result = self
-            .provider
-            .borrow()
-            .as_ref()
-            .ok_or(RuntimeFailure::Unavailable {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => Box::pin(async move {
+                provider
+                    .invoke(|reply| SqliteSessionCommand::Read { reply, request })
+                    .await
+            }),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
                 capability: session_contract::CAPABILITY_ID,
-            })
-            .and_then(|provider| native_result(provider.read_now(request)));
-        Box::pin(ready(result))
+            }))),
+        }
     }
     fn rename(
         &self,
         _: InvocationContext,
         request: RenameSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRename> {
-        let result = self
-            .provider
-            .borrow()
-            .as_ref()
-            .ok_or(RuntimeFailure::Unavailable {
+        let provider = self.provider.borrow().clone();
+        match provider {
+            Some(provider) => Box::pin(async move {
+                provider
+                    .invoke(|reply| SqliteSessionCommand::Rename { reply, request })
+                    .await
+            }),
+            None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
                 capability: session_contract::CAPABILITY_ID,
-            })
-            .and_then(|provider| native_result(provider.rename_now(&request)));
-        Box::pin(ready(result))
+            }))),
+        }
+    }
+}
+
+impl SqliteSessionPlugin {
+    async fn prepare_runtime(&self) -> Result<(), RuntimeFailure> {
+        if self.worker.borrow().is_some() {
+            return Err(store_failure("Session database worker is already prepared"));
+        }
+        let (provider, worker) = SqliteSessionWorker::start(self.config.database.clone()).await?;
+        self.provider.replace(Some(provider));
+        self.worker.replace(Some(worker));
+        Ok(())
+    }
+
+    async fn deactivate_runtime(&self) -> Result<(), RuntimeFailure> {
+        self.provider.take();
+        let worker = self.worker.take();
+        match worker {
+            Some(worker) => worker.shutdown().await,
+            None => Ok(()),
+        }
     }
 }
 
 impl Lifecycle for SqliteSessionPlugin {
-    #[allow(clippy::unused_async_trait_impl)]
     async fn prepare(&self, _: PrepareContext) -> Result<(), RuntimeFailure> {
-        let provider = SqliteSessionProvider {
-            database: self.config.database.clone(),
-            operation_lock: Rc::new(RefCell::new(())),
-        };
-        provider.prepare_store()?;
-        self.provider.replace(Some(provider));
-        Ok(())
+        self.prepare_runtime().await
+    }
+
+    async fn deactivate(&self, _: DeactivateContext) -> Result<(), RuntimeFailure> {
+        self.deactivate_runtime().await
     }
 }
 
@@ -1013,6 +1212,190 @@ mod tests {
         provider
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_worker_keeps_the_current_thread_executor_responsive() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sessions.sqlite3");
+        let (runtime, worker) = SqliteSessionWorker::start(database.clone()).await.unwrap();
+        let blocker = Connection::open(database).unwrap();
+        blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
+
+        let operation = runtime.invoke(|reply| SqliteSessionCommand::Open {
+            request: OpenSessionRequest { session_id: None },
+            reply,
+        });
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => panic!("blocked SQLite write completed early: {result:?}"),
+            () = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+        }
+
+        blocker.execute_batch("ROLLBACK").unwrap();
+        let opened = tokio::time::timeout(std::time::Duration::from_secs(1), operation)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(opened.created);
+        worker.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_worker_shutdown_fails_closed_and_a_fresh_worker_can_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sessions.sqlite3");
+        let (first_runtime, first_worker) =
+            SqliteSessionWorker::start(database.clone()).await.unwrap();
+        first_worker.shutdown().await.unwrap();
+
+        let error = first_runtime
+            .invoke(|reply| SqliteSessionCommand::Open {
+                request: OpenSessionRequest { session_id: None },
+                reply,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, RuntimeFailure::PluginFailure { .. }));
+
+        let (second_runtime, second_worker) = SqliteSessionWorker::start(database).await.unwrap();
+        let opened = second_runtime
+            .invoke(|reply| SqliteSessionCommand::Open {
+                request: OpenSessionRequest { session_id: None },
+                reply,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(opened.created);
+        second_worker.shutdown().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn runtime_worker_bounds_admission_and_shutdown_waits_behind_backlog() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sessions.sqlite3");
+        let (runtime, worker) = SqliteSessionWorker::start(database.clone()).await.unwrap();
+        let commands = worker.commands.clone();
+        let (started, ready) = oneshot::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        commands
+            .send(SqliteSessionCommand::Block {
+                started,
+                release: blocked,
+            })
+            .await
+            .unwrap();
+        ready.await.unwrap();
+
+        for _ in 0..SESSION_WORKER_QUEUE_CAPACITY {
+            let (reply, _response) = oneshot::channel();
+            commands
+                .try_send(SqliteSessionCommand::List {
+                    request: ListSessionsRequest { limit: 1 },
+                    reply,
+                })
+                .unwrap();
+        }
+        let (reply, _response) = oneshot::channel();
+        assert!(matches!(
+            commands.try_send(SqliteSessionCommand::List {
+                request: ListSessionsRequest { limit: 1 },
+                reply,
+            }),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_))
+        ));
+
+        {
+            let operation = runtime.invoke(|reply| SqliteSessionCommand::Open {
+                request: OpenSessionRequest { session_id: None },
+                reply,
+            });
+            tokio::pin!(operation);
+            tokio::select! {
+                result = &mut operation => panic!("full worker queue admitted an operation: {result:?}"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+            }
+        }
+
+        let shutdown = worker.shutdown();
+        tokio::pin!(shutdown);
+        tokio::select! {
+            result = &mut shutdown => panic!("shutdown bypassed the admitted backlog: {result:?}"),
+            () = tokio::time::sleep(std::time::Duration::from_millis(25)) => {}
+        }
+        release.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), shutdown)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let provider = provider(database);
+        assert!(
+            provider
+                .list_now(&ListSessionsRequest { limit: 1 })
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn plugin_runtime_lifecycle_fences_prepare_deactivate_and_fresh_generation() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sessions.sqlite3");
+        let plugin = SqliteSessionPlugin {
+            config: SqliteSessionConfig {
+                database: database.clone(),
+            },
+            provider: Rc::new(RefCell::new(None)),
+            worker: Rc::new(RefCell::new(None)),
+        };
+
+        plugin.prepare_runtime().await.unwrap();
+        assert!(plugin.provider.borrow().is_some());
+        assert!(plugin.worker.borrow().is_some());
+        let duplicate = plugin.prepare_runtime().await.unwrap_err();
+        assert!(matches!(duplicate, RuntimeFailure::PluginFailure { .. }));
+        assert!(plugin.provider.borrow().is_some());
+        assert!(plugin.worker.borrow().is_some());
+
+        plugin.deactivate_runtime().await.unwrap();
+        assert!(plugin.provider.borrow().is_none());
+        assert!(plugin.worker.borrow().is_none());
+        let unavailable = SessionProvider::open(
+            &plugin,
+            InvocationContext::new(1, None, lenso_kernel::CancellationToken::new()),
+            OpenSessionRequest { session_id: None },
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            unavailable,
+            RuntimeFailure::Unavailable {
+                capability: session_contract::CAPABILITY_ID
+            }
+        ));
+
+        let fresh_generation = SqliteSessionPlugin {
+            config: SqliteSessionConfig { database },
+            provider: Rc::new(RefCell::new(None)),
+            worker: Rc::new(RefCell::new(None)),
+        };
+        fresh_generation.prepare_runtime().await.unwrap();
+        let opened = SessionProvider::open(
+            &fresh_generation,
+            InvocationContext::new(2, None, lenso_kernel::CancellationToken::new()),
+            OpenSessionRequest { session_id: None },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(opened.created);
+        fresh_generation.deactivate_runtime().await.unwrap();
+        assert!(fresh_generation.provider.borrow().is_none());
+        assert!(fresh_generation.worker.borrow().is_none());
+    }
+
     fn event(id: &str) -> AppendSessionRequestEventsItem {
         AppendSessionRequestEventsItem {
             event_id: id.to_owned(),
@@ -1078,6 +1461,34 @@ mod tests {
             Some("Use one presentation projection.")
         );
         assert_eq!(listed.sessions[0].title_revision.as_deref(), Some("0"));
+    }
+
+    #[test]
+    fn session_list_uses_the_partial_presentation_index() {
+        let temporary = tempfile::tempdir().unwrap();
+        let provider = provider(temporary.path().join("sessions.sqlite3"));
+        let connection = provider.connect().unwrap();
+        let mut statement = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {LIST_SESSIONS_SQL}"))
+            .unwrap();
+        let details = statement
+            .query_map([10], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let presentation_index_uses = details
+            .iter()
+            .filter(|detail| detail.contains("events_turn_completed_presentation"))
+            .count();
+        eprintln!(
+            "session_list_query plan_steps={} presentation_index_uses={presentation_index_uses}",
+            details.len()
+        );
+
+        assert!(
+            presentation_index_uses >= 2,
+            "unexpected Session-list query plan: {details:?}"
+        );
     }
 
     #[test]
