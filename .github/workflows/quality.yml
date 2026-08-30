@@ -25,6 +25,11 @@ jobs:
           persist-credentials: false
       - name: Check product identity
         run: ./scripts/check-product-identity.sh
+      - name: Check release scripts
+        run: |
+          bash -n scripts/*.sh
+          ./scripts/check-release-version.sh 0.1.0
+          ./scripts/test-release-packaging.sh
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: nightly-2026-07-10

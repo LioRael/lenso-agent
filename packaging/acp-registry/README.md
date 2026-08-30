@@ -4,8 +4,9 @@ Zed installs new ACP agents through the ACP Registry. The former Zed Agent
 Server extension format is deprecated, so this directory contains Registry
 submission assets rather than a Zed extension.
 
-Build `lenso-agent-acp` for one supported target, then create the deterministic
-archive and checksum:
+The repository Release workflow builds, tests, and packages `lenso-agent-acp`
+for every admitted release target. For a local packaging check, build one
+target and create its deterministic archive and checksum:
 
 ```sh
 cargo build --locked --release -p lenso-agent-acp --target aarch64-apple-darwin
@@ -28,6 +29,13 @@ entry against the exact versioned GitHub Release URL:
 ```
 
 Do not submit the entry until every declared archive URL returns the published
-bytes and its committed checksum matches. Copy `agent.json` and `icon.svg` into
-an `lenso/` directory in a fork of `agentclientprotocol/registry`, run that
-repository's validation, and open the Registry PR there.
+bytes, its checksum matches, and `lenso-agent-acp` advertises the `chatgpt`
+Agent Auth method. Copy `agent.json` and `icon.svg` into an `lenso/` directory
+in a fork of `agentclientprotocol/registry`, then run:
+
+```sh
+python3 .github/workflows/verify_agents.py --auth-check --agent lenso
+uv run --with jsonschema .github/workflows/build_registry.py
+```
+
+Open the Registry PR only after both checks pass against the live Release.

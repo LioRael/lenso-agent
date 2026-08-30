@@ -1684,6 +1684,46 @@ fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
 }
 
 #[test]
+fn product_runner_reports_its_release_version() {
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .arg("--version")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        format!("lenso-agent-cli {}", env!("CARGO_PKG_VERSION"))
+    );
+}
+
+#[test]
+fn doctor_json_is_machine_readable_and_never_requires_credentials() {
+    let home = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .env("LENSO_AGENT_HOME", home.path())
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        report["agent_home"]["path"],
+        home.path().display().to_string()
+    );
+    assert_eq!(report["authentication"]["authenticated"], false);
+    assert_eq!(report["ready"], false);
+    assert!(report["components"].is_array());
+    assert!(report["dependencies"].is_array());
+}
+
+#[test]
 fn product_runner_rejects_the_removed_named_app_interface() {
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .args(["--app", "unknown", "hello"])

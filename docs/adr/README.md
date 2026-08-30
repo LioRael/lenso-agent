@@ -90,3 +90,4 @@
 - [0088 — Compose dynamic model selection per Turn](0088-compose-dynamic-model-selection-per-turn.md)
 - [0089 — Name the product Lenso Agent](0089-name-the-product-lenso-agent.md)
 - [0090 — Compose terminal commands through Capabilities](0090-compose-terminal-commands-through-capabilities.md)
+- [0091 — Distribute installable Lenso Agent releases](0091-distribute-installable-agent-releases.md)
