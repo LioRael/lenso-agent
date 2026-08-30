@@ -131,9 +131,15 @@ async fn handle_control_command(
             )
         }
         "/model" => {
-            let models = app.lease_tui_turn().await?.available_models();
+            let lease = app.lease_tui_turn().await?;
+            let models = lease.available_models();
             if models.is_empty() {
                 "No models are exposed by the selected Provider Instance".to_owned()
+            } else if lease.supports_dynamic_model_selection() {
+                format!(
+                    "Available concrete models: {}. Configured dynamic policy aliases may also be selected.",
+                    models.join(", ")
+                )
             } else {
                 format!("Available models: {}", models.join(", "))
             }

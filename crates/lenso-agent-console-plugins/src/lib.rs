@@ -8,6 +8,7 @@ use lenso_agent_http_fetch_plugin as _;
 use lenso_agent_loop_plugin as _;
 use lenso_agent_memory_sqlite_plugin as _;
 use lenso_agent_model_openai_codex_direct_plugin as _;
+use lenso_agent_model_selection_plugin as _;
 use lenso_agent_oauth_client_credentials_plugin as _;
 use lenso_agent_prompt_plugin as _;
 use lenso_agent_prompt_static_plugin as _;

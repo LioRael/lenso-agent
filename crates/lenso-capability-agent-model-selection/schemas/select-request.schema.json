@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["policy", "selection_id", "input", "candidates"],
+  "properties": {
+    "policy": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "selection_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "input": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 262144
+    },
+    "candidates": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "$ref": "#/$defs/SelectCandidate"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "SelectCandidate": {
+      "type": "object",
+      "required": ["model", "selected_by_default"],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "selected_by_default": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "SelectRequest"
+}

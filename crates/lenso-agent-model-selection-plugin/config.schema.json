@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policies"],
+  "properties": {
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "description", "strategy"],
+        "properties": {
+          "id": { "type": "string" },
+          "description": { "type": "string" },
+          "strategy": { "enum": ["rules", "weighted_random", "llm_classifier"] },
+          "default_model": { "type": "string" },
+          "strong_model": { "type": "string" },
+          "min_input_characters": { "type": "integer" },
+          "strong_keywords": { "type": "array", "items": { "type": "string" } },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model", "weight"],
+              "properties": {
+                "model": { "type": "string" },
+                "weight": { "type": "integer" }
+              }
+            }
+          },
+          "classifier_model": { "type": "string" },
+          "fallback_model": { "type": "string" },
+          "instruction": { "type": "string" },
+          "max_output_tokens": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

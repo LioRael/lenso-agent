@@ -32,6 +32,7 @@ lenso-agent-model-openai-compatible-plugin = { path = "../lenso-agent-model-open
 lenso-agent-multimodal-tools-plugin = { path = "../lenso-agent-multimodal-tools-plugin" }
 lenso-agent-oauth-client-credentials-plugin = { path = "../lenso-agent-oauth-client-credentials-plugin" }
 lenso-agent-model-openai-codex-direct-plugin = { path = "../lenso-agent-model-openai-codex-direct-plugin" }
+lenso-agent-model-selection-plugin = { path = "../lenso-agent-model-selection-plugin" }
 lenso-agent-process-native-plugin = { path = "../lenso-agent-process-native-plugin" }
 lenso-agent-process-sandbox-plugin = { path = "../lenso-agent-process-sandbox-plugin" }
 lenso-agent-process-tools-plugin = { path = "../lenso-agent-process-tools-plugin" }

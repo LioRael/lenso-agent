@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.model-selection@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "select",
+      "interaction": "request",
+      "request_schema": "schemas/select-request.schema.json",
+      "response_schema": "schemas/select-response.schema.json",
+      "domain_error_schema": "schemas/select-error.schema.json"
+    }
+  ]
+}

@@ -87,3 +87,4 @@
 - [0085 — Project deferred and structured Tools](0085-project-deferred-and-structured-tools.md)
 - [0086 — Resolve Provider controls and transient failures per Turn](0086-resolve-provider-controls-and-transient-failures-per-turn.md)
 - [0087 — Compose remote OAuth and large Artifacts](0087-compose-remote-oauth-and-large-artifacts.md)
+- [0088 — Compose dynamic model selection per Turn](0088-compose-dynamic-model-selection-per-turn.md)

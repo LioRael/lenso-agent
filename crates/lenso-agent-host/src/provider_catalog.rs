@@ -99,6 +99,21 @@ impl ProviderModelCatalog {
             })
             .unwrap_or_default()
     }
+
+    /// Resolves every model admitted by the selected Provider that accepts the requested options.
+    pub fn resolve_model_candidates(
+        &self,
+        reasoning_effort: Option<&str>,
+        service_tier: Option<&str>,
+    ) -> Vec<ResolvedTurnProfile> {
+        self.selected_provider_models()
+            .into_iter()
+            .filter_map(|model| {
+                self.resolve_model_options(&model, reasoning_effort, service_tier)
+                    .ok()
+            })
+            .collect()
+    }
 }
 
 fn model_supports_reasoning(model: &ModelCatalogEntry, effort: Option<&str>) -> bool {
