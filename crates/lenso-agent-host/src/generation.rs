@@ -164,9 +164,9 @@ pub fn online_reconcile_telemetry() -> OnlineReconcileTelemetry {
 }
 
 #[derive(Debug)]
-struct HarnessCatalogFactory;
+struct AgentCatalogFactory;
 
-impl CatalogFactory for HarnessCatalogFactory {
+impl CatalogFactory for AgentCatalogFactory {
     fn catalog(
         &self,
         generation: &ResolvedGeneration,
@@ -435,7 +435,7 @@ impl AgentApp {
         let generation = initial.generation.clone();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
-        let runtime = KernelGenerationRuntime::new(harness_catalog_factory());
+        let runtime = KernelGenerationRuntime::new(agent_catalog_factory());
         let mut host =
             recover_or_open_host(plan_bytes, store_root, &host_build, runtime, store, durable)
                 .await?;
@@ -2866,8 +2866,8 @@ pub(crate) fn resolve_host_plan_for_agent_in(
         .map_err(|error| format!("failed to resolve Host Plugins for Agent `{agent}`: {error}"))
 }
 
-fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
-    MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
+fn agent_catalog_factory() -> MultiExecutionCatalogFactory<AgentCatalogFactory> {
+    MultiExecutionCatalogFactory::new(AgentCatalogFactory)
         .with_wasm_codec(AgentJsonCodec)
         .with_wasm_codec(ArtifactJsonCodec)
         .with_wasm_codec(ContextCompactionJsonCodec)
@@ -3639,7 +3639,7 @@ mod tests {
                     "default",
                 )
                 .with_configuration(serde_json::json!({
-                    "allowed_repositories": ["LioRael/lenso-agent-harness"],
+                    "allowed_repositories": ["LioRael/lenso-agent"],
                     "default_timeout_ms": 30_000,
                     "enable_mutations": false,
                     "max_body_bytes": 16_384

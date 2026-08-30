@@ -634,7 +634,7 @@ mod tests {
 
     fn config(enable_mutations: bool) -> GitHubConfig {
         GitHubConfig {
-            allowed_repositories: vec!["LioRael/lenso-agent-harness".to_owned()],
+            allowed_repositories: vec!["LioRael/lenso-agent".to_owned()],
             default_timeout_ms: 30_000,
             enable_mutations,
             max_body_bytes: 16_384,
@@ -680,7 +680,7 @@ mod tests {
             &request(
                 PR_CREATE_TOOL,
                 &serde_json::json!({
-                    "repository": "LioRael/lenso-agent-harness",
+                    "repository": "LioRael/lenso-agent",
                     "title": "feat: workflow",
                     "head": "feature",
                     "base": "main",
@@ -690,7 +690,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(command[0], "api");
-        assert_eq!(command[1], "repos/LioRael/lenso-agent-harness/pulls");
+        assert_eq!(command[1], "repos/LioRael/lenso-agent/pulls");
         assert!(
             command_for(
                 &config(true),

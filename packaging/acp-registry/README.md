@@ -22,7 +22,7 @@ entry against the exact versioned GitHub Release URL:
 ```sh
 ./scripts/render-acp-registry-entry.py \
   --version 0.1.0 \
-  --base-url https://github.com/LioRael/lenso-agent-harness/releases/download/v0.1.0 \
+  --base-url https://github.com/LioRael/lenso-agent/releases/download/v0.1.0 \
   --artifacts dist \
   --output dist/agent.json
 ```

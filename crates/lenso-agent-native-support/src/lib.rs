@@ -1,4 +1,4 @@
-//! Small native-runtime helpers shared by Agent Harness Plugins.
+//! Small native-runtime helpers shared by Lenso Agent Plugins.
 
 use std::{
     any::Any,

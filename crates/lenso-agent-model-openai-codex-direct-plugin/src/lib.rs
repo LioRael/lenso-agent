@@ -141,7 +141,7 @@ impl ModelProvider for DirectModel {
                 .bearer_auth(credential.access_token)
                 .header("chatgpt-account-id", credential.account_id)
                 .header("originator", "lenso")
-                .header("User-Agent", "lenso-agent-harness/0.1.0")
+                .header("User-Agent", "lenso-agent/0.1.0")
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("Accept", "text/event-stream")
                 .json(&wire_request.body)

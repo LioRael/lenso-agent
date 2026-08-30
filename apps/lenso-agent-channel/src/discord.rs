@@ -119,7 +119,7 @@ impl DiscordClient {
         headers.insert(header::AUTHORIZATION, authorization);
         headers.insert(
             header::USER_AGENT,
-            header::HeaderValue::from_static("Lenso-Agent-Harness/0.1"),
+            header::HeaderValue::from_static("Lenso-Agent/0.1"),
         );
         let http = Client::builder()
             .default_headers(headers)
@@ -583,8 +583,8 @@ fn identify_payload(token: &str, message_content_intent: bool) -> Value {
             "intents": intents,
             "properties": {
                 "os": std::env::consts::OS,
-                "browser": "lenso-agent-harness",
-                "device": "lenso-agent-harness"
+                "browser": "lenso-agent",
+                "device": "lenso-agent"
             }
         }
     })

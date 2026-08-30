@@ -1,7 +1,7 @@
 [package]
 name = "lenso-capability-agent-model-selection"
 version = "0.1.0"
-description = "Portable turn-scoped Model selection Capability for the Lenso Agent Harness."
+description = "Portable turn-scoped Model selection Capability for Lenso Agent."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true

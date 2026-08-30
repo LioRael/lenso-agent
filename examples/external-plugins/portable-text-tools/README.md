@@ -16,7 +16,7 @@ lenso plugin pack
 `lenso plugin pack` builds both outputs into one immutable `.lenso-plugin` release. The Host
 selects a compatible implementation; Plugin authors do not maintain two behavior implementations.
 
-Add and exercise the Bundle from the Agent Harness:
+Add and exercise the Bundle from Lenso Agent:
 
 ```sh
 lenso plugins add \

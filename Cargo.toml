@@ -101,7 +101,7 @@ members = [
 edition = "2024"
 license = "MIT"
 publish = false
-repository = "https://github.com/LioRael/lenso-agent-harness"
+repository = "https://github.com/LioRael/lenso-agent"
 rust-version = "1.94"
 
 [workspace.dependencies]

@@ -1,7 +1,7 @@
 [package]
 name = "lenso-agent-acp"
 version = "0.1.0"
-description = "ACP stdio surface for the Lenso Agent Harness."
+description = "ACP stdio surface for Lenso Agent."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true

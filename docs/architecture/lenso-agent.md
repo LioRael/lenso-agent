@@ -1,4 +1,4 @@
-# Agent Harness architecture
+# Lenso Agent architecture
 
 ## User outcome
 

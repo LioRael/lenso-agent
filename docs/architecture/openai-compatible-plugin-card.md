@@ -35,7 +35,7 @@ Profile itself contains no mapping or credential. The OpenAI-compatible Model
 continues to request only `model/openai-api-key`, so switching Provider or using
 different mappings per Profile does not change the Model Plugin.
 
-The Harness imports the owner-local `lenso-capability-secrets` crate and does
+The Host imports the owner-local `lenso-capability-secrets` crate and does
 not vendor a second contract copy. Resolved values never enter Plugin
 configuration, Profiles, Plans, errors, or Session facts.
 

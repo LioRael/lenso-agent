@@ -1,7 +1,7 @@
 [package]
 name = "lenso-agent-prompt-static-plugin"
 version = "0.1.0"
-description = "Static Prompt and Skill contribution Plugin for the Lenso Agent Harness."
+description = "Static Prompt and Skill contribution Plugin for Lenso Agent."
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
