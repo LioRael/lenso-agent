@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+Refined by: ADR-0080
+
 ## Context
 
 An Agent sometimes cannot continue without a choice or missing fact from its

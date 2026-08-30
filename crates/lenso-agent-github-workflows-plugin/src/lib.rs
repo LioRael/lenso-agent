@@ -584,6 +584,7 @@ fn map_response(
         }));
     }
     Ok(ExecuteResponse {
+        content_blocks: None,
         content: if response.stdout.is_empty() {
             "GitHub operation completed successfully.".to_owned()
         } else {

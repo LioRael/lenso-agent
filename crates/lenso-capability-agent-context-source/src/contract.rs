@@ -102,7 +102,9 @@ pub struct ResourceContent {
     #[schemars(length(max = 256))]
     pub mime_type: String,
     #[schemars(length(max = 1_048_576))]
-    pub text: String,
+    pub text: Option<String>,
+    #[schemars(length(max = 5_592_408))]
+    pub data_base64: Option<String>,
 }
 
 #[derive(lenso::DomainError)]
@@ -116,7 +118,7 @@ pub enum ContextSourceError {
 #[lenso::capability(
     id = "lenso.agent.context-source",
     major = 1,
-    version = "1.0.0",
+    version = "1.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

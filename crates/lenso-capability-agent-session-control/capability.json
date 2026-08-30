@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.session-control@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "compact_session",
+      "interaction": "request",
+      "request_schema": "schemas/compact-session-request.schema.json",
+      "response_schema": "schemas/compact-session-response.schema.json",
+      "domain_error_schema": "schemas/compact-session-error.schema.json"
+    }
+  ]
+}

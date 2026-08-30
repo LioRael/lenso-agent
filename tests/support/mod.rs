@@ -8,7 +8,24 @@ use std::{
 pub(crate) fn plan_for_home(app: &str, home: &Path) -> PathBuf {
     match app {
         "base" => resolve("lenso-agent", fixture_configurations(), home),
+        "model-switch" => resolve(
+            "model-switch",
+            &[
+                (
+                    "lenso.agent.loop/agent.toml",
+                    "model = \"fixture/readme-summary-v1\"\n",
+                ),
+                (
+                    "lenso.agent.model.fixture/model.toml",
+                    "model = \"fixture/readme-summary-v1\"\nallowed_models = [\"fixture/alternate-v1\"]\n",
+                ),
+            ],
+            home,
+        ),
         "interaction-resume-budget" => resolve_interaction_resume_budget(home),
+        app @ ("interaction-resume-limit" | "interaction-total-tool-limit") => {
+            interaction_limit(home, app)
+        }
         "openai-codex-direct" => resolve(
             app,
             &[
@@ -59,51 +76,44 @@ content = "Be concise, follow explicit user instructions, and use only the Tools
             ],
             home,
         ),
-        "openai-compatible" => resolve(
-            app,
-            &[
-                (
-                    "lenso.agent.loop/agent.toml",
-                    r#"model = "gpt-4o-mini"
-"#,
-                ),
-                (
-                    "lenso.agent.loop/researcher.toml",
-                    r#"model = "gpt-4o-mini"
-"#,
-                ),
-                (
-                    "lenso.agent.loop/reviewer.toml",
-                    r#"model = "gpt-4o-mini"
-"#,
-                ),
-                (
-                    "lenso.agent.model.openai-compatible/model.toml",
-                    r#"api_key_ref = "model/openai-api-key"
-base_url = "https://api.openai.com/v1"
-model = "gpt-4o-mini"
-"#,
-                ),
-                (
-                    "lenso.secrets.env/secrets.toml",
-                    r#"[references]
-"model/openai-api-key" = "OPENAI_API_KEY"
-"#,
-                ),
-                (
-                    "lenso.agent.prompt.static/default-instructions.toml",
-                    r#"[[contributions]]
+        "openai-compatible" => resolve_openai_compatible(app, home),
+        _ => panic!("unsupported test App `{app}`"),
+    }
+}
+
+fn resolve_openai_compatible(app: &str, home: &Path) -> PathBuf {
+    resolve(
+        app,
+        &[
+            ("lenso.agent.loop/agent.toml", "model = \"gpt-4o-mini\"\n"),
+            (
+                "lenso.agent.loop/researcher.toml",
+                "model = \"gpt-4o-mini\"\n",
+            ),
+            (
+                "lenso.agent.loop/reviewer.toml",
+                "model = \"gpt-4o-mini\"\n",
+            ),
+            (
+                "lenso.agent.model.openai-compatible/model.toml",
+                "api_key_ref = \"model/openai-api-key\"\nbase_url = \"https://api.openai.com/v1\"\nmodel = \"gpt-4o-mini\"\n",
+            ),
+            (
+                "lenso.secrets.env/secrets.toml",
+                "[references]\n\"model/openai-api-key\" = \"OPENAI_API_KEY\"\n",
+            ),
+            (
+                "lenso.agent.prompt.static/default-instructions.toml",
+                r#"[[contributions]]
 id = "harness.default"
 version = "1.0.0"
 kind = "instruction"
 content = "Be concise, follow explicit user instructions, and use only the Tools supplied by this App."
 "#,
-                ),
-            ],
-            home,
-        ),
-        _ => panic!("unsupported test App `{app}`"),
-    }
+            ),
+        ],
+        home,
+    )
 }
 
 fn resolve_interaction_resume_budget(home: &Path) -> PathBuf {
@@ -114,6 +124,26 @@ fn resolve_interaction_resume_budget(home: &Path) -> PathBuf {
                 "lenso.agent.loop/agent.toml",
                 "model = \"fixture/readme-summary-v1\"\nmax_steps = 8\nmax_tool_calls = 4\n",
             ),
+            (
+                "lenso.agent.model.fixture/model.toml",
+                "model = \"fixture/readme-summary-v1\"\n",
+            ),
+        ],
+        home,
+    )
+}
+
+fn interaction_limit(home: &Path, app: &str) -> PathBuf {
+    let limit = match app {
+        "interaction-resume-limit" => "max_user_resumes = 0",
+        "interaction-total-tool-limit" => "max_total_tool_calls = 4",
+        _ => unreachable!("caller selects an interaction-limit fixture"),
+    };
+    let agent = format!("model = \"fixture/readme-summary-v1\"\n{limit}\n");
+    resolve(
+        app,
+        &[
+            ("lenso.agent.loop/agent.toml", &agent),
             (
                 "lenso.agent.model.fixture/model.toml",
                 "model = \"fixture/readme-summary-v1\"\n",

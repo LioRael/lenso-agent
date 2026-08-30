@@ -622,6 +622,7 @@ fn response_for(
         response.stdout
     };
     Ok(ExecuteResponse {
+        content_blocks: None,
         content,
         content_type: ContentType::Text,
         metadata_json: serde_json::json!({

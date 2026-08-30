@@ -204,9 +204,15 @@ async fn compose_context(app: &generation::AgentApp, args: &Args) -> Result<Stri
             .contents
             .into_iter()
             .map(|content| {
+                let body = content.text.flatten().unwrap_or_else(|| {
+                    format!(
+                        "[binary resource available: {} bytes base64]",
+                        content.data_base64.flatten().map_or(0, |data| data.len())
+                    )
+                });
                 format!(
                     "URI: {}\nMIME: {}\n{}",
-                    content.uri, content.mime_type, content.text
+                    content.uri, content.mime_type, body
                 )
             })
             .collect::<Vec<_>>()

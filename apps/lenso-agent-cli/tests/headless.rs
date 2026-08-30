@@ -599,12 +599,17 @@ fn global_agent_home_keeps_configuration_and_state_outside_the_workspace() {
 }
 
 #[test]
-fn automatic_compaction_commits_a_durable_projection_without_rewriting_session_history() {
+fn token_aware_compaction_commits_a_durable_projection_without_rewriting_session_history() {
     let temporary = tempfile::tempdir().unwrap();
     configure_fixture_app(temporary.path());
     fs::write(
         temporary.path().join("plugins/lenso.agent.loop/agent.toml"),
-        "model = \"fixture/readme-summary-v1\"\nmax_history_events = 1\n",
+        concat!(
+            "model = \"fixture/readme-summary-v1\"\n",
+            "max_history_events = 200\n",
+            "compaction_trigger_mode = \"tokens\"\n",
+            "compaction_trigger_value = 1\n",
+        ),
     )
     .unwrap();
     let compactor = temporary
@@ -1930,6 +1935,91 @@ fn bounded_loop_executes_two_sequential_tool_calls() {
             .count(),
         2
     );
+}
+
+#[test]
+fn large_tool_results_spill_to_the_bound_artifact_provider() {
+    let temporary = tempfile::tempdir().unwrap();
+    let content = format!("# Large Artifact\n{}", "x".repeat(4_096));
+    fs::write(temporary.path().join("README.md"), &content).unwrap();
+    configure_fixture_app(temporary.path());
+    fs::write(
+        temporary.path().join("plugins/lenso.agent.loop/agent.toml"),
+        "model = \"fixture/readme-summary-v1\"\nartifact_spill_threshold_bytes = 1024\n",
+    )
+    .unwrap();
+
+    let output = run_configured_derived(temporary.path(), "Read README.md.", None);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifacts = fs::read_dir(temporary.path().join("artifacts"))
+        .unwrap()
+        .flat_map(|session| fs::read_dir(session.unwrap().path()).unwrap())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(artifacts.len(), 1);
+    assert_eq!(fs::read(artifacts[0].path()).unwrap(), content.as_bytes());
+
+    let state = stored_session(temporary.path());
+    let payload = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "tool_result")
+        .and_then(|event| event["payload_json"].as_str())
+        .map(|payload| serde_json::from_str::<serde_json::Value>(payload).unwrap())
+        .unwrap();
+    assert!(payload["content"].as_str().unwrap().contains("Artifact"));
+    assert_eq!(payload["content_truncated"], false);
+    let block = &payload["content_blocks"][0];
+    assert_eq!(block["kind"], "artifact");
+    assert!(block["handle"].as_str().unwrap().starts_with("artifact://"));
+    assert!(block.get("data_base64").is_none());
+}
+
+#[test]
+fn default_loop_allows_more_than_sixteen_tool_calls() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Unbounded\n").unwrap();
+    let output = run(
+        temporary.path(),
+        &plan_path(temporary.path()),
+        "Read README.md seventeen times.",
+        None,
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let state = stored_session(temporary.path());
+    let turn_started = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "turn_started")
+        .unwrap();
+    let turn_payload: serde_json::Value =
+        serde_json::from_str(turn_started["payload_json"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        turn_payload["resolved_turn_profile"]["model"],
+        "fixture/readme-summary-v1"
+    );
+    assert_eq!(
+        turn_payload["resolved_turn_profile"]["catalog_revision"],
+        turn_payload["generation_spec_digest"]
+    );
+    let tool_requests = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "tool_requested")
+        .count();
+    assert_eq!(tool_requests, 17, "{state}");
 }
 
 #[test]

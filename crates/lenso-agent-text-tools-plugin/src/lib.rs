@@ -33,6 +33,7 @@ impl TextTools {
             return Err(ExecuteError::OutputLimitExceeded);
         }
         Ok(ExecuteResponse {
+            content_blocks: None,
             content,
             content_type: ContentType::Text,
             metadata_json: r#"{"operation":"uppercase"}"#

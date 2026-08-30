@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["handle", "digest", "size"],
+  "properties": {
+    "handle": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 160
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "size": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    }
+  },
+  "additionalProperties": false,
+  "title": "PutResponse"
+}

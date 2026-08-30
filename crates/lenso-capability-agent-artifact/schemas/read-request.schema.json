@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["handle", "offset", "max_bytes"],
+  "properties": {
+    "handle": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 160
+    },
+    "offset": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "max_bytes": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "additionalProperties": false,
+  "title": "ReadRequest"
+}

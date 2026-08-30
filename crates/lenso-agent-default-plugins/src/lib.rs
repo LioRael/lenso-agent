@@ -1,6 +1,7 @@
 //! Standard surface-neutral Plugin linkage for the distributed Agent Hosts.
 
 use lenso_agent_approval_hook_plugin as _;
+use lenso_agent_artifact_file_plugin as _;
 use lenso_agent_ask_user_tools_plugin as _;
 use lenso_agent_auth_openai_codex_plugin as _;
 use lenso_agent_browser_playwright_plugin as _;
@@ -21,6 +22,7 @@ use lenso_agent_model_fixture_plugin as _;
 use lenso_agent_model_openai_codex_direct_plugin as _;
 use lenso_agent_model_openai_compatible_plugin as _;
 use lenso_agent_multimodal_tools_plugin as _;
+use lenso_agent_oauth_client_credentials_plugin as _;
 use lenso_agent_process_native_plugin as _;
 use lenso_agent_process_sandbox_plugin as _;
 use lenso_agent_process_tools_plugin as _;

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_session" },
+    { "const": "empty_history" },
+    { "const": "active_turn" },
+    { "const": "concurrent_session" }
+  ]
+}

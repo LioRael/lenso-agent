@@ -30,6 +30,10 @@ struct OpenAiConfig {
     #[serde(default)]
     allowed_models: Vec<String>,
     api_key_ref: String,
+    #[serde(default)]
+    http_referer: Option<String>,
+    #[serde(default)]
+    app_title: Option<String>,
 }
 
 impl OpenAiConfig {
@@ -43,6 +47,10 @@ impl OpenAiConfig {
             || self.allowed_models.iter().collect::<BTreeSet<_>>().len()
                 != self.allowed_models.len()
             || self.api_key_ref.trim().is_empty()
+            || self
+                .app_title
+                .as_deref()
+                .is_some_and(|title| title.trim().is_empty() || title.len() > 128)
         {
             return Err(invalid_plan(
                 "OpenAI-compatible model allowlist and api_key_ref are invalid",
@@ -67,6 +75,13 @@ impl OpenAiConfig {
             return Err(invalid_plan(
                 "OpenAI-compatible base_url must use HTTPS or loopback HTTP",
             ));
+        }
+        if let Some(referer) = self.http_referer.as_deref() {
+            let referer = reqwest::Url::parse(referer)
+                .map_err(|_| invalid_plan("HTTP Referer must be an absolute HTTPS URL"))?;
+            if referer.scheme() != "https" || referer.host_str().is_none() {
+                return Err(invalid_plan("HTTP Referer must be an absolute HTTPS URL"));
+            }
         }
         Ok(self)
     }
@@ -136,15 +151,18 @@ impl ModelProvider for OpenAiCompatibleModel {
                         false,
                     )
                 })?;
-            let response = client
+            let mut request = client
                 .post(config.endpoint().map_err(ModelInvocationError::Runtime)?)
-                .bearer_auth(credential.value)
-                .json(&body)
-                .send()
-                .await
-                .map_err(|_| {
-                    provider_failure("transport_error", "model provider request failed", true)
-                })?;
+                .bearer_auth(credential.value);
+            if let Some(referer) = config.http_referer.as_deref() {
+                request = request.header("HTTP-Referer", referer);
+            }
+            if let Some(title) = config.app_title.as_deref() {
+                request = request.header("X-Title", title);
+            }
+            let response = request.json(&body).send().await.map_err(|_| {
+                provider_failure("transport_error", "model provider request failed", true)
+            })?;
             if !response.status().is_success() {
                 return Err(map_status(response.status()));
             }
@@ -262,11 +280,15 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
             "model provider rejected its configured credential",
             false,
         ),
-        reqwest::StatusCode::TOO_MANY_REQUESTS => provider_failure(
-            "rate_limited",
-            "model provider rate limit was exceeded",
-            true,
-        ),
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            ModelInvocationError::Domain(CompleteError::RateLimited)
+        }
+        reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
+            ModelInvocationError::Domain(CompleteError::ContextOverflow)
+        }
+        reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+            ModelInvocationError::Domain(CompleteError::Overloaded)
+        }
         _ => provider_failure(
             "provider_error",
             "model provider returned an unsuccessful status",
@@ -639,6 +661,8 @@ mod tests {
     fn chat_request_preserves_assistant_tool_call() {
         let request = CompleteOpen {
             model: "test-model".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
             messages: vec![
                 CompleteMessageInput {
                     role: CompleteMessageRole::Assistant,
@@ -735,6 +759,8 @@ data: [DONE]
             model: "test-model".to_owned(),
             allowed_models: Vec::new(),
             api_key_ref: "model/api-key".to_owned(),
+            http_referer: None,
+            app_title: None,
         }
         .validate()
         .unwrap_err();
@@ -748,6 +774,8 @@ data: [DONE]
             model: "test-model".to_owned(),
             allowed_models: Vec::new(),
             api_key_ref: "model/api-key".to_owned(),
+            http_referer: None,
+            app_title: None,
         }
         .validate()
         .unwrap_err();
@@ -761,6 +789,8 @@ data: [DONE]
             model: "main-model".to_owned(),
             allowed_models: vec!["presentation-model".to_owned()],
             api_key_ref: "model/api-key".to_owned(),
+            http_referer: None,
+            app_title: None,
         }
         .validate()
         .unwrap();

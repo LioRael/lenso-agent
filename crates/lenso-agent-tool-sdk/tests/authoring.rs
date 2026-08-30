@@ -43,6 +43,7 @@ impl FixtureTools {
 
 fn response(content: String) -> ExecuteResponse {
     ExecuteResponse {
+        content_blocks: None,
         content,
         content_type: ContentType::Text,
         metadata_json: "{}".try_into().unwrap(),

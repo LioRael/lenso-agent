@@ -1,0 +1,29 @@
+[package]
+name = "lenso-agent-artifact-file-plugin"
+version = "0.1.0"
+description = "Bounded file-backed Artifact Provider for the Lenso Agent Harness."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.artifact.file"
+root-slot = "artifact"
+
+[dependencies]
+base64.workspace = true
+lenso.workspace = true
+lenso-capability-agent-artifact = { path = "../lenso-capability-agent-artifact" }
+lenso-kernel.workspace = true
+serde.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

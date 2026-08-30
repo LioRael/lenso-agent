@@ -1,7 +1,7 @@
 use super::{
     Block, BorderType, Borders, Clear, Constraint, Focus, Frame, Layout, Line, Modifier, Padding,
-    Palette, Paragraph, Rect, ShortcutAction, ShortcutHitTarget, Span, Style, Text, TuiState,
-    UiPhase, Wrap,
+    Palette, Paragraph, Rect, SessionMode, ShortcutAction, ShortcutHitTarget, Span, Style, Text,
+    TuiState, UiPhase, Wrap,
 };
 
 pub(super) fn render_panel(frame: &mut Frame<'_>, area: Rect, state: &TuiState) {
@@ -165,13 +165,14 @@ fn render_composer_caption(frame: &mut Frame<'_>, area: Rect, state: &TuiState) 
         return;
     }
     let caption_style = Style::default().bg(Palette::BG_BASE);
-    let mut spans = vec![
-        Span::styled(" lenso-agent", caption_style.fg(Palette::MUTED)),
-        Span::styled(
-            format!(" · {}", state.tool_scope),
-            caption_style.fg(Palette::QUIET),
+    let displayed_mode = state.pending_mode.as_ref().unwrap_or(&state.mode);
+    let mut spans = vec![Span::styled(
+        format!(
+            " {}",
+            state.selected_model.as_deref().unwrap_or("lenso-agent")
         ),
-    ];
+        caption_style.fg(Palette::MUTED),
+    )];
     if state.input.contains('\n') {
         spans.push(Span::styled(
             " · multiline",
@@ -184,6 +185,28 @@ fn render_composer_caption(frame: &mut Frame<'_>, area: Rect, state: &TuiState) 
             caption_style.fg(Palette::COMMAND),
         ));
     }
+    if let Some(effort) = state.selected_reasoning_effort.as_deref() {
+        spans.push(Span::styled(
+            format!(" · think:{effort}"),
+            caption_style.fg(Palette::QUIET),
+        ));
+    }
+    if state.selected_service_tier.as_deref() == Some("fast") {
+        spans.push(Span::styled(" · fast", caption_style.fg(Palette::COMMAND)));
+    }
+    spans.push(Span::styled(" · ", caption_style.fg(Palette::QUIET)));
+    spans.push(Span::styled(
+        if state.pending_mode.is_some() {
+            format!("{}…", displayed_mode.label())
+        } else {
+            displayed_mode.label().to_owned()
+        },
+        caption_style.fg(if matches!(displayed_mode, SessionMode::Plan) {
+            Palette::COMMAND
+        } else {
+            Palette::QUIET
+        }),
+    ));
     spans.push(Span::styled(" ", caption_style));
     let info = Line::from(spans);
     let width = u16::try_from(info.width())
@@ -324,7 +347,7 @@ pub(super) fn render_shortcuts_overlay(frame: &mut Frame<'_>, area: Rect) {
         ("h / l", "Collapse or expand the selected Tool block"),
         ("PgUp / PgDn", "Scroll conversation"),
         ("End", "Return to the latest message"),
-        ("Shift+Tab", "Open or cycle composed context panels"),
+        ("Shift+Tab", "Cycle Normal / Plan / Auto mode"),
         ("Esc", "Cancel turn or close this panel"),
         ("Ctrl+C", "Quit immediately"),
     ];

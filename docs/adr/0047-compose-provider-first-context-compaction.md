@@ -2,6 +2,8 @@
 
 Status: Accepted
 
+Refined by: ADR-0082
+
 ## Context
 
 The Agent Loop previously rebuilt model context from only the newest

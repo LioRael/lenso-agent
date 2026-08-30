@@ -11,12 +11,36 @@
     "environment_allowlist": { "type": "array", "items": { "type": "string" } },
     "endpoint": { "type": "string" },
     "authorization_environment": { "type": "string" },
+    "oauth_resource": { "type": "string" },
+    "oauth_scopes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
     "protocol": { "enum": ["auto", "modern", "legacy"] },
     "tool_namespace": { "type": "string" },
     "startup_timeout_ms": { "type": "integer" },
     "request_timeout_ms": { "type": "integer" },
     "allow_elicitation": { "type": "boolean" },
     "allow_sampling": { "type": "boolean" },
+    "roots": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["uri", "name"],
+        "properties": {
+          "uri": { "type": "string", "minLength": 1, "maxLength": 4096 },
+          "name": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
+    "parallel_safe_tools": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+    },
     "continuation_max_rounds": { "type": "integer" },
     "sampling_model": { "type": "string" },
     "max_sampling_tokens": { "type": "integer" }

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["resource_uri", "scopes"],
+  "properties": {
+    "resource_uri": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 4096
+    },
+    "scopes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "title": "AccessRequest"
+}

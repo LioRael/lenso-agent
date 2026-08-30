@@ -26,8 +26,10 @@ pub use host::{
 };
 pub use official_prompts::migrate_legacy_official_files;
 pub use provider_catalog::{
-    ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelProviderCatalogEntry,
-    ProviderModelCatalog,
+    ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelInputModality, ModelLimits,
+    ModelProviderCatalogEntry, ModelProviderReadiness, ModelProviderReadinessStatus,
+    ModelReasoningControl, ModelServiceTierControl, ModelWireProtocol, ProviderModelCatalog,
+    ResolvedTurnProfile,
 };
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.

@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.context-source@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const CONTEXT_SOURCE_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,21 +13,21 @@ pub const CONTEXT_SOURCE_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_context_source { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"read_resource\",\"render_prompt\",\"snapshot\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_context_source { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"read_resource\",\"render_prompt\",\"snapshot\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_context_source_client { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_context_source_client { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_context_source_client { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_context_source_client { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
 
 pub const READ_RESOURCE_OPERATION: &str = "read_resource";
 pub const RENDER_PROMPT_OPERATION: &str = "render_prompt";
 pub const SNAPSHOT_OPERATION: &str = "snapshot";
 
-pub use lenso_contract_runtime::{RawJson, UnknownDomainError};
+pub use lenso_contract_runtime::{OptionalValue, RawJson, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -49,12 +49,19 @@ pub struct ReadResourceResponse {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceContent {
+    #[serde(rename = "data_base64")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub data_base64: OptionalValue<String>,
     #[serde(rename = "mime_type")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub mime_type: String,
     #[serde(rename = "text")]
-    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub text: String,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub text: OptionalValue<String>,
     #[serde(rename = "uri")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub uri: String,

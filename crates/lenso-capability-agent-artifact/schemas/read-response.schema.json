@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["data_base64", "total_size", "next_offset", "complete"],
+  "properties": {
+    "data_base64": {
+      "type": "string",
+      "maxLength": 5592408
+    },
+    "total_size": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "next_offset": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "complete": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "title": "ReadResponse"
+}

@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeStream, NativeStreamEndpoint, Native
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.model@2";
-pub const DESCRIPTOR_VERSION: &str = "2.0.0";
+pub const DESCRIPTOR_VERSION: &str = "2.1.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const MODEL_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@2\",\"descriptor_version\":\"2.0.0\",\"operations\":[\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@2\",\"descriptor_version\":\"2.1.0\",\"operations\":[\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"many\"}" }; }
 
 pub const COMPLETE_OPERATION: &str = "complete";
 
@@ -39,6 +39,12 @@ pub struct CompleteOpen {
     #[serde(rename = "model")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub model: String,
+    #[serde(rename = "reasoning_effort")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(rename = "service_tier")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
     #[serde(rename = "temperature")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub temperature: f64,
@@ -147,8 +153,11 @@ pub struct ProviderFailurePayload {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CompleteError {
     ContentRejected,
+    ContextOverflow,
     InvalidRequest,
+    Overloaded,
     ProviderFailure { payload: ProviderFailurePayload },
+    RateLimited,
     UnsupportedModel,
     Unknown(UnknownDomainError),
 }
@@ -172,13 +181,16 @@ impl serde::Serialize for CompleteError {
         use serde::ser::SerializeMap;
         match self {
             Self::ContentRejected => serializer.serialize_str("content_rejected"),
+            Self::ContextOverflow => serializer.serialize_str("context_overflow"),
             Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::Overloaded => serializer.serialize_str("overloaded"),
             Self::ProviderFailure { payload } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("code", "provider_failure")?;
                 map.serialize_entry("payload", payload)?;
                 map.end()
             },
+            Self::RateLimited => serializer.serialize_str("rate_limited"),
             Self::UnsupportedModel => serializer.serialize_str("unsupported_model"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -204,7 +216,10 @@ impl<'de> serde::Deserialize<'de> for CompleteError {
         match value {
             serde_json::Value::String(code) => match code.as_str() {
                 "content_rejected" => Ok(Self::ContentRejected),
+                "context_overflow" => Ok(Self::ContextOverflow),
                 "invalid_request" => Ok(Self::InvalidRequest),
+                "overloaded" => Ok(Self::Overloaded),
+                "rate_limited" => Ok(Self::RateLimited),
                 "unsupported_model" => Ok(Self::UnsupportedModel),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },

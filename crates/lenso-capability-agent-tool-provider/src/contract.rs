@@ -53,8 +53,43 @@ pub struct ExecuteResponse {
     pub content_type: ContentType,
     #[schemars(length(max = 1_048_576))]
     pub content: String,
+    #[schemars(length(max = 64))]
+    pub content_blocks: Option<Vec<ContentBlock>>,
     #[schemars(length(min = 2, max = 65_536))]
     pub metadata_json: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ContentBlock {
+    pub kind: ContentBlockKind,
+    #[schemars(length(max = 1_048_576))]
+    pub text: Option<String>,
+    #[schemars(length(min = 2, max = 1_048_576))]
+    pub value_json: Option<String>,
+    #[schemars(length(max = 128))]
+    pub mime_type: Option<String>,
+    #[schemars(length(max = 5_592_408))]
+    pub data_base64: Option<String>,
+    #[schemars(length(max = 4_096))]
+    pub uri: Option<String>,
+    #[schemars(length(max = 256))]
+    pub name: Option<String>,
+    #[schemars(length(max = 4_096))]
+    pub handle: Option<String>,
+    #[schemars(length(max = 4_096))]
+    pub description: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentBlockKind {
+    Text,
+    Json,
+    Image,
+    Audio,
+    ResourceLink,
+    Artifact,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -86,7 +121,7 @@ pub enum ExecuteError {
 #[lenso::capability(
     id = "lenso.agent.tool-provider",
     major = 2,
-    version = "2.0.0",
+    version = "2.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

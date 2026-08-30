@@ -189,6 +189,7 @@ impl MultimodalTools {
             })?
             .to_owned();
         Ok(ExecuteResponse {
+            content_blocks: None,
             content: derived_text,
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({

@@ -30,7 +30,7 @@ mod tests {
                 },
                 {
                     "capability_id": "lenso.agent.context-source@1",
-                    "descriptor_version": "1.0.0",
+                    "descriptor_version": "1.1.0",
                     "cardinality": "many"
                 }
             ])

@@ -464,6 +464,7 @@ async fn proxy_progress_provider(
                         kind,
                         content_type: ExecuteStreamResponseContentType::Text,
                         content: message.content,
+                        content_blocks: parse_content_blocks(message.metadata_json.as_str()),
                         metadata_json: message.metadata_json,
                     })
                     .await
@@ -508,6 +509,11 @@ async fn execute_legacy_provider(
                 PluginError::runtime(error)
             }
         })?;
+    let content_blocks = response
+        .content_blocks
+        .clone()
+        .flatten()
+        .map(convert_content_blocks);
     let terminal = ExecuteTerminal {
         content: response.content.clone(),
         metadata_json: response.metadata_json.as_str().to_owned(),
@@ -517,6 +523,7 @@ async fn execute_legacy_provider(
             kind: ExecuteStreamResponseKind::Completed,
             content_type: ExecuteStreamResponseContentType::Text,
             content: response.content,
+            content_blocks,
             metadata_json: response.metadata_json,
         })
         .await
@@ -625,13 +632,40 @@ fn valid_model_tool_name(name: &str) -> bool {
 }
 
 fn convert_execute_response(response: provider_contract::ExecuteResponse) -> ExecuteResponse {
+    let content_blocks = response
+        .content_blocks
+        .flatten()
+        .map(convert_content_blocks);
     ExecuteResponse {
         content: response.content,
+        content_blocks,
         content_type: match response.content_type {
             provider_contract::ContentType::Text => ExecuteResponseContentType::Text,
         },
         metadata_json: response.metadata_json,
     }
+}
+
+fn convert_content_blocks<T, U>(blocks: Vec<T>) -> Vec<U>
+where
+    T: serde::Serialize,
+    U: serde::de::DeserializeOwned,
+{
+    serde_json::from_value(
+        serde_json::to_value(blocks).expect("Tool Provider content blocks are serializable"),
+    )
+    .expect("Tool Provider and aggregate Tool content block schemas are aligned")
+}
+
+fn parse_content_blocks<T>(metadata_json: &str) -> Option<Vec<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let metadata = serde_json::from_str::<serde_json::Value>(metadata_json).ok()?;
+    let blocks = metadata.get("content_blocks")?.clone();
+    serde_json::from_value::<Vec<T>>(blocks)
+        .ok()
+        .filter(|blocks| !blocks.is_empty())
 }
 
 fn convert_execute_error(error: provider_contract::ExecuteError) -> ExecuteError {

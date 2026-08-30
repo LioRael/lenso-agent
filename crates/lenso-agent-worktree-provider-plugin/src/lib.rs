@@ -398,6 +398,7 @@ impl WorktreeProviderPlugin {
             diff.stdout
         );
         Ok(ExecuteResponse {
+            content_blocks: None,
             content: review_content,
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
@@ -538,6 +539,7 @@ impl WorktreeProviderPlugin {
         ensure_tool_success(&delete_branch, "worktree_branch_cleanup_failed")?;
         self.allocations.borrow_mut().remove(&arguments.task_id);
         Ok(ExecuteResponse {
+            content_blocks: None,
             content: format!("integrated worktree {}", arguments.task_id),
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({
@@ -571,6 +573,7 @@ impl WorktreeProviderPlugin {
             })
             .collect::<Vec<_>>();
         ExecuteResponse {
+            content_blocks: None,
             content: serde_json::json!({"worktrees": worktrees}).to_string(),
             content_type: ContentType::Text,
             metadata_json: serde_json::json!({"worktree_count": worktrees.len()})

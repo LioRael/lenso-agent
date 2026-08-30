@@ -159,6 +159,7 @@ impl AskUserToolsPlugin {
             .await
         {
             Ok(response) => Ok(ExecuteResponse {
+                content_blocks: None,
                 content: serde_json::to_string(&response).map_err(|error| {
                     PluginError::runtime(lenso_kernel::RuntimeFailure::PluginFailure {
                         detail: format!("failed to encode ask_user answers: {error}"),

@@ -75,19 +75,33 @@ pub(super) fn telemetry() -> OnlineReconcileTelemetry {
 
 #[derive(Debug)]
 pub(super) struct GenerationReconciler {
-    reopen: mpsc::Sender<()>,
+    requests: mpsc::Sender<ReconcileRequest>,
     stop: Option<oneshot::Sender<()>>,
     task: tokio::task::JoinHandle<()>,
 }
 
 impl GenerationReconciler {
     pub(super) fn reopen(&self) -> Result<(), String> {
-        match self.reopen.try_send(()) {
-            Ok(()) | Err(mpsc::error::TrySendError::Full(())) => Ok(()),
-            Err(mpsc::error::TrySendError::Closed(())) => {
+        match self.requests.try_send(ReconcileRequest::Reopen) {
+            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
                 Err("Generation Reconciler is not available".to_owned())
             }
         }
+    }
+
+    pub(super) async fn select_profile(&self, profile_name: Option<String>) -> Result<(), String> {
+        let (reply, response) = oneshot::channel();
+        self.requests
+            .send(ReconcileRequest::SelectProfile {
+                profile_name,
+                reply,
+            })
+            .await
+            .map_err(|_| "Generation Reconciler is not available".to_owned())?;
+        response
+            .await
+            .map_err(|_| "Generation Reconciler stopped before selecting the Profile".to_owned())?
     }
 
     pub(super) async fn shutdown(mut self) -> Result<(), String> {
@@ -98,6 +112,15 @@ impl GenerationReconciler {
             .await
             .map_err(|error| format!("Generation Reconciler task failed: {error}"))
     }
+}
+
+#[derive(Debug)]
+enum ReconcileRequest {
+    Reopen,
+    SelectProfile {
+        profile_name: Option<String>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 #[derive(Debug)]
@@ -338,27 +361,26 @@ pub(super) fn start(
     client: GenerationControllerClient<NativeApp>,
     store_root: PathBuf,
     host_build: HostBuildIdentity,
-    profile_name: Option<String>,
+    profile_name: Rc<RefCell<Option<String>>>,
     authoring_managed: bool,
     events: Rc<RefCell<OnlineGenerationEventLog>>,
     online_generation: Rc<RefCell<OnlineGenerationTracker>>,
 ) -> GenerationReconciler {
     let (stop, stopped) = oneshot::channel();
-    let (reopen, reopen_requests) = mpsc::channel(1);
+    let (requests, reconcile_requests) = mpsc::channel(4);
     let directories = directories_for_store_root(&store_root)
         .expect("validated Agent runtime root must have an Agent Home parent");
     let plugin_root = directories.plugins();
     let plugin_parent = watch_parent(&plugin_root);
     let profile_directory = directories.profiles();
     let selected_profile_path = profile_name
+        .borrow()
         .as_deref()
         .map(|profile| profile_directory.join(format!("{profile}.toml")));
     let mut watched_paths = vec![store_root.as_path()];
     if authoring_managed {
         watched_paths.push(plugin_parent.as_path());
-        if profile_name.is_some() {
-            watched_paths.push(profile_directory.as_path());
-        }
+        watched_paths.push(profile_directory.as_path());
     }
     let (watcher, watcher_errors) =
         FilesystemReconcileWatcher::start(&watched_paths, Some(plugin_root.clone()));
@@ -380,14 +402,14 @@ pub(super) fn start(
             online_generation,
             watcher,
             consistency,
-            reopen_requests,
+            reconcile_requests,
             last_attempted_desired: None,
             last_deduplicated_outcome: None,
         }
         .run(stopped),
     );
     GenerationReconciler {
-        reopen,
+        requests,
         stop: Some(stop),
         task,
     }
@@ -398,14 +420,14 @@ struct OnlineReconcilerLoop {
     store_root: PathBuf,
     plugin_root: PathBuf,
     host_build: HostBuildIdentity,
-    profile_name: Option<String>,
+    profile_name: Rc<RefCell<Option<String>>>,
     authoring_managed: bool,
     events: Rc<RefCell<OnlineGenerationEventLog>>,
     online_generation: Rc<RefCell<OnlineGenerationTracker>>,
     controller_events: tokio::sync::broadcast::Receiver<GenerationControllerEvent>,
     watcher: FilesystemReconcileWatcher,
     consistency: ReconcileConsistencyState,
-    reopen_requests: mpsc::Receiver<()>,
+    reconcile_requests: mpsc::Receiver<ReconcileRequest>,
     last_attempted_desired: Option<AttemptedDesiredState>,
     last_deduplicated_outcome: Option<OnlineGenerationEvent>,
 }
@@ -455,14 +477,22 @@ impl OnlineReconcilerLoop {
                         self.consistency.retry_required();
                     }
                 }
-                request = self.reopen_requests.recv() => {
-                    if request.is_none() {
+                request = self.reconcile_requests.recv() => {
+                    let Some(request) = request else {
                         break;
-                    }
-                    reopen_explicit_attempt(&mut self.last_attempted_desired);
-                    self.consistency.retry_required();
-                    if self.authoring_managed && !self.reconcile_and_record().await {
-                        self.consistency.retry_required();
+                    };
+                    match request {
+                        ReconcileRequest::Reopen => {
+                            reopen_explicit_attempt(&mut self.last_attempted_desired);
+                            self.consistency.retry_required();
+                            if self.authoring_managed && !self.reconcile_and_record().await {
+                                self.consistency.retry_required();
+                            }
+                        }
+                        ReconcileRequest::SelectProfile { profile_name, reply } => {
+                            let result = self.select_profile(profile_name).await;
+                            let _ = reply.send(result);
+                        }
                     }
                 }
                 signal = self.watcher.changed() => {
@@ -473,12 +503,43 @@ impl OnlineReconcilerLoop {
     }
 
     fn selected_profile_path(&self) -> Option<PathBuf> {
-        self.profile_name.as_deref().map(|profile| {
+        self.profile_name.borrow().as_deref().map(|profile| {
             directories_for_store_root(&self.store_root)
                 .expect("validated Agent runtime root must have an Agent Home parent")
                 .profiles()
                 .join(format!("{profile}.toml"))
         })
+    }
+
+    async fn select_profile(&mut self, profile_name: Option<String>) -> Result<(), String> {
+        if !self.authoring_managed {
+            return Err(
+                "this Host runs an exact diagnostic Plan, not an author-managed Plugin Root"
+                    .to_owned(),
+            );
+        }
+        let previous = self.profile_name.replace(profile_name);
+        reopen_explicit_attempt(&mut self.last_attempted_desired);
+        self.consistency.retry_required();
+        let result = match reconcile_online_generation(self).await {
+            OnlineReconcileAttempt::Completed(
+                None | Some(OnlineGenerationEvent::Switched { .. }),
+            ) => Ok(()),
+            OnlineReconcileAttempt::AuthorityBusy => {
+                Err("Generation authority is busy; retry the mode switch".to_owned())
+            }
+            OnlineReconcileAttempt::Retryable(event)
+            | OnlineReconcileAttempt::Completed(Some(event)) => Err(format!(
+                "Profile mode was rejected before activation: {event:?}"
+            )),
+        };
+        if result.is_err() {
+            self.profile_name.replace(previous);
+            self.consistency.retry_required();
+        } else {
+            self.consistency.refreshed(self.desired_state_probe());
+        }
+        result
     }
 
     fn desired_state_probe(&self) -> Result<crate::plugin_root::DesiredStateProbe, String> {
@@ -885,11 +946,12 @@ async fn prepare_online_candidate(
         }
     };
     FULL_RECONCILE_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+    let profile_name = context.profile_name.borrow().clone();
     let Some(desired) = resolve_desired_generation(
         &context.plugin_root,
         &context.store_root,
         &context.host_build,
-        context.profile_name.as_deref(),
+        profile_name.as_deref(),
         &mut context.last_attempted_desired,
     )?
     else {

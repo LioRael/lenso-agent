@@ -10,6 +10,8 @@
       "type": "array",
       "items": { "type": "string" }
     },
-    "api_key_ref": { "type": "string" }
+    "api_key_ref": { "type": "string" },
+    "http_referer": { "type": "string" },
+    "app_title": { "type": "string", "maxLength": 128 }
   }
 }

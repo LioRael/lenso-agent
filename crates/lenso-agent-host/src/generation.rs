@@ -11,6 +11,7 @@ use lenso_app_plan::{
 };
 use lenso_bun_adapter::{BunAdapter, BunCapabilityCodec};
 use lenso_capability_agent::{Agent, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID};
+use lenso_capability_agent_artifact::ArtifactJsonCodec;
 use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
 use lenso_capability_agent_context_source::{
     ContextSourceJsonCodec, ContextSourceReadResource, ContextSourceRenderPrompt,
@@ -24,6 +25,7 @@ use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_memory::MemoryJsonCodec;
 use lenso_capability_agent_model::ModelJsonCodec;
+use lenso_capability_agent_oauth_access::OauthAccessJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
 use lenso_capability_agent_session::{
     APPEND_OPERATION, AppendSessionRequest, AppendSessionRequestEventsItem,
@@ -32,6 +34,9 @@ use lenso_capability_agent_session::{
     ReadSessionResponse, ReadSessionResponseEventsItemKind, RenameError, RenameSessionRequest,
     RenameSessionResponse, SessionAppend, SessionJsonCodec, SessionList, SessionOpen, SessionRead,
     SessionRename,
+};
+use lenso_capability_agent_session_control::{
+    COMPACT_SESSION_OPERATION, CompactSessionRequest, CompactSessionResponse, SessionControl,
 };
 use lenso_capability_agent_session_presentation::SessionPresentationJsonCodec;
 use lenso_capability_agent_task_supervisor::{
@@ -330,7 +335,7 @@ pub struct AgentApp {
     resolved_plan: ResolvedAppPlan,
     runtime: RuntimeAttachment,
     session_database: PathBuf,
-    profile_name: Option<String>,
+    profile_name: Rc<RefCell<Option<String>>>,
     authoring_managed: bool,
     reconciler: Option<GenerationReconciler>,
     reconcile_events: Rc<RefCell<OnlineGenerationEventLog>>,
@@ -401,6 +406,7 @@ impl AgentApp {
         )));
         let authoring_managed =
             plan_is_authoring_managed(plan_bytes, store_root, profile_name.as_deref());
+        let profile_name = Rc::new(RefCell::new(profile_name));
         let reconciler = online_reconciler::start(
             client.clone(),
             store_root.to_path_buf(),
@@ -445,7 +451,8 @@ impl AgentApp {
         }
         let directories = directories_for_store_root(self.runtime.state().root())?;
         let root = crate::plugin_root::snapshot_with_resources(&directories.plugins())?;
-        let plan = if let Some(profile_name) = self.profile_name.as_deref() {
+        let selected_profile = self.profile_name.borrow().clone();
+        let plan = if let Some(profile_name) = selected_profile.as_deref() {
             let profile =
                 crate::profile::select(profile_name, root.root(), &directories.profiles())?;
             resolve_host_plan_for_agent_in(&directories, profile.root(), profile.agent())?
@@ -477,7 +484,7 @@ impl AgentApp {
             })?;
         let directories = directories_for_store_root(self.runtime.state().root())?;
         let host = linked_host_catalog_in(&directories)?;
-        crate::provider_catalog::project(&host, &plan)
+        crate::provider_catalog::project(&host, &plan, route.generation_spec_digest())
     }
 
     /// Snapshots explicit disabled Instance markers for management surfaces.
@@ -494,6 +501,21 @@ impl AgentApp {
             .as_ref()
             .ok_or_else(|| "Generation Reconciler is not available".to_owned())?
             .reopen()
+    }
+
+    /// Selects an authoring Profile and activates it through the ordinary Ready Gate.
+    /// `None` selects the default Plugin Root composition.
+    pub async fn select_profile(&self, profile_name: Option<String>) -> Result<(), String> {
+        self.reconciler
+            .as_ref()
+            .ok_or_else(|| "Generation Reconciler is not available".to_owned())?
+            .select_profile(profile_name)
+            .await
+    }
+
+    /// Returns the Profile currently selected by this Host surface.
+    pub fn selected_profile(&self) -> Option<String> {
+        self.profile_name.borrow().clone()
     }
 
     /// Returns Instances whose author-owned files may be enabled or disabled.
@@ -755,7 +777,7 @@ impl AgentApp {
             .find(|binding| binding.capability_id() == AGENT_CAPABILITY_ID)
             .map(|binding| binding.provider_instance().to_owned())
             .ok_or_else(|| "leased Generation Surface has no Agent provider binding".to_owned())?;
-        let behavior_digest = {
+        let (behavior_digest, resolved_turn_profile, model_catalog) = {
             let plan = self
                 .retained_generation_plan(route.generation_spec_digest())
                 .ok_or_else(|| {
@@ -764,7 +786,15 @@ impl AgentApp {
                         route.generation_spec_digest()
                     )
                 })?;
-            agent_behavior_digest(&plan, &agent_provider)?
+            let behavior_digest = agent_behavior_digest(&plan, &agent_provider)?;
+            let directories = directories_for_store_root(self.runtime.state().root())?;
+            let host = linked_host_catalog_in(&directories)?;
+            let catalog =
+                crate::provider_catalog::project(&host, &plan, route.generation_spec_digest())?;
+            let resolved_turn_profile = catalog.resolved_turn_profile.clone().ok_or_else(|| {
+                "leased Generation Agent has no resolved Turn model profile".to_owned()
+            })?;
+            (behavior_digest, resolved_turn_profile, catalog)
         };
         let tools_catalog = route
             .target()
@@ -772,6 +802,11 @@ impl AgentApp {
             .map_err(|error| {
                 format!("leased Generation Agent has no Tool catalog route: {error:?}")
             })?;
+        let has_session_control = surface_dependencies.bindings().iter().any(|binding| {
+            binding.capability_id() == lenso_capability_agent_session_control::CAPABILITY_ID
+        });
+        let session_control =
+            session_control_handle(&route, consumer_instance, has_session_control)?;
         let interactive = surface_dependencies
             .bindings()
             .iter()
@@ -803,7 +838,10 @@ impl AgentApp {
             interaction,
             interactive,
             tools_catalog: Rc::new(tools_catalog),
+            session_control,
             behavior_digest,
+            resolved_turn_profile,
+            model_catalog,
         })
     }
 
@@ -928,6 +966,24 @@ impl AgentApp {
             .map(OnlineGenerationEventRecord::into_event)
             .collect()
     }
+}
+
+fn session_control_handle(
+    route: &DurableGenerationRoute<NativeApp>,
+    consumer_instance: &str,
+    required: bool,
+) -> Result<Option<Rc<NativeRequestHandle<SessionControl>>>, String> {
+    required
+        .then(|| {
+            route
+                .target()
+                .handle::<SessionControl>(consumer_instance)
+                .map(Rc::new)
+                .map_err(|error| {
+                    format!("leased Generation has no Session Control route: {error:?}")
+                })
+        })
+        .transpose()
 }
 
 pub(crate) fn live_controller_generation_digests(
@@ -1108,7 +1164,10 @@ pub struct TurnGeneration {
     interaction: Option<UserInteractionSurfaceHandles>,
     interactive: bool,
     tools_catalog: Rc<NativeRequestHandle<ToolsCatalog>>,
+    session_control: Option<Rc<NativeRequestHandle<SessionControl>>>,
     behavior_digest: String,
+    resolved_turn_profile: crate::ResolvedTurnProfile,
+    model_catalog: crate::ProviderModelCatalog,
 }
 
 #[derive(Debug)]
@@ -1131,6 +1190,49 @@ impl TurnGeneration {
         self.invocation_context_with_cancellation(CancellationToken::new())
     }
 
+    /// Lists models admitted by the Provider Instance already bound to this Generation.
+    pub fn available_models(&self) -> Vec<String> {
+        self.model_catalog.selected_provider_models()
+    }
+
+    /// Returns the model selected by this immutable Generation lease.
+    pub fn selected_model(&self) -> &str {
+        &self.resolved_turn_profile.model
+    }
+
+    /// Returns the Generation's default reasoning selection, when configured.
+    pub fn selected_reasoning_effort(&self) -> Option<&str> {
+        self.resolved_turn_profile.reasoning_effort.as_deref()
+    }
+
+    /// Returns the Generation's default service tier, when configured.
+    pub fn selected_service_tier(&self) -> Option<&str> {
+        self.resolved_turn_profile.service_tier.as_deref()
+    }
+
+    /// Creates a root context selecting one admitted model for this Turn only.
+    pub fn invocation_context_for_model(
+        &self,
+        model_id: &str,
+    ) -> Result<InvocationContext, String> {
+        let profile = self.model_catalog.resolve_model(model_id)?;
+        self.invocation_context_with_profile(CancellationToken::new(), &profile)
+    }
+
+    /// Creates a root context with model-specific, catalog-validated inference controls.
+    pub fn invocation_context_for_model_options(
+        &self,
+        model_id: Option<&str>,
+        reasoning_effort: Option<&str>,
+        service_tier: Option<&str>,
+    ) -> Result<InvocationContext, String> {
+        let model_id = model_id.unwrap_or(self.resolved_turn_profile.model.as_str());
+        let profile =
+            self.model_catalog
+                .resolve_model_options(model_id, reasoning_effort, service_tier)?;
+        self.invocation_context_with_profile(CancellationToken::new(), &profile)
+    }
+
     /// Reads the exact Tool catalog bound to this Turn's Agent provider.
     pub async fn tool_catalog(&self) -> Result<Vec<CatalogResponseToolsItem>, String> {
         self.tools_catalog
@@ -1145,11 +1247,39 @@ impl TurnGeneration {
             .map_err(|error| format!("Tool catalog snapshot was rejected: {error:?}"))
     }
 
+    /// Compacts the current Session through the leased Agent's durable control boundary.
+    pub async fn compact_session(
+        &self,
+        session_id: String,
+    ) -> Result<CompactSessionResponse, String> {
+        let control = self
+            .session_control
+            .as_ref()
+            .ok_or_else(|| "this Agent surface has no Session Control route".to_owned())?;
+        control
+            .invoke_with_context(
+                COMPACT_SESSION_OPERATION,
+                self.invocation_context()?,
+                CompactSessionRequest { session_id },
+            )
+            .await
+            .map_err(|error| format!("Session Control invocation failed: {error:?}"))?
+            .map_err(|error| format!("Session compaction was rejected: {error:?}"))
+    }
+
     /// Creates a root invocation context whose lifetime can be controlled by
     /// the owning Surface.
     pub fn invocation_context_with_cancellation(
         &self,
         cancellation: CancellationToken,
+    ) -> Result<InvocationContext, String> {
+        self.invocation_context_with_profile(cancellation, &self.resolved_turn_profile)
+    }
+
+    fn invocation_context_with_profile(
+        &self,
+        cancellation: CancellationToken,
+        profile: &crate::ResolvedTurnProfile,
     ) -> Result<InvocationContext, String> {
         let mut request_id = NEXT_ROOT_REQUEST_ID.load(Ordering::Relaxed);
         loop {
@@ -1185,7 +1315,9 @@ impl TurnGeneration {
             })
             .map_err(|error| format!("failed to attach Workspace scope: {error}"))?
             .with_typed_extension(&AgentBehaviorProvenance::new(self.behavior_digest.clone())?)
-            .map_err(|error| format!("failed to attach Agent behavior provenance: {error}"))?;
+            .map_err(|error| format!("failed to attach Agent behavior provenance: {error}"))?
+            .with_typed_extension(profile)
+            .map_err(|error| format!("failed to attach resolved Turn profile: {error}"))?;
         if self.interactive {
             context
                 .with_typed_extension(&InteractiveSurface)
@@ -1833,6 +1965,7 @@ fn linked_host_catalog_for_agent_in(
 fn host_catalog_slots() -> Vec<HostSlot> {
     vec![
         HostSlot::many("agents"),
+        HostSlot::one("artifact").replaceable(),
         HostSlot::optional("auth"),
         HostSlot::optional("console"),
         HostSlot::one("context-compactor").replaceable(),
@@ -1844,6 +1977,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::one("http-fetch"),
         HostSlot::one("model").replaceable(),
         HostSlot::optional("process"),
+        HostSlot::one("oauth-access").replaceable(),
         HostSlot::many("prompt-providers"),
         HostSlot::one("prompt-runtime"),
         HostSlot::many("tools-runtimes"),
@@ -1864,6 +1998,7 @@ fn host_catalog_defaults(
 ) -> Vec<HostDefaultPlugin> {
     let mut defaults = agent_defaults(available);
     defaults.extend(default_interactive_plugins());
+    defaults.extend(default_boundary_plugins(directories));
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.acp", "acp"),
         HostDefaultPlugin::new("lenso.agent.cli", "cli"),
@@ -1925,18 +2060,7 @@ fn host_catalog_defaults(
                 }]
             }),
         ),
-        default_plugin(
-            "lenso.agent.tui-command-suggestions",
-            "tui-commands",
-            serde_json::json!({
-                "commands": [
-                    {"id": "agent.command.help", "label": "/help", "insert_text": "/help", "description": "Show keyboard shortcuts"},
-                    {"id": "agent.command.clear", "label": "/clear", "insert_text": "/clear", "description": "Clear the visible conversation"},
-                    {"id": "agent.command.new", "label": "/new", "insert_text": "/new", "description": "Start a new session"},
-                    {"id": "agent.command.rename", "label": "/rename", "insert_text": "/rename ", "description": "Rename the current session"}
-                ]
-            }),
-        ),
+        default_tui_commands_plugin(),
         default_plugin(
             "lenso.agent.tui-workspace-suggestions",
             "tui-workspace-suggestions",
@@ -1962,6 +2086,48 @@ fn host_catalog_defaults(
         HostDefaultPlugin::new("lenso.agent.workspace-read-tools", "restricted-read-tools"),
     ]);
     defaults
+}
+
+fn default_boundary_plugins(directories: &AgentDirectories) -> [HostDefaultPlugin; 2] {
+    [
+        default_plugin(
+            "lenso.agent.artifact.file",
+            "artifacts",
+            serde_json::json!({
+                "directory": directories.artifacts(),
+                "max_artifact_bytes": 16_777_216,
+                "max_total_bytes": 1_073_741_824_u64,
+                "max_items": 4_096
+            }),
+        ),
+        default_plugin(
+            "lenso.agent.oauth.client-credentials",
+            "oauth",
+            serde_json::json!({
+                "resources": [],
+                "request_timeout_ms": 30_000,
+                "refresh_margin_seconds": 60
+            }),
+        ),
+    ]
+}
+
+fn default_tui_commands_plugin() -> HostDefaultPlugin {
+    default_plugin(
+        "lenso.agent.tui-command-suggestions",
+        "tui-commands",
+        serde_json::json!({
+            "commands": [
+                {"id": "agent.command.help", "label": "/help", "insert_text": "/help", "description": "Show keyboard shortcuts"},
+                {"id": "agent.command.clear", "label": "/clear", "insert_text": "/clear", "description": "Clear the visible conversation"},
+                {"id": "agent.command.new", "label": "/new", "insert_text": "/new", "description": "Start a new session"},
+                {"id": "agent.command.compact", "label": "/compact", "insert_text": "/compact", "description": "Compact the current session context"},
+                {"id": "agent.command.model", "label": "/model", "insert_text": "/model ", "description": "List or select an admitted model"},
+                {"id": "agent.command.permissions", "label": "/permissions", "insert_text": "/permissions ", "description": "Inspect or narrow Tool permissions"},
+                {"id": "agent.command.rename", "label": "/rename", "insert_text": "/rename ", "description": "Rename the current session"}
+            ]
+        }),
+    )
 }
 
 fn default_context_compaction_plugin() -> HostDefaultPlugin {
@@ -2057,9 +2223,6 @@ fn agent_defaults(available: &BTreeSet<String>) -> Vec<HostDefaultPlugin> {
                 instance_key,
                 serde_json::json!({
                     "model": DEFAULT_MODEL,
-                    "max_steps": 16,
-                    "max_tool_calls": 16,
-                    "max_user_resumes": 8,
                     "max_parallel_tool_calls": 4,
                     "max_output_tokens": 1024,
                     "max_history_events": 200,
@@ -2102,9 +2265,6 @@ fn host_catalog_configurations(directories: &AgentDirectories) -> Vec<HostPlugin
             instance,
             serde_json::json!({
                 "model": DEFAULT_MODEL,
-                "max_steps": 16,
-                "max_tool_calls": 16,
-                "max_user_resumes": 8,
                 "max_parallel_tool_calls": 4,
                 "max_output_tokens": 1024,
                 "max_history_events": 200,
@@ -2396,6 +2556,13 @@ fn host_catalog_bindings(
             selected_agent.clone(),
         ));
     }
+    if available.contains("lenso.agent.tui") {
+        bindings.push(HostBinding::to_instance(
+            PluginInstanceId::new("lenso.agent.tui", "tui"),
+            "lenso.agent.session-control@1",
+            selected_agent.clone(),
+        ));
+    }
     if available.contains("lenso.agent.subagent-tools") {
         for surface in [
             PluginInstanceId::new("lenso.agent.tui", "tui"),
@@ -2578,12 +2745,14 @@ pub(crate) fn resolve_host_plan_for_agent_in(
 fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFactory> {
     MultiExecutionCatalogFactory::new(HarnessCatalogFactory)
         .with_wasm_codec(AgentJsonCodec)
+        .with_wasm_codec(ArtifactJsonCodec)
         .with_wasm_codec(ContextCompactionJsonCodec)
         .with_wasm_codec(ContextSourceJsonCodec)
         .with_wasm_codec(MemoryJsonCodec)
         .with_wasm_codec(HttpFetchJsonCodec)
         .with_wasm_codec(LifecycleJsonCodec)
         .with_wasm_codec(ModelJsonCodec)
+        .with_wasm_codec(OauthAccessJsonCodec)
         .with_wasm_codec(PromptJsonCodec)
         .with_wasm_codec(SessionJsonCodec)
         .with_wasm_codec(SessionPresentationJsonCodec)
@@ -2594,11 +2763,13 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_wasm_codec(UserInteractionJsonCodec)
         .with_wasm_codec(WorkspaceReadJsonCodec)
         .with_quickjs_codec(AgentJsonCodec)
+        .with_quickjs_codec(ArtifactJsonCodec)
         .with_quickjs_codec(ContextCompactionJsonCodec)
         .with_quickjs_codec(ContextSourceJsonCodec)
         .with_quickjs_codec(MemoryJsonCodec)
         .with_quickjs_codec(LifecycleJsonCodec)
         .with_quickjs_codec(ModelJsonCodec)
+        .with_quickjs_codec(OauthAccessJsonCodec)
         .with_quickjs_codec(PromptJsonCodec)
         .with_quickjs_codec(SessionJsonCodec)
         .with_quickjs_codec(ToolHookJsonCodec)
@@ -2607,12 +2778,14 @@ fn harness_catalog_factory() -> MultiExecutionCatalogFactory<HarnessCatalogFacto
         .with_quickjs_codec(UserInteractionJsonCodec)
         .with_quickjs_codec(WorkspaceReadJsonCodec)
         .with_process_codec(AgentJsonCodec)
+        .with_process_codec(ArtifactJsonCodec)
         .with_process_codec(ContextCompactionJsonCodec)
         .with_process_codec(ContextSourceJsonCodec)
         .with_process_codec(MemoryJsonCodec)
         .with_process_codec(HttpFetchJsonCodec)
         .with_process_codec(LifecycleJsonCodec)
         .with_process_codec(ModelJsonCodec)
+        .with_process_codec(OauthAccessJsonCodec)
         .with_process_codec(PromptJsonCodec)
         .with_process_codec(SessionJsonCodec)
         .with_process_codec(ToolHookJsonCodec)
@@ -2749,6 +2922,8 @@ mod tests {
             .collect::<BTreeSet<_>>();
 
         assert!(instances.contains("lenso.agent.auth.openai-codex/auth"));
+        assert!(instances.contains("lenso.agent.artifact.file/artifacts"));
+        assert!(instances.contains("lenso.agent.oauth.client-credentials/oauth"));
         assert!(instances.contains("lenso.agent.model.openai-codex-direct/model"));
         assert!(instances.contains("lenso.agent.context-compaction/context-compactor"));
         assert!(instances.contains("lenso.agent.memory.sqlite/memory"));
@@ -2765,6 +2940,17 @@ mod tests {
                         && binding["provider_instance"]
                             == "lenso.agent.context-compaction/context-compactor"
                         && binding["capability_id"] == "lenso.agent.context-compaction@1"
+                })
+        );
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.loop/agent"
+                        && binding["provider_instance"] == "lenso.agent.artifact.file/artifacts"
+                        && binding["capability_id"] == "lenso.agent.artifact@1"
                 })
         );
         assert!(
@@ -3423,6 +3609,18 @@ mod tests {
                 .any(|binding| {
                     binding["provider_instance"] == "lenso.agent.mcp-client/filesystem"
                         && binding["capability_id"] == "lenso.agent.tool-provider@2"
+                })
+        );
+        assert!(
+            plan_json["capability_bindings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|binding| {
+                    binding["consumer_instance"] == "lenso.agent.mcp-client/filesystem"
+                        && binding["provider_instance"]
+                            == "lenso.agent.oauth.client-credentials/oauth"
+                        && binding["capability_id"] == "lenso.agent.oauth-access@1"
                 })
         );
     }

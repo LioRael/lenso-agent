@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["access_token", "token_type", "expires_at_millis", "scopes"],
+  "properties": {
+    "access_token": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "x-lenso-sensitive": true
+    },
+    "token_type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "expires_at_millis": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^(0|[1-9][0-9]*)$"
+    },
+    "scopes": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "title": "AccessResponse"
+}

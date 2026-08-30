@@ -2852,6 +2852,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-artifact-file-plugin"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures",
+ "lenso",
+ "lenso-capability-agent-artifact",
+ "lenso-kernel",
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
 name = "lenso-agent-ask-user-tools-plugin"
 version = "0.1.0"
 dependencies = [
@@ -2981,6 +2996,7 @@ dependencies = [
 name = "lenso-agent-console-plugins"
 version = "0.1.0"
 dependencies = [
+ "lenso-agent-artifact-file-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-context-compaction-plugin",
@@ -2988,6 +3004,7 @@ dependencies = [
  "lenso-agent-loop-plugin",
  "lenso-agent-memory-sqlite-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
+ "lenso-agent-oauth-client-credentials-plugin",
  "lenso-agent-prompt-plugin",
  "lenso-agent-prompt-static-plugin",
  "lenso-agent-session-sqlite-plugin",
@@ -3022,6 +3039,7 @@ name = "lenso-agent-default-plugins"
 version = "0.1.0"
 dependencies = [
  "lenso-agent-approval-hook-plugin",
+ "lenso-agent-artifact-file-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-browser-playwright-plugin",
@@ -3042,6 +3060,7 @@ dependencies = [
  "lenso-agent-model-openai-codex-direct-plugin",
  "lenso-agent-model-openai-compatible-plugin",
  "lenso-agent-multimodal-tools-plugin",
+ "lenso-agent-oauth-client-credentials-plugin",
  "lenso-agent-process-native-plugin",
  "lenso-agent-process-sandbox-plugin",
  "lenso-agent-process-tools-plugin",
@@ -3122,14 +3141,17 @@ dependencies = [
  "lenso-app-plan",
  "lenso-bun-adapter",
  "lenso-capability-agent",
+ "lenso-capability-agent-artifact",
  "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-http-fetch",
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-memory",
  "lenso-capability-agent-model",
+ "lenso-capability-agent-oauth-access",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-session-control",
  "lenso-capability-agent-session-presentation",
  "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-hook",
@@ -3214,16 +3236,19 @@ dependencies = [
 name = "lenso-agent-loop-plugin"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "futures",
  "lenso",
  "lenso-agent-native-support",
  "lenso-capability-agent",
+ "lenso-capability-agent-artifact",
  "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-lifecycle",
  "lenso-capability-agent-memory",
  "lenso-capability-agent-model",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-session-control",
  "lenso-capability-agent-session-presentation",
  "lenso-capability-agent-tools",
  "lenso-capability-agent-turn-input",
@@ -3232,6 +3257,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "time",
+ "tokio",
  "uuid",
 ]
 
@@ -3246,6 +3272,7 @@ dependencies = [
  "lenso",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-model",
+ "lenso-capability-agent-oauth-access",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-user-interaction",
  "lenso-kernel",
@@ -3354,6 +3381,22 @@ dependencies = [
  "lenso-kernel",
  "serde",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "lenso-agent-oauth-client-credentials-plugin"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures",
+ "lenso",
+ "lenso-capability-agent-oauth-access",
+ "lenso-kernel",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -3610,6 +3653,7 @@ dependencies = [
  "lenso-capability-agent-tools",
  "lenso-kernel",
  "lenso-native-adapter",
+ "serde",
  "serde_json",
 ]
 
@@ -3661,6 +3705,7 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-session-control",
  "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tui-contribution",
  "lenso-capability-agent-tui-suggestion",
@@ -3881,6 +3926,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-capability-agent-artifact"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "lenso-capability-agent-auth-openai-codex"
 version = "0.1.0"
 dependencies = [
@@ -4000,6 +4064,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-capability-agent-oauth-access"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
 name = "lenso-capability-agent-process"
 version = "0.1.0"
 dependencies = [
@@ -4053,6 +4136,25 @@ dependencies = [
  "lenso-runtime-codec",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-session-control"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]

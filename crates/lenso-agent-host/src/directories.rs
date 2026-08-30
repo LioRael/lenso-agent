@@ -67,6 +67,10 @@ impl AgentDirectories {
         self.home.join("sessions")
     }
 
+    pub fn artifacts(&self) -> PathBuf {
+        self.home.join("artifacts")
+    }
+
     pub fn session_database(&self) -> PathBuf {
         self.home.join("sessions.sqlite3")
     }
@@ -131,6 +135,10 @@ mod tests {
         assert_eq!(
             directories.session_database(),
             Path::new("/tmp/lenso-agent-home/sessions.sqlite3")
+        );
+        assert_eq!(
+            directories.artifacts(),
+            Path::new("/tmp/lenso-agent-home/artifacts")
         );
     }
 

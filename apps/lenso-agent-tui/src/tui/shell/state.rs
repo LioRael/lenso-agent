@@ -50,6 +50,51 @@ enum Focus {
     Scrollback,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SessionMode {
+    Normal,
+    Plan,
+    Auto,
+    Custom(String),
+}
+
+impl SessionMode {
+    fn from_profile(profile: Option<&str>) -> Self {
+        match profile {
+            None => Self::Normal,
+            Some("plan") => Self::Plan,
+            Some("code") => Self::Auto,
+            Some(profile) => Self::Custom(profile.to_owned()),
+        }
+    }
+
+    const fn label(&self) -> &str {
+        match self {
+            Self::Normal => "normal",
+            Self::Plan => "plan",
+            Self::Auto => "auto",
+            Self::Custom(profile) => profile.as_str(),
+        }
+    }
+
+    fn profile(&self) -> Option<String> {
+        match self {
+            Self::Normal => None,
+            Self::Plan => Some("plan".to_owned()),
+            Self::Auto => Some("code".to_owned()),
+            Self::Custom(profile) => Some(profile.clone()),
+        }
+    }
+
+    fn next(&self) -> Self {
+        match self {
+            Self::Normal | Self::Custom(_) => Self::Plan,
+            Self::Plan => Self::Auto,
+            Self::Auto => Self::Normal,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum WheelDirection {
     Up,
@@ -437,6 +482,12 @@ struct TuiState {
     suggestion_visibility: SuggestionVisibility,
     selected_panel: usize,
     session_id: Option<String>,
+    selected_model: Option<String>,
+    selected_reasoning_effort: Option<String>,
+    selected_service_tier: Option<String>,
+    mode: SessionMode,
+    pending_mode: Option<SessionMode>,
+    allowed_tools: Option<Vec<String>>,
     phase: UiPhase,
     active: Option<ActiveTurn>,
     pending_interaction: Option<PendingInteraction>,
@@ -500,6 +551,12 @@ impl TuiState {
             suggestion_visibility: SuggestionVisibility::Auto,
             selected_panel: 0,
             session_id: options.session_id.clone(),
+            selected_model: None,
+            selected_reasoning_effort: None,
+            selected_service_tier: None,
+            mode: SessionMode::from_profile(options.profile.as_deref()),
+            pending_mode: None,
+            allowed_tools: options.allowed_tools.clone(),
             phase: UiPhase::Idle,
             active: None,
             pending_interaction: None,
@@ -609,6 +666,11 @@ impl TuiState {
     fn turn_is_running(&self) -> bool {
         self.active.is_some() || self.phase == UiPhase::Active
     }
+
+    fn request_next_mode(&mut self) {
+        let current = self.pending_mode.as_ref().unwrap_or(&self.mode);
+        self.pending_mode = Some(current.next());
+    }
 }
 
 #[derive(Debug)]
@@ -673,8 +735,11 @@ use task_supervision::{TASK_POLL_ERROR_INTERVAL, TASK_POLL_INTERVAL, apply_task_
 #[path = "turn.rs"]
 mod turn;
 #[cfg(test)]
-use turn::rename_command;
-use turn::submit;
+use turn::{
+    FastSelection, PermissionSelection, ThinkingSelection, fast_command, mode_command,
+    model_command, permissions_command, rename_command, thinking_command,
+};
+use turn::{apply_pending_mode, submit};
 #[path = "turn_stream.rs"]
 mod turn_stream;
 use turn_stream::handle_stream_event;

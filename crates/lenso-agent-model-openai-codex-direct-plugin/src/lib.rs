@@ -50,7 +50,7 @@ impl DirectModelConfig {
                 != self.allowed_models.len()
             || !matches!(
                 self.reasoning_effort.as_str(),
-                "low" | "medium" | "high" | "xhigh"
+                "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
             )
             || self.max_event_bytes == 0
             || self.max_event_bytes > MAX_EVENT_BYTES
@@ -120,7 +120,11 @@ impl ModelProvider for DirectModel {
                 CompleteError::UnsupportedModel,
             ))));
         }
-        let wire_request = match responses_request(&request, &self.config.reasoning_effort) {
+        let reasoning_effort = request
+            .reasoning_effort
+            .as_deref()
+            .unwrap_or(&self.config.reasoning_effort);
+        let wire_request = match responses_request(&request, reasoning_effort) {
             Ok(body) => body,
             Err(error) => return Box::pin(ready(Err(ModelInvocationError::Domain(error)))),
         };
@@ -223,9 +227,16 @@ fn responses_request(
         "include": ["reasoning.encrypted_content"],
         "reasoning": { "effort": reasoning_effort, "summary": "auto" },
         "text": { "verbosity": "low" },
+        "max_output_tokens": request.max_output_tokens,
     });
     if request.temperature != 0.0 {
         body["temperature"] = serde_json::json!(request.temperature);
+    }
+    if let Some(service_tier) = request.service_tier.as_deref() {
+        if service_tier != "fast" {
+            return Err(CompleteError::InvalidRequest);
+        }
+        body["service_tier"] = serde_json::json!(service_tier);
     }
     Ok(ResponsesRequest {
         body,
@@ -342,11 +353,15 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
             "direct Codex credential was rejected",
             false,
         ),
-        reqwest::StatusCode::TOO_MANY_REQUESTS => provider_failure(
-            "rate_limited",
-            "ChatGPT subscription rate limit was exceeded",
-            true,
-        ),
+        reqwest::StatusCode::TOO_MANY_REQUESTS => {
+            ModelInvocationError::Domain(CompleteError::RateLimited)
+        }
+        reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
+            ModelInvocationError::Domain(CompleteError::ContextOverflow)
+        }
+        reqwest::StatusCode::SERVICE_UNAVAILABLE => {
+            ModelInvocationError::Domain(CompleteError::Overloaded)
+        }
         _ => provider_failure(
             "provider_error",
             "direct Codex provider returned an unsuccessful status",
@@ -694,6 +709,8 @@ mod tests {
     fn request_preserves_tool_call_and_result() {
         let request = CompleteOpen {
             model: "gpt-test".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
             messages: vec![
                 CompleteMessageInput {
                     role: CompleteMessageRole::Assistant,
@@ -727,7 +744,7 @@ mod tests {
         assert_eq!(body["parallel_tool_calls"], true);
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert!(body.get("temperature").is_none());
-        assert!(body.get("max_output_tokens").is_none());
+        assert_eq!(body["max_output_tokens"], 128);
         assert_eq!(
             wire_request.provider_to_lenso_tool_names.get("read"),
             Some(&"read".to_owned())
@@ -738,6 +755,8 @@ mod tests {
     fn request_rejects_provider_tool_name_collisions() {
         let request = CompleteOpen {
             model: "gpt-test".to_owned(),
+            reasoning_effort: None,
+            service_tier: None,
             messages: Vec::new(),
             tools: vec![
                 CompleteTool {
