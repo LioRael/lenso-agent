@@ -20,8 +20,8 @@ ACP authentication method.
 - Zed distribution targets the ACP Registry, not the deprecated Zed extension
   format. Before publication, each declared platform archive is built from the
   `lenso-agent-acp` binary, assigned an exact version, and pinned by SHA-256.
-- `package-acp-binary.sh` creates one deterministic archive and checksum from
-  an already-built target binary. `render-acp-registry-entry.py` fails closed
+- The release packager creates one deterministic archive and checksum from an
+  already-built target binary. `render-acp-registry-entry.py` fails closed
   on invalid versions, latest aliases, missing archive/checksum pairs, malformed
   digests, and an empty platform set.
 - The Registry manifest starts `lenso-agent-acp` without a client-authored

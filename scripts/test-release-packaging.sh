@@ -11,7 +11,7 @@ mkdir -p "${fixtures}" "${artifacts}" "${agent_home}"
 printf 'keep\n' >"${agent_home}/sentinel"
 
 for binary in lenso-agent lenso-agent-cli lenso-agent-acp; do
-  cp scripts/check-product-identity.sh "${fixtures}/${binary}"
+  cp scripts/install.sh "${fixtures}/${binary}"
   chmod 0755 "${fixtures}/${binary}"
   ./scripts/package-release-binary.sh \
     0.1.0 "${binary}" darwin-aarch64 "${fixtures}/${binary}" "${artifacts}" >/dev/null
