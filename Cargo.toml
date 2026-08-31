@@ -92,6 +92,7 @@ members = [
     "crates/lenso-agent-discord-plugin",
     "crates/lenso-agent-tui-workspace-suggestions-plugin",
     "crates/lenso-terminal-tui-plugin",
+    "crates/lenso-terminal-web-plugin",
     "crates/lenso-agent-session-terminal-plugin",
     "crates/lenso-agent-user-interaction-local-plugin",
     "crates/lenso-agent-ask-user-tools-plugin",

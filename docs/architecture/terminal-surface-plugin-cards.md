@@ -78,6 +78,28 @@
 - **First observable behavior:** `/sessions list` and `/sessions show ...`
   appear from the same Session provider used by the headless CLI.
 
+## Generic Web Surface
+
+- **Owner:** `lenso.terminal.web` owns only the Web consumer identity. The
+  `lenso-agent-web` Host surface owns HTTP validation, SSE framing, volatile
+  execution tracking, and cancellation transport.
+- **Deletion boundary:** disabling or removing the `web` Instance removes Web
+  command discovery and execution while the Agent Web surface, Agent Turns,
+  Sessions, providers, CLI, and TUI remain valid.
+- **Required Capability:** one `lenso.terminal.command@1`. The consumer neither
+  provides commands nor receives ambient OS shell authority.
+- **Configuration and state:** the Plugin has no configuration or durable
+  state. Catalogs and active executions are Generation-pinned Host state;
+  request IDs and cancellation tokens are volatile and bounded to one active
+  Agent Turn or Terminal command at a time.
+- **Lifecycle:** the Console first negotiates `terminalCommands`, then reads the
+  active Generation catalog. Execution uses the shared Clap-backed parser and
+  streams typed messages plus one terminal status over SSE. Shutdown and an
+  explicit cancel endpoint cancel active commands.
+- **First observable behavior:** `/sessions list` is suggested from the live
+  catalog and produces streamed output from the same Session provider used by
+  CLI and TUI surfaces.
+
 ## TUI Panel and Suggestion Providers
 
 - **Owner:** each provider owns one concrete semantic role, not a generic

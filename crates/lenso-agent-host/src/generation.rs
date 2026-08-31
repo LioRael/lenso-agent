@@ -651,6 +651,16 @@ impl AgentApp {
         self.lease_terminal("lenso.terminal.tui/tui").await
     }
 
+    /// Pins Web command discovery and execution to one immutable App Generation.
+    pub async fn lease_web_terminal(&self) -> Result<TerminalGeneration, String> {
+        self.lease_terminal("lenso.terminal.web/web").await
+    }
+
+    /// Returns no lease when the selected App intentionally omits the Web terminal consumer.
+    pub async fn try_lease_web_terminal(&self) -> Result<Option<TerminalGeneration>, String> {
+        self.try_lease_terminal("lenso.terminal.web/web").await
+    }
+
     /// Pins any explicitly named terminal consumer Instance to one Generation.
     ///
     /// Custom Hosts may compose multiple CLI or TUI consumer Instances and
@@ -701,6 +711,11 @@ impl AgentApp {
         self.context_sources("lenso.agent.tui/tui").await
     }
 
+    /// Snapshots Prompt and Resource metadata explicitly visible to the Web surface.
+    pub async fn web_context_sources(&self) -> Result<ContextSnapshotResponse, String> {
+        self.context_sources("lenso.agent.web/web").await
+    }
+
     /// Reads the typed child-task projection visible to the TUI surface.
     pub async fn tui_task_snapshot(&self) -> Result<TaskSnapshotResponse, String> {
         self.task_snapshot("lenso.agent.tui/tui").await
@@ -749,6 +764,24 @@ impl AgentApp {
         request: ReadResourceRequest,
     ) -> Result<ReadResourceResponse, String> {
         self.read_context_resource("lenso.agent.tui/tui", request)
+            .await
+    }
+
+    /// Renders one user-selected Context Prompt for the Web surface.
+    pub async fn render_web_context_prompt(
+        &self,
+        request: RenderPromptRequest,
+    ) -> Result<RenderPromptResponse, String> {
+        self.render_context_prompt("lenso.agent.web/web", request)
+            .await
+    }
+
+    /// Reads one application-selected Context Resource for the Web surface.
+    pub async fn read_web_context_resource(
+        &self,
+        request: ReadResourceRequest,
+    ) -> Result<ReadResourceResponse, String> {
+        self.read_context_resource("lenso.agent.web/web", request)
             .await
     }
 
@@ -1334,10 +1367,17 @@ impl TerminalGeneration {
         &self,
         request: TerminalExecuteOpen,
     ) -> Result<NativeStream<CommandExecute>, String> {
-        let context = self
-            .route
-            .target()
-            .invocation_context(None, CancellationToken::new());
+        self.execute_with_cancellation(request, CancellationToken::new())
+            .await
+    }
+
+    /// Opens one cancellable command stream against this immutable Generation.
+    pub async fn execute_with_cancellation(
+        &self,
+        request: TerminalExecuteOpen,
+        cancellation: CancellationToken,
+    ) -> Result<NativeStream<CommandExecute>, String> {
+        let context = self.route.target().invocation_context(None, cancellation);
         self.execute
             .open_with_context(TERMINAL_EXECUTE_OPERATION, context, request)
             .await
@@ -1421,12 +1461,28 @@ impl TurnGeneration {
         reasoning_effort: Option<&str>,
         service_tier: Option<&str>,
     ) -> Result<InvocationContext, String> {
+        self.invocation_context_for_model_options_with_cancellation(
+            model_id,
+            reasoning_effort,
+            service_tier,
+            CancellationToken::new(),
+        )
+    }
+
+    /// Creates a controllable root context with model-specific, catalog-validated controls.
+    pub fn invocation_context_for_model_options_with_cancellation(
+        &self,
+        model_id: Option<&str>,
+        reasoning_effort: Option<&str>,
+        service_tier: Option<&str>,
+        cancellation: CancellationToken,
+    ) -> Result<InvocationContext, String> {
         let model_id = model_id.unwrap_or(self.resolved_turn_profile.model.as_str());
         match self
             .model_catalog
             .resolve_model_options(model_id, reasoning_effort, service_tier)
         {
-            Ok(profile) => self.invocation_context_with_profile(CancellationToken::new(), &profile),
+            Ok(profile) => self.invocation_context_with_profile(cancellation, &profile),
             Err(error)
                 if model_id != self.resolved_turn_profile.model
                     && !self
@@ -1449,15 +1505,12 @@ impl TurnGeneration {
                             .to_owned(),
                     );
                 }
-                self.invocation_context_with_profile(
-                    CancellationToken::new(),
-                    &self.resolved_turn_profile,
-                )?
-                .with_typed_extension(&TurnModelSelection {
-                    policy: model_id.to_owned(),
-                    candidates,
-                })
-                .map_err(|error| format!("failed to attach dynamic Model Selection: {error}"))
+                self.invocation_context_with_profile(cancellation, &self.resolved_turn_profile)?
+                    .with_typed_extension(&TurnModelSelection {
+                        policy: model_id.to_owned(),
+                        candidates,
+                    })
+                    .map_err(|error| format!("failed to attach dynamic Model Selection: {error}"))
             }
             Err(error) => Err(error),
         }
@@ -2285,6 +2338,7 @@ fn host_catalog_defaults(
         HostDefaultPlugin::new("lenso.agent.tui", "tui"),
         HostDefaultPlugin::new("lenso.terminal.command", "commands"),
         HostDefaultPlugin::new("lenso.terminal.tui", "tui"),
+        HostDefaultPlugin::new("lenso.terminal.web", "web").disableable(),
         HostDefaultPlugin::new("lenso.agent.web", "web"),
         default_plugin(
             "lenso.agent.tui.static",
