@@ -22,7 +22,8 @@
 
 ## Terminal Command Aggregate
 
-- **Owner:** `lenso-terminal-command-plugin` owns deterministic validation and
+- **Owner:** the `LioRael/lenso-terminal` repository and its
+  `lenso-terminal-command-plugin` crate own deterministic validation and
   routing, not any feature command.
 - **Deletion boundary:** removing its `commands` Instance removes terminal
   command discovery and execution. Agent Turns, Sessions, and feature
@@ -38,9 +39,10 @@
 
 ## Generic CLI Surface
 
-- **Owner:** `lenso.terminal.cli` owns the consumer identity;
-  `lenso-terminal-cli-surface` owns catalog-to-Clap translation; each product
-  binary owns argv, stdout/stderr, exit codes, and maintenance commands.
+- **Owner:** the `LioRael/lenso-terminal` repository owns the
+  `lenso.terminal.cli` consumer identity and `lenso-terminal-cli-surface`
+  catalog-to-Clap translation; each product binary owns argv, stdout/stderr,
+  exit codes, and maintenance commands.
 - **Deletion boundary:** removing one CLI Instance removes only that command
   presentation. Providers and other CLI, TUI, or Console consumers remain.
 - **Required Capability:** one `lenso.terminal.command@1`.

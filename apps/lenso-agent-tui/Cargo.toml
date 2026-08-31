@@ -23,14 +23,14 @@ lenso-agent-session-terminal-plugin = { path = "../../crates/lenso-agent-session
 lenso-agent-tui-plugin = { path = "../../crates/lenso-agent-tui-plugin" }
 lenso-agent-tui-static-plugin = { path = "../../crates/lenso-agent-tui-static-plugin" }
 lenso-agent-tui-workspace-suggestions-plugin = { path = "../../crates/lenso-agent-tui-workspace-suggestions-plugin" }
-lenso-terminal-cli-surface = { path = "../../crates/lenso-terminal-cli-surface" }
-lenso-terminal-command-plugin = { path = "../../crates/lenso-terminal-command-plugin" }
+lenso-terminal-cli-surface.workspace = true
+lenso-terminal-command-plugin.workspace = true
 lenso-terminal-tui-plugin = { path = "../../crates/lenso-terminal-tui-plugin" }
 lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-context-source = { path = "../../crates/lenso-capability-agent-context-source" }
 lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
 lenso-capability-agent-tool-progress = { path = "../../crates/lenso-capability-agent-tool-progress" }
-lenso-capability-terminal-command = { path = "../../crates/lenso-capability-terminal-command" }
+lenso-capability-terminal-command.workspace = true
 lenso-capability-tui-panel = { path = "../../crates/lenso-capability-tui-panel" }
 lenso-capability-tui-suggestion = { path = "../../crates/lenso-capability-tui-suggestion" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }

@@ -4396,6 +4396,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-terminal-command"
 version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
@@ -4413,6 +4414,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-terminal-command-provider"
 version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
@@ -4766,15 +4768,16 @@ dependencies = [
 [[package]]
 name = "lenso-terminal-cli-plugin"
 version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
 dependencies = [
  "lenso",
  "lenso-capability-terminal-command",
- "serde_json",
 ]
 
 [[package]]
 name = "lenso-terminal-cli-surface"
 version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
 dependencies = [
  "clap",
  "lenso-capability-terminal-command",
@@ -4785,6 +4788,7 @@ dependencies = [
 [[package]]
 name = "lenso-terminal-command-plugin"
 version = "0.1.0"
+source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
 dependencies = [
  "futures",
  "lenso",

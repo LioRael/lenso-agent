@@ -71,11 +71,10 @@ The first feature slice is `lenso.agent.session-terminal`. It contributes
 `sessions list` and `sessions show`, depends only on the existing Session
 Capability, and is consumed unchanged by both the headless CLI and TUI.
 
-The generic terminal packages incubate in the Agent Harness until another
-repository consumes a released version. A future Lenso CLI integration should
-depend on published terminal crates or move them through an explicit repository
-extraction; sibling-repository path dependencies and an umbrella `lenso` crate
-are not part of this decision.
+The generic terminal packages are released from the dedicated
+`LioRael/lenso-terminal` repository. Agent and future products consume its
+published crates or one immutable repository revision; sibling-repository path
+dependencies and an umbrella `lenso` crate are not part of this decision.
 
 ## Consequences
 

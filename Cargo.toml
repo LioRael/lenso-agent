@@ -38,8 +38,6 @@ members = [
     "crates/lenso-capability-agent-turn-input",
     "crates/lenso-capability-agent-task-supervisor",
     "crates/lenso-capability-agent-worktree",
-    "crates/lenso-capability-terminal-command-provider",
-    "crates/lenso-capability-terminal-command",
     "crates/lenso-capability-tui-panel",
     "crates/lenso-capability-tui-suggestion",
     "crates/lenso-agent-loop-plugin",
@@ -93,11 +91,8 @@ members = [
     "crates/lenso-agent-telegram-plugin",
     "crates/lenso-agent-discord-plugin",
     "crates/lenso-agent-tui-workspace-suggestions-plugin",
-    "crates/lenso-terminal-command-plugin",
-    "crates/lenso-terminal-cli-plugin",
     "crates/lenso-terminal-tui-plugin",
     "crates/lenso-agent-session-terminal-plugin",
-    "crates/lenso-terminal-cli-surface",
     "crates/lenso-agent-user-interaction-local-plugin",
     "crates/lenso-agent-ask-user-tools-plugin",
     "crates/lenso-agent-web-plugin",
@@ -141,6 +136,11 @@ lenso-plugin-control-plane = { version = "0.3.0", git = "https://github.com/LioR
 lenso-quickjs-adapter = { version = "0.2.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "89815107385475c8b5be378bdcf5e21aa74e02f0" }
 lenso-runner = { version = "0.2.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "89815107385475c8b5be378bdcf5e21aa74e02f0" }
 lenso-runtime-codec = { version = "0.2.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "89815107385475c8b5be378bdcf5e21aa74e02f0" }
+lenso-capability-terminal-command-provider = { version = "0.1.0", git = "https://github.com/LioRael/lenso-terminal", rev = "01fbda985b49dd5bb58483ea11dec5f848a503b9" }
+lenso-capability-terminal-command = { version = "0.1.0", git = "https://github.com/LioRael/lenso-terminal", rev = "01fbda985b49dd5bb58483ea11dec5f848a503b9" }
+lenso-terminal-command-plugin = { version = "0.1.0", git = "https://github.com/LioRael/lenso-terminal", rev = "01fbda985b49dd5bb58483ea11dec5f848a503b9" }
+lenso-terminal-cli-plugin = { version = "0.1.0", git = "https://github.com/LioRael/lenso-terminal", rev = "01fbda985b49dd5bb58483ea11dec5f848a503b9" }
+lenso-terminal-cli-surface = { version = "0.1.0", git = "https://github.com/LioRael/lenso-terminal", rev = "01fbda985b49dd5bb58483ea11dec5f848a503b9" }
 lenso-wasm-component-adapter = { version = "0.2.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "89815107385475c8b5be378bdcf5e21aa74e02f0" }
 mlua = { version = "0.11", features = ["async", "lua54", "serialize", "vendored"] }
 nix = { version = "0.31", features = ["process", "signal"] }

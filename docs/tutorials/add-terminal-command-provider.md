@@ -20,7 +20,7 @@ root-slot = "terminal-command-providers"
 
 [dependencies]
 lenso.workspace = true
-lenso-capability-terminal-command-provider = { path = "../lenso-capability-terminal-command-provider" }
+lenso-capability-terminal-command-provider.workspace = true
 example-project-capability = { path = "../example-project-capability" }
 ```
 
