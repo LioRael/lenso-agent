@@ -576,7 +576,9 @@ fn model_capabilities(plugin_id: &str, model_id: &str) -> ModelCapabilities {
         } else {
             ModelReasoningControl::Unsupported
         },
-        service_tiers: if plugin_id == CODEX_DIRECT_PLUGIN && model_id == "gpt-5.6-sol" {
+        service_tiers: if plugin_id == CODEX_DIRECT_PLUGIN
+            && matches!(model_id, "gpt-5.6-sol" | "gpt-5.6-luna")
+        {
             ModelServiceTierControl::Selectable {
                 tiers: vec!["fast".to_owned()],
             }
@@ -628,7 +630,7 @@ mod tests {
         let luna = model_capabilities(CODEX_DIRECT_PLUGIN, "gpt-5.6-luna");
         assert!(matches!(
             luna.service_tiers,
-            ModelServiceTierControl::Unsupported
+            ModelServiceTierControl::Selectable { ref tiers } if tiers == &["fast"]
         ));
         assert!(matches!(
             luna.reasoning,
