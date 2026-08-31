@@ -10,8 +10,9 @@ target and create its deterministic archive and checksum:
 
 ```sh
 cargo build --locked --release -p lenso-agent-acp --target aarch64-apple-darwin
-./scripts/package-acp-binary.sh \
+./scripts/package-release-binary.sh \
   0.1.0 \
+  lenso-agent-acp \
   darwin-aarch64 \
   target/aarch64-apple-darwin/release/lenso-agent-acp \
   dist

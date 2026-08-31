@@ -24,7 +24,15 @@ jobs:
         with:
           persist-credentials: false
       - name: Check product identity
-        run: ./scripts/check-product-identity.sh
+        run: |
+          former_repository='lenso-agent-''harness'
+          former_product='Lenso Agent ''Harness'
+          if git grep -n -I -E "${former_repository}|${former_product}" -- . \
+            ':!docs/adr/**' \
+            ':!docs/research/**'; then
+            echo "active product files still use the former Lenso Agent identity" >&2
+            exit 1
+          fi
       - name: Check release scripts
         run: |
           bash -n scripts/*.sh
@@ -85,4 +93,4 @@ jobs:
           --rev 9d2774c767fd64a6cc63a5ac04360e9cb92816da
           lenso-contract-codegen
       - name: Check generated contracts
-        run: ./scripts/check-contracts.sh
+        run: lenso-contract-codegen workspace check --manifest-path Cargo.toml
