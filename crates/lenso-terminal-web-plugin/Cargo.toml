@@ -1,0 +1,23 @@
+[package]
+name = "lenso-terminal-web-plugin"
+version = "0.1.0"
+description = "Generic Web terminal surface consumer Plugin identity."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.terminal.web"
+root-slot = "surfaces"
+
+[dependencies]
+lenso.workspace = true
+lenso-capability-terminal-command.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

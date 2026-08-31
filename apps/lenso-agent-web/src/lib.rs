@@ -23,18 +23,32 @@ use lenso_agent_loop_plugin::RunScope;
 use lenso_agent_session_inspection::{
     InspectedSession, InspectedSessionEvent, Trajectory, project_trajectory,
 };
+use lenso_agent_session_terminal_plugin as _;
 use lenso_agent_web_plugin as _;
 use lenso_app_authoring::PluginConfigurationAuthority;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
+use lenso_capability_agent_context_source::{
+    ContextRole, ReadResourceRequest, RenderPromptRequest,
+    SnapshotResponse as ContextSnapshotResponse,
+};
 use lenso_capability_agent_session::{
     ListSessionsResponse, ReadSessionResponse, ReadSessionResponseEventsItemKind, RenameError,
     RenameSessionResponse,
 };
+use lenso_capability_agent_session_control::CompactSessionResponse;
 use lenso_capability_agent_task_supervisor::SnapshotResponse as TaskSnapshotResponse;
 use lenso_capability_agent_user_interaction::{
     InteractionAnswer, InteractionOption, InteractionQuestion, PendingInteraction,
 };
+use lenso_capability_terminal_command::{
+    CatalogResponse as TerminalCatalogResponse, ContentType as TerminalContentType,
+    ExecuteMessage as TerminalExecuteMessage, ExecuteOpen as TerminalExecuteOpen,
+    OutputKind as TerminalOutputKind,
+};
 use lenso_kernel::{CancellationToken, StreamEvent};
+use lenso_terminal_cli_surface::{ParseOutcome, parse_line as parse_terminal_line};
+use lenso_terminal_command_plugin as _;
+use lenso_terminal_web_plugin as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -260,6 +274,12 @@ impl fmt::Debug for AgentWebControlPolicy {
     }
 }
 
+impl AgentWebControlPolicy {
+    const fn is_enabled(&self) -> bool {
+        !matches!(self, Self::Disabled)
+    }
+}
+
 impl From<AgentWebControl> for AgentWebControlPolicy {
     fn from(control: AgentWebControl) -> Self {
         match control {
@@ -286,8 +306,29 @@ struct WebRuntimeConfig {
 
 #[derive(Debug)]
 enum RuntimeCommand {
+    CompactSession {
+        reply: oneshot::Sender<Result<CompactSessionResponse, String>>,
+        session_id: String,
+    },
     ModelCatalog {
         reply: oneshot::Sender<Result<ProviderModelCatalog, String>>,
+    },
+    ContextSources {
+        reply: oneshot::Sender<Result<ContextSnapshotResponse, String>>,
+    },
+    TerminalCatalog {
+        reply: oneshot::Sender<Result<TerminalCatalogResponse, String>>,
+    },
+    RunTerminal {
+        events: mpsc::Sender<Result<Event, Infallible>>,
+        request: WebTerminalRequest,
+    },
+    CancelTerminal {
+        reply: oneshot::Sender<bool>,
+        request_id: String,
+    },
+    TerminalFinished {
+        request_id: String,
     },
     Plugin(PluginRuntimeCommand),
     RemoteConfigurationWatchDegraded {
@@ -327,6 +368,10 @@ enum RuntimeCommand {
         session_id: String,
         title: String,
     },
+    SelectProfile {
+        profile: Option<String>,
+        reply: oneshot::Sender<Result<SelectedProfileResponse, String>>,
+    },
     RunTurn {
         events: mpsc::Sender<Result<Event, Infallible>>,
         request: WebTurnRequest,
@@ -352,11 +397,38 @@ enum RuntimeInteractionError {
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
     #[serde(default)]
+    allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
     edit_turn_id: Option<String>,
     input: String,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
     request_id: String,
     #[serde(default)]
     session_id: Option<String>,
+    #[serde(default)]
+    service_tier: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WebTerminalRequest {
+    command_line: String,
+    request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct SelectProfileRequest {
+    profile: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectedProfileResponse {
+    profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -543,6 +615,19 @@ enum WebStreamEvent<'a> {
     Failed { detail: &'a str },
     #[serde(rename = "turn_message")]
     Message { message: &'a RunTurnResponse },
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum WebTerminalEvent<'a> {
+    #[serde(rename = "terminal_cancelled")]
+    Cancelled,
+    #[serde(rename = "terminal_completed")]
+    Completed,
+    #[serde(rename = "terminal_failed")]
+    Failed { detail: &'a str },
+    #[serde(rename = "terminal_message")]
+    Message { message: &'a TerminalExecuteMessage },
 }
 
 #[derive(Debug, Serialize)]
@@ -839,6 +924,22 @@ fn router(runtime: WebRuntime) -> Router {
     let data_plane = Router::new()
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
         .route("/api/console/v1/agent/models", get(model_catalog))
+        .route(
+            "/api/console/v1/agent/context-sources",
+            get(context_sources),
+        )
+        .route(
+            "/api/console/v1/agent/terminal/commands",
+            get(terminal_catalog),
+        )
+        .route(
+            "/api/console/v1/agent/terminal/executions",
+            post(run_terminal),
+        )
+        .route(
+            "/api/console/v1/agent/terminal/executions/{request_id}/cancel",
+            post(cancel_terminal),
+        )
         .route("/api/console/v1/agent/turns", post(run_turn))
         .route(
             "/api/console/v1/agent/turns/{request_id}/cancel",
@@ -862,6 +963,10 @@ fn router(runtime: WebRuntime) -> Router {
             "/api/console/v1/agent/sessions/{session_id}/trajectory",
             get(read_trajectory),
         )
+        .route(
+            "/api/console/v1/agent/sessions/{session_id}/compact",
+            post(compact_session),
+        )
         .route_layer(middleware::from_fn_with_state(
             runtime.clone(),
             authorize_data_plane,
@@ -870,6 +975,10 @@ fn router(runtime: WebRuntime) -> Router {
         .route(
             "/api/console/v1/agent/control/tool-policy",
             get(read_tool_policy).put(update_tool_policy),
+        )
+        .route(
+            "/api/console/v1/agent/control/profile",
+            post(select_profile),
         )
         .merge(plugin_control::routes())
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
@@ -901,6 +1010,73 @@ async fn model_catalog(
         .map_err(ApiProblem::unavailable)
 }
 
+async fn context_sources(
+    State(runtime): State<WebRuntime>,
+) -> Result<Json<ContextSnapshotResponse>, ApiProblem> {
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ContextSources { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn terminal_catalog(
+    State(runtime): State<WebRuntime>,
+) -> Result<Json<TerminalCatalogResponse>, ApiProblem> {
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::TerminalCatalog { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn run_terminal(
+    State(runtime): State<WebRuntime>,
+    Json(request): Json<WebTerminalRequest>,
+) -> Result<Sse<ReceiverStream<Result<Event, Infallible>>>, ApiProblem> {
+    validate_terminal_request(&request)?;
+    let (events, receiver) = mpsc::channel(32);
+    runtime
+        .commands
+        .send(RuntimeCommand::RunTerminal { events, request })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    Ok(Sse::new(ReceiverStream::new(receiver)))
+}
+
+async fn cancel_terminal(
+    State(runtime): State<WebRuntime>,
+    Path(request_id): Path<String>,
+) -> Result<StatusCode, ApiProblem> {
+    validate_request_id(&request_id)?;
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::CancelTerminal { reply, request_id })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    if response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+    {
+        Ok(StatusCode::ACCEPTED)
+    } else {
+        Err(ApiProblem::not_found("Terminal command is not active"))
+    }
+}
+
 async fn bootstrap(
     State(runtime): State<WebRuntime>,
 ) -> Result<Json<BootstrapResponse>, ApiProblem> {
@@ -913,7 +1089,13 @@ async fn bootstrap(
             ("sessionRead", true),
             ("userInteraction", true),
             ("sessionRename", true),
+            ("sessionCompact", true),
             ("taskSnapshot", true),
+            ("contextSources", true),
+            ("terminalCommands", true),
+            ("turnModelSelection", true),
+            ("turnToolSelection", true),
+            ("profileSelection", runtime.control.is_enabled()),
         ]
         .into_iter()
         .collect(),
@@ -942,6 +1124,35 @@ async fn update_tool_policy(
 ) -> Result<Json<ToolPolicyResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
     runtime.update_tool_policy(request).map(Json)
+}
+
+async fn select_profile(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<SelectProfileRequest>,
+) -> Result<Json<SelectedProfileResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    if request
+        .profile
+        .as_deref()
+        .is_some_and(|profile| profile.is_empty() || profile.len() > 128)
+    {
+        return Err(ApiProblem::bad_request("Agent Profile is invalid"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::SelectProfile {
+            profile: request.profile,
+            reply,
+        })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::conflict)
 }
 
 async fn run_turn(
@@ -1081,6 +1292,26 @@ async fn read_trajectory(
         .map_err(ApiProblem::unavailable)
 }
 
+async fn compact_session(
+    State(runtime): State<WebRuntime>,
+    Path(session_id): Path<String>,
+) -> Result<Json<CompactSessionResponse>, ApiProblem> {
+    if !valid_session_id(&session_id) {
+        return Err(ApiProblem::bad_request("Session ID is invalid"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::CompactSession { reply, session_id })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::conflict)
+}
+
 async fn list_sessions(
     State(runtime): State<WebRuntime>,
 ) -> Result<Json<WebSessionList>, ApiProblem> {
@@ -1198,6 +1429,20 @@ fn validate_turn_request(request: &WebTurnRequest) -> Result<(), ApiProblem> {
     Ok(())
 }
 
+fn validate_terminal_request(request: &WebTerminalRequest) -> Result<(), ApiProblem> {
+    if request.command_line.trim().is_empty() {
+        return Err(ApiProblem::bad_request(
+            "Terminal command line must not be empty",
+        ));
+    }
+    if request.command_line.len() > MAX_PROMPT_BYTES {
+        return Err(ApiProblem::bad_request(
+            "Terminal command line is too large",
+        ));
+    }
+    validate_request_id(&request.request_id)
+}
+
 fn valid_session_id(session_id: &str) -> bool {
     !session_id.is_empty()
         && session_id.len() <= 128
@@ -1275,6 +1520,7 @@ impl WebRuntime {
         tokio::task::spawn_local(runtime_actor(
             app,
             receiver,
+            commands.clone(),
             Arc::clone(&policy),
             configuration_authority,
             remote_sync,
@@ -1384,12 +1630,14 @@ fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
 async fn runtime_actor(
     mut app: AgentApp,
     mut commands: mpsc::Receiver<RuntimeCommand>,
+    command_sender: mpsc::Sender<RuntimeCommand>,
     policy: Arc<RwLock<ToolPolicyDocument>>,
     configuration_authority: Option<plugin_control_api::PluginConfigurationAuthorityResponse>,
     mut remote_sync: Option<RemoteConfigurationSyncRuntime>,
 ) {
     let mut pending = VecDeque::new();
     let mut pre_cancelled = BTreeSet::new();
+    let mut active_terminal_commands = BTreeMap::<String, CancellationToken>::new();
     let mut plugin_runtime = PluginRuntimeState::new(&app, configuration_authority);
     loop {
         let command = match pending.pop_front() {
@@ -1400,8 +1648,133 @@ async fn runtime_actor(
             },
         };
         match command {
+            RuntimeCommand::CompactSession { reply, session_id } => {
+                let result = match app.lease_web_turn().await {
+                    Ok(turn) => turn.compact_session(session_id).await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
             RuntimeCommand::ModelCatalog { reply } => {
                 let _ = reply.send(app.provider_model_catalog().await);
+            }
+            RuntimeCommand::ContextSources { reply } => {
+                let _ = reply.send(app.web_context_sources().await);
+            }
+            RuntimeCommand::TerminalCatalog { reply } => {
+                let result = match app.lease_web_terminal().await {
+                    Ok(terminal) => terminal.catalog().await,
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
+            RuntimeCommand::RunTerminal { events, request } => {
+                if !active_terminal_commands.is_empty() {
+                    send_terminal_event(
+                        &events,
+                        "terminal.failed",
+                        &WebTerminalEvent::Failed {
+                            detail: "A Terminal command is already active",
+                        },
+                    )
+                    .await;
+                    continue;
+                }
+                let terminal = match app.lease_web_terminal().await {
+                    Ok(terminal) => terminal,
+                    Err(error) => {
+                        send_terminal_event(
+                            &events,
+                            "terminal.failed",
+                            &WebTerminalEvent::Failed { detail: &error },
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+                let catalog = match terminal.catalog().await {
+                    Ok(catalog) => catalog,
+                    Err(error) => {
+                        send_terminal_event(
+                            &events,
+                            "terminal.failed",
+                            &WebTerminalEvent::Failed { detail: &error },
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+                let line = request
+                    .command_line
+                    .trim()
+                    .strip_prefix('/')
+                    .unwrap_or(request.command_line.trim());
+                let parsed = match parse_terminal_line(&catalog.commands, "lenso-console", line) {
+                    Ok(ParseOutcome::Command(command)) => command,
+                    Ok(ParseOutcome::Help(help)) => {
+                        let message = TerminalExecuteMessage {
+                            content: help,
+                            content_type: TerminalContentType::Text,
+                            kind: TerminalOutputKind::Result,
+                        };
+                        send_terminal_event(
+                            &events,
+                            "terminal.message",
+                            &WebTerminalEvent::Message { message: &message },
+                        )
+                        .await;
+                        send_terminal_event(
+                            &events,
+                            "terminal.completed",
+                            &WebTerminalEvent::Completed,
+                        )
+                        .await;
+                        continue;
+                    }
+                    Ok(ParseOutcome::NoMatch) => {
+                        send_terminal_event(
+                            &events,
+                            "terminal.failed",
+                            &WebTerminalEvent::Failed {
+                                detail: "Terminal command was not found",
+                            },
+                        )
+                        .await;
+                        continue;
+                    }
+                    Err(error) => {
+                        let detail = error.to_string();
+                        send_terminal_event(
+                            &events,
+                            "terminal.failed",
+                            &WebTerminalEvent::Failed { detail: &detail },
+                        )
+                        .await;
+                        continue;
+                    }
+                };
+                let request_id = request.request_id;
+                let cancellation = CancellationToken::new();
+                active_terminal_commands.insert(request_id.clone(), cancellation.clone());
+                let sender = command_sender.clone();
+                tokio::task::spawn_local(async move {
+                    run_terminal_on_lease(terminal, parsed, &events, cancellation).await;
+                    let _ = sender
+                        .send(RuntimeCommand::TerminalFinished { request_id })
+                        .await;
+                });
+            }
+            RuntimeCommand::CancelTerminal { reply, request_id } => {
+                let found = active_terminal_commands
+                    .get(&request_id)
+                    .is_some_and(|cancellation| {
+                        cancellation.cancel();
+                        true
+                    });
+                let _ = reply.send(found);
+            }
+            RuntimeCommand::TerminalFinished { request_id } => {
+                active_terminal_commands.remove(&request_id);
             }
             RuntimeCommand::Plugin(command) => plugin_runtime.dispatch(&app, command),
             RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
@@ -1435,13 +1808,37 @@ async fn runtime_actor(
                 handle_rename_command(&app, session_id, title, expected_title_revision, reply)
                     .await;
             }
+            RuntimeCommand::SelectProfile { profile, reply } => {
+                let result = app
+                    .select_profile(profile)
+                    .await
+                    .map(|()| SelectedProfileResponse {
+                        profile: app.selected_profile(),
+                    });
+                let _ = reply.send(result);
+            }
             RuntimeCommand::ReadTrajectory { reply, session_id } => {
                 let result = read_session_from_app(&app, session_id)
                     .await
                     .and_then(|session| project_web_trajectory(&session));
                 let _ = reply.send(result);
             }
-            RuntimeCommand::RunTurn { events, request } => {
+            RuntimeCommand::RunTurn {
+                events,
+                mut request,
+            } => {
+                if !active_terminal_commands.is_empty() {
+                    send_stream_event(
+                        &events,
+                        "turn.failed",
+                        None,
+                        &WebStreamEvent::Failed {
+                            detail: "A Terminal command is active",
+                        },
+                    )
+                    .await;
+                    continue;
+                }
                 let allowed_tools = match policy.read() {
                     Ok(policy) => policy.allowed.clone(),
                     Err(_) => {
@@ -1462,6 +1859,19 @@ async fn runtime_actor(
                 if pre_cancelled.remove(&request_id) {
                     cancellation.cancel();
                 }
+                request.input = match compose_web_context(&app, &request.input).await {
+                    Ok(input) => input,
+                    Err(error) => {
+                        send_stream_event(
+                            &events,
+                            "turn.failed",
+                            None,
+                            &WebStreamEvent::Failed { detail: &error },
+                        )
+                        .await;
+                        continue;
+                    }
+                };
                 let turn = match app.lease_web_turn().await {
                     Ok(turn) => turn,
                     Err(error) => {
@@ -1496,6 +1906,38 @@ async fn runtime_actor(
                                 match command {
                                     RuntimeCommand::ModelCatalog { reply } => {
                                         let _ = reply.send(app.provider_model_catalog().await);
+                                    }
+                                    RuntimeCommand::ContextSources { reply } => {
+                                        let _ = reply.send(app.web_context_sources().await);
+                                    }
+                                    RuntimeCommand::TerminalCatalog { reply } => {
+                                        let result = match app.lease_web_terminal().await {
+                                            Ok(terminal) => terminal.catalog().await,
+                                            Err(error) => Err(error),
+                                        };
+                                        let _ = reply.send(result);
+                                    }
+                                    RuntimeCommand::CancelTerminal { reply, request_id } => {
+                                        let found = active_terminal_commands
+                                            .get(&request_id)
+                                            .is_some_and(|cancellation| {
+                                                cancellation.cancel();
+                                                true
+                                            });
+                                        let _ = reply.send(found);
+                                    }
+                                    RuntimeCommand::TerminalFinished { request_id } => {
+                                        active_terminal_commands.remove(&request_id);
+                                    }
+                                    RuntimeCommand::RunTerminal { events, .. } => {
+                                        send_terminal_event(
+                                            &events,
+                                            "terminal.failed",
+                                            &WebTerminalEvent::Failed {
+                                                detail: "An Agent Turn is active",
+                                            },
+                                        )
+                                        .await;
                                     }
                                     RuntimeCommand::Plugin(command) => {
                                         plugin_runtime.dispatch(&app, command);
@@ -1543,6 +1985,9 @@ async fn runtime_actor(
                                     }
                                     RuntimeCommand::Shutdown { reply } => {
                                         cancellation.cancel();
+                                        for cancellation in active_terminal_commands.values() {
+                                            cancellation.cancel();
+                                        }
                                         shutdown = Some(reply);
                                     }
                                     command => defer_runtime_command(&mut pending, command),
@@ -1560,12 +2005,18 @@ async fn runtime_actor(
                 }
             }
             RuntimeCommand::Shutdown { reply } => {
+                for cancellation in active_terminal_commands.values() {
+                    cancellation.cancel();
+                }
                 let sync = stop_remote_configuration_sync(&mut remote_sync).await;
                 let app = app.shutdown().await;
                 let _ = reply.send(sync.and(app));
                 return;
             }
         }
+    }
+    for cancellation in active_terminal_commands.values() {
+        cancellation.cancel();
     }
     let _ = stop_remote_configuration_sync(&mut remote_sync).await;
     let _ = app.shutdown().await;
@@ -1610,6 +2061,12 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         RuntimeCommand::RenameSession { reply, .. } => {
             let _ = reply.send(Err(RenameSessionFailure::Runtime(detail.to_owned())));
         }
+        RuntimeCommand::CompactSession { reply, .. } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
+        RuntimeCommand::SelectProfile { reply, .. } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
         RuntimeCommand::RunTurn { events, .. } => {
             if let Some(event) =
                 stream_event("turn.failed", None, &WebStreamEvent::Failed { detail })
@@ -1617,7 +2074,18 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
                 let _ = events.try_send(Ok(event));
             }
         }
+        RuntimeCommand::RunTerminal { events, .. } => {
+            if let Some(event) =
+                terminal_stream_event("terminal.failed", &WebTerminalEvent::Failed { detail })
+            {
+                let _ = events.try_send(Ok(event));
+            }
+        }
         RuntimeCommand::ModelCatalog { .. }
+        | RuntimeCommand::ContextSources { .. }
+        | RuntimeCommand::TerminalCatalog { .. }
+        | RuntimeCommand::CancelTerminal { .. }
+        | RuntimeCommand::TerminalFinished { .. }
         | RuntimeCommand::Plugin(_)
         | RuntimeCommand::RemoteConfigurationWatchDegraded { .. }
         | RuntimeCommand::AnswerInteraction { .. }
@@ -2018,6 +2486,101 @@ fn project_session_list(listed: ListSessionsResponse) -> WebSessionList {
     WebSessionList { sessions }
 }
 
+async fn compose_web_context(app: &AgentApp, input: &str) -> Result<String, String> {
+    if let Some((source, name, task)) = selected_context_prompt(input)? {
+        let rendered = app
+            .render_web_context_prompt(RenderPromptRequest {
+                source: source.to_owned(),
+                name: name.to_owned(),
+                arguments_json: "{}"
+                    .to_owned()
+                    .try_into()
+                    .expect("empty JSON object is valid"),
+            })
+            .await?;
+        let messages = rendered
+            .messages
+            .into_iter()
+            .map(|message| {
+                let role = match message.role {
+                    ContextRole::User => "user",
+                    ContextRole::Assistant => "assistant",
+                };
+                format!("[{role}]\n{}", message.text)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(format!(
+            "Selected Context Prompt: {source}/{name}\n{messages}\n\n---\n\nUser task:\n{}",
+            task.trim()
+        ));
+    }
+    if let Some((source, uri, task)) = selected_context_resource(input)? {
+        let response = app
+            .read_web_context_resource(ReadResourceRequest {
+                source: source.to_owned(),
+                uri: uri.to_owned(),
+            })
+            .await?;
+        let contents = response
+            .contents
+            .into_iter()
+            .map(|content| {
+                let body = content.text.flatten().unwrap_or_else(|| {
+                    format!(
+                        "[binary resource available: {} bytes base64]",
+                        content.data_base64.flatten().map_or(0, |data| data.len())
+                    )
+                });
+                format!(
+                    "URI: {}\nMIME: {}\n{}",
+                    content.uri, content.mime_type, body
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        return Ok(format!(
+            "Selected Context Resource: {source}/{uri}\n{contents}\n\n---\n\nUser task:\n{}",
+            task.trim()
+        ));
+    }
+    Ok(input.to_owned())
+}
+
+fn selected_context_prompt(input: &str) -> Result<Option<(&str, &str, &str)>, String> {
+    let Some(selection) = input.strip_prefix("/mcp-prompt ") else {
+        return Ok(None);
+    };
+    let (identity, task) = selection
+        .split_once(char::is_whitespace)
+        .ok_or_else(|| "an MCP Prompt selection must be followed by the user task".to_owned())?;
+    let (source, name) = identity
+        .split_once('/')
+        .ok_or_else(|| "invalid MCP Prompt source/name".to_owned())?;
+    let task = task.trim();
+    if task.is_empty() {
+        return Err("an MCP Prompt selection must be followed by the user task".to_owned());
+    }
+    Ok(Some((source, name, task)))
+}
+
+fn selected_context_resource(input: &str) -> Result<Option<(&str, &str, &str)>, String> {
+    let Some(selection) = input.strip_prefix("/mcp-resource ") else {
+        return Ok(None);
+    };
+    let (identity, task) = selection
+        .split_once(char::is_whitespace)
+        .ok_or_else(|| "an MCP Resource selection must be followed by the user task".to_owned())?;
+    let (source, uri) = identity
+        .split_once('=')
+        .ok_or_else(|| "invalid MCP Resource source=URI".to_owned())?;
+    let task = task.trim();
+    if task.is_empty() {
+        return Err("an MCP Resource selection must be followed by the user task".to_owned());
+    }
+    Ok(Some((source, uri, task)))
+}
+
 async fn run_turn_on_lease(
     turn: &lenso_agent_host::generation::TurnGeneration,
     request: WebTurnRequest,
@@ -2043,6 +2606,7 @@ async fn invoke_turn(
     cancellation: CancellationToken,
     allowed_tools: &[String],
 ) -> Result<(), String> {
+    let requested_tools = resolve_turn_tools(request.allowed_tools.as_deref(), allowed_tools)?;
     let requested_session_id = match (request.session_id, request.edit_turn_id) {
         (Some(session_id), Some(turn_id)) => {
             turn.fork_session_before_turn(session_id, turn_id).await?
@@ -2051,8 +2615,14 @@ async fn invoke_turn(
         (None, None) => turn.open_session().await?,
         (None, Some(_)) => return Err("Editing a message requires its source Session".to_owned()),
     };
-    let context = RunScope::new(allowed_tools.iter().cloned())?
-        .attach(turn.invocation_context_with_cancellation(cancellation.clone())?)?;
+    let context = RunScope::new(requested_tools)?.attach(
+        turn.invocation_context_for_model_options_with_cancellation(
+            request.model.as_deref(),
+            request.reasoning_effort.as_deref(),
+            request.service_tier.as_deref(),
+            cancellation.clone(),
+        )?,
+    )?;
     let stream = turn
         .handle()
         .open_with_context(
@@ -2135,6 +2705,139 @@ async fn invoke_turn(
     }
 }
 
+fn resolve_turn_tools(
+    requested: Option<&[String]>,
+    policy: &[String],
+) -> Result<Vec<String>, String> {
+    let requested = requested.unwrap_or(policy);
+    if requested
+        .iter()
+        .any(|tool| !policy.iter().any(|allowed| allowed == tool))
+    {
+        return Err("Turn Tool selection exceeds the configured Agent Tool policy".to_owned());
+    }
+    Ok(requested.to_vec())
+}
+
+async fn run_terminal_on_lease(
+    terminal: lenso_agent_host::generation::TerminalGeneration,
+    command: lenso_terminal_cli_surface::ParsedCommand,
+    events: &mpsc::Sender<Result<Event, Infallible>>,
+    cancellation: CancellationToken,
+) {
+    let request = TerminalExecuteOpen {
+        id: command.id,
+        arguments_json: match command.arguments_json.try_into() {
+            Ok(arguments) => arguments,
+            Err(_) => {
+                send_terminal_event(
+                    events,
+                    "terminal.failed",
+                    &WebTerminalEvent::Failed {
+                        detail: "Terminal command arguments are not valid JSON",
+                    },
+                )
+                .await;
+                return;
+            }
+        },
+        output_format: command.output_format,
+    };
+    let stream = match terminal
+        .execute_with_cancellation(request, cancellation.clone())
+        .await
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            if cancellation.is_cancelled() {
+                send_terminal_event(events, "terminal.cancelled", &WebTerminalEvent::Cancelled)
+                    .await;
+            } else {
+                send_terminal_event(
+                    events,
+                    "terminal.failed",
+                    &WebTerminalEvent::Failed { detail: &error },
+                )
+                .await;
+            }
+            return;
+        }
+    };
+    if let Err(error) = stream.close_send().await {
+        let detail = format!("failed to half-close terminal command input: {error:?}");
+        send_terminal_event(
+            events,
+            "terminal.failed",
+            &WebTerminalEvent::Failed { detail: &detail },
+        )
+        .await;
+        return;
+    }
+    loop {
+        match stream.receive().await {
+            Ok(StreamEvent::Message(message)) => {
+                if !send_terminal_event(
+                    events,
+                    "terminal.message",
+                    &WebTerminalEvent::Message { message: &message },
+                )
+                .await
+                {
+                    cancellation.cancel();
+                    return;
+                }
+            }
+            Ok(StreamEvent::PeerHalfClosed) => {}
+            Ok(StreamEvent::Terminal(Ok(()))) => {
+                send_terminal_event(events, "terminal.completed", &WebTerminalEvent::Completed)
+                    .await;
+                return;
+            }
+            Ok(StreamEvent::Terminal(Err(error))) => {
+                let detail = format!("terminal command failed: {error:?}");
+                send_terminal_event(
+                    events,
+                    "terminal.failed",
+                    &WebTerminalEvent::Failed { detail: &detail },
+                )
+                .await;
+                return;
+            }
+            Err(_) if cancellation.is_cancelled() => {
+                send_terminal_event(events, "terminal.cancelled", &WebTerminalEvent::Cancelled)
+                    .await;
+                return;
+            }
+            Err(error) => {
+                let detail = format!("terminal command stream failed: {error:?}");
+                send_terminal_event(
+                    events,
+                    "terminal.failed",
+                    &WebTerminalEvent::Failed { detail: &detail },
+                )
+                .await;
+                return;
+            }
+        }
+    }
+}
+
+async fn send_terminal_event(
+    events: &mpsc::Sender<Result<Event, Infallible>>,
+    kind: &'static str,
+    payload: &WebTerminalEvent<'_>,
+) -> bool {
+    let Some(event) = terminal_stream_event(kind, payload) else {
+        return false;
+    };
+    events.send(Ok(event)).await.is_ok()
+}
+
+fn terminal_stream_event(kind: &'static str, payload: &WebTerminalEvent<'_>) -> Option<Event> {
+    let data = serde_json::to_string(payload).ok()?;
+    Some(Event::default().event(kind).data(data))
+}
+
 async fn send_stream_event(
     events: &mpsc::Sender<Result<Event, Infallible>>,
     kind: &'static str,
@@ -2167,6 +2870,7 @@ mod tests {
     use std::rc::Rc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use axum::http::Method;
     use lenso_app_authoring::{
         LocalPluginRootAuthority, PluginConfigurationAuthoritySource, PluginConfigurationProposal,
         PluginRootAuthoringState, PluginRootRevision,
@@ -2393,6 +3097,36 @@ mod tests {
         assert!(normalize_allowed_tools(vec![String::new()]).is_err());
     }
 
+    #[test]
+    fn turn_tool_selection_can_only_narrow_the_host_policy() {
+        let policy = vec!["read".to_owned(), "write".to_owned()];
+
+        assert_eq!(
+            resolve_turn_tools(Some(&["read".to_owned()]), &policy).unwrap(),
+            ["read"]
+        );
+        assert!(resolve_turn_tools(Some(&[]), &policy).unwrap().is_empty());
+        assert!(resolve_turn_tools(Some(&["shell".to_owned()]), &policy).is_err());
+    }
+
+    #[test]
+    fn web_context_selection_requires_an_identity_and_user_task() {
+        assert_eq!(selected_context_prompt("plain task").unwrap(), None);
+        assert_eq!(
+            selected_context_prompt("/mcp-prompt workspace/brief Review this").unwrap(),
+            Some(("workspace", "brief", "Review this"))
+        );
+        assert_eq!(
+            selected_context_resource("/mcp-resource workspace=file:///architecture.md Explain it")
+                .unwrap(),
+            Some(("workspace", "file:///architecture.md", "Explain it"))
+        );
+        assert!(selected_context_prompt("/mcp-prompt workspace/brief ").is_err());
+        assert!(selected_context_resource("/mcp-resource workspace=file:///brief ").is_err());
+        assert!(selected_context_prompt("/mcp-prompt invalid Review").is_err());
+        assert!(selected_context_resource("/mcp-resource invalid Review").is_err());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn active_turn_deferred_commands_are_bounded_and_overflow_fails_closed() {
         let mut pending = VecDeque::new();
@@ -2403,10 +3137,14 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        allowed_tools: None,
                         edit_turn_id: None,
                         input: "queued".to_owned(),
+                        model: None,
+                        reasoning_effort: None,
                         request_id: format!("queued-{index}"),
                         session_id: None,
+                        service_tier: None,
                     },
                 },
             );
@@ -2418,10 +3156,14 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    allowed_tools: None,
                     edit_turn_id: None,
                     input: "overflow".to_owned(),
+                    model: None,
+                    reasoning_effort: None,
                     request_id: "overflow".to_owned(),
                     session_id: None,
+                    service_tier: None,
                 },
             },
         );
@@ -2438,10 +3180,14 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        allowed_tools: None,
                         edit_turn_id: None,
                         input: "queued".to_owned(),
+                        model: None,
+                        reasoning_effort: None,
                         request_id: format!("queued-{index}"),
                         session_id: None,
+                        service_tier: None,
                     },
                 }
             })
@@ -2454,10 +3200,14 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    allowed_tools: None,
                     edit_turn_id: None,
                     input: "overflow".to_owned(),
+                    model: None,
+                    reasoning_effort: None,
                     request_id: "overflow".to_owned(),
                     session_id: None,
+                    service_tier: None,
                 },
             },
         );
@@ -2476,10 +3226,14 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        allowed_tools: None,
                         edit_turn_id: None,
                         input: "queued".to_owned(),
+                        model: None,
+                        reasoning_effort: None,
                         request_id: request_id.to_owned(),
                         session_id: None,
+                        service_tier: None,
                     },
                 },
             );
@@ -2503,10 +3257,14 @@ mod tests {
             pending.push_back(RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    allowed_tools: None,
                     edit_turn_id: None,
                     input: "queued".to_owned(),
+                    model: None,
+                    reasoning_effort: None,
                     request_id: request_id.to_owned(),
                     session_id: None,
+                    service_tier: None,
                 },
             });
         }
@@ -2645,6 +3403,7 @@ mod tests {
             .run_until(async {
                 let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
                 config.agent_home = Some(root.path().to_path_buf());
+                config.access = AgentWebAccess::HostAuthorized;
                 let surface = AgentWebSurface::start(config).await.unwrap();
                 let inventory = plugin_control::plugin_inventory(
                     State(surface.runtime.clone()),
@@ -2662,6 +3421,78 @@ mod tests {
                         .iter()
                         .any(|plugin| plugin["instanceKey"] == "lenso.agent.loop/agent")
                 );
+                assert!(
+                    inventory["active"]["plugins"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|plugin| plugin["instanceKey"] == "lenso.terminal.web/web")
+                );
+                let (reply, response) = oneshot::channel();
+                surface
+                    .runtime
+                    .commands
+                    .send(RuntimeCommand::TerminalCatalog { reply })
+                    .await
+                    .unwrap();
+                let catalog = response.await.unwrap().unwrap();
+                assert!(
+                    catalog
+                        .commands
+                        .iter()
+                        .any(|command| command.path == ["sessions", "list"])
+                );
+                let response = surface
+                    .router()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/api/console/v1/agent/terminal/executions")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from(
+                                serde_json::json!({
+                                    "commandLine": "/sessions list",
+                                    "requestId": "terminal-proof"
+                                })
+                                .to_string(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), 1_048_576)
+                    .await
+                    .unwrap();
+                let body = String::from_utf8(body.to_vec()).unwrap();
+                assert!(body.contains("terminal_message"));
+                assert!(body.contains("terminal_completed"));
+                surface.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn removing_web_terminal_consumer_preserves_the_agent_web_app() {
+        let root = tempfile::tempdir().unwrap();
+        let plugin_directory = root.path().join("plugins/lenso.terminal.web");
+        std::fs::create_dir_all(&plugin_directory).unwrap();
+        std::fs::write(plugin_directory.join("web.disabled"), "").unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+                config.agent_home = Some(root.path().to_path_buf());
+                let surface = AgentWebSurface::start(config).await.unwrap();
+                let (reply, response) = oneshot::channel();
+                surface
+                    .runtime
+                    .commands
+                    .send(RuntimeCommand::TerminalCatalog { reply })
+                    .await
+                    .unwrap();
+                let error = response.await.unwrap().unwrap_err();
+                assert!(error.contains("lenso.terminal.web/web"));
                 surface.shutdown().await.unwrap();
             })
             .await;
@@ -2825,19 +3656,41 @@ mod tests {
     fn rejects_empty_and_oversized_turns() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                allowed_tools: None,
                 edit_turn_id: None,
                 input: "  ".to_owned(),
+                model: None,
+                reasoning_effort: None,
                 request_id: "request-1".to_owned(),
                 session_id: None,
+                service_tier: None,
             })
             .is_err()
         );
         assert!(
             validate_turn_request(&WebTurnRequest {
+                allowed_tools: None,
                 edit_turn_id: None,
                 input: "x".repeat(MAX_PROMPT_BYTES + 1),
+                model: None,
+                reasoning_effort: None,
                 request_id: "request-2".to_owned(),
                 session_id: None,
+                service_tier: None,
+            })
+            .is_err()
+        );
+        assert!(
+            validate_terminal_request(&WebTerminalRequest {
+                command_line: "  ".to_owned(),
+                request_id: "terminal-1".to_owned(),
+            })
+            .is_err()
+        );
+        assert!(
+            validate_terminal_request(&WebTerminalRequest {
+                command_line: "sessions list".to_owned(),
+                request_id: "../terminal".to_owned(),
             })
             .is_err()
         );
