@@ -9,11 +9,13 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 directories.workspace = true
 fs2.workspace = true
 jsonschema.workspace = true
 lenso = { workspace = true, features = ["host"] }
 lenso-app-plan.workspace = true
+lenso-app-authoring.workspace = true
 lenso-bun-adapter.workspace = true
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
@@ -30,6 +32,7 @@ lenso-capability-agent-lifecycle = { path = "../lenso-capability-agent-lifecycle
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-capability-agent-model-selection = { path = "../lenso-capability-agent-model-selection" }
 lenso-capability-agent-oauth-access = { path = "../lenso-capability-agent-oauth-access" }
+lenso-capability-agent-plugin-configuration-authority = { path = "../lenso-capability-agent-plugin-configuration" }
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-capability-agent-session-presentation = { path = "../lenso-capability-agent-session-presentation" }

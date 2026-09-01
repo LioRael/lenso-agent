@@ -25,7 +25,7 @@ use lenso_agent_session_inspection::{
 };
 use lenso_agent_session_terminal_plugin as _;
 use lenso_agent_web_plugin as _;
-use lenso_app_authoring::PluginConfigurationAuthority;
+use lenso_app_authoring::{LocalPluginRootAuthority, PluginConfigurationAuthority};
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
 use lenso_capability_agent_context_source::{
     ContextRole, ReadResourceRequest, RenderPromptRequest,
@@ -761,14 +761,6 @@ impl AgentWebSurface {
             profile.is_some(),
         )?;
         PluginControl::validate_target(managed_app_root.as_deref(), directories.home())?;
-        let host = AgentHost::builder().plugins(plugins);
-        let host = match agent_home {
-            Some(agent_home) => host.agent_home(agent_home)?,
-            None => host,
-        }
-        .surface(WebSurface::browser())
-        .build()?;
-        host.prepare_authoring()?;
         let app_root = managed_app_root.as_deref().unwrap_or(directories.home());
         let authorities = resolve_configuration_authorities(
             app_root,
@@ -777,12 +769,23 @@ impl AgentWebSurface {
             plugin_configuration_store,
             plugin_configuration_remote,
         )?;
-        let app = host.run(selected_profile).await?;
         let ResolvedConfigurationAuthorities {
             authority: plugin_configuration_authority,
+            authority_is_builtin_local,
             history: plugin_configuration_history,
             remote,
         } = authorities;
+        let host = AgentHost::builder()
+            .plugins(plugins)
+            .plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
+        let host = match agent_home {
+            Some(agent_home) => host.agent_home(agent_home)?,
+            None => host,
+        }
+        .surface(WebSurface::browser())
+        .build()?;
+        host.prepare_authoring()?;
+        let app = Box::pin(host.run(selected_profile)).await?;
         let plugin_control = PluginControl::resolve(
             plugin_control,
             managed_app_root.as_deref(),
@@ -790,6 +793,7 @@ impl AgentWebSurface {
             profile.clone(),
             plugin_configuration_authority,
             plugin_configuration_history,
+            authority_is_builtin_local,
         )?;
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
@@ -874,7 +878,8 @@ fn plugin_configuration_authority_selection(
 }
 
 struct ResolvedConfigurationAuthorities {
-    authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    authority: Arc<dyn PluginConfigurationAuthority>,
+    authority_is_builtin_local: bool,
     history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     remote: Option<Arc<RemotePluginConfigurationAuthority>>,
 }
@@ -893,7 +898,8 @@ fn resolve_configuration_authorities(
                     .map_err(|error| error.to_string())?,
             );
             Ok(ResolvedConfigurationAuthorities {
-                authority: Some(Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>),
+                authority: Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>,
+                authority_is_builtin_local: false,
                 history: Some(authority as Arc<dyn PluginConfigurationHistoryAuthority>),
                 remote: None,
             })
@@ -904,18 +910,27 @@ fn resolve_configuration_authorities(
                     .map_err(|error| error.to_string())?,
             );
             Ok(ResolvedConfigurationAuthorities {
-                authority: Some(Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>),
+                authority: Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>,
+                authority_is_builtin_local: false,
                 history: Some(
                     Arc::clone(&authority) as Arc<dyn PluginConfigurationHistoryAuthority>
                 ),
                 remote: Some(authority),
             })
         }
-        (None, None) => Ok(ResolvedConfigurationAuthorities {
-            authority: injected_authority,
-            history: injected_history,
-            remote: None,
-        }),
+        (None, None) => {
+            let authority_is_builtin_local = injected_authority.is_none();
+            let authority = injected_authority.unwrap_or_else(|| {
+                Arc::new(LocalPluginRootAuthority::new(app_root))
+                    as Arc<dyn PluginConfigurationAuthority>
+            });
+            Ok(ResolvedConfigurationAuthorities {
+                authority,
+                authority_is_builtin_local,
+                history: injected_history,
+                remote: None,
+            })
+        }
         (Some(_), Some(_)) => unreachable!("authority selection rejects this conflict"),
     }
 }
@@ -3451,6 +3466,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one integration test proves the complete minimal Console inventory and surface"
+    )]
     async fn minimal_console_plugin_inventory_reaches_readiness_and_shuts_down() {
         let root = tempfile::tempdir().unwrap();
         configure_test_fixture_model(root.path());
@@ -3460,6 +3479,10 @@ mod tests {
                 let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
                 config.agent_home = Some(root.path().to_path_buf());
                 config.access = AgentWebAccess::HostAuthorized;
+                config.allowed_tools = lenso_agent_console_plugins::PLUGIN_CONTROL_TOOLS
+                    .iter()
+                    .map(|tool| (*tool).to_owned())
+                    .collect();
                 let surface = AgentWebSurface::start(config).await.unwrap();
                 let inventory = plugin_control::plugin_inventory(
                     State(surface.runtime.clone()),
@@ -3483,6 +3506,29 @@ mod tests {
                         .unwrap()
                         .iter()
                         .any(|plugin| plugin["instanceKey"] == "lenso.terminal.web/web")
+                );
+                for instance in [
+                    "lenso.agent.console-plugin-tools/default",
+                    "lenso.agent.interactive-approval-hook/default",
+                ] {
+                    assert!(
+                        inventory["active"]["plugins"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|plugin| plugin["instanceKey"] == instance)
+                    );
+                }
+                let available = surface
+                    .runtime
+                    .available_tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<BTreeSet<_>>();
+                assert!(
+                    lenso_agent_console_plugins::PLUGIN_CONTROL_TOOLS
+                        .iter()
+                        .all(|tool| available.contains(tool))
                 );
                 let (reply, response) = oneshot::channel();
                 surface
@@ -3523,6 +3569,35 @@ mod tests {
                 let body = String::from_utf8(body.to_vec()).unwrap();
                 assert!(body.contains("terminal_message"));
                 assert!(body.contains("terminal_completed"));
+                surface.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn removing_console_plugin_tools_preserves_the_console_agent_app() {
+        let root = tempfile::tempdir().unwrap();
+        configure_test_fixture_model(root.path());
+        let plugin_directory = root.path().join("plugins/lenso.agent.console-plugin-tools");
+        std::fs::create_dir_all(&plugin_directory).unwrap();
+        std::fs::write(plugin_directory.join("default.disabled"), "").unwrap();
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+                config.agent_home = Some(root.path().to_path_buf());
+                let surface = AgentWebSurface::start(config).await.unwrap();
+                let available = surface
+                    .runtime
+                    .available_tools
+                    .iter()
+                    .map(|tool| tool.name.as_str())
+                    .collect::<BTreeSet<_>>();
+                assert!(
+                    lenso_agent_console_plugins::PLUGIN_CONTROL_TOOLS
+                        .iter()
+                        .all(|tool| !available.contains(tool))
+                );
                 surface.shutdown().await.unwrap();
             })
             .await;
@@ -3653,8 +3728,9 @@ mod tests {
             Some(managed_app.path()),
             agent_home.path(),
             None,
+            Arc::new(LocalPluginRootAuthority::new(agent_home.path())),
             None,
-            None,
+            true,
         )
         .unwrap_err();
 

@@ -15,7 +15,7 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use lenso_app_authoring::{
-    LocalPluginRootAuthority, PluginConfigurationApplication, PluginConfigurationAuthority,
+    PluginConfigurationApplication, PluginConfigurationAuthority,
     PluginConfigurationAuthoritySource, PluginConfigurationDiagnostic, PluginConfigurationProposal,
     PluginConfigurationProposalStatus, PluginConfigurationSourceDigest, PluginRootAuthoringState,
     PluginRootRevision, add_bundle,
@@ -76,30 +76,21 @@ impl PluginControl {
         managed_app_root: Option<&Path>,
         authority_home: &Path,
         profile: Option<String>,
-        configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+        configuration_authority: Arc<dyn PluginConfigurationAuthority>,
         configuration_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
+        configuration_authority_is_builtin_local: bool,
     ) -> Result<Option<Self>, String> {
         Self::validate_target(managed_app_root, authority_home)?;
         if !enabled {
-            if configuration_authority.is_some() || configuration_history.is_some() {
-                return Err(
-                    "a Plugin configuration authority requires Plugin Root control".to_owned(),
-                );
-            }
             return Ok(None);
         }
         let app_root = managed_app_root.unwrap_or(authority_home);
-        let configuration_authority_is_builtin_local = configuration_authority.is_none();
         if profile.is_some() && !configuration_authority_is_builtin_local {
             return Err(
                 "named Profile Plugin control requires the built-in local configuration authority"
                     .to_owned(),
             );
         }
-        let configuration_authority = configuration_authority.unwrap_or_else(|| {
-            Arc::new(LocalPluginRootAuthority::new(app_root))
-                as Arc<dyn PluginConfigurationAuthority>
-        });
         Ok(Some(Self::new(
             app_root,
             authority_home,
@@ -2448,6 +2439,7 @@ mod tests {
 
     use super::*;
     use crate::plugin_control_api::fixture_desired_selection;
+    use lenso_app_authoring::LocalPluginRootAuthority;
 
     #[test]
     #[allow(clippy::too_many_lines)] // One golden keeps the whole HTTP contract visually adjacent.
