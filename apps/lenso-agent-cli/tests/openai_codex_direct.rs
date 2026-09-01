@@ -187,7 +187,19 @@ fn direct_model_revalidates_and_uses_a_bounded_stale_catalog_cache() {
     let (base_url, server) = spawn_catalog_cache_server();
     let plan = test_plan(temporary.path(), &base_url, &credential);
 
-    for prompt in ["First catalog.", "Revalidated catalog.", "Stale catalog."] {
+    let effective_snapshot = temporary
+        .path()
+        .join("runtime/model-catalog/effective/openai-codex-direct.json");
+    for (index, prompt) in ["First catalog.", "Revalidated catalog.", "Stale catalog."]
+        .into_iter()
+        .enumerate()
+    {
+        // This test exercises acquisition-cache semantics explicitly. Normal
+        // restarts consume the Generation-bound effective snapshot and do not
+        // need to revalidate before the configured periodic refresh.
+        if index > 0 {
+            fs::remove_file(&effective_snapshot).unwrap();
+        }
         let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
             .current_dir(temporary.path())
             .env("LENSO_AGENT_HOME", temporary.path())

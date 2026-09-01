@@ -696,7 +696,7 @@ fn validate_selected_variant(
     Ok(())
 }
 
-fn selected_model_instance(plan: &ResolvedAppPlan) -> Result<Option<String>, String> {
+pub(crate) fn selected_model_instance(plan: &ResolvedAppPlan) -> Result<Option<String>, String> {
     let providers = plan
         .capability_bindings()
         .iter()

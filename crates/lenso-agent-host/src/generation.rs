@@ -439,7 +439,8 @@ impl AgentApp {
         let runtime_state = RuntimeState::open(store_root)?;
         let runtime_attachment = runtime_state.attach(surface)?;
         let _authority_fence = runtime_attachment.authority_snapshot()?;
-        let initial = resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
+        let mut initial =
+            resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
         let generation = initial.generation.clone();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
@@ -470,6 +471,23 @@ impl AgentApp {
                 let _ = host.shutdown().await;
                 return Err(control_error(error));
             }
+        }
+        // A Provider may publish its first validated external catalog while the
+        // initial candidate crosses the Ready Gate. Resolve once more before
+        // exposing the Host so every routable Turn is bound to those exact bytes.
+        let bootstrapped =
+            resolve_and_record_current_generation(plan_bytes, store_root, &host_build)?;
+        if bootstrapped.generation.spec.digest() != initial.generation.spec.digest() {
+            let transition = maintenance_transition(&initial.generation, &bootstrapped.generation)
+                .map_err(control_error)?;
+            if let Err(error) = host
+                .transition(transition, bootstrapped.generation.clone(), BTreeMap::new())
+                .await
+            {
+                let _ = host.shutdown().await;
+                return Err(control_error(error));
+            }
+            initial = bootstrapped;
         }
         if let Err(error) = runtime_attachment.state().confirm_legacy_migration() {
             let _ = host.shutdown().await;
@@ -2107,6 +2125,8 @@ fn resolve_generation_with_authority(
     let plan = serde_json::from_slice::<ResolvedAppPlan>(plan_bytes)
         .map_err(|error| format!("resolved Plan is invalid JSON: {error}"))?;
     let resources = crate::plugin_root::plan_resources(plugin_root, &plan)?;
+    let resources =
+        crate::model_catalog_resources::inject_selected_catalog_snapshot(&plan, resources)?;
     resolve_generation_from_plan(&plan, authority, host_build, plugin_root, resources)
 }
 
@@ -2561,6 +2581,8 @@ fn default_interactive_plugins(directories: &AgentDirectories) -> [HostDefaultPl
                 "base_url": "https://chatgpt.com/backend-api",
                 "catalog_cache_path": directories.model_catalog_cache(),
                 "catalog_max_stale_seconds": 86_400,
+                "catalog_snapshot_path": directories.model_catalog_snapshot(),
+                "catalog_refresh_seconds": 3_600,
                 "max_event_bytes": 1_048_576,
                 "model": DEFAULT_MODEL,
                 "reasoning_effort": "medium"
@@ -2682,6 +2704,8 @@ fn model_and_auth_configurations(directories: &AgentDirectories) -> Vec<HostPlug
                 "base_url": "https://chatgpt.com/backend-api",
                 "catalog_cache_path": directories.model_catalog_cache(),
                 "catalog_max_stale_seconds": 86_400,
+                "catalog_snapshot_path": directories.model_catalog_snapshot(),
+                "catalog_refresh_seconds": 3_600,
                 "max_event_bytes": 1_048_576,
                 "model": "gpt-5.6-luna",
                 "reasoning_effort": "medium"

@@ -373,6 +373,20 @@ pub(super) fn start(
     let plugin_root = directories.plugins();
     let plugin_parent = watch_parent(&plugin_root);
     let profile_directory = directories.profiles();
+    let model_catalog_snapshot = directories.model_catalog_snapshot();
+    let model_catalog_directory = model_catalog_snapshot
+        .parent()
+        .expect("model catalog snapshot has a parent")
+        .to_path_buf();
+    if let Err(error) = fs::create_dir_all(&model_catalog_directory) {
+        report_watcher_errors(
+            &events,
+            [format!(
+                "failed to prepare Model catalog reconciliation path {}: {error}",
+                model_catalog_directory.display()
+            )],
+        );
+    }
     let selected_profile_path = profile_name
         .borrow()
         .as_deref()
@@ -381,6 +395,7 @@ pub(super) fn start(
     if authoring_managed {
         watched_paths.push(plugin_parent.as_path());
         watched_paths.push(profile_directory.as_path());
+        watched_paths.push(model_catalog_directory.as_path());
     }
     let (watcher, watcher_errors) =
         FilesystemReconcileWatcher::start(&watched_paths, Some(plugin_root.clone()));
@@ -1083,6 +1098,9 @@ fn resolve_desired_generation(
     };
     let resources =
         crate::plugin_root::plan_resources_from_snapshot(&root, &plan).map_err(rejected)?;
+    let resources =
+        crate::model_catalog_resources::inject_selected_catalog_snapshot(&plan, resources)
+            .map_err(rejected)?;
     let (desired_state_digest, plan_digest) =
         desired_generation_identity(&authority.resolution_authority_digest, &plan, &resources)
             .map_err(rejected)?;
