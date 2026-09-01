@@ -244,6 +244,17 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
         crate::ensure_host_catalog(&self.directories)
     }
 
+    /// Supplies the Host-owned authority after authoring preparation has made
+    /// the current Host Catalog available to authority implementations.
+    #[must_use]
+    pub fn plugin_configuration_authority(
+        mut self,
+        authority: Arc<dyn PluginConfigurationAuthority>,
+    ) -> Self {
+        self.plugin_configuration_authority = Some(authority);
+        self
+    }
+
     /// Resolves the selected Profile and starts one immutable App Generation.
     pub async fn run(self, profile: Profile) -> Result<AgentApp, String> {
         let (plan, profile_name) = match profile {

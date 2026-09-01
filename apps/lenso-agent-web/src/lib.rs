@@ -761,6 +761,14 @@ impl AgentWebSurface {
             profile.is_some(),
         )?;
         PluginControl::validate_target(managed_app_root.as_deref(), directories.home())?;
+        let host = AgentHost::builder().plugins(plugins);
+        let host = match agent_home {
+            Some(agent_home) => host.agent_home(agent_home)?,
+            None => host,
+        }
+        .surface(WebSurface::browser())
+        .build()?;
+        host.prepare_authoring()?;
         let app_root = managed_app_root.as_deref().unwrap_or(directories.home());
         let authorities = resolve_configuration_authorities(
             app_root,
@@ -775,16 +783,7 @@ impl AgentWebSurface {
             history: plugin_configuration_history,
             remote,
         } = authorities;
-        let host = AgentHost::builder()
-            .plugins(plugins)
-            .plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
-        let host = match agent_home {
-            Some(agent_home) => host.agent_home(agent_home)?,
-            None => host,
-        }
-        .surface(WebSurface::browser())
-        .build()?;
-        host.prepare_authoring()?;
+        let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
         let app = Box::pin(host.run(selected_profile)).await?;
         let plugin_control = PluginControl::resolve(
             plugin_control,
