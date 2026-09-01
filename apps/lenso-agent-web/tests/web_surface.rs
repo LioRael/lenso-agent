@@ -1091,7 +1091,7 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_eq!(applied["appliedRevision"], accepted["revision"]);
     assert_eq!(applied["configurationStatus"], "applied");
     let operation = wait_for_plugin_operation(&client, address, &control_token, operation_id).await;
-    assert_eq!(operation["operation"]["status"], "switched");
+    assert_eq!(operation["operation"]["status"], "switched", "{operation}");
 
     assert_inventory_cursor_is_non_destructive(&client, address).await;
 }

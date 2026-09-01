@@ -96,6 +96,11 @@ impl AgentDirectories {
             .join("runtime/model-catalog/openai-codex-direct.json")
     }
 
+    pub fn model_catalog_snapshot(&self) -> PathBuf {
+        self.home
+            .join("runtime/model-catalog/effective/openai-codex-direct.json")
+    }
+
     pub fn channels(&self) -> PathBuf {
         self.home.join("channels.toml")
     }
@@ -148,6 +153,12 @@ mod tests {
         assert_eq!(
             directories.model_catalog_cache(),
             Path::new("/tmp/lenso-agent-home/runtime/model-catalog/openai-codex-direct.json")
+        );
+        assert_eq!(
+            directories.model_catalog_snapshot(),
+            Path::new(
+                "/tmp/lenso-agent-home/runtime/model-catalog/effective/openai-codex-direct.json"
+            )
         );
     }
 

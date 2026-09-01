@@ -2749,7 +2749,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::large_futures, clippy::too_many_lines)]
     async fn opaque_publication_receipt_replays_switch_before_handler_registration() {
         let root = tempfile::tempdir().unwrap();
         crate::configure_test_fixture_model(root.path());

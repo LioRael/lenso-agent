@@ -8,6 +8,7 @@ mod directories;
 pub mod generation;
 mod generation_authority;
 mod host;
+mod model_catalog_resources;
 mod official_prompts;
 mod online_generation;
 mod plugin_root;
@@ -134,7 +135,8 @@ pub fn validate_desired_plugin_root_for_home(
     profile_name: Option<&str>,
 ) -> Result<(), String> {
     let (root, plan) = resolve_desired_plugin_root_for_home(home, profile_name)?;
-    plugin_root::plan_resources_from_snapshot(&root, &plan).map(drop)
+    let resources = plugin_root::plan_resources_from_snapshot(&root, &plan)?;
+    model_catalog_resources::inject_selected_catalog_snapshot(&plan, resources).map(drop)
 }
 
 /// One immutable, Profile-aware Desired State captured for an authoring receipt.
@@ -189,6 +191,7 @@ pub fn snapshot_desired_plugin_root_for_home(
     let (root, plan) = resolve_desired_plugin_root_for_home(home, profile_name)?;
     let plugin_root_revision = root.revision()?;
     let resources = plugin_root::plan_resources_from_snapshot(&root, &plan)?;
+    let resources = model_catalog_resources::inject_selected_catalog_snapshot(&plan, resources)?;
     let authority_directories = AgentDirectories::from_home(authority_home)?;
     let authority =
         generation_authority::load_generation_authority_unfenced(&authority_directories.runtime());
