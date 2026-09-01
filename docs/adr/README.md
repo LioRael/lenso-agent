@@ -93,3 +93,4 @@
 - [0091 — Distribute installable Lenso Agent releases](0091-distribute-installable-agent-releases.md)
 - [0092 — Discover selected Provider models at Generation readiness](0092-discover-selected-provider-models-at-generation-readiness.md)
 - [0093 — Separate Provider model facts from visibility](0093-separate-provider-model-facts-from-visibility.md)
+- [0094 — Model reasoning controls as typed Turn options](0094-model-reasoning-controls-as-typed-turn-options.md)

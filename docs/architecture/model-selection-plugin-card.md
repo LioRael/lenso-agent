@@ -12,7 +12,7 @@ to classify the work, or distribute Turns across a fixed weighted pool.
 
 `lenso.agent.model-selection.dynamic` owns policy configuration and the choice
 among candidates supplied for one Turn. It provides
-`lenso.agent.model-selection@1` and requires `lenso.agent.model@2` only for the
+`lenso.agent.model-selection@1` and requires `lenso.agent.model@3` only for the
 optional LLM-classifier strategy.
 
 Removing the Plugin removes dynamic aliases. The Host, Agent Loop, concrete

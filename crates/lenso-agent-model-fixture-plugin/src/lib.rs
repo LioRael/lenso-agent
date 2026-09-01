@@ -114,8 +114,10 @@ impl ModelProvider for FixtureModel {
 fn unsupported_control() -> CatalogControl {
     CatalogControl {
         status: CatalogControlStatus::Unsupported,
+        mode: None,
         options: Vec::new(),
         default: None,
+        budget_tokens: None,
     }
 }
 
@@ -193,11 +195,7 @@ impl FixtureModel {
         &self,
         request: &CompleteOpen,
     ) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
-        if !self.admits_model(&request.model) || request.max_output_tokens <= 0 {
-            return Err(ModelCompleteInvocationError::Domain(
-                CompleteError::UnsupportedModel,
-            ));
-        }
+        validate_fixture_request(self, request)?;
         let current_user_index = request
             .messages
             .iter()
@@ -294,6 +292,27 @@ impl FixtureModel {
         }
         default_fixture_response(request, current_user, &tool_results)
     }
+}
+
+fn validate_fixture_request(
+    model: &FixtureModel,
+    request: &CompleteOpen,
+) -> Result<(), ModelCompleteInvocationError> {
+    if !model.admits_model(&request.model) || request.max_output_tokens <= 0 {
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::UnsupportedModel,
+        ));
+    }
+    if request.reasoning_effort.is_some()
+        || request.reasoning_enabled.is_some()
+        || request.reasoning_budget_tokens.is_some()
+        || request.service_tier.is_some()
+    {
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
+    }
+    Ok(())
 }
 
 fn is_context_source_fixture(current_user: &str) -> bool {

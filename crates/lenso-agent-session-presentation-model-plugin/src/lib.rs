@@ -109,6 +109,8 @@ fn model_request(config: &PresentationModelConfig, request: &ProjectRequest) -> 
     CompleteOpen {
         model: config.model.clone(),
         reasoning_effort: None,
+        reasoning_enabled: None,
+        reasoning_budget_tokens: None,
         service_tier: None,
         messages: vec![
             CompleteMessageInput {

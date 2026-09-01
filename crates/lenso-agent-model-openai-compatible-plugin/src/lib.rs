@@ -221,13 +221,20 @@ impl ModelProvider for OpenAiCompatibleModel {
 fn unknown_control() -> CatalogControl {
     CatalogControl {
         status: CatalogControlStatus::Unknown,
+        mode: None,
         options: Vec::new(),
         default: None,
+        budget_tokens: None,
     }
 }
 
 fn chat_request(request: &CompleteOpen) -> Result<serde_json::Value, CompleteError> {
-    if request.max_output_tokens <= 0 {
+    if request.max_output_tokens <= 0
+        || request.reasoning_effort.is_some()
+        || request.reasoning_enabled.is_some()
+        || request.reasoning_budget_tokens.is_some()
+        || request.service_tier.is_some()
+    {
         return Err(CompleteError::InvalidRequest);
     }
     let messages = request
@@ -854,6 +861,8 @@ mod tests {
         let request = CompleteOpen {
             model: "test-model".to_owned(),
             reasoning_effort: None,
+            reasoning_enabled: None,
+            reasoning_budget_tokens: None,
             service_tier: None,
             messages: vec![
                 CompleteMessageInput {

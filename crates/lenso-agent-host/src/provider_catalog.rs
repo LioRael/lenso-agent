@@ -1,14 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use lenso_agent_loop_plugin::{
-    ModelCapabilities, ModelInputModality, ModelLimits, ModelReasoningControl,
+    ModelCapabilities, ModelControlOption, ModelInputModality, ModelLimits, ModelReasoningControl,
     ModelServiceTierControl, ModelWireProtocol, ResolvedTurnProfile,
 };
 use lenso_app_plan::{ResolvedAppPlan, authoring::HostCatalog};
 use lenso_capability_agent_model as model_contract;
 use serde::{Deserialize, Serialize};
 
-const MODEL_CAPABILITY: &str = "lenso.agent.model@2";
+const MODEL_CAPABILITY: &str = "lenso.agent.model@3";
 const FIXTURE_PLUGIN: &str = "lenso.agent.model.fixture";
 const OPENAI_COMPATIBLE_PLUGIN: &str = "lenso.agent.model.openai-compatible";
 const CODEX_DIRECT_PLUGIN: &str = "lenso.agent.model.openai-codex-direct";
@@ -36,6 +36,18 @@ impl ProviderModelCatalog {
         reasoning_effort: Option<&str>,
         service_tier: Option<&str>,
     ) -> Result<ResolvedTurnProfile, String> {
+        self.resolve_model_controls(model_id, reasoning_effort, None, None, service_tier)
+    }
+
+    /// Resolves one admitted model plus one typed reasoning selection.
+    pub fn resolve_model_controls(
+        &self,
+        model_id: &str,
+        reasoning_effort: Option<&str>,
+        reasoning_enabled: Option<bool>,
+        reasoning_budget_tokens: Option<u64>,
+        service_tier: Option<&str>,
+    ) -> Result<ResolvedTurnProfile, String> {
         let current = self
             .resolved_turn_profile
             .as_ref()
@@ -57,23 +69,42 @@ impl ProviderModelCatalog {
                     current.provider_instance
                 )
             })?;
-        let reasoning_effort = reasoning_effort.map(str::to_owned).or_else(|| {
-            model_supports_reasoning(model, current.reasoning_effort.as_deref())
-                .then(|| current.reasoning_effort.clone())
-                .flatten()
-        });
+        let explicit_reasoning = usize::from(reasoning_effort.is_some())
+            + usize::from(reasoning_enabled.is_some())
+            + usize::from(reasoning_budget_tokens.is_some());
+        if explicit_reasoning > 1 {
+            return Err("a Turn may select only one reasoning control".to_owned());
+        }
+        let (reasoning_effort, reasoning_enabled, reasoning_budget_tokens) =
+            if explicit_reasoning == 1 {
+                (
+                    reasoning_effort.map(str::to_owned),
+                    reasoning_enabled,
+                    reasoning_budget_tokens,
+                )
+            } else {
+                reasoning_selection_or_default(model, current)
+            };
         let service_tier = service_tier.map(str::to_owned).or_else(|| {
             model_supports_service_tier(model, current.service_tier.as_deref())
                 .then(|| current.service_tier.clone())
                 .flatten()
         });
-        validate_selected_variant(model, reasoning_effort.as_deref(), service_tier.as_deref())?;
+        validate_selected_variant(
+            model,
+            reasoning_effort.as_deref(),
+            reasoning_enabled,
+            reasoning_budget_tokens,
+            service_tier.as_deref(),
+        )?;
         Ok(ResolvedTurnProfile {
             catalog_revision: self.catalog_revision.clone(),
             provider_id: current.provider_id.clone(),
             provider_instance: current.provider_instance.clone(),
             model: model.id.clone(),
             reasoning_effort,
+            reasoning_enabled,
+            reasoning_budget_tokens,
             service_tier,
             limits: model.limits.clone(),
             capabilities: model.capabilities.clone(),
@@ -107,22 +138,73 @@ impl ProviderModelCatalog {
         reasoning_effort: Option<&str>,
         service_tier: Option<&str>,
     ) -> Vec<ResolvedTurnProfile> {
+        self.resolve_model_control_candidates(reasoning_effort, None, None, service_tier)
+    }
+
+    /// Resolves selected-Provider candidates that accept one typed reasoning control.
+    pub fn resolve_model_control_candidates(
+        &self,
+        reasoning_effort: Option<&str>,
+        reasoning_enabled: Option<bool>,
+        reasoning_budget_tokens: Option<u64>,
+        service_tier: Option<&str>,
+    ) -> Vec<ResolvedTurnProfile> {
         self.selected_provider_models()
             .into_iter()
             .filter_map(|model| {
-                self.resolve_model_options(&model, reasoning_effort, service_tier)
-                    .ok()
+                self.resolve_model_controls(
+                    &model,
+                    reasoning_effort,
+                    reasoning_enabled,
+                    reasoning_budget_tokens,
+                    service_tier,
+                )
+                .ok()
             })
             .collect()
     }
 }
 
-fn model_supports_reasoning(model: &ModelCatalogEntry, effort: Option<&str>) -> bool {
-    matches!(
-        (&model.capabilities.reasoning, effort),
-        (ModelReasoningControl::Selectable { efforts }, Some(effort))
-            if efforts.iter().any(|candidate| candidate == effort)
-    )
+fn reasoning_selection_or_default(
+    model: &ModelCatalogEntry,
+    current: &ResolvedTurnProfile,
+) -> (Option<String>, Option<bool>, Option<u64>) {
+    match &model.capabilities.reasoning {
+        ModelReasoningControl::Selectable {
+            efforts, default, ..
+        } => (
+            current
+                .reasoning_effort
+                .as_ref()
+                .filter(|effort| efforts.contains(effort))
+                .cloned()
+                .or_else(|| default.clone()),
+            None,
+            None,
+        ),
+        ModelReasoningControl::Toggle {
+            default_enabled, ..
+        } => (
+            None,
+            Some(current.reasoning_enabled.unwrap_or(*default_enabled)),
+            None,
+        ),
+        ModelReasoningControl::BudgetTokens {
+            minimum,
+            maximum,
+            default,
+        } => (
+            None,
+            None,
+            Some(
+                current
+                    .reasoning_budget_tokens
+                    .filter(|value| (*minimum..=*maximum).contains(value))
+                    .unwrap_or(*default),
+            ),
+        ),
+        ModelReasoningControl::Unknown | ModelReasoningControl::Unsupported => (None, None, None),
+    }
 }
 
 fn model_supports_service_tier(model: &ModelCatalogEntry, tier: Option<&str>) -> bool {
@@ -427,13 +509,36 @@ fn resolved_turn_profile(
         .iter()
         .find(|model| model.id == selected_model)
         .ok_or_else(|| "selected model is absent from its Provider catalog".to_owned())?;
-    validate_selected_variant(model, reasoning_effort.as_deref(), service_tier.as_deref())?;
+    let (reasoning_effort, reasoning_enabled, reasoning_budget_tokens) =
+        if reasoning_effort.is_some() {
+            (reasoning_effort, None, None)
+        } else {
+            match &model.capabilities.reasoning {
+                ModelReasoningControl::Selectable { default, .. } => (default.clone(), None, None),
+                ModelReasoningControl::Toggle {
+                    default_enabled, ..
+                } => (None, Some(*default_enabled), None),
+                ModelReasoningControl::BudgetTokens { default, .. } => (None, None, Some(*default)),
+                ModelReasoningControl::Unknown | ModelReasoningControl::Unsupported => {
+                    (None, None, None)
+                }
+            }
+        };
+    validate_selected_variant(
+        model,
+        reasoning_effort.as_deref(),
+        reasoning_enabled,
+        reasoning_budget_tokens,
+        service_tier.as_deref(),
+    )?;
     Ok(Some(ResolvedTurnProfile {
         catalog_revision: catalog_revision.to_owned(),
         provider_id: provider.provider_id.clone(),
         provider_instance: selected_instance.to_owned(),
         model: selected_model.to_owned(),
         reasoning_effort,
+        reasoning_enabled,
+        reasoning_budget_tokens,
         service_tier,
         limits: model.limits.clone(),
         capabilities: model.capabilities.clone(),
@@ -445,15 +550,36 @@ fn resolved_turn_profile(
 fn validate_selected_variant(
     model: &ModelCatalogEntry,
     reasoning_effort: Option<&str>,
+    reasoning_enabled: Option<bool>,
+    reasoning_budget_tokens: Option<u64>,
     service_tier: Option<&str>,
 ) -> Result<(), String> {
-    match (&model.capabilities.reasoning, reasoning_effort) {
-        (ModelReasoningControl::Selectable { efforts }, Some(selected))
+    let selected_count = usize::from(reasoning_effort.is_some())
+        + usize::from(reasoning_enabled.is_some())
+        + usize::from(reasoning_budget_tokens.is_some());
+    if selected_count > 1 {
+        return Err("a Turn may select only one reasoning control".to_owned());
+    }
+    match (
+        &model.capabilities.reasoning,
+        reasoning_effort,
+        reasoning_enabled,
+        reasoning_budget_tokens,
+    ) {
+        (ModelReasoningControl::Selectable { efforts, .. }, Some(selected), None, None)
             if efforts.iter().any(|effort| effort == selected) => {}
-        (_, None) => {}
+        (ModelReasoningControl::Toggle { .. }, None, Some(_), None) | (_, None, None, None) => {}
+        (
+            ModelReasoningControl::BudgetTokens {
+                minimum, maximum, ..
+            },
+            None,
+            None,
+            Some(selected),
+        ) if (*minimum..=*maximum).contains(&selected) => {}
         _ => {
             return Err(
-                "selected reasoning effort is not admitted by the model catalog".to_owned(),
+                "selected reasoning control is not admitted by the model catalog".to_owned(),
             );
         }
     }
@@ -556,15 +682,19 @@ fn project_model(
     model: &model_contract::CatalogModel,
     selected_model: Option<&str>,
 ) -> Result<ModelCatalogEntry, String> {
-    let reasoning = project_control(&model.reasoning, true)?;
+    let reasoning = project_reasoning_control(&model.reasoning)?;
     let service_tiers = project_control(&model.service_tiers, false)?;
+    let default_reasoning_effort = match &reasoning {
+        ModelReasoningControl::Selectable { default, .. } => default.clone(),
+        _ => None,
+    };
     Ok(ModelCatalogEntry {
         id: model.id.clone(),
         display_name: model.display_name.clone(),
         description: model.description.clone(),
         hidden: model.hidden,
         selected: selected_model == Some(model.id.as_str()),
-        default_reasoning_effort: model.reasoning.default.clone().flatten(),
+        default_reasoning_effort,
         default_service_tier: model.service_tiers.default.clone().flatten(),
         limits: ModelLimits {
             context_window_tokens: optional_tokens(model.limits.context_window_tokens.as_ref())?,
@@ -584,13 +714,7 @@ fn project_model(
             text_output: model.text_output,
             tool_calls: model.tool_calls,
             parallel_tool_calls: model.parallel_tool_calls,
-            reasoning: match reasoning {
-                ProjectedControl::Unknown => ModelReasoningControl::Unknown,
-                ProjectedControl::Unsupported => ModelReasoningControl::Unsupported,
-                ProjectedControl::Selectable(values) => {
-                    ModelReasoningControl::Selectable { efforts: values }
-                }
-            },
+            reasoning,
             service_tiers: match service_tiers {
                 ProjectedControl::Unknown => ModelServiceTierControl::Unknown,
                 ProjectedControl::Unsupported => ModelServiceTierControl::Unsupported,
@@ -618,6 +742,92 @@ enum ProjectedControl {
     Selectable(Vec<String>),
 }
 
+fn project_reasoning_control(
+    control: &model_contract::CatalogControl,
+) -> Result<ModelReasoningControl, String> {
+    let values = control
+        .options
+        .iter()
+        .map(|option| option.id.clone())
+        .collect::<BTreeSet<_>>();
+    let default = control.default.as_ref().and_then(Option::as_ref);
+    let mode = control.mode.as_ref().and_then(Option::as_ref);
+    let budget = control.budget_tokens.as_ref().and_then(Option::as_ref);
+    if values.len() != control.options.len() || default.is_some_and(|value| !values.contains(value))
+    {
+        return Err("Model Provider returned inconsistent reasoning metadata".to_owned());
+    }
+    let empty =
+        control.options.is_empty() && default.is_none() && mode.is_none() && budget.is_none();
+    match (&control.status, mode, budget) {
+        (model_contract::CatalogControlStatus::Unknown, None, None) if empty => {
+            Ok(ModelReasoningControl::Unknown)
+        }
+        (model_contract::CatalogControlStatus::Unsupported, None, None) if empty => {
+            Ok(ModelReasoningControl::Unsupported)
+        }
+        (
+            model_contract::CatalogControlStatus::Selectable,
+            None | Some(model_contract::CatalogControlMode::Effort),
+            None,
+        ) if !values.is_empty() && default.is_some() => Ok(ModelReasoningControl::Selectable {
+            efforts: values.into_iter().collect(),
+            options: control
+                .options
+                .iter()
+                .map(|option| ModelControlOption {
+                    id: option.id.clone(),
+                    name: option.name.clone(),
+                    description: option.description.clone(),
+                })
+                .collect(),
+            default: default.cloned(),
+        }),
+        (
+            model_contract::CatalogControlStatus::Selectable,
+            Some(model_contract::CatalogControlMode::Toggle),
+            None,
+        ) if values == BTreeSet::from(["off".to_owned(), "on".to_owned()]) && default.is_some() => {
+            Ok(ModelReasoningControl::Toggle {
+                default_enabled: default.is_some_and(|value| value == "on"),
+                options: control
+                    .options
+                    .iter()
+                    .map(|option| ModelControlOption {
+                        id: option.id.clone(),
+                        name: option.name.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect(),
+            })
+        }
+        (
+            model_contract::CatalogControlStatus::Selectable,
+            Some(model_contract::CatalogControlMode::BudgetTokens),
+            Some(budget),
+        ) if control.options.is_empty() && default.is_none() => {
+            let minimum = budget.minimum.parse::<u64>().map_err(|_| {
+                "Model Provider returned an invalid reasoning token budget".to_owned()
+            })?;
+            let maximum = budget.maximum.parse::<u64>().map_err(|_| {
+                "Model Provider returned an invalid reasoning token budget".to_owned()
+            })?;
+            let default = budget.default.parse::<u64>().map_err(|_| {
+                "Model Provider returned an invalid reasoning token budget".to_owned()
+            })?;
+            if minimum == 0 || minimum > default || default > maximum {
+                return Err("Model Provider returned an invalid reasoning token budget".to_owned());
+            }
+            Ok(ModelReasoningControl::BudgetTokens {
+                minimum,
+                maximum,
+                default,
+            })
+        }
+        _ => Err("Model Provider returned invalid reasoning control metadata".to_owned()),
+    }
+}
+
 fn project_control(
     control: &model_contract::CatalogControl,
     reasoning: bool,
@@ -628,9 +838,16 @@ fn project_control(
         .map(|option| option.id.clone())
         .collect::<BTreeSet<_>>();
     let default = control.default.as_ref().and_then(Option::as_ref);
+    let mode = control.mode.as_ref().and_then(Option::as_ref);
+    let budget = control.budget_tokens.as_ref().and_then(Option::as_ref);
     if values.len() != control.options.len() || default.is_some_and(|value| !values.contains(value))
     {
         return Err("Model Provider returned inconsistent control metadata".to_owned());
+    }
+    if mode.is_some() || budget.is_some() {
+        return Err(
+            "Model Provider returned reasoning metadata for a service-tier control".to_owned(),
+        );
     }
     let invalid_empty = !control.options.is_empty() || default.is_some();
     match control.status {
@@ -710,6 +927,92 @@ fn configured_model(
 mod tests {
     use super::*;
 
+    fn option(id: &str, name: &str) -> model_contract::CatalogControlOption {
+        model_contract::CatalogControlOption {
+            id: id.to_owned(),
+            name: name.to_owned(),
+            description: format!("{name} reasoning"),
+        }
+    }
+
+    fn selectable_reasoning(
+        mode: model_contract::CatalogControlMode,
+        options: Vec<model_contract::CatalogControlOption>,
+        default: Option<&str>,
+        budget_tokens: Option<model_contract::CatalogTokenBudget>,
+    ) -> model_contract::CatalogControl {
+        model_contract::CatalogControl {
+            status: model_contract::CatalogControlStatus::Selectable,
+            mode: Some(Some(mode)),
+            options,
+            default: default.map(|value| Some(value.to_owned())),
+            budget_tokens: budget_tokens.map(Some),
+        }
+    }
+
+    fn model_with_reasoning(reasoning: ModelReasoningControl) -> ModelCatalogEntry {
+        ModelCatalogEntry {
+            id: "reasoning-model".to_owned(),
+            display_name: "Reasoning model".to_owned(),
+            description: String::new(),
+            hidden: false,
+            selected: true,
+            default_reasoning_effort: None,
+            default_service_tier: None,
+            limits: ModelLimits {
+                context_window_tokens: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+            },
+            capabilities: ModelCapabilities {
+                input_modalities: vec![ModelInputModality::Text],
+                text_output: true,
+                tool_calls: true,
+                parallel_tool_calls: true,
+                reasoning,
+                service_tiers: ModelServiceTierControl::Unsupported,
+            },
+            wire_protocol: ModelWireProtocol::Fixture,
+            compaction_compatibility: "generic-text-v1".to_owned(),
+        }
+    }
+
+    fn catalog_with_reasoning(reasoning: ModelReasoningControl) -> ProviderModelCatalog {
+        let model = model_with_reasoning(reasoning);
+        let profile = ResolvedTurnProfile {
+            catalog_revision: format!("sha256:{}", "a".repeat(64)),
+            provider_id: "fixture".to_owned(),
+            provider_instance: "lenso.agent.model.fixture/model".to_owned(),
+            model: model.id.clone(),
+            reasoning_effort: None,
+            reasoning_enabled: None,
+            reasoning_budget_tokens: None,
+            service_tier: None,
+            limits: model.limits.clone(),
+            capabilities: model.capabilities.clone(),
+            wire_protocol: model.wire_protocol,
+            compaction_compatibility: model.compaction_compatibility.clone(),
+        };
+        ProviderModelCatalog {
+            schema: "lenso.agent.provider-model-catalog.v1".to_owned(),
+            catalog_revision: profile.catalog_revision.clone(),
+            resolved_turn_profile: Some(profile),
+            providers: vec![ModelProviderCatalogEntry {
+                provider_id: "fixture".to_owned(),
+                name: "Fixture".to_owned(),
+                plugin_id: FIXTURE_PLUGIN.to_owned(),
+                authentication: ModelAuthentication::None,
+                readiness: ModelProviderReadiness {
+                    status: ModelProviderReadinessStatus::Unchecked,
+                    detail: String::new(),
+                },
+                available_instances: vec!["lenso.agent.model.fixture/model".to_owned()],
+                selected_instance: Some("lenso.agent.model.fixture/model".to_owned()),
+                models: vec![model],
+            }],
+        }
+    }
+
     #[test]
     fn provider_catalog_exposes_openrouter_as_a_distinct_provider() {
         let openrouter = PROVIDERS
@@ -746,5 +1049,120 @@ mod tests {
         .unwrap();
 
         assert_eq!(models, ["gpt-primary", "gpt-visible"]);
+    }
+
+    #[test]
+    fn reasoning_projection_preserves_effort_labels_and_default() {
+        let control = selectable_reasoning(
+            model_contract::CatalogControlMode::Effort,
+            vec![option("low", "Low"), option("high", "High")],
+            Some("high"),
+            None,
+        );
+
+        assert_eq!(
+            project_reasoning_control(&control).unwrap(),
+            ModelReasoningControl::Selectable {
+                efforts: vec!["high".to_owned(), "low".to_owned()],
+                options: vec![
+                    ModelControlOption {
+                        id: "low".to_owned(),
+                        name: "Low".to_owned(),
+                        description: "Low reasoning".to_owned(),
+                    },
+                    ModelControlOption {
+                        id: "high".to_owned(),
+                        name: "High".to_owned(),
+                        description: "High reasoning".to_owned(),
+                    },
+                ],
+                default: Some("high".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn reasoning_projection_supports_toggle_and_token_budget() {
+        let toggle = selectable_reasoning(
+            model_contract::CatalogControlMode::Toggle,
+            vec![option("off", "Off"), option("on", "On")],
+            Some("on"),
+            None,
+        );
+        let budget = selectable_reasoning(
+            model_contract::CatalogControlMode::BudgetTokens,
+            Vec::new(),
+            None,
+            Some(model_contract::CatalogTokenBudget {
+                minimum: "256".to_owned(),
+                maximum: "8192".to_owned(),
+                default: "2048".to_owned(),
+            }),
+        );
+
+        assert_eq!(
+            project_reasoning_control(&toggle).unwrap(),
+            ModelReasoningControl::Toggle {
+                default_enabled: true,
+                options: vec![
+                    ModelControlOption {
+                        id: "off".to_owned(),
+                        name: "Off".to_owned(),
+                        description: "Off reasoning".to_owned(),
+                    },
+                    ModelControlOption {
+                        id: "on".to_owned(),
+                        name: "On".to_owned(),
+                        description: "On reasoning".to_owned(),
+                    },
+                ],
+            }
+        );
+        assert_eq!(
+            project_reasoning_control(&budget).unwrap(),
+            ModelReasoningControl::BudgetTokens {
+                minimum: 256,
+                maximum: 8192,
+                default: 2048,
+            }
+        );
+    }
+
+    #[test]
+    fn typed_reasoning_selection_is_validated_and_written_to_turn_provenance() {
+        let toggle = model_with_reasoning(ModelReasoningControl::Toggle {
+            default_enabled: true,
+            options: Vec::new(),
+        });
+        assert!(validate_selected_variant(&toggle, None, Some(false), None, None).is_ok());
+        assert!(validate_selected_variant(&toggle, Some("high"), None, None, None).is_err());
+
+        let budget = model_with_reasoning(ModelReasoningControl::BudgetTokens {
+            minimum: 256,
+            maximum: 8192,
+            default: 2048,
+        });
+        assert!(validate_selected_variant(&budget, None, None, Some(4096), None).is_ok());
+        assert!(validate_selected_variant(&budget, None, None, Some(128), None).is_err());
+        assert!(validate_selected_variant(&budget, None, Some(true), Some(4096), None).is_err());
+
+        let toggle_profile = catalog_with_reasoning(ModelReasoningControl::Toggle {
+            default_enabled: true,
+            options: Vec::new(),
+        })
+        .resolve_model_controls("reasoning-model", None, Some(false), None, None)
+        .unwrap();
+        assert_eq!(toggle_profile.reasoning_enabled, Some(false));
+        assert_eq!(toggle_profile.reasoning_budget_tokens, None);
+
+        let budget_profile = catalog_with_reasoning(ModelReasoningControl::BudgetTokens {
+            minimum: 256,
+            maximum: 8192,
+            default: 2048,
+        })
+        .resolve_model_controls("reasoning-model", None, None, Some(4096), None)
+        .unwrap();
+        assert_eq!(budget_profile.reasoning_enabled, None);
+        assert_eq!(budget_profile.reasoning_budget_tokens, Some(4096));
     }
 }

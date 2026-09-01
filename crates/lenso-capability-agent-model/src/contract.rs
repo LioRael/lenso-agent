@@ -67,10 +67,14 @@ pub enum CatalogInputModality {
 #[schemars(deny_unknown_fields)]
 pub struct CatalogControl {
     pub status: CatalogControlStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<CatalogControlMode>,
     #[schemars(length(max = 16))]
     pub options: Vec<CatalogControlOption>,
     #[schemars(length(min = 1, max = 32))]
     pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<CatalogTokenBudget>,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -79,6 +83,25 @@ pub enum CatalogControlStatus {
     Unknown,
     Unsupported,
     Selectable,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogControlMode {
+    Effort,
+    Toggle,
+    BudgetTokens,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogTokenBudget {
+    #[schemars(extend("format" = "uint64"))]
+    pub minimum: String,
+    #[schemars(extend("format" = "uint64"))]
+    pub maximum: String,
+    #[schemars(extend("format" = "uint64"))]
+    pub default: String,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -121,6 +144,12 @@ pub struct CompleteOpen {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String", length(min = 1, max = 32))]
     pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "bool")]
+    pub reasoning_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", extend("format" = "uint64"))]
+    pub reasoning_budget_tokens: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String", length(min = 1, max = 32))]
     pub service_tier: Option<String>,
@@ -215,8 +244,8 @@ pub struct ProviderFailurePayload {
 
 #[lenso::capability(
     id = "lenso.agent.model",
-    major = 2,
-    version = "2.2.0",
+    major = 3,
+    version = "3.0.0",
     portable = true,
     cross_lane_transfer = false
 )]

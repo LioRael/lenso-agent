@@ -21,6 +21,16 @@
         "status": {
           "$ref": "#/$defs/CatalogControlStatus"
         },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogControlMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "options": {
           "type": "array",
           "maxItems": 16,
@@ -32,9 +42,23 @@
           "type": ["string", "null"],
           "minLength": 1,
           "maxLength": 32
+        },
+        "budget_tokens": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CatalogTokenBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false
+    },
+    "CatalogControlMode": {
+      "type": "string",
+      "enum": ["effort", "toggle", "budget_tokens"]
     },
     "CatalogControlOption": {
       "type": "object",
@@ -150,6 +174,25 @@
         },
         "max_output_tokens": {
           "type": ["string", "null"],
+          "format": "uint64"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalogTokenBudget": {
+      "type": "object",
+      "required": ["minimum", "maximum", "default"],
+      "properties": {
+        "minimum": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "maximum": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "default": {
+          "type": "string",
           "format": "uint64"
         }
       },

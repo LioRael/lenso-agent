@@ -18,11 +18,11 @@ use lenso_capability_agent_auth_openai_codex::{
     self as auth_contract, AccessRequest, OpenaiCodexInvocationError,
 };
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlOption,
-    CatalogControlStatus, CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogRequest,
-    CatalogResponse, CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput,
-    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
-    ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
+    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlMode,
+    CatalogControlOption, CatalogControlStatus, CatalogInputModality, CatalogModel,
+    CatalogModelLimits, CatalogRequest, CatalogResponse, CatalogWireProtocol, CompleteError,
+    CompleteMessage, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen,
+    ModelCatalog, ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
@@ -241,20 +241,31 @@ impl ModelProvider for DirectModel {
         request: CompleteOpen,
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelCompleteInvocationError>>
     {
-        if !self
-            .catalog
-            .borrow()
-            .as_ref()
-            .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == request.model))
-        {
+        let catalog = self.catalog.borrow();
+        let selected_model = catalog.as_ref().and_then(|catalog| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.id == request.model)
+        });
+        let Some(selected_model) = selected_model else {
             return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ))));
-        }
+        };
         let reasoning_effort = request
             .reasoning_effort
             .as_deref()
             .unwrap_or(&self.config.reasoning_effort);
+        if request.reasoning_enabled.is_some()
+            || request.reasoning_budget_tokens.is_some()
+            || !control_supports(&selected_model.reasoning, reasoning_effort)
+        {
+            return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ))));
+        }
+        drop(catalog);
         let wire_request = match responses_request(&request, reasoning_effort) {
             Ok(body) => body,
             Err(error) => return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(error)))),
@@ -427,6 +438,7 @@ fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure
                 description: item.description,
             })
             .collect(),
+        true,
     )?;
     let mut tiers = Vec::new();
     for tier in model.service_tiers {
@@ -443,7 +455,7 @@ fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure
             description: "Provider speed tier".to_owned(),
         });
     }
-    let service_tiers = control(model.default_service_tier, tiers)?;
+    let service_tiers = control(model.default_service_tier, tiers, false)?;
     let compaction_compatibility = model
         .comp_hash
         .unwrap_or_else(|| "generic-text-v1".to_owned());
@@ -476,6 +488,7 @@ fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure
 fn control(
     default: Option<String>,
     options: Vec<CatalogControlOption>,
+    reasoning: bool,
 ) -> Result<CatalogControl, RuntimeFailure> {
     let unique_ids = options
         .iter()
@@ -504,8 +517,12 @@ fn control(
         } else {
             CatalogControlStatus::Selectable
         },
+        mode: (reasoning && !options.is_empty())
+            .then_some(CatalogControlMode::Effort)
+            .map(Some),
         options,
         default: default.map(Some),
+        budget_tokens: None,
     })
 }
 
@@ -1286,7 +1303,7 @@ mod tests {
             name: "High".to_owned(),
             description: String::new(),
         };
-        assert!(control(None, vec![duplicate.clone(), duplicate]).is_err());
+        assert!(control(None, vec![duplicate.clone(), duplicate], true).is_err());
     }
     use lenso_capability_agent_model::CompleteTool;
 
@@ -1295,6 +1312,8 @@ mod tests {
         let request = CompleteOpen {
             model: "gpt-test".to_owned(),
             reasoning_effort: None,
+            reasoning_enabled: None,
+            reasoning_budget_tokens: None,
             service_tier: None,
             messages: vec![
                 CompleteMessageInput {
@@ -1341,6 +1360,8 @@ mod tests {
         let request = CompleteOpen {
             model: "gpt-test".to_owned(),
             reasoning_effort: None,
+            reasoning_enabled: None,
+            reasoning_budget_tokens: None,
             service_tier: None,
             messages: Vec::new(),
             tools: vec![

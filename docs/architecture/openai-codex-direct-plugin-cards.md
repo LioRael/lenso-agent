@@ -31,7 +31,7 @@ Status: experimental direct-provider baseline.
 - **Owned facts:** allowed backend URL, discovered model metadata, Provider and
   App visibility, selected model, Responses wire mapping, event bound, and
   sanitized status policy.
-- **Provides:** `lenso.agent.model@2.2` (`catalog`, request; `complete`, stream).
+- **Provides:** `lenso.agent.model@3.0` (`catalog`, request; `complete`, stream).
 - **Requires:** exactly one `lenso.agent.auth.openai-codex@1` provider selected
   by the Host Profile.
 - **Configuration:** official backend base URL, selected model, optional exact
