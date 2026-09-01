@@ -38,8 +38,8 @@ use lenso_capability_agent_memory::{
 };
 use lenso_capability_agent_model::{
     self as model_capability, CompleteError, CompleteMessage, CompleteMessageInput,
-    CompleteMessageKind, CompleteMessageRole, CompleteOpen, CompleteTool, ModelEvent,
-    ModelInvocationError,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, CompleteTool, ModelCompleteEvent,
+    ModelCompleteInvocationError,
 };
 use lenso_capability_agent_model_selection::{
     self as model_selection_capability, ModelSelectionInvocationError, SelectCandidate,
@@ -2740,7 +2740,7 @@ async fn stream_model(
             }
         };
         match event {
-            ModelEvent::Message(message) => match message.kind {
+            ModelCompleteEvent::Message(message) => match message.kind {
                 CompleteMessageKind::ReasoningSummaryDelta => {
                     if message.text.is_empty() {
                         continue;
@@ -4197,19 +4197,19 @@ fn map_prompt_error(error: PromptInvocationError) -> TurnFailure {
     }
 }
 
-fn map_model_error(error: ModelInvocationError) -> TurnFailure {
+fn map_model_error(error: ModelCompleteInvocationError) -> TurnFailure {
     match error {
-        ModelInvocationError::Domain(error) => map_model_domain_error(error),
-        ModelInvocationError::Runtime(error) => PluginError::runtime(error),
+        ModelCompleteInvocationError::Domain(error) => map_model_domain_error(error),
+        ModelCompleteInvocationError::Runtime(error) => PluginError::runtime(error),
     }
 }
 
-fn model_error_is_retryable(error: &ModelInvocationError) -> bool {
+fn model_error_is_retryable(error: &ModelCompleteInvocationError) -> bool {
     match error {
-        ModelInvocationError::Domain(CompleteError::RateLimited | CompleteError::Overloaded) => {
-            true
-        }
-        ModelInvocationError::Domain(CompleteError::ProviderFailure { payload }) => {
+        ModelCompleteInvocationError::Domain(
+            CompleteError::RateLimited | CompleteError::Overloaded,
+        ) => true,
+        ModelCompleteInvocationError::Domain(CompleteError::ProviderFailure { payload }) => {
             payload.retryable
         }
         _ => false,
@@ -4703,18 +4703,18 @@ mod tests {
 
     #[test]
     fn retry_policy_is_limited_to_transient_open_failures() {
-        assert!(model_error_is_retryable(&ModelInvocationError::Domain(
-            CompleteError::RateLimited
-        )));
-        assert!(model_error_is_retryable(&ModelInvocationError::Domain(
-            CompleteError::Overloaded
-        )));
-        assert!(!model_error_is_retryable(&ModelInvocationError::Domain(
-            CompleteError::ContextOverflow
-        )));
-        assert!(!model_error_is_retryable(&ModelInvocationError::Domain(
-            CompleteError::InvalidRequest
-        )));
+        assert!(model_error_is_retryable(
+            &ModelCompleteInvocationError::Domain(CompleteError::RateLimited)
+        ));
+        assert!(model_error_is_retryable(
+            &ModelCompleteInvocationError::Domain(CompleteError::Overloaded)
+        ));
+        assert!(!model_error_is_retryable(
+            &ModelCompleteInvocationError::Domain(CompleteError::ContextOverflow)
+        ));
+        assert!(!model_error_is_retryable(
+            &ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest)
+        ));
     }
 
     #[test]

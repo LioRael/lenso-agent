@@ -156,7 +156,7 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
 }
 
 #[test]
-fn missing_direct_credential_rejects_the_turn_without_starting_http() {
+fn missing_direct_credential_rejects_generation_readiness_without_starting_http() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let missing = temporary.path().join("missing-credential.json");
@@ -171,7 +171,7 @@ fn missing_direct_credential_rejects_the_turn_without_starting_http() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("direct Codex authentication failed"),
+        stderr.contains("direct Codex model catalog authentication failed"),
         "{stderr}"
     );
     assert!(!stderr.contains("direct-access-secret"));
@@ -183,6 +183,17 @@ fn spawn_model_server() -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
     let address = listener.local_addr().unwrap();
     let server = thread::spawn(move || {
         let mut requests = Vec::new();
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (headers, body) = read_request_parts(&mut stream);
+        assert!(headers.starts_with("GET /codex/models?client_version=0.1.0 HTTP/1.1"));
+        assert!(body.is_empty());
+        let lower = headers.to_ascii_lowercase();
+        assert!(lower.contains("authorization: bearer direct-access-secret"));
+        assert!(lower.contains("chatgpt-account-id: account-test-1"));
+        write_json_response(&mut stream, model_catalog_response().as_bytes());
         for response_body in [tool_call_response(), text_response()] {
             let (mut stream, _) = listener.accept().unwrap();
             stream
@@ -201,6 +212,12 @@ fn spawn_model_server() -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
 }
 
 fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
+    let (headers, body) = read_request_parts(stream);
+    assert!(headers.starts_with("POST /codex/responses HTTP/1.1"));
+    (headers, body)
+}
+
+fn read_request_parts(stream: &mut TcpStream) -> (String, Vec<u8>) {
     let mut received = Vec::new();
     let header_end = loop {
         let mut buffer = [0_u8; 4096];
@@ -212,7 +229,6 @@ fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
         }
     };
     let headers = String::from_utf8(received[..header_end].to_vec()).unwrap();
-    assert!(headers.starts_with("POST /codex/responses HTTP/1.1"));
     let content_length = headers
         .lines()
         .find_map(|line| {
@@ -220,7 +236,7 @@ fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
             name.eq_ignore_ascii_case("content-length")
                 .then(|| value.trim().parse::<usize>().unwrap())
         })
-        .expect("request Content-Length");
+        .unwrap_or(0);
     while received.len() - header_end < content_length {
         let mut buffer = [0_u8; 4096];
         let read = stream.read(&mut buffer).unwrap();
@@ -231,6 +247,17 @@ fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
         headers,
         received[header_end..header_end + content_length].to_vec(),
     )
+}
+
+fn write_json_response(stream: &mut TcpStream, body: &[u8]) {
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\netag: \"catalog-v1\"\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    )
+    .unwrap();
+    stream.write_all(body).unwrap();
+    stream.flush().unwrap();
 }
 
 fn write_response(stream: &mut TcpStream, body: &[u8]) {
@@ -250,6 +277,31 @@ fn tool_call_response() -> String {
         "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":20,\"output_tokens\":6}}}\n\n"
     )
     .to_owned()
+}
+
+fn model_catalog_response() -> String {
+    serde_json::json!({
+        "models": [{
+            "slug": "gpt-5.6-luna",
+            "display_name": "GPT-5.6 Luna",
+            "description": "Fast coding model",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "Light reasoning"},
+                {"effort": "medium", "description": "Balanced reasoning"},
+                {"effort": "high", "description": "Deep reasoning"}
+            ],
+            "visibility": "list",
+            "additional_speed_tiers": ["fast"],
+            "service_tiers": [],
+            "default_service_tier": null,
+            "supports_parallel_tool_calls": true,
+            "context_window": 272_000,
+            "effective_context_window_percent": 95,
+            "input_modalities": ["text", "image"]
+        }]
+    })
+    .to_string()
 }
 
 fn text_response() -> String {

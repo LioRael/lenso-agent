@@ -49,6 +49,27 @@ use lenso_kernel::{CancellationToken, StreamEvent};
 use lenso_terminal_cli_surface::{ParseOutcome, parse_line as parse_terminal_line};
 use lenso_terminal_command_plugin as _;
 use lenso_terminal_web_plugin as _;
+
+#[cfg(test)]
+pub(crate) fn configure_test_fixture_model(root: &FsPath) {
+    let model = root.join("plugins/lenso.agent.model.fixture");
+    std::fs::create_dir_all(&model).unwrap();
+    std::fs::write(
+        model.join("model.toml"),
+        concat!(
+            "model = \"fixture/readme-summary-v1\"\n",
+            "allowed_models = [\"fixture/alternate-v1\"]\n",
+        ),
+    )
+    .unwrap();
+    let agent = root.join("plugins/lenso.agent.loop");
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::write(
+        agent.join("agent.toml"),
+        "model = \"fixture/readme-summary-v1\"\n",
+    )
+    .unwrap();
+}
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
@@ -3398,6 +3419,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn minimal_console_plugin_inventory_reaches_readiness_and_shuts_down() {
         let root = tempfile::tempdir().unwrap();
+        configure_test_fixture_model(root.path());
         let local = tokio::task::LocalSet::new();
         local
             .run_until(async {
@@ -3475,6 +3497,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn removing_web_terminal_consumer_preserves_the_agent_web_app() {
         let root = tempfile::tempdir().unwrap();
+        configure_test_fixture_model(root.path());
         let plugin_directory = root.path().join("plugins/lenso.terminal.web");
         std::fs::create_dir_all(&plugin_directory).unwrap();
         std::fs::write(plugin_directory.join("web.disabled"), "").unwrap();
@@ -3501,8 +3524,18 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn plugin_control_accepts_a_named_profile() {
         let root = tempfile::tempdir().unwrap();
+        configure_test_fixture_model(root.path());
         std::fs::create_dir_all(root.path().join("profiles")).unwrap();
-        std::fs::write(root.path().join("profiles/web.toml"), "instances = []\n").unwrap();
+        std::fs::write(
+            root.path().join("profiles/web.toml"),
+            concat!(
+                "instances = [\n",
+                "  \"lenso.agent.loop/agent\",\n",
+                "  \"lenso.agent.model.fixture/model\",\n",
+                "]\n",
+            ),
+        )
+        .unwrap();
         let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
         config.agent_home = Some(root.path().to_path_buf());
         config.profile = Some("web".to_owned());
@@ -3521,6 +3554,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn plugin_control_dispatches_through_a_host_supplied_configuration_authority() {
         let root = tempfile::tempdir().unwrap();
+        configure_test_fixture_model(root.path());
         let inspections = Arc::new(AtomicUsize::new(0));
         let authority = RecordingConfigurationAuthority {
             inspections: Arc::clone(&inspections),
@@ -3601,6 +3635,7 @@ mod tests {
     async fn plugin_control_supports_a_first_run_agent_home() {
         let parent = tempfile::tempdir().unwrap();
         let agent_home = parent.path().join("new-agent-home");
+        configure_test_fixture_model(&agent_home);
         let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
         config.agent_home = Some(agent_home.clone());
         config.control = AgentWebControl::HostAuthorized;

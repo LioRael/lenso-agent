@@ -4,6 +4,109 @@ use lenso_contract_authoring as lenso;
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
+pub struct CatalogRequest {}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogResponse {
+    #[schemars(length(min = 1, max = 128))]
+    pub models: Vec<CatalogModel>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "portable model feature flags are independent Provider facts"
+)]
+pub struct CatalogModel {
+    #[schemars(length(min = 1, max = 256))]
+    pub id: String,
+    #[schemars(length(min = 1, max = 256))]
+    pub display_name: String,
+    #[schemars(length(max = 4_096))]
+    pub description: String,
+    pub hidden: bool,
+    pub limits: CatalogModelLimits,
+    #[schemars(length(min = 1, max = 3))]
+    pub input_modalities: Vec<CatalogInputModality>,
+    pub text_output: bool,
+    pub tool_calls: bool,
+    pub parallel_tool_calls: bool,
+    pub reasoning: CatalogControl,
+    pub service_tiers: CatalogControl,
+    pub wire_protocol: CatalogWireProtocol,
+    #[schemars(length(min = 1, max = 128))]
+    pub compaction_compatibility: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "portable token limits retain explicit units on every field"
+)]
+pub struct CatalogModelLimits {
+    #[schemars(extend("format" = "uint64"))]
+    pub context_window_tokens: Option<String>,
+    #[schemars(extend("format" = "uint64"))]
+    pub max_input_tokens: Option<String>,
+    #[schemars(extend("format" = "uint64"))]
+    pub max_output_tokens: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogInputModality {
+    Text,
+    Image,
+    Audio,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogControl {
+    pub status: CatalogControlStatus,
+    #[schemars(length(max = 16))]
+    pub options: Vec<CatalogControlOption>,
+    #[schemars(length(min = 1, max = 32))]
+    pub default: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogControlStatus {
+    Unknown,
+    Unsupported,
+    Selectable,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogControlOption {
+    #[schemars(length(min = 1, max = 32))]
+    pub id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub name: String,
+    #[schemars(length(max = 1_024))]
+    pub description: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogWireProtocol {
+    Fixture,
+    OpenaiResponses,
+    OpenaiChatCompletions,
+}
+
+#[derive(lenso::DomainError)]
+pub enum CatalogError {
+    CatalogInvalid,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
 pub struct CompleteOpen {
     #[schemars(length(min = 1, max = 256))]
     pub model: String,
@@ -113,11 +216,17 @@ pub struct ProviderFailurePayload {
 #[lenso::capability(
     id = "lenso.agent.model",
     major = 2,
-    version = "2.1.0",
+    version = "2.2.0",
     portable = true,
     cross_lane_transfer = false
 )]
 pub trait Model {
+    async fn catalog(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: CatalogRequest,
+    ) -> Result<CatalogResponse, CatalogError>;
+
     async fn complete(
         &self,
         context: lenso::Ctx<'_>,

@@ -1017,6 +1017,7 @@ mod tests {
     }
 
     fn prepare_default_host(root: &tempfile::TempDir) {
+        crate::configure_test_fixture_model(root.path());
         AgentHost::builder()
             .plugins(lenso_agent_default_plugins::link)
             .agent_home(root.path())
@@ -1344,22 +1345,15 @@ mod tests {
                 let surface = crate::AgentWebSurface::start(config).await.unwrap();
                 let before = server.authority().inspect().unwrap().revision().clone();
                 let configuration = concat!(
-                    "model = \"gpt-5.6-luna\"\n",
-                    "max_steps = 7\n",
-                    "max_tool_calls = 4\n",
-                    "max_parallel_tool_calls = 4\n",
-                    "max_output_tokens = 1024\n",
-                    "max_history_events = 200\n",
-                    "max_compaction_summary_characters = 8192\n",
-                    "max_memory_items = 8\n",
-                    "max_memory_characters = 16384\n",
+                    "model = \"fixture/readme-summary-v1\"\n",
+                    "allowed_models = [\"fixture/alternate-v1\", \"fixture/alternate-v2\"]\n",
                 );
                 let proposal = server
                     .authority()
                     .propose(
                         &before,
-                        "lenso.agent.loop",
-                        "agent",
+                        "lenso.agent.model.fixture",
+                        "model",
                         configuration.as_bytes(),
                     )
                     .unwrap();
@@ -1403,7 +1397,7 @@ mod tests {
                     fs::read_to_string(
                         local_root
                             .path()
-                            .join("plugins/lenso.agent.loop/agent.toml")
+                            .join("plugins/lenso.agent.model.fixture/model.toml")
                     )
                     .unwrap(),
                     configuration

@@ -1,4 +1,21 @@
-use std::process::Command;
+use std::{fs, path::Path, process::Command};
+
+fn configure_fixture_app(home: &Path) {
+    for (relative, configuration) in [
+        (
+            "lenso.agent.loop/agent.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+        (
+            "lenso.agent.model.fixture/model.toml",
+            "model = \"fixture/readme-summary-v1\"\n",
+        ),
+    ] {
+        let path = home.join("plugins").join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, configuration).unwrap();
+    }
+}
 
 fn agent(home: &std::path::Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"));
@@ -9,6 +26,7 @@ fn agent(home: &std::path::Path) -> Command {
 #[test]
 fn session_commands_are_discovered_and_executed_through_plugins() {
     let home = tempfile::tempdir().unwrap();
+    configure_fixture_app(home.path());
 
     let text = agent(home.path())
         .args(["sessions", "list"])
@@ -39,6 +57,7 @@ fn session_commands_are_discovered_and_executed_through_plugins() {
 #[test]
 fn dynamic_command_help_comes_from_the_catalog() {
     let home = tempfile::tempdir().unwrap();
+    configure_fixture_app(home.path());
     let group = agent(home.path())
         .args(["sessions", "--help"])
         .output()

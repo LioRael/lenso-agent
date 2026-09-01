@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["models"],
+  "properties": {
+    "models": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "$ref": "#/$defs/CatalogModel"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "CatalogControl": {
+      "type": "object",
+      "required": ["status", "options"],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CatalogControlStatus"
+        },
+        "options": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/CatalogControlOption"
+          }
+        },
+        "default": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 32
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalogControlOption": {
+      "type": "object",
+      "required": ["id", "name", "description"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1024
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalogControlStatus": {
+      "type": "string",
+      "enum": ["unknown", "unsupported", "selectable"]
+    },
+    "CatalogInputModality": {
+      "type": "string",
+      "enum": ["text", "image", "audio"]
+    },
+    "CatalogModel": {
+      "type": "object",
+      "required": [
+        "id",
+        "display_name",
+        "description",
+        "hidden",
+        "limits",
+        "input_modalities",
+        "text_output",
+        "tool_calls",
+        "parallel_tool_calls",
+        "reasoning",
+        "service_tiers",
+        "wire_protocol",
+        "compaction_compatibility"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "display_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "limits": {
+          "$ref": "#/$defs/CatalogModelLimits"
+        },
+        "input_modalities": {
+          "type": "array",
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/CatalogInputModality"
+          },
+          "minItems": 1
+        },
+        "text_output": {
+          "type": "boolean"
+        },
+        "tool_calls": {
+          "type": "boolean"
+        },
+        "parallel_tool_calls": {
+          "type": "boolean"
+        },
+        "reasoning": {
+          "$ref": "#/$defs/CatalogControl"
+        },
+        "service_tiers": {
+          "$ref": "#/$defs/CatalogControl"
+        },
+        "wire_protocol": {
+          "$ref": "#/$defs/CatalogWireProtocol"
+        },
+        "compaction_compatibility": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalogModelLimits": {
+      "type": "object",
+      "properties": {
+        "context_window_tokens": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        },
+        "max_input_tokens": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        },
+        "max_output_tokens": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalogWireProtocol": {
+      "type": "string",
+      "enum": ["fixture", "openai_responses", "openai_chat_completions"]
+    }
+  },
+  "title": "CatalogResponse"
+}

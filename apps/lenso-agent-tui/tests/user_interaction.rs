@@ -35,8 +35,8 @@ async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation
             assert_eq!(
                 lease.available_models(),
                 vec![
-                    "fixture/alternate-v1".to_owned(),
-                    "fixture/readme-summary-v1".to_owned()
+                    "fixture/readme-summary-v1".to_owned(),
+                    "fixture/alternate-v1".to_owned()
                 ]
             );
             let stream = lease

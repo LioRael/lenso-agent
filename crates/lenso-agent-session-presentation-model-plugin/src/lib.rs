@@ -3,7 +3,7 @@
 use lenso::prelude::*;
 use lenso_capability_agent_model::{
     self as model_contract, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole,
-    CompleteOpen, ModelEvent, ModelInvocationError,
+    CompleteOpen, ModelCompleteEvent, ModelCompleteInvocationError,
 };
 use lenso_capability_agent_session_presentation::{
     self as presentation_contract, ProjectError, ProjectRequest, ProjectResponse,
@@ -145,7 +145,7 @@ async fn collect_model_response(
     let mut output = String::new();
     loop {
         match stream.receive().await.map_err(PluginError::runtime)? {
-            ModelEvent::Message(message) => match message.kind {
+            ModelCompleteEvent::Message(message) => match message.kind {
                 CompleteMessageKind::TextDelta => {
                     if output
                         .chars()
@@ -171,10 +171,12 @@ async fn collect_model_response(
     }
 }
 
-fn map_model_open_error(error: ModelInvocationError) -> PluginError<ProjectError> {
+fn map_model_open_error(error: ModelCompleteInvocationError) -> PluginError<ProjectError> {
     match error {
-        ModelInvocationError::Domain(_) => PluginError::domain(ProjectError::ProjectionFailed),
-        ModelInvocationError::Runtime(error) => PluginError::runtime(error),
+        ModelCompleteInvocationError::Domain(_) => {
+            PluginError::domain(ProjectError::ProjectionFailed)
+        }
+        ModelCompleteInvocationError::Runtime(error) => PluginError::runtime(error),
     }
 }
 

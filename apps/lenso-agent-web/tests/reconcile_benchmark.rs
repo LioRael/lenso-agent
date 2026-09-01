@@ -5,14 +5,19 @@ use lenso_agent_web::{AgentWebConfig, AgentWebSurface};
 
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "manual performance smoke; run with --ignored --nocapture"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one performance scenario keeps cold start, idle, switch, and repeat measurements together"
+)]
 async fn reports_reconciler_performance_as_stable_json() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
             let root = tempfile::tempdir().unwrap();
+            configure_fixture_model(root.path());
             let before_start = online_reconcile_telemetry();
             let started_at = Instant::now();
-            let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+            let mut config = AgentWebConfig::new(lenso_agent_default_plugins::link);
             config.agent_home = Some(root.path().to_path_buf());
             let surface = AgentWebSurface::start(config).await.unwrap();
             let cold_start_ms = started_at.elapsed().as_millis();
@@ -56,7 +61,7 @@ async fn reports_reconciler_performance_as_stable_json() {
             std::fs::write(
                 plugin_directory.join("agent.toml"),
                 concat!(
-                    "model = \"gpt-5.6-luna\"\n",
+                    "model = \"fixture/readme-summary-v1\"\n",
                     "max_steps = 9\n",
                     "max_tool_calls = 4\n",
                     "max_parallel_tool_calls = 4\n",
@@ -120,7 +125,8 @@ async fn repeated_inventory_after_switch_does_not_resnapshot_plugin_root() {
     local
         .run_until(async {
             let root = tempfile::tempdir().unwrap();
-            let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+            configure_fixture_model(root.path());
+            let mut config = AgentWebConfig::new(lenso_agent_default_plugins::link);
             config.agent_home = Some(root.path().to_path_buf());
             let surface = AgentWebSurface::start(config).await.unwrap();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -137,7 +143,7 @@ async fn repeated_inventory_after_switch_does_not_resnapshot_plugin_root() {
             std::fs::write(
                 plugin_directory.join("agent.toml"),
                 concat!(
-                    "model = \"gpt-5.6-luna\"\n",
+                    "model = \"fixture/readme-summary-v1\"\n",
                     "max_steps = 9\n",
                     "max_tool_calls = 4\n",
                     "max_parallel_tool_calls = 4\n",
@@ -171,6 +177,27 @@ async fn repeated_inventory_after_switch_does_not_resnapshot_plugin_root() {
             server.abort();
         })
         .await;
+}
+
+fn configure_fixture_model(root: &std::path::Path) {
+    let model_directory = root.join("plugins/lenso.agent.model.fixture");
+    std::fs::create_dir_all(&model_directory).unwrap();
+    std::fs::write(
+        model_directory.join("model.toml"),
+        concat!(
+            "model = \"fixture/readme-summary-v1\"\n",
+            "allowed_models = [\"fixture/alternate-v1\"]\n",
+        ),
+    )
+    .unwrap();
+
+    let loop_directory = root.join("plugins/lenso.agent.loop");
+    std::fs::create_dir_all(&loop_directory).unwrap();
+    std::fs::write(
+        loop_directory.join("agent.toml"),
+        "model = \"fixture/readme-summary-v1\"\n",
+    )
+    .unwrap();
 }
 
 fn performance_report(

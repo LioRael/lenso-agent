@@ -176,6 +176,7 @@ fn official_coding_sandbox_and_plan_profiles_install_and_resolve() {
         "{}",
         String::from_utf8_lossy(&install.stderr)
     );
+    configure_fixture_app(&home);
 
     for profile in ["code", "code-sandbox", "plan"] {
         let output = command_with_home(&workspace, &home)

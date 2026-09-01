@@ -10,8 +10,10 @@ use std::{
 use futures::future::{LocalBoxFuture, poll_fn, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
-    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlStatus,
+    CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogRequest, CatalogResponse,
+    CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput, CompleteMessageKind,
+    CompleteMessageRole, CompleteOpen, ModelCatalog, ModelCompleteInvocationError, ModelProvider,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
@@ -55,11 +57,42 @@ struct FixtureModel {
 
 #[lenso::provides(model_contract::Model)]
 impl ModelProvider for FixtureModel {
+    fn catalog(
+        &self,
+        _context: InvocationContext,
+        _request: CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<ModelCatalog> {
+        let models = std::iter::once(self.config.model.as_str())
+            .chain(self.config.allowed_models.iter().map(String::as_str))
+            .map(|id| CatalogModel {
+                id: id.to_owned(),
+                display_name: id.to_owned(),
+                description: "Deterministic fixture model".to_owned(),
+                hidden: false,
+                limits: CatalogModelLimits {
+                    context_window_tokens: Some(Some("32768".to_owned())),
+                    max_input_tokens: Some(Some("28672".to_owned())),
+                    max_output_tokens: Some(Some("4096".to_owned())),
+                },
+                input_modalities: vec![CatalogInputModality::Text],
+                text_output: true,
+                tool_calls: true,
+                parallel_tool_calls: true,
+                reasoning: unsupported_control(),
+                service_tiers: unsupported_control(),
+                wire_protocol: CatalogWireProtocol::Fixture,
+                compaction_compatibility: "generic-text-v1".to_owned(),
+            })
+            .collect();
+        Box::pin(ready(Ok(Ok(CatalogResponse { models }))))
+    }
+
     fn complete(
         &self,
         _context: InvocationContext,
         request: CompleteOpen,
-    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
+    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelCompleteInvocationError>>
+    {
         if waits_for_running_input(&request)
             || request.messages.iter().rev().any(|message| {
                 message.role == CompleteMessageRole::User
@@ -75,6 +108,14 @@ impl ModelProvider for FixtureModel {
                 as Box<dyn NativeStreamSession>
         });
         Box::pin(ready(result))
+    }
+}
+
+fn unsupported_control() -> CatalogControl {
+    CatalogControl {
+        status: CatalogControlStatus::Unsupported,
+        options: Vec::new(),
+        default: None,
     }
 }
 
@@ -151,9 +192,9 @@ impl FixtureModel {
     fn complete_now(
         &self,
         request: &CompleteOpen,
-    ) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+    ) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
         if !self.admits_model(&request.model) || request.max_output_tokens <= 0 {
-            return Err(ModelInvocationError::Domain(
+            return Err(ModelCompleteInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ));
         }
@@ -161,7 +202,9 @@ impl FixtureModel {
             .messages
             .iter()
             .rposition(|message| message.role == CompleteMessageRole::User)
-            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+            .ok_or(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ))?;
         let current_user = &request.messages[current_user_index].content;
         if let Some(response) = standalone_fixture_response(request, current_user) {
             return Ok(response);
@@ -311,7 +354,7 @@ fn default_fixture_response(
     request: &CompleteOpen,
     current_user: &str,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if let Some(url) = current_user
         .strip_prefix("Use the network Plugin to fetch ")
         .and_then(|value| value.strip_suffix('.'))
@@ -336,7 +379,9 @@ fn default_fixture_response(
     }
     let has_workspace_tool = request.tools.iter().any(|tool| tool.name == "read");
     if !has_workspace_tool {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     Ok(tool_request(1))
 }
@@ -345,7 +390,7 @@ fn subagent_fixture_response(
     request: &CompleteOpen,
     current_user: &str,
     tool_results: &[&CompleteMessageInput],
-) -> Option<Result<Vec<CompleteMessage>, ModelInvocationError>> {
+) -> Option<Result<Vec<CompleteMessage>, ModelCompleteInvocationError>> {
     match current_user {
         "Delegate a README.md summary." => Some(subagent_root_response(request, tool_results)),
         "Spawn and wait for a README.md subagent." => {
@@ -404,9 +449,11 @@ fn sampling_fixture_response() -> Vec<CompleteMessage> {
 fn ask_user_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "ask_user") {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -416,11 +463,13 @@ fn ask_user_response(
         )),
         [result] => {
             let answer: serde_json::Value = serde_json::from_str(&result.content)
-                .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+                .map_err(|_| ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest))?;
             let selection = answer["answers"][0]["selected_option_ids"][0]
                 .as_str()
                 .or_else(|| answer["answers"][0]["other"].as_str())
-                .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+                .ok_or(ModelCompleteInvocationError::Domain(
+                    CompleteError::InvalidRequest,
+                ))?;
             Ok(vec![
                 response(
                     "1",
@@ -435,18 +484,22 @@ fn ask_user_response(
                 response("2", CompleteMessageKind::Usage, "", "", "", "{}", "16", "4"),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn resumed_ask_user_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "ask_user")
         || !request.tools.iter().any(|tool| tool.name == "list")
     {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -485,16 +538,20 @@ fn resumed_ask_user_response(
             ),
             response("2", CompleteMessageKind::Usage, "", "", "", "{}", "32", "8"),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn code_mode_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "run_code") {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -515,7 +572,9 @@ fn code_mode_response(
             ),
             response("2", CompleteMessageKind::Usage, "", "", "", "{}", "28", "8"),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -527,9 +586,11 @@ fn is_expected_code_mode_result(content: &str) -> bool {
 fn subagent_root_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "delegate") {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -559,17 +620,21 @@ fn subagent_root_response(
                 "12",
             ),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn asynchronous_subagent_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in ["spawn_subagent", "wait_subagent", "cancel_subagent"] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     match tool_results {
@@ -580,10 +645,13 @@ fn asynchronous_subagent_response(
         )),
         [spawned] => {
             let spawned: serde_json::Value = serde_json::from_str(&spawned.content)
-                .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
-            let task_id = spawned["task_id"]
-                .as_str()
-                .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+                .map_err(|_| ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest))?;
+            let task_id =
+                spawned["task_id"]
+                    .as_str()
+                    .ok_or(ModelCompleteInvocationError::Domain(
+                        CompleteError::InvalidRequest,
+                    ))?;
             let arguments = serde_json::json!({ "task_id": task_id }).to_string();
             Ok(named_tool_request(
                 "call-wait-subagent-readme",
@@ -613,14 +681,16 @@ fn asynchronous_subagent_response(
                 "14",
             ),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn cancelled_subagent_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in [
         "spawn_subagent",
         "list_subagents",
@@ -628,14 +698,18 @@ fn cancelled_subagent_response(
         "cancel_subagent",
     ] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     let task_id = tool_results.first().map(|spawned| {
         serde_json::from_str::<serde_json::Value>(&spawned.content)
             .ok()
             .and_then(|value| value["task_id"].as_str().map(str::to_owned))
-            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+            .ok_or(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ))
     });
     match (tool_results, task_id) {
         ([], None) => Ok(named_tool_request(
@@ -697,24 +771,30 @@ fn cancelled_subagent_response(
                 ),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn steered_subagent_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in ["spawn_subagent", "send_subagent", "wait_subagent"] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     let task_id = tool_results.first().map(|spawned| {
         serde_json::from_str::<serde_json::Value>(&spawned.content)
             .ok()
             .and_then(|value| value["task_id"].as_str().map(str::to_owned))
-            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+            .ok_or(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ))
     });
     match (tool_results, task_id) {
         ([], None) => Ok(named_tool_request(
@@ -771,16 +851,20 @@ fn steered_subagent_response(
                 ),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn subagent_child_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "read_text") {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -801,7 +885,9 @@ fn subagent_child_response(
             ),
             response("2", CompleteMessageKind::Usage, "", "", "", "{}", "20", "8"),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -809,12 +895,12 @@ fn steered_subagent_child_response(
     request: &CompleteOpen,
     current_user: &str,
     tool_results: &[&CompleteMessageInput],
-) -> Option<Result<Vec<CompleteMessage>, ModelInvocationError>> {
+) -> Option<Result<Vec<CompleteMessage>, ModelCompleteInvocationError>> {
     if !current_user.starts_with("Draft a README.md summary.") {
         return None;
     }
     if !request.tools.iter().any(|tool| tool.name == "read_text") {
-        return Some(Err(ModelInvocationError::Domain(
+        return Some(Err(ModelCompleteInvocationError::Domain(
             CompleteError::InvalidRequest,
         )));
     }
@@ -851,7 +937,9 @@ fn steered_subagent_child_response(
                 ),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     };
     Some(result)
 }
@@ -859,9 +947,11 @@ fn steered_subagent_child_response(
 fn text_plugin_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "uppercase") {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -870,20 +960,24 @@ fn text_plugin_response(
             r#"{"text":"Lenso plugin"}"#,
         )),
         [result] if !result.content.is_empty() => Ok(text_plugin_result(&result.content)),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn mcp_plugin_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request
         .tools
         .iter()
         .any(|tool| tool.name == "mcp__fixture__ping")
     {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -892,20 +986,24 @@ fn mcp_plugin_response(
             "{}",
         )),
         [result] if result.content == "pong" => Ok(mcp_plugin_result()),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn workspace_plugin_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request
         .tools
         .iter()
         .any(|tool| tool.name == "plugin_workspace_read_text")
     {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -935,7 +1033,9 @@ fn workspace_plugin_response(
                 "10",
             ),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -943,13 +1043,15 @@ fn network_plugin_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
     url: &str,
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request
         .tools
         .iter()
         .any(|tool| tool.name == "plugin_http_get")
     {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => {
@@ -982,14 +1084,16 @@ fn network_plugin_response(
                 "10",
             ),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn skill_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_skill_tools = ["skill_list", "skill"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
@@ -1014,7 +1118,9 @@ fn skill_response(
         || !skill_catalog_in_prompt
         || leaked_unselected_skill
     {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -1025,14 +1131,16 @@ fn skill_response(
         [skill] if skill.content.contains("RUST REVIEW INSTRUCTION") => {
             Ok(skill_applied_response())
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn resource_skill_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_skill_tools = ["skill_list", "skill", "skill_resources", "skill_resource"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
@@ -1049,7 +1157,9 @@ fn resource_skill_response(
                 .contains("UNREAD RESOURCE CONTENT MUST NOT REACH THE MODEL")
         })
     {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -1075,7 +1185,9 @@ fn resource_skill_response(
         [_, _, resource] if resource.content.contains("RESOURCE CHECKLIST CONTENT") => {
             Ok(resource_applied_response())
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1098,12 +1210,14 @@ fn readonly_skill_tool_profile(request: &CompleteOpen) -> bool {
 fn workspace_navigation_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_workspace_tools = ["list", "search", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_workspace_tools {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request("call-workspace-list", "list", "{}")),
@@ -1125,7 +1239,9 @@ fn workspace_navigation_response(
                 .unwrap_or("The target is empty.");
             Ok(navigation_response(first_line))
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1157,12 +1273,14 @@ fn navigation_response(first_line: &str) -> Vec<CompleteMessage> {
 fn workspace_mutation_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_mutation_tools = ["create_file", "edit", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_mutation_tools {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -1181,16 +1299,20 @@ fn workspace_mutation_response(
             r#"{"path":"note.txt"}"#,
         )),
         [_, _, document] if document.content == "after\n" => Ok(mutation_response()),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
 fn approved_workspace_mutation_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     if !request.tools.iter().any(|tool| tool.name == "create_file") {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -1211,7 +1333,9 @@ fn approved_workspace_mutation_response(
             ),
             response("2", CompleteMessageKind::Usage, "", "", "", "{}", "20", "8"),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1243,12 +1367,14 @@ fn mutation_response() -> Vec<CompleteMessage> {
 fn local_coding_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_coding_tools = ["edit", "run_process", "read"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_coding_tools {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request(
@@ -1269,7 +1395,9 @@ fn local_coding_response(
         [_, _, document] if document.content.contains("pub fn value() -> u32 { 2 }") => {
             Ok(local_coding_final_response())
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1301,7 +1429,7 @@ fn local_coding_final_response() -> Vec<CompleteMessage> {
 fn background_process_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_background_tools = [
         "start_process",
         "read_process",
@@ -1311,7 +1439,9 @@ fn background_process_response(
     .iter()
     .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_background_tools {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     if tool_results.is_empty() {
         return Ok(named_tool_request(
@@ -1321,10 +1451,12 @@ fn background_process_response(
         ));
     }
     let started = serde_json::from_str::<serde_json::Value>(&tool_results[0].content)
-        .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+        .map_err(|_| ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest))?;
     let process_id = started["process_id"]
         .as_str()
-        .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+        .ok_or(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ))?;
     if tool_results.len() == 1 {
         return Ok(named_tool_request(
             "call-background-list",
@@ -1338,7 +1470,7 @@ fn background_process_response(
             .expect("non-empty background Tool results")
             .content,
     )
-    .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    .map_err(|_| ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest))?;
     let terminal_and_durable = latest["status"] == "completed"
         && latest["durable_terminal"] == true
         && latest["stdout"] == "background-output";
@@ -1381,10 +1513,12 @@ fn background_process_response(
 fn cancelled_process_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in ["start_process", "read_process", "cancel_process"] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     if tool_results.is_empty() {
@@ -1395,10 +1529,12 @@ fn cancelled_process_response(
         ));
     }
     let started = serde_json::from_str::<serde_json::Value>(&tool_results[0].content)
-        .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+        .map_err(|_| ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest))?;
     let process_id = started["process_id"]
         .as_str()
-        .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+        .ok_or(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ))?;
     if tool_results.len() == 1 {
         return Ok(named_tool_request(
             "call-cancel-process",
@@ -1412,7 +1548,7 @@ fn cancelled_process_response(
             .expect("non-empty cancelled process results")
             .content,
     )
-    .map_err(|_| ModelInvocationError::Domain(CompleteError::InvalidRequest))?;
+    .map_err(|_| ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest))?;
     let terminal_and_durable = latest["status"] == "cancelled"
         && latest["durable_terminal"] == true
         && latest["cancel_requested"] == true;
@@ -1454,12 +1590,14 @@ fn cancelled_process_response(
 fn git_workflow_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     let has_git_tools = ["git_status", "git_stage", "git_commit", "git_log"]
         .iter()
         .all(|name| request.tools.iter().any(|tool| tool.name.as_str() == *name));
     if !has_git_tools {
-        return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+        return Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        ));
     }
     match tool_results {
         [] => Ok(named_tool_request("call-git-status", "git_status", "{}")),
@@ -1500,7 +1638,9 @@ fn git_workflow_response(
                 "12",
             ),
         ]),
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1511,10 +1651,12 @@ fn git_workflow_response(
 fn isolated_workers_root_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in ["spawn_subagent", "wait_subagent"] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     match tool_results {
@@ -1556,7 +1698,9 @@ fn isolated_workers_root_response(
                 serde_json::from_str::<serde_json::Value>(&result.content)
                     .ok()
                     .and_then(|value| value["task_id"].as_str().map(str::to_owned))
-                    .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+                    .ok_or(ModelCompleteInvocationError::Domain(
+                        CompleteError::InvalidRequest,
+                    ))
             };
             let worker_a = serde_json::json!({"task_id": task_id(worker_a)?}).to_string();
             let worker_b = serde_json::json!({"task_id": task_id(worker_b)?}).to_string();
@@ -1614,7 +1758,9 @@ fn isolated_workers_root_response(
                 response("2", CompleteMessageKind::Usage, "", "", "", "{}", "32", "8"),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1625,7 +1771,7 @@ fn isolated_workers_root_response(
 fn supervised_workers_root_response(
     request: &CompleteOpen,
     tool_results: &[&CompleteMessageInput],
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in [
         "spawn_subagent",
         "wait_subagent",
@@ -1634,14 +1780,18 @@ fn supervised_workers_root_response(
         "integrate_worktree",
     ] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     let task_id = |result: &&CompleteMessageInput| {
         serde_json::from_str::<serde_json::Value>(&result.content)
             .ok()
             .and_then(|value| value["task_id"].as_str().map(str::to_owned))
-            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+            .ok_or(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ))
     };
     match tool_results {
         [] => Ok(isolated_worker_spawn_requests()),
@@ -1749,7 +1899,9 @@ fn supervised_workers_root_response(
                 response("2", CompleteMessageKind::Usage, "", "", "", "{}", "28", "8"),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 
@@ -1789,13 +1941,18 @@ fn worker_results_completed(first: &CompleteMessageInput, second: &CompleteMessa
         && [first.content.as_str(), second.content.as_str()].contains(&"worker-b committed")
 }
 
-fn integration_arguments(task_id: &str, review: &str) -> Result<String, ModelInvocationError> {
+fn integration_arguments(
+    task_id: &str,
+    review: &str,
+) -> Result<String, ModelCompleteInvocationError> {
     let field = |name: &str| {
         review
             .lines()
             .find_map(|line| line.strip_prefix(&format!("{name}=")))
             .map(str::to_owned)
-            .ok_or(ModelInvocationError::Domain(CompleteError::InvalidRequest))
+            .ok_or(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ))
     };
     Ok(serde_json::json!({
         "task_id": task_id,
@@ -1810,10 +1967,12 @@ fn isolated_worker_response(
     tool_results: &[&CompleteMessageInput],
     path: &str,
     worker: &str,
-) -> Result<Vec<CompleteMessage>, ModelInvocationError> {
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
     for tool in ["create_file", "git_stage", "git_commit"] {
         if !request.tools.iter().any(|candidate| candidate.name == tool) {
-            return Err(ModelInvocationError::Domain(CompleteError::InvalidRequest));
+            return Err(ModelCompleteInvocationError::Domain(
+                CompleteError::InvalidRequest,
+            ));
         }
     }
     match tool_results {
@@ -1854,7 +2013,9 @@ fn isolated_worker_response(
                 response("2", CompleteMessageKind::Usage, "", "", "", "{}", "24", "8"),
             ])
         }
-        _ => Err(ModelInvocationError::Domain(CompleteError::InvalidRequest)),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 

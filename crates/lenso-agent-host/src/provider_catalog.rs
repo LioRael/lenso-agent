@@ -5,6 +5,7 @@ pub use lenso_agent_loop_plugin::{
     ModelServiceTierControl, ModelWireProtocol, ResolvedTurnProfile,
 };
 use lenso_app_plan::{ResolvedAppPlan, authoring::HostCatalog};
+use lenso_capability_agent_model as model_contract;
 use serde::{Deserialize, Serialize};
 
 const MODEL_CAPABILITY: &str = "lenso.agent.model@2";
@@ -181,7 +182,12 @@ pub enum ModelAuthentication {
 #[serde(deny_unknown_fields)]
 pub struct ModelCatalogEntry {
     pub id: String,
+    pub display_name: String,
+    pub description: String,
+    pub hidden: bool,
     pub selected: bool,
+    pub default_reasoning_effort: Option<String>,
+    pub default_service_tier: Option<String>,
     pub limits: ModelLimits,
     pub capabilities: ModelCapabilities,
     pub wire_protocol: ModelWireProtocol,
@@ -239,6 +245,7 @@ pub(crate) fn project(
     host: &HostCatalog,
     plan: &ResolvedAppPlan,
     catalog_revision: &str,
+    selected_catalog: Option<&model_contract::CatalogResponse>,
 ) -> Result<ProviderModelCatalog, String> {
     let selected_instance = selected_model_instance(plan)?;
     let selected_configuration = selected_instance.as_deref().and_then(|instance| {
@@ -274,6 +281,7 @@ pub(crate) fn project(
             plan,
             selected_instance.as_deref(),
             selected_model.as_deref(),
+            selected_catalog,
         )?);
     }
     let resolved_turn_profile = resolved_turn_profile(
@@ -298,6 +306,7 @@ fn project_provider(
     plan: &ResolvedAppPlan,
     selected_instance: Option<&str>,
     selected_model: Option<&str>,
+    selected_catalog: Option<&model_contract::CatalogResponse>,
 ) -> Result<ModelProviderCatalogEntry, String> {
     let mut instances = BTreeMap::<String, Vec<String>>::new();
     for item in host
@@ -342,14 +351,27 @@ fn project_provider(
             configuration_models(selected.configuration())?,
         );
     }
-    let mut model_ids = instances
-        .values()
-        .flatten()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    if let Some(model) = definition.fallback_model {
-        model_ids.insert(model.to_owned());
-    }
+    let models = if selected_instance.is_some() {
+        selected_catalog
+            .ok_or_else(|| "selected Model Provider returned no catalog snapshot".to_owned())?
+            .models
+            .iter()
+            .map(|model| project_model(model, selected_model))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        let mut model_ids = instances
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if let Some(model) = definition.fallback_model {
+            model_ids.insert(model.to_owned());
+        }
+        model_ids
+            .into_iter()
+            .map(|id| configured_model(definition.plugin_id, id, selected_model))
+            .collect()
+    };
     Ok(ModelProviderCatalogEntry {
         provider_id: definition.provider_id.to_owned(),
         name: definition.name.to_owned(),
@@ -362,17 +384,7 @@ fn project_provider(
         },
         available_instances: instances.into_keys().collect(),
         selected_instance: selected_instance.map(str::to_owned),
-        models: model_ids
-            .into_iter()
-            .map(|id| ModelCatalogEntry {
-                selected: selected_model == Some(id.as_str()),
-                limits: model_limits(definition.plugin_id),
-                capabilities: model_capabilities(definition.plugin_id, &id),
-                wire_protocol: wire_protocol(definition.plugin_id),
-                compaction_compatibility: "generic-text-v1".to_owned(),
-                id,
-            })
-            .collect(),
+        models,
     })
 }
 
@@ -538,61 +550,157 @@ fn authentication(plugin_id: &str) -> ModelAuthentication {
     }
 }
 
-fn model_limits(plugin_id: &str) -> ModelLimits {
-    if plugin_id == FIXTURE_PLUGIN {
-        ModelLimits {
-            context_window_tokens: Some(32_768),
-            max_input_tokens: Some(28_672),
-            max_output_tokens: Some(4_096),
+fn project_model(
+    model: &model_contract::CatalogModel,
+    selected_model: Option<&str>,
+) -> Result<ModelCatalogEntry, String> {
+    let reasoning = project_control(&model.reasoning, true)?;
+    let service_tiers = project_control(&model.service_tiers, false)?;
+    Ok(ModelCatalogEntry {
+        id: model.id.clone(),
+        display_name: model.display_name.clone(),
+        description: model.description.clone(),
+        hidden: model.hidden,
+        selected: selected_model == Some(model.id.as_str()),
+        default_reasoning_effort: model.reasoning.default.clone().flatten(),
+        default_service_tier: model.service_tiers.default.clone().flatten(),
+        limits: ModelLimits {
+            context_window_tokens: optional_tokens(model.limits.context_window_tokens.as_ref())?,
+            max_input_tokens: optional_tokens(model.limits.max_input_tokens.as_ref())?,
+            max_output_tokens: optional_tokens(model.limits.max_output_tokens.as_ref())?,
+        },
+        capabilities: ModelCapabilities {
+            input_modalities: model
+                .input_modalities
+                .iter()
+                .map(|modality| match modality {
+                    model_contract::CatalogInputModality::Text => ModelInputModality::Text,
+                    model_contract::CatalogInputModality::Image => ModelInputModality::Image,
+                    model_contract::CatalogInputModality::Audio => ModelInputModality::Audio,
+                })
+                .collect(),
+            text_output: model.text_output,
+            tool_calls: model.tool_calls,
+            parallel_tool_calls: model.parallel_tool_calls,
+            reasoning: match reasoning {
+                ProjectedControl::Unknown => ModelReasoningControl::Unknown,
+                ProjectedControl::Unsupported => ModelReasoningControl::Unsupported,
+                ProjectedControl::Selectable(values) => {
+                    ModelReasoningControl::Selectable { efforts: values }
+                }
+            },
+            service_tiers: match service_tiers {
+                ProjectedControl::Unknown => ModelServiceTierControl::Unknown,
+                ProjectedControl::Unsupported => ModelServiceTierControl::Unsupported,
+                ProjectedControl::Selectable(values) => {
+                    ModelServiceTierControl::Selectable { tiers: values }
+                }
+            },
+        },
+        wire_protocol: match model.wire_protocol {
+            model_contract::CatalogWireProtocol::Fixture => ModelWireProtocol::Fixture,
+            model_contract::CatalogWireProtocol::OpenaiResponses => {
+                ModelWireProtocol::OpenaiResponses
+            }
+            model_contract::CatalogWireProtocol::OpenaiChatCompletions => {
+                ModelWireProtocol::OpenaiChatCompletions
+            }
+        },
+        compaction_compatibility: model.compaction_compatibility.clone(),
+    })
+}
+
+enum ProjectedControl {
+    Unknown,
+    Unsupported,
+    Selectable(Vec<String>),
+}
+
+fn project_control(
+    control: &model_contract::CatalogControl,
+    reasoning: bool,
+) -> Result<ProjectedControl, String> {
+    let values = control
+        .options
+        .iter()
+        .map(|option| option.id.clone())
+        .collect::<BTreeSet<_>>();
+    let default = control.default.as_ref().and_then(Option::as_ref);
+    if values.len() != control.options.len() || default.is_some_and(|value| !values.contains(value))
+    {
+        return Err("Model Provider returned inconsistent control metadata".to_owned());
+    }
+    let invalid_empty = !control.options.is_empty() || default.is_some();
+    match control.status {
+        model_contract::CatalogControlStatus::Unknown if !invalid_empty => {
+            Ok(ProjectedControl::Unknown)
         }
-    } else {
-        ModelLimits {
+        model_contract::CatalogControlStatus::Unsupported if !invalid_empty => {
+            Ok(ProjectedControl::Unsupported)
+        }
+        model_contract::CatalogControlStatus::Selectable if !values.is_empty() => {
+            Ok(ProjectedControl::Selectable(values.into_iter().collect()))
+        }
+        _ => Err(format!(
+            "Model Provider returned invalid {} control metadata",
+            if reasoning {
+                "reasoning"
+            } else {
+                "service-tier"
+            }
+        )),
+    }
+}
+
+#[allow(
+    clippy::option_option,
+    reason = "generated portable optional fields distinguish omitted from explicit null"
+)]
+fn optional_tokens(value: Option<&Option<String>>) -> Result<Option<u64>, String> {
+    value
+        .and_then(Option::as_ref)
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| "Model Provider returned an invalid token limit".to_owned())
+        })
+        .transpose()
+}
+
+fn configured_model(
+    plugin_id: &str,
+    id: String,
+    selected_model: Option<&str>,
+) -> ModelCatalogEntry {
+    ModelCatalogEntry {
+        display_name: id.clone(),
+        description: "Configured model; Provider metadata is unavailable until selected".to_owned(),
+        hidden: false,
+        selected: selected_model == Some(id.as_str()),
+        default_reasoning_effort: None,
+        default_service_tier: None,
+        limits: ModelLimits {
             context_window_tokens: None,
             max_input_tokens: None,
             max_output_tokens: None,
-        }
-    }
-}
-
-fn model_capabilities(plugin_id: &str, model_id: &str) -> ModelCapabilities {
-    ModelCapabilities {
-        input_modalities: vec![ModelInputModality::Text],
-        text_output: true,
-        tool_calls: true,
-        parallel_tool_calls: true,
-        reasoning: if plugin_id == CODEX_DIRECT_PLUGIN && model_id.starts_with("gpt-5") {
-            ModelReasoningControl::Selectable {
-                efforts: (match model_id {
-                    "gpt-5.6-sol" => {
-                        vec!["low", "medium", "high", "xhigh", "max", "ultra"]
-                    }
-                    "gpt-5.6-luna" => vec!["low", "medium", "high", "xhigh", "max"],
-                    _ => vec!["low", "medium", "high", "xhigh"],
-                })
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
-            }
-        } else {
-            ModelReasoningControl::Unsupported
         },
-        service_tiers: if plugin_id == CODEX_DIRECT_PLUGIN
-            && matches!(model_id, "gpt-5.6-sol" | "gpt-5.6-luna")
-        {
-            ModelServiceTierControl::Selectable {
-                tiers: vec!["fast".to_owned()],
-            }
-        } else {
-            ModelServiceTierControl::Unsupported
+        capabilities: ModelCapabilities {
+            input_modalities: vec![ModelInputModality::Text],
+            text_output: true,
+            tool_calls: true,
+            parallel_tool_calls: true,
+            reasoning: ModelReasoningControl::Unknown,
+            service_tiers: ModelServiceTierControl::Unknown,
         },
-    }
-}
-
-fn wire_protocol(plugin_id: &str) -> ModelWireProtocol {
-    match plugin_id {
-        CODEX_DIRECT_PLUGIN => ModelWireProtocol::OpenaiResponses,
-        OPENAI_COMPATIBLE_PLUGIN => ModelWireProtocol::OpenaiChatCompletions,
-        _ => ModelWireProtocol::Fixture,
+        wire_protocol: match plugin_id {
+            CODEX_DIRECT_PLUGIN => ModelWireProtocol::OpenaiResponses,
+            OPENAI_COMPATIBLE_PLUGIN => ModelWireProtocol::OpenaiChatCompletions,
+            _ => ModelWireProtocol::Fixture,
+        },
+        compaction_compatibility: "generic-text-v1".to_owned(),
+        id,
     }
 }
 
@@ -615,27 +723,15 @@ mod tests {
     }
 
     #[test]
-    fn direct_model_controls_are_model_specific() {
-        let sol = model_capabilities(CODEX_DIRECT_PLUGIN, "gpt-5.6-sol");
+    fn unselected_models_do_not_claim_provider_metadata() {
+        let model = configured_model(CODEX_DIRECT_PLUGIN, "gpt-next".to_owned(), None);
         assert!(matches!(
-            sol.service_tiers,
-            ModelServiceTierControl::Selectable { ref tiers } if tiers == &["fast"]
+            model.capabilities.reasoning,
+            ModelReasoningControl::Unknown
         ));
         assert!(matches!(
-            sol.reasoning,
-            ModelReasoningControl::Selectable { ref efforts }
-                if efforts.last().map(String::as_str) == Some("ultra")
-        ));
-
-        let luna = model_capabilities(CODEX_DIRECT_PLUGIN, "gpt-5.6-luna");
-        assert!(matches!(
-            luna.service_tiers,
-            ModelServiceTierControl::Selectable { ref tiers } if tiers == &["fast"]
-        ));
-        assert!(matches!(
-            luna.reasoning,
-            ModelReasoningControl::Selectable { ref efforts }
-                if efforts.last().map(String::as_str) == Some("max")
+            model.capabilities.service_tiers,
+            ModelServiceTierControl::Unknown
         ));
     }
 }
