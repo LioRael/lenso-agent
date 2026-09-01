@@ -188,7 +188,7 @@ fn spawn_model_server() -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
             .set_read_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let (headers, body) = read_request_parts(&mut stream);
-        assert!(headers.starts_with("GET /codex/models?client_version=0.1.0 HTTP/1.1"));
+        assert!(headers.starts_with("GET /codex/models?client_version=99.99.99 HTTP/1.1"));
         assert!(body.is_empty());
         let lower = headers.to_ascii_lowercase();
         assert!(lower.contains("authorization: bearer direct-access-secret"));
