@@ -28,16 +28,18 @@ Status: experimental direct-provider baseline.
 - **Deletion boundary:** removes direct Codex model discovery, Responses request
   conversion, subscription headers, SSE decoding, and provider-error
   translation.
-- **Owned facts:** allowed backend URL, discovered model metadata, optional model
-  allowlist, selected model, Responses wire mapping, event bound, and sanitized
-  status policy.
+- **Owned facts:** allowed backend URL, discovered model metadata, Provider and
+  App visibility, selected model, Responses wire mapping, event bound, and
+  sanitized status policy.
 - **Provides:** `lenso.agent.model@2.2` (`catalog`, request; `complete`, stream).
 - **Requires:** exactly one `lenso.agent.auth.openai-codex@1` provider selected
   by the Host Profile.
-- **Configuration:** official backend base URL, selected model, optional
-  `allowed_models` restriction, reasoning effort, and maximum SSE event bytes.
-  With no allowlist, all Provider-discovered models are admitted. The shipped
-  Profile selects `gpt-5.6-luna` with medium reasoning.
+- **Configuration:** official backend base URL, selected model, optional exact
+  `include_models`/`exclude_models` visibility policy, reasoning effort, and
+  maximum SSE event bytes. All valid Provider-discovered models remain in the
+  frozen catalog. Legacy `allowed_models` is accepted only as a deprecated
+  no-op migration input. The shipped Profile selects `gpt-5.6-luna` with medium
+  reasoning.
 - **Lifecycle/resources:** activation constructs the generated Auth client only
   from `PluginDependencies`, fetches and validates the authenticated model
   catalog, then freezes it for the candidate Generation. Every completion owns

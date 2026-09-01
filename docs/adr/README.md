@@ -92,3 +92,4 @@
 - [0090 — Compose terminal commands through Capabilities](0090-compose-terminal-commands-through-capabilities.md)
 - [0091 — Distribute installable Lenso Agent releases](0091-distribute-installable-agent-releases.md)
 - [0092 — Discover selected Provider models at Generation readiness](0092-discover-selected-provider-models-at-generation-readiness.md)
+- [0093 — Separate Provider model facts from visibility](0093-separate-provider-model-facts-from-visibility.md)

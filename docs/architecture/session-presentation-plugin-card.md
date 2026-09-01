@@ -33,9 +33,11 @@ values live in `plugins/lenso.agent.session-presentation.model/<instance>.toml`;
 a Profile only selects that configured Instance.
 
 The requested model is still authorized by the bound Model provider. A Model
-provider rejects an unconfigured model ID. The built-in OpenAI-compatible and
-direct Codex Providers accept their primary `model` plus an explicit bounded
-`allowed_models` list, allowing one Profile to use a cheaper presentation
+provider rejects an unavailable model ID. The built-in OpenAI-compatible
+Provider accepts its primary `model` plus an explicit bounded `allowed_models`
+list. The direct Codex Provider instead admits its frozen discovered catalog;
+its optional `include_models`/`exclude_models` fields affect ordinary selector
+visibility only. Either path allows one Profile to use a cheaper presentation
 model without changing the Agent Loop model. Session Presentation never reads
 credentials or calls a provider transport directly.
 

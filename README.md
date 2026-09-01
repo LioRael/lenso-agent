@@ -375,11 +375,13 @@ instances = [
 
 The model request goes through the Profile's Plan-bound Model provider, which
 must admit the configured model ID. The Codex Provider discovers its models and
-controls while the candidate Generation enters the Ready Gate. With no
-`allowed_models` setting, all discovered models are admitted. To restrict a
-Profile, configure `allowed_models`; the selected primary model is always kept
-and other unlisted IDs fail closed. Select both configured Instances in the
-Profile when a cheaper admitted model should own presentation. `/rename
+controls while the candidate Generation enters the Ready Gate. All valid
+discovered models remain in that frozen catalog. App owners may use exact-ID
+`include_models` and `exclude_models` settings to control ordinary selector
+visibility without erasing Provider facts; the selected primary model always
+remains visible. Legacy `allowed_models` is a deprecated migration input and no
+longer filters discovery. Select both configured Instances in the Profile when
+a cheaper admitted model should own presentation. `/rename
 <title>` remains authoritative and is never overwritten by automatic
 projection.
 

@@ -518,20 +518,22 @@ fn configuration_models_value(configuration: &serde_json::Value) -> Result<Vec<S
                 .to_owned(),
         );
     }
-    if let Some(allowed) = object.get("allowed_models") {
-        let allowed = allowed
-            .as_array()
-            .ok_or_else(|| "Model configuration allowed_models must be an array".to_owned())?;
-        for model in allowed {
-            models.push(
-                model
-                    .as_str()
-                    .filter(|model| !model.is_empty())
-                    .ok_or_else(|| {
-                        "Model configuration has an invalid auxiliary model identity".to_owned()
-                    })?
-                    .to_owned(),
-            );
+    for key in ["allowed_models", "include_models"] {
+        if let Some(configured) = object.get(key) {
+            let configured = configured
+                .as_array()
+                .ok_or_else(|| format!("Model configuration {key} must be an array"))?;
+            for model in configured {
+                models.push(
+                    model
+                        .as_str()
+                        .filter(|model| !model.is_empty())
+                        .ok_or_else(|| {
+                            "Model configuration has an invalid auxiliary model identity".to_owned()
+                        })?
+                        .to_owned(),
+                );
+            }
         }
     }
     Ok(models)
@@ -733,5 +735,16 @@ mod tests {
             model.capabilities.service_tiers,
             ModelServiceTierControl::Unknown
         ));
+    }
+
+    #[test]
+    fn configured_model_projection_reads_include_models_during_unselected_inspection() {
+        let models = configuration_models_value(&serde_json::json!({
+            "model": "gpt-primary",
+            "include_models": ["gpt-visible"]
+        }))
+        .unwrap();
+
+        assert_eq!(models, ["gpt-primary", "gpt-visible"]);
     }
 }

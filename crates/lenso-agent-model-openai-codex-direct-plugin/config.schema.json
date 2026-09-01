@@ -7,6 +7,15 @@
     "base_url": { "type": "string" },
     "model": { "type": "string" },
     "allowed_models": {
+      "deprecated": true,
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "include_models": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "exclude_models": {
       "type": "array",
       "items": { "type": "string" }
     },
