@@ -178,6 +178,86 @@ fn missing_direct_credential_rejects_generation_readiness_without_starting_http(
     assert!(!stderr.contains("direct-refresh-secret"));
 }
 
+#[test]
+fn direct_model_revalidates_and_uses_a_bounded_stale_catalog_cache() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Cached catalog\n").unwrap();
+    let credential = temporary.path().join("credential.json");
+    write_credential(&credential);
+    let (base_url, server) = spawn_catalog_cache_server();
+    let plan = test_plan(temporary.path(), &base_url, &credential);
+
+    for prompt in ["First catalog.", "Revalidated catalog.", "Stale catalog."] {
+        let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+            .current_dir(temporary.path())
+            .env("LENSO_AGENT_HOME", temporary.path())
+            .args(["--plan", plan.to_str().unwrap()])
+            .args(["--prompt", prompt])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let catalog_headers = server.join().unwrap();
+    assert!(
+        !catalog_headers[0]
+            .to_ascii_lowercase()
+            .contains("if-none-match")
+    );
+    for headers in &catalog_headers[1..] {
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("if-none-match: \"catalog-v1\"")
+        );
+    }
+    let cache = temporary
+        .path()
+        .join("runtime/model-catalog/openai-codex-direct.json");
+    let cache: serde_json::Value = serde_json::from_slice(&fs::read(cache).unwrap()).unwrap();
+    assert_eq!(cache["schema"], "lenso.agent.model-catalog-cache.v1");
+    assert_eq!(cache["revision"], "\"catalog-v1\"");
+    assert!(cache["source_key"].as_str().unwrap().starts_with("sha256:"));
+    assert!(!cache.to_string().contains("account-test-1"));
+}
+
+fn spawn_catalog_cache_server() -> (String, thread::JoinHandle<Vec<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let mut catalog_headers = Vec::new();
+        for catalog_status in [200_u16, 304, 503] {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let (headers, body) = read_request_parts(&mut stream);
+            assert!(headers.starts_with("GET /codex/models?client_version=99.99.99 HTTP/1.1"));
+            assert!(body.is_empty());
+            catalog_headers.push(headers);
+            match catalog_status {
+                200 => write_json_response(&mut stream, model_catalog_response().as_bytes()),
+                304 => write_empty_response(&mut stream, 304, "Not Modified"),
+                503 => write_empty_response(&mut stream, 503, "Service Unavailable"),
+                _ => unreachable!(),
+            }
+
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let _ = read_request(&mut stream);
+            write_response(&mut stream, text_response().as_bytes());
+        }
+        catalog_headers
+    });
+    (format!("http://{address}"), server)
+}
+
 fn spawn_model_server() -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -257,6 +337,15 @@ fn write_json_response(stream: &mut TcpStream, body: &[u8]) {
     )
     .unwrap();
     stream.write_all(body).unwrap();
+    stream.flush().unwrap();
+}
+
+fn write_empty_response(stream: &mut TcpStream, status: u16, reason: &str) {
+    write!(
+        stream,
+        "HTTP/1.1 {status} {reason}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+    )
+    .unwrap();
     stream.flush().unwrap();
 }
 

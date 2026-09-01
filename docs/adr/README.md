@@ -94,3 +94,4 @@
 - [0092 — Discover selected Provider models at Generation readiness](0092-discover-selected-provider-models-at-generation-readiness.md)
 - [0093 — Separate Provider model facts from visibility](0093-separate-provider-model-facts-from-visibility.md)
 - [0094 — Model reasoning controls as typed Turn options](0094-model-reasoning-controls-as-typed-turn-options.md)
+- [0095 — Freeze Model catalog freshness provenance](0095-freeze-model-catalog-freshness-provenance.md)

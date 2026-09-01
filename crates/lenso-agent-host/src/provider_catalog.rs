@@ -1,14 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use lenso_agent_loop_plugin::{
-    ModelCapabilities, ModelControlOption, ModelInputModality, ModelLimits, ModelReasoningControl,
+    ModelCapabilities, ModelCatalogFreshness, ModelCatalogProvenance, ModelCatalogSource,
+    ModelControlOption, ModelInputModality, ModelLimits, ModelReasoningControl,
     ModelServiceTierControl, ModelWireProtocol, ResolvedTurnProfile,
 };
 use lenso_app_plan::{ResolvedAppPlan, authoring::HostCatalog};
 use lenso_capability_agent_model as model_contract;
 use serde::{Deserialize, Serialize};
 
-const MODEL_CAPABILITY: &str = "lenso.agent.model@3";
+const MODEL_CAPABILITY: &str = "lenso.agent.model@4";
+const MAX_CATALOG_STALE_SECONDS: u64 = 7 * 24 * 60 * 60;
 const FIXTURE_PLUGIN: &str = "lenso.agent.model.fixture";
 const OPENAI_COMPATIBLE_PLUGIN: &str = "lenso.agent.model.openai-compatible";
 const CODEX_DIRECT_PLUGIN: &str = "lenso.agent.model.openai-codex-direct";
@@ -19,6 +21,7 @@ const CODEX_DIRECT_PLUGIN: &str = "lenso.agent.model.openai-codex-direct";
 pub struct ProviderModelCatalog {
     pub schema: String,
     pub catalog_revision: String,
+    pub catalog_provenance: Option<ModelCatalogProvenance>,
     pub resolved_turn_profile: Option<ResolvedTurnProfile>,
     pub providers: Vec<ModelProviderCatalogEntry>,
 }
@@ -99,6 +102,7 @@ impl ProviderModelCatalog {
         )?;
         Ok(ResolvedTurnProfile {
             catalog_revision: self.catalog_revision.clone(),
+            catalog_provenance: self.catalog_provenance.clone(),
             provider_id: current.provider_id.clone(),
             provider_instance: current.provider_instance.clone(),
             model: model.id.clone(),
@@ -329,6 +333,9 @@ pub(crate) fn project(
     catalog_revision: &str,
     selected_catalog: Option<&model_contract::CatalogResponse>,
 ) -> Result<ProviderModelCatalog, String> {
+    let catalog_provenance = selected_catalog
+        .map(|catalog| project_catalog_provenance(&catalog.provenance))
+        .transpose()?;
     let selected_instance = selected_model_instance(plan)?;
     let selected_configuration = selected_instance.as_deref().and_then(|instance| {
         plan.plugin_instances()
@@ -373,10 +380,12 @@ pub(crate) fn project(
         selected_reasoning_effort,
         selected_service_tier,
         catalog_revision,
+        catalog_provenance.as_ref(),
     )?;
     Ok(ProviderModelCatalog {
-        schema: "lenso.agent.provider-model-catalog.v2".to_owned(),
+        schema: "lenso.agent.provider-model-catalog.v3".to_owned(),
         catalog_revision: catalog_revision.to_owned(),
+        catalog_provenance,
         resolved_turn_profile,
         providers,
     })
@@ -495,6 +504,7 @@ fn resolved_turn_profile(
     reasoning_effort: Option<String>,
     service_tier: Option<String>,
     catalog_revision: &str,
+    catalog_provenance: Option<&ModelCatalogProvenance>,
 ) -> Result<Option<ResolvedTurnProfile>, String> {
     let (Some(selected_instance), Some(selected_model)) = (selected_instance, selected_model)
     else {
@@ -533,6 +543,7 @@ fn resolved_turn_profile(
     )?;
     Ok(Some(ResolvedTurnProfile {
         catalog_revision: catalog_revision.to_owned(),
+        catalog_provenance: catalog_provenance.cloned(),
         provider_id: provider.provider_id.clone(),
         provider_instance: selected_instance.to_owned(),
         model: selected_model.to_owned(),
@@ -545,6 +556,99 @@ fn resolved_turn_profile(
         wire_protocol: model.wire_protocol,
         compaction_compatibility: model.compaction_compatibility.clone(),
     }))
+}
+
+fn project_catalog_provenance(
+    provenance: &model_contract::CatalogProvenance,
+) -> Result<ModelCatalogProvenance, String> {
+    let source = match provenance.source {
+        model_contract::CatalogSource::Live => ModelCatalogSource::Live,
+        model_contract::CatalogSource::Cache => ModelCatalogSource::Cache,
+        model_contract::CatalogSource::Configured => ModelCatalogSource::Configured,
+    };
+    let freshness = match provenance.freshness {
+        model_contract::CatalogFreshness::Fresh => ModelCatalogFreshness::Fresh,
+        model_contract::CatalogFreshness::Revalidated => ModelCatalogFreshness::Revalidated,
+        model_contract::CatalogFreshness::Stale => ModelCatalogFreshness::Stale,
+    };
+    let fetched_at_unix_seconds = portable_u64(
+        provenance.fetched_at_unix_seconds.as_ref(),
+        "catalog fetched_at_unix_seconds",
+    )?;
+    let validated_at_unix_seconds = portable_u64(
+        provenance.validated_at_unix_seconds.as_ref(),
+        "catalog validated_at_unix_seconds",
+    )?;
+    let max_stale_seconds = portable_u64(
+        provenance.max_stale_seconds.as_ref(),
+        "catalog max_stale_seconds",
+    )?;
+    let revision = provenance
+        .revision
+        .as_ref()
+        .and_then(Option::as_ref)
+        .cloned();
+    if revision
+        .as_deref()
+        .is_some_and(|value| value.trim() != value || value.is_empty() || value.len() > 256)
+        || max_stale_seconds.is_some_and(|value| value > MAX_CATALOG_STALE_SECONDS)
+    {
+        return Err("selected Model Provider returned invalid catalog provenance".to_owned());
+    }
+    match source {
+        ModelCatalogSource::Configured
+            if freshness == ModelCatalogFreshness::Fresh
+                && fetched_at_unix_seconds.is_none()
+                && validated_at_unix_seconds.is_none()
+                && revision.is_none()
+                && max_stale_seconds.is_none() => {}
+        ModelCatalogSource::Live
+            if freshness == ModelCatalogFreshness::Fresh
+                && fetched_at_unix_seconds.is_some()
+                && validated_at_unix_seconds.is_some()
+                && revision.is_some()
+                && max_stale_seconds.is_some() => {}
+        ModelCatalogSource::Cache
+            if matches!(
+                freshness,
+                ModelCatalogFreshness::Revalidated | ModelCatalogFreshness::Stale
+            ) && fetched_at_unix_seconds.is_some()
+                && validated_at_unix_seconds.is_some()
+                && revision.is_some()
+                && max_stale_seconds.is_some() => {}
+        _ => {
+            return Err(
+                "selected Model Provider returned inconsistent catalog provenance".to_owned(),
+            );
+        }
+    }
+    if freshness == ModelCatalogFreshness::Stale {
+        let fetched = fetched_at_unix_seconds.expect("stale cache requires fetched time");
+        let validated = validated_at_unix_seconds.expect("stale cache requires validation time");
+        let maximum = max_stale_seconds.expect("stale cache requires a maximum age");
+        if validated < fetched || validated - fetched > maximum {
+            return Err("selected Model Provider returned over-age catalog provenance".to_owned());
+        }
+    }
+    Ok(ModelCatalogProvenance {
+        source,
+        freshness,
+        fetched_at_unix_seconds,
+        validated_at_unix_seconds,
+        revision,
+        max_stale_seconds,
+    })
+}
+
+fn portable_u64(value: Option<&Option<String>>, field: &str) -> Result<Option<u64>, String> {
+    value
+        .and_then(Option::as_ref)
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("selected Model Provider returned invalid {field}"))
+        })
+        .transpose()
 }
 
 fn validate_selected_variant(
@@ -927,6 +1031,59 @@ fn configured_model(
 mod tests {
     use super::*;
 
+    fn cache_provenance(
+        freshness: model_contract::CatalogFreshness,
+        fetched: u64,
+        validated: u64,
+        maximum: u64,
+    ) -> model_contract::CatalogProvenance {
+        model_contract::CatalogProvenance {
+            source: model_contract::CatalogSource::Cache,
+            freshness,
+            fetched_at_unix_seconds: Some(Some(fetched.to_string())),
+            validated_at_unix_seconds: Some(Some(validated.to_string())),
+            revision: Some(Some("\"catalog-v1\"".to_owned())),
+            max_stale_seconds: Some(Some(maximum.to_string())),
+        }
+    }
+
+    #[test]
+    fn stale_catalog_provenance_is_bounded_and_projected() {
+        let projected = project_catalog_provenance(&cache_provenance(
+            model_contract::CatalogFreshness::Stale,
+            100,
+            160,
+            60,
+        ))
+        .unwrap();
+        assert_eq!(projected.source, ModelCatalogSource::Cache);
+        assert_eq!(projected.freshness, ModelCatalogFreshness::Stale);
+        assert_eq!(projected.fetched_at_unix_seconds, Some(100));
+        assert_eq!(projected.validated_at_unix_seconds, Some(160));
+    }
+
+    #[test]
+    fn over_age_or_inconsistent_catalog_provenance_fails_closed() {
+        assert!(
+            project_catalog_provenance(&cache_provenance(
+                model_contract::CatalogFreshness::Stale,
+                100,
+                161,
+                60,
+            ))
+            .is_err()
+        );
+        let configured_with_fetch = model_contract::CatalogProvenance {
+            source: model_contract::CatalogSource::Configured,
+            freshness: model_contract::CatalogFreshness::Fresh,
+            fetched_at_unix_seconds: Some(Some("100".to_owned())),
+            validated_at_unix_seconds: None,
+            revision: None,
+            max_stale_seconds: None,
+        };
+        assert!(project_catalog_provenance(&configured_with_fetch).is_err());
+    }
+
     fn option(id: &str, name: &str) -> model_contract::CatalogControlOption {
         model_contract::CatalogControlOption {
             id: id.to_owned(),
@@ -981,6 +1138,7 @@ mod tests {
         let model = model_with_reasoning(reasoning);
         let profile = ResolvedTurnProfile {
             catalog_revision: format!("sha256:{}", "a".repeat(64)),
+            catalog_provenance: None,
             provider_id: "fixture".to_owned(),
             provider_instance: "lenso.agent.model.fixture/model".to_owned(),
             model: model.id.clone(),
@@ -994,8 +1152,9 @@ mod tests {
             compaction_compatibility: model.compaction_compatibility.clone(),
         };
         ProviderModelCatalog {
-            schema: "lenso.agent.provider-model-catalog.v1".to_owned(),
+            schema: "lenso.agent.provider-model-catalog.v3".to_owned(),
             catalog_revision: profile.catalog_revision.clone(),
+            catalog_provenance: None,
             resolved_turn_profile: Some(profile),
             providers: vec![ModelProviderCatalogEntry {
                 provider_id: "fixture".to_owned(),

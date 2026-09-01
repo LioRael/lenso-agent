@@ -68,12 +68,14 @@ async fn streams_lists_and_branches_a_durable_session() {
         .json::<serde_json::Value>()
         .await
         .unwrap();
-    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v2");
+    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v3");
     assert!(
         models["catalog_revision"]
             .as_str()
             .is_some_and(|revision| revision.starts_with("sha256:"))
     );
+    assert_eq!(models["catalog_provenance"]["source"], "configured");
+    assert_eq!(models["catalog_provenance"]["freshness"], "fresh");
     let fixture = models["providers"]
         .as_array()
         .unwrap()
@@ -118,6 +120,10 @@ async fn streams_lists_and_branches_a_durable_session() {
     assert_eq!(
         models["resolved_turn_profile"]["catalog_revision"],
         models["catalog_revision"]
+    );
+    assert_eq!(
+        models["resolved_turn_profile"]["catalog_provenance"],
+        models["catalog_provenance"]
     );
     assert!(!models.to_string().contains("credential"));
     fs::write(

@@ -3076,7 +3076,7 @@ done
         );
         assert_eq!(
             descriptor["required_capabilities"][1]["capability_id"],
-            "lenso.agent.model@3"
+            "lenso.agent.model@4"
         );
         assert_eq!(
             descriptor["required_capabilities"][2]["capability_id"],

@@ -1,8 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["models"],
+  "required": ["provenance", "models"],
   "properties": {
+    "provenance": {
+      "$ref": "#/$defs/CatalogProvenance"
+    },
     "models": {
       "type": "array",
       "maxItems": 128,
@@ -84,6 +87,10 @@
     "CatalogControlStatus": {
       "type": "string",
       "enum": ["unknown", "unsupported", "selectable"]
+    },
+    "CatalogFreshness": {
+      "type": "string",
+      "enum": ["fresh", "revalidated", "stale"]
     },
     "CatalogInputModality": {
       "type": "string",
@@ -178,6 +185,40 @@
         }
       },
       "additionalProperties": false
+    },
+    "CatalogProvenance": {
+      "type": "object",
+      "required": ["source", "freshness"],
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/CatalogSource"
+        },
+        "freshness": {
+          "$ref": "#/$defs/CatalogFreshness"
+        },
+        "fetched_at_unix_seconds": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        },
+        "validated_at_unix_seconds": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        },
+        "revision": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "max_stale_seconds": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        }
+      },
+      "additionalProperties": false
+    },
+    "CatalogSource": {
+      "type": "string",
+      "enum": ["live", "cache", "configured"]
     },
     "CatalogTokenBudget": {
       "type": "object",

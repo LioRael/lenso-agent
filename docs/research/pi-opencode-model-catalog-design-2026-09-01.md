@@ -362,3 +362,11 @@ bounded `budget_tokens`; the Host validates exactly one selection against the
 Generation-frozen catalog, stores it in Turn provenance, and forwards it to
 `complete`. Service tier remains independent. Existing effort callers retain
 an effort-only wrapper while richer API consumers use typed fields.
+
+[ADR-0095](../adr/0095-freeze-model-catalog-freshness-provenance.md)
+implements bounded snapshot reuse and explicit provenance as
+`lenso.agent.model@4`. The direct Codex Provider owns an atomic, identity-bound
+cache, uses ETag revalidation, and may admit a prior validated snapshot only for
+transient failures within configured stale bounds. The Host freezes
+live/cache/configured source and fresh/revalidated/stale status into the public
+catalog and each durable Turn profile.
