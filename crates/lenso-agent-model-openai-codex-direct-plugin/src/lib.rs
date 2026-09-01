@@ -27,6 +27,9 @@ use lenso_capability_agent_model::{
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
+// Codex's own catalog refresh uses this compatibility ceiling to request the
+// complete Provider catalog rather than filtering it by the caller's release.
+const CODEX_CATALOG_CLIENT_VERSION: &str = "99.99.99";
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 
@@ -90,7 +93,7 @@ impl DirectModelConfig {
         reqwest::Url::parse(&format!(
             "{}/codex/models?client_version={}",
             self.base_url.trim_end_matches('/'),
-            env!("CARGO_PKG_VERSION")
+            CODEX_CATALOG_CLIENT_VERSION
         ))
         .map_err(|_| invalid_plan("direct Codex catalog URL is invalid"))
     }
@@ -1027,6 +1030,23 @@ fn protocol_failure(detail: &str) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_request_uses_the_codex_compatibility_ceiling() {
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "gpt-current".to_owned(),
+            allowed_models: None,
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        };
+
+        assert_eq!(
+            config.catalog_endpoint().unwrap().as_str(),
+            "https://chatgpt.com/backend-api/codex/models?client_version=99.99.99"
+        );
+        assert_ne!(CODEX_CATALOG_CLIENT_VERSION, env!("CARGO_PKG_VERSION"));
+    }
 
     #[test]
     fn configured_auxiliary_model_is_admitted_without_changing_the_primary() {
