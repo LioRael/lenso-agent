@@ -7,7 +7,7 @@ Status: implementation baseline for the first executable slice.
 - **Deletion boundary:** removes deterministic model completion used by local
   proof and tests; no Agent, Tool, Session, or Kernel behavior changes.
 - **Owned facts:** fixture script and deterministic response policy.
-- **Provides:** `lenso.agent.model@2` (`complete`, stream).
+- **Provides:** `lenso.agent.model@3` (`catalog`, request; `complete`, stream).
 - **Requires:** none.
 - **Configuration:** exact fixture model name.
 - **Lifecycle/resources:** endpoint-only; no durable state or managed work.
@@ -130,7 +130,7 @@ Status: implementation baseline for the first executable slice.
 - **Owned facts:** active Turn exclusion, bounded autonomous execution segments,
   maximum model steps/tool calls, message construction, and Session event intent.
 - **Provides:** `lenso.agent@3` (`run_turn`, stream).
-- **Requires:** exactly one `lenso.agent.model@2`, one
+- **Requires:** exactly one `lenso.agent.model@3`, one
   `lenso.agent.prompt@1`, one `lenso.agent.tools@2`, and one
   `lenso.agent.session@1`.
 - **Configuration:** model name, per-segment maximum steps and Tool calls,

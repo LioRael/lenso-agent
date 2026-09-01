@@ -721,6 +721,8 @@ impl McpClientPlugin {
                 CompleteOpen {
                     model: model.clone(),
                     reasoning_effort: None,
+                    reasoning_enabled: None,
+                    reasoning_budget_tokens: None,
                     service_tier: None,
                     messages,
                     tools,
@@ -3074,7 +3076,7 @@ done
         );
         assert_eq!(
             descriptor["required_capabilities"][1]["capability_id"],
-            "lenso.agent.model@2"
+            "lenso.agent.model@3"
         );
         assert_eq!(
             descriptor["required_capabilities"][2]["capability_id"],

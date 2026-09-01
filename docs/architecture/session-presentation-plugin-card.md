@@ -16,7 +16,7 @@ metadata while Turns continue normally.
 - **Deterministic implementation:** `lenso.agent.session-presentation`; local
   whitespace normalization and bounded extraction, with no requirements.
 - **Model implementation:** `lenso.agent.session-presentation.model`; requires
-  exactly one Plan-bound `lenso.agent.model@2` provider and requests no Tools.
+  exactly one Plan-bound `lenso.agent.model@3` provider and requests no Tools.
 - **Root Slot:** optional, replaceable `session-presentation`.
 - **State and lifecycle:** stateless; no lifecycle hook or background task.
 - **Failure:** invalid input is a Domain Error. Model rejection, malformed

@@ -1502,6 +1502,16 @@ impl TurnGeneration {
         self.resolved_turn_profile.reasoning_effort.as_deref()
     }
 
+    /// Returns the Generation's default reasoning toggle, when configured.
+    pub const fn selected_reasoning_enabled(&self) -> Option<bool> {
+        self.resolved_turn_profile.reasoning_enabled
+    }
+
+    /// Returns the Generation's default reasoning token budget, when configured.
+    pub const fn selected_reasoning_budget_tokens(&self) -> Option<u64> {
+        self.resolved_turn_profile.reasoning_budget_tokens
+    }
+
     /// Returns the Generation's default service tier, when configured.
     pub fn selected_service_tier(&self) -> Option<&str> {
         self.resolved_turn_profile.service_tier.as_deref()
@@ -1543,11 +1553,34 @@ impl TurnGeneration {
         service_tier: Option<&str>,
         cancellation: CancellationToken,
     ) -> Result<InvocationContext, String> {
+        self.invocation_context_for_model_controls_with_cancellation(
+            model_id,
+            reasoning_effort,
+            None,
+            None,
+            service_tier,
+            cancellation,
+        )
+    }
+
+    /// Creates a controllable root context with one typed, catalog-validated reasoning control.
+    pub fn invocation_context_for_model_controls_with_cancellation(
+        &self,
+        model_id: Option<&str>,
+        reasoning_effort: Option<&str>,
+        reasoning_enabled: Option<bool>,
+        reasoning_budget_tokens: Option<u64>,
+        service_tier: Option<&str>,
+        cancellation: CancellationToken,
+    ) -> Result<InvocationContext, String> {
         let model_id = model_id.unwrap_or(self.resolved_turn_profile.model.as_str());
-        match self
-            .model_catalog
-            .resolve_model_options(model_id, reasoning_effort, service_tier)
-        {
+        match self.model_catalog.resolve_model_controls(
+            model_id,
+            reasoning_effort,
+            reasoning_enabled,
+            reasoning_budget_tokens,
+            service_tier,
+        ) {
             Ok(profile) => self.invocation_context_with_profile(cancellation, &profile),
             Err(error)
                 if model_id != self.resolved_turn_profile.model
@@ -1562,9 +1595,12 @@ impl TurnGeneration {
                         "{error}; no Model Selection Plugin is bound for dynamic policy `{model_id}`"
                     ));
                 }
-                let candidates = self
-                    .model_catalog
-                    .resolve_model_candidates(reasoning_effort, service_tier);
+                let candidates = self.model_catalog.resolve_model_control_candidates(
+                    reasoning_effort,
+                    reasoning_enabled,
+                    reasoning_budget_tokens,
+                    service_tier,
+                );
                 if candidates.is_empty() {
                     return Err(
                         "no admitted model accepts the requested dynamic inference controls"
@@ -3483,7 +3519,7 @@ mod tests {
         assert!(bindings.iter().any(|binding| {
             binding["consumer_instance"] == "lenso.agent.session-presentation.model/semantic"
                 && binding["provider_instance"] == "lenso.agent.model.fixture/model"
-                && binding["capability_id"] == "lenso.agent.model@2"
+                && binding["capability_id"] == "lenso.agent.model@3"
         }));
         assert!(bindings.iter().any(|binding| {
             binding["consumer_instance"] == "lenso.agent.loop/agent"

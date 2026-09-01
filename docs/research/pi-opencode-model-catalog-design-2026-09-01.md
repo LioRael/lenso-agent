@@ -298,7 +298,7 @@ These are recommendations, not descriptions of existing behavior.
    must never change stored Provider facts.
 
 4. **Generalize reasoning metadata before adding more model-name branches.** A
-   compatible next contract should distinguish `effort { values }`, `toggle`,
+   typed next contract should distinguish `effort { values }`, `toggle`,
    and `budget_tokens { min, max, default }`. Providers map those controls to
    transport fields. Existing discrete reasoning levels can remain a derived
    UI projection.
@@ -344,7 +344,7 @@ These are recommendations, not descriptions of existing behavior.
 - CLI, TUI, Web, and ACP expose identical model/control sets for the same
   Generation digest.
 
-## First implemented slice
+## Implemented slices
 
 [ADR-0093](../adr/0093-separate-provider-model-facts-from-visibility.md)
 implements the first recommendation without changing the portable Model
@@ -353,3 +353,12 @@ projects exact-ID `include_models`/`exclude_models` through the existing
 `hidden` fact, and treats legacy `allowed_models` as a deprecated no-op
 migration input. Catalog admission and validation remain frozen with the
 Generation; visibility no longer erases Provider facts.
+
+[ADR-0094](../adr/0094-model-reasoning-controls-as-typed-turn-options.md)
+implements the reasoning recommendation as `lenso.agent.model@3`. Strict
+response schemas make richer Catalog output a major evolution rather than a
+compatible 2.x minor. The contract now represents `effort`, `toggle`, and
+bounded `budget_tokens`; the Host validates exactly one selection against the
+Generation-frozen catalog, stores it in Turn provenance, and forwards it to
+`complete`. Service tier remains independent. Existing effort callers retain
+an effort-only wrapper while richer API consumers use typed fields.

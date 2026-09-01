@@ -309,6 +309,8 @@ async fn classify(
             CompleteOpen {
                 model: classifier_model.to_owned(),
                 reasoning_effort: None,
+                reasoning_enabled: None,
+                reasoning_budget_tokens: None,
                 service_tier: None,
                 messages: vec![
                     CompleteMessageInput {

@@ -10,7 +10,7 @@ Status: implementation baseline for the first real provider slice.
 - **Owned facts:** selected provider base URL, one allowed model, logical API
   key reference, Chat Completions wire mapping, stream assembly, and sanitized
   provider failure policy.
-- **Provides:** `lenso.agent.model@2` (`complete`, stream).
+- **Provides:** `lenso.agent.model@3` (`catalog`, request; `complete`, stream).
 - **Requires:** exactly one `lenso.secrets@1` provider selected by Composition.
 - **Configuration:** HTTPS base URL (or loopback HTTP for tests), model name,
   and logical secret reference. No resolved credential is configuration.

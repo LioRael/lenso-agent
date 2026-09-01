@@ -105,13 +105,37 @@ pub enum ModelInputModality {
     Audio,
 }
 
-/// Whether and how one model accepts a reasoning-effort selection.
+/// One Provider-authored option for a portable Model control.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelControlOption {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
+/// Whether and how one model accepts a reasoning selection.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
 pub enum ModelReasoningControl {
     Unknown,
     Unsupported,
-    Selectable { efforts: Vec<String> },
+    Selectable {
+        efforts: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<ModelControlOption>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        default: Option<String>,
+    },
+    Toggle {
+        default_enabled: bool,
+        options: Vec<ModelControlOption>,
+    },
+    BudgetTokens {
+        minimum: u64,
+        maximum: u64,
+        default: u64,
+    },
 }
 
 /// Whether and how one model accepts a provider service/speed tier.
@@ -153,6 +177,10 @@ pub struct ResolvedTurnProfile {
     pub provider_instance: String,
     pub model: String,
     pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_budget_tokens: Option<u64>,
     pub service_tier: Option<String>,
     pub limits: ModelLimits,
     pub capabilities: ModelCapabilities,
@@ -1433,6 +1461,18 @@ fn agent_behavior_provenance(
         })
 }
 
+fn complete_reasoning_selection(
+    profile: &ResolvedTurnProfile,
+) -> (Option<String>, Option<bool>, Option<String>) {
+    (
+        profile.reasoning_effort.clone(),
+        profile.reasoning_enabled,
+        profile
+            .reasoning_budget_tokens
+            .map(|value| value.to_string()),
+    )
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn execute_steps(
     clients: &AgentLoop,
@@ -1611,9 +1651,13 @@ async fn execute_steps(
         )
         .await?;
         acknowledge_pending_turn_inputs(pending_inputs, revision);
+        let (reasoning_effort, reasoning_enabled, reasoning_budget_tokens) =
+            complete_reasoning_selection(resolved_turn_profile);
         let mut model_request = CompleteOpen {
             model: resolved_turn_profile.model.clone(),
-            reasoning_effort: resolved_turn_profile.reasoning_effort.clone(),
+            reasoning_effort,
+            reasoning_enabled,
+            reasoning_budget_tokens,
             service_tier: resolved_turn_profile.service_tier.clone(),
             messages: messages.clone(),
             tools: tools.clone(),
@@ -4635,6 +4679,8 @@ mod tests {
             provider_instance: "lenso.agent.model.fixture/model".to_owned(),
             model: "fixture".to_owned(),
             reasoning_effort: None,
+            reasoning_enabled: None,
+            reasoning_budget_tokens: None,
             service_tier: None,
             limits: ModelLimits {
                 context_window_tokens: Some(4_096),
@@ -4682,6 +4728,8 @@ mod tests {
             provider_instance: "lenso.agent.model.fixture/model".to_owned(),
             model: "fixture".to_owned(),
             reasoning_effort: None,
+            reasoning_enabled: None,
+            reasoning_budget_tokens: None,
             service_tier: None,
             limits: ModelLimits {
                 context_window_tokens: None,
@@ -4699,6 +4747,23 @@ mod tests {
             wire_protocol: ModelWireProtocol::Fixture,
             compaction_compatibility: "generic-text-v1".to_owned(),
         }
+    }
+
+    #[test]
+    fn resolved_reasoning_selection_reaches_complete_request_fields() {
+        let mut toggle = compaction_test_profile(None);
+        toggle.reasoning_enabled = Some(false);
+        assert_eq!(
+            complete_reasoning_selection(&toggle),
+            (None, Some(false), None)
+        );
+
+        let mut budget = compaction_test_profile(None);
+        budget.reasoning_budget_tokens = Some(4096);
+        assert_eq!(
+            complete_reasoning_selection(&budget),
+            (None, None, Some("4096".to_owned()))
+        );
     }
 
     #[test]

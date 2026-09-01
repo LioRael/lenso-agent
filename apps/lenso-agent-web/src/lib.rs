@@ -45,7 +45,7 @@ use lenso_capability_terminal_command::{
     ExecuteMessage as TerminalExecuteMessage, ExecuteOpen as TerminalExecuteOpen,
     OutputKind as TerminalOutputKind,
 };
-use lenso_kernel::{CancellationToken, StreamEvent};
+use lenso_kernel::{CancellationToken, InvocationContext, StreamEvent};
 use lenso_terminal_cli_surface::{ParseOutcome, parse_line as parse_terminal_line};
 use lenso_terminal_command_plugin as _;
 use lenso_terminal_web_plugin as _;
@@ -426,6 +426,10 @@ struct WebTurnRequest {
     model: Option<String>,
     #[serde(default)]
     reasoning_effort: Option<String>,
+    #[serde(default)]
+    reasoning_enabled: Option<bool>,
+    #[serde(default)]
+    reasoning_budget_tokens: Option<u64>,
     request_id: String,
     #[serde(default)]
     session_id: Option<String>,
@@ -1419,6 +1423,12 @@ fn rename_problem(error: RenameSessionFailure) -> ApiProblem {
 }
 
 fn validate_turn_request(request: &WebTurnRequest) -> Result<(), ApiProblem> {
+    let reasoning_selections = usize::from(request.reasoning_effort.is_some())
+        + usize::from(request.reasoning_enabled.is_some())
+        + usize::from(request.reasoning_budget_tokens.is_some());
+    if reasoning_selections > 1 {
+        return Err(ApiProblem::bad_request("Select only one reasoning control"));
+    }
     if request.input.trim().is_empty() {
         return Err(ApiProblem::bad_request("Agent input must not be empty"));
     }
@@ -2620,6 +2630,21 @@ async fn run_turn_on_lease(
     }
 }
 
+fn turn_invocation_context(
+    turn: &lenso_agent_host::generation::TurnGeneration,
+    request: &WebTurnRequest,
+    cancellation: CancellationToken,
+) -> Result<InvocationContext, String> {
+    turn.invocation_context_for_model_controls_with_cancellation(
+        request.model.as_deref(),
+        request.reasoning_effort.as_deref(),
+        request.reasoning_enabled,
+        request.reasoning_budget_tokens,
+        request.service_tier.as_deref(),
+        cancellation,
+    )
+}
+
 async fn invoke_turn(
     turn: &lenso_agent_host::generation::TurnGeneration,
     request: WebTurnRequest,
@@ -2628,6 +2653,11 @@ async fn invoke_turn(
     allowed_tools: &[String],
 ) -> Result<(), String> {
     let requested_tools = resolve_turn_tools(request.allowed_tools.as_deref(), allowed_tools)?;
+    let context = RunScope::new(requested_tools)?.attach(turn_invocation_context(
+        turn,
+        &request,
+        cancellation.clone(),
+    )?)?;
     let requested_session_id = match (request.session_id, request.edit_turn_id) {
         (Some(session_id), Some(turn_id)) => {
             turn.fork_session_before_turn(session_id, turn_id).await?
@@ -2636,14 +2666,6 @@ async fn invoke_turn(
         (None, None) => turn.open_session().await?,
         (None, Some(_)) => return Err("Editing a message requires its source Session".to_owned()),
     };
-    let context = RunScope::new(requested_tools)?.attach(
-        turn.invocation_context_for_model_options_with_cancellation(
-            request.model.as_deref(),
-            request.reasoning_effort.as_deref(),
-            request.service_tier.as_deref(),
-            cancellation.clone(),
-        )?,
-    )?;
     let stream = turn
         .handle()
         .open_with_context(
@@ -3163,6 +3185,8 @@ mod tests {
                         input: "queued".to_owned(),
                         model: None,
                         reasoning_effort: None,
+                        reasoning_enabled: None,
+                        reasoning_budget_tokens: None,
                         request_id: format!("queued-{index}"),
                         session_id: None,
                         service_tier: None,
@@ -3182,6 +3206,8 @@ mod tests {
                     input: "overflow".to_owned(),
                     model: None,
                     reasoning_effort: None,
+                    reasoning_enabled: None,
+                    reasoning_budget_tokens: None,
                     request_id: "overflow".to_owned(),
                     session_id: None,
                     service_tier: None,
@@ -3206,6 +3232,8 @@ mod tests {
                         input: "queued".to_owned(),
                         model: None,
                         reasoning_effort: None,
+                        reasoning_enabled: None,
+                        reasoning_budget_tokens: None,
                         request_id: format!("queued-{index}"),
                         session_id: None,
                         service_tier: None,
@@ -3226,6 +3254,8 @@ mod tests {
                     input: "overflow".to_owned(),
                     model: None,
                     reasoning_effort: None,
+                    reasoning_enabled: None,
+                    reasoning_budget_tokens: None,
                     request_id: "overflow".to_owned(),
                     session_id: None,
                     service_tier: None,
@@ -3252,6 +3282,8 @@ mod tests {
                         input: "queued".to_owned(),
                         model: None,
                         reasoning_effort: None,
+                        reasoning_enabled: None,
+                        reasoning_budget_tokens: None,
                         request_id: request_id.to_owned(),
                         session_id: None,
                         service_tier: None,
@@ -3283,6 +3315,8 @@ mod tests {
                     input: "queued".to_owned(),
                     model: None,
                     reasoning_effort: None,
+                    reasoning_enabled: None,
+                    reasoning_budget_tokens: None,
                     request_id: request_id.to_owned(),
                     session_id: None,
                     service_tier: None,
@@ -3696,6 +3730,8 @@ mod tests {
                 input: "  ".to_owned(),
                 model: None,
                 reasoning_effort: None,
+                reasoning_enabled: None,
+                reasoning_budget_tokens: None,
                 request_id: "request-1".to_owned(),
                 session_id: None,
                 service_tier: None,
@@ -3709,6 +3745,8 @@ mod tests {
                 input: "x".repeat(MAX_PROMPT_BYTES + 1),
                 model: None,
                 reasoning_effort: None,
+                reasoning_enabled: None,
+                reasoning_budget_tokens: None,
                 request_id: "request-2".to_owned(),
                 session_id: None,
                 service_tier: None,
@@ -3726,6 +3764,25 @@ mod tests {
             validate_terminal_request(&WebTerminalRequest {
                 command_line: "sessions list".to_owned(),
                 request_id: "../terminal".to_owned(),
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_ambiguous_reasoning_controls() {
+        assert!(
+            validate_turn_request(&WebTurnRequest {
+                allowed_tools: None,
+                edit_turn_id: None,
+                input: "Summarize this".to_owned(),
+                model: Some("reasoning-model".to_owned()),
+                reasoning_effort: Some("high".to_owned()),
+                reasoning_enabled: Some(true),
+                reasoning_budget_tokens: None,
+                request_id: "request-reasoning".to_owned(),
+                session_id: None,
+                service_tier: None,
             })
             .is_err()
         );
