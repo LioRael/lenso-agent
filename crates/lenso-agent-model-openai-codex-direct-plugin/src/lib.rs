@@ -38,8 +38,13 @@ const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 struct DirectModelConfig {
     base_url: String,
     model: String,
+    /// Deprecated migration input. Catalog admission is now Provider-owned.
     #[serde(default)]
     allowed_models: Option<Vec<String>>,
+    #[serde(default)]
+    include_models: Option<Vec<String>>,
+    #[serde(default)]
+    exclude_models: Vec<String>,
     reasoning_effort: String,
     max_event_bytes: usize,
 }
@@ -47,19 +52,34 @@ struct DirectModelConfig {
 impl DirectModelConfig {
     fn validate(self) -> Result<Self, RuntimeFailure> {
         let allowed_models = self.allowed_models.as_deref().unwrap_or_default();
+        let include_models = self.include_models.as_deref().unwrap_or_default();
+        let exclude_models = self.exclude_models.as_slice();
+        let include_ids = include_models.iter().collect::<BTreeSet<_>>();
+        let exclude_ids = exclude_models.iter().collect::<BTreeSet<_>>();
         if !valid_model_id(&self.model)
             || allowed_models.len() > 128
+            || include_models.len() > 128
+            || exclude_models.len() > 128
             || allowed_models
                 .iter()
                 .any(|model| !valid_model_id(model) || model == &self.model)
             || allowed_models.iter().collect::<BTreeSet<_>>().len() != allowed_models.len()
+            || include_models
+                .iter()
+                .any(|model| !valid_model_id(model) || model == &self.model)
+            || include_ids.len() != include_models.len()
+            || exclude_models
+                .iter()
+                .any(|model| !valid_model_id(model) || model == &self.model)
+            || exclude_ids.len() != exclude_models.len()
+            || !include_ids.is_disjoint(&exclude_ids)
             || self.reasoning_effort.is_empty()
             || self.reasoning_effort.len() > 32
             || self.max_event_bytes == 0
             || self.max_event_bytes > MAX_EVENT_BYTES
         {
             return Err(invalid_plan(
-                "direct Codex model and max_event_bytes are invalid",
+                "direct Codex model, visibility policy, or max_event_bytes is invalid",
             ));
         }
         let endpoint = self.endpoint()?;
@@ -98,12 +118,19 @@ impl DirectModelConfig {
         .map_err(|_| invalid_plan("direct Codex catalog URL is invalid"))
     }
 
-    fn admits_model(&self, model: &str) -> bool {
-        model == self.model
-            || self
-                .allowed_models
-                .as_ref()
-                .is_some_and(|allowed| allowed.iter().any(|candidate| candidate == model))
+    fn model_is_visible(&self, model: &str) -> bool {
+        if model == self.model {
+            return true;
+        }
+        let included = self
+            .include_models
+            .as_ref()
+            .is_none_or(|models| models.iter().any(|candidate| candidate == model));
+        included
+            && !self
+                .exclude_models
+                .iter()
+                .any(|candidate| candidate == model)
     }
 }
 
@@ -343,12 +370,11 @@ fn project_codex_catalog(
     let mut ids = BTreeSet::new();
     let mut models = Vec::new();
     for model in response.models {
-        if model.visibility == "none"
-            || (!config.admits_model(&model.slug) && config.allowed_models.is_some())
-        {
+        if model.visibility == "none" {
             continue;
         }
-        let projected = project_codex_model(model)?;
+        let mut projected = project_codex_model(model)?;
+        projected.hidden |= !config.model_is_visible(&projected.id);
         if !ids.insert(projected.id.clone()) {
             return Err(invalid_plan(
                 "direct Codex model catalog contains duplicate models",
@@ -1037,6 +1063,8 @@ mod tests {
             base_url: DEFAULT_BASE_URL.to_owned(),
             model: "gpt-current".to_owned(),
             allowed_models: None,
+            include_models: None,
+            exclude_models: Vec::new(),
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         };
@@ -1049,19 +1077,129 @@ mod tests {
     }
 
     #[test]
-    fn configured_auxiliary_model_is_admitted_without_changing_the_primary() {
+    fn visibility_policy_keeps_the_primary_visible_and_separates_include_from_exclude() {
         let config = DirectModelConfig {
             base_url: DEFAULT_BASE_URL.to_owned(),
             model: "main-model".to_owned(),
-            allowed_models: Some(vec!["presentation-model".to_owned()]),
+            allowed_models: None,
+            include_models: Some(vec!["presentation-model".to_owned()]),
+            exclude_models: vec!["retired-model".to_owned()],
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
         .validate()
         .unwrap();
-        assert!(config.admits_model("main-model"));
-        assert!(config.admits_model("presentation-model"));
-        assert!(!config.admits_model("unreviewed-model"));
+        assert!(config.model_is_visible("main-model"));
+        assert!(config.model_is_visible("presentation-model"));
+        assert!(!config.model_is_visible("retired-model"));
+        assert!(!config.model_is_visible("unreviewed-model"));
+    }
+
+    #[test]
+    fn visibility_policy_rejects_overlap_and_hiding_the_primary() {
+        let overlapping = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: None,
+            include_models: Some(vec!["shared-model".to_owned()]),
+            exclude_models: vec!["shared-model".to_owned()],
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        };
+        assert!(overlapping.validate().is_err());
+
+        let primary_hidden = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: None,
+            include_models: None,
+            exclude_models: vec!["main-model".to_owned()],
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        };
+        assert!(primary_hidden.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_allowed_models_no_longer_filters_provider_facts() {
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: Some(vec!["legacy-auxiliary".to_owned()]),
+            include_models: None,
+            exclude_models: Vec::new(),
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        }
+        .validate()
+        .unwrap();
+
+        assert!(config.model_is_visible("new-provider-model"));
+    }
+
+    #[test]
+    fn catalog_retains_discovered_models_and_projects_visibility_separately() {
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: Some(vec!["legacy-model".to_owned()]),
+            include_models: Some(vec!["visible-model".to_owned()]),
+            exclude_models: vec!["excluded-model".to_owned()],
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        }
+        .validate()
+        .unwrap();
+        let catalog = project_codex_catalog(
+            &config,
+            CodexModelsResponse {
+                models: vec![
+                    catalog_model("main-model", "list"),
+                    catalog_model("visible-model", "list"),
+                    catalog_model("excluded-model", "list"),
+                    catalog_model("provider-hidden-model", "hide"),
+                    catalog_model("provider-absent-model", "none"),
+                ],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            catalog
+                .models
+                .iter()
+                .map(|model| (model.id.as_str(), model.hidden))
+                .collect::<Vec<_>>(),
+            [
+                ("main-model", false),
+                ("visible-model", false),
+                ("excluded-model", true),
+                ("provider-hidden-model", true),
+            ]
+        );
+    }
+
+    fn catalog_model(slug: &str, visibility: &str) -> CodexModel {
+        CodexModel {
+            slug: slug.to_owned(),
+            display_name: slug.to_owned(),
+            description: None,
+            default_reasoning_level: Some("medium".to_owned()),
+            supported_reasoning_levels: vec![CodexReasoningEffort {
+                effort: "medium".to_owned(),
+                description: "Balanced".to_owned(),
+            }],
+            visibility: visibility.to_owned(),
+            additional_speed_tiers: Vec::new(),
+            service_tiers: Vec::new(),
+            default_service_tier: None,
+            supports_parallel_tool_calls: true,
+            context_window: Some(272_000),
+            max_context_window: None,
+            effective_context_window_percent: 95,
+            comp_hash: None,
+            input_modalities: vec!["text".to_owned()],
+        }
     }
 
     #[test]
@@ -1070,6 +1208,8 @@ mod tests {
             base_url: DEFAULT_BASE_URL.to_owned(),
             model: "gpt-current".to_owned(),
             allowed_models: None,
+            include_models: None,
+            exclude_models: Vec::new(),
             reasoning_effort: "high".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
