@@ -9,8 +9,40 @@ pub struct CatalogRequest {}
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
 pub struct CatalogResponse {
+    pub provenance: CatalogProvenance,
     #[schemars(length(min = 1, max = 128))]
     pub models: Vec<CatalogModel>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogProvenance {
+    pub source: CatalogSource,
+    pub freshness: CatalogFreshness,
+    #[schemars(extend("format" = "uint64"))]
+    pub fetched_at_unix_seconds: Option<String>,
+    #[schemars(extend("format" = "uint64"))]
+    pub validated_at_unix_seconds: Option<String>,
+    #[schemars(length(min = 1, max = 256))]
+    pub revision: Option<String>,
+    #[schemars(extend("format" = "uint64"))]
+    pub max_stale_seconds: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogSource {
+    Live,
+    Cache,
+    Configured,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CatalogFreshness {
+    Fresh,
+    Revalidated,
+    Stale,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -244,8 +276,8 @@ pub struct ProviderFailurePayload {
 
 #[lenso::capability(
     id = "lenso.agent.model",
-    major = 3,
-    version = "3.0.0",
+    major = 4,
+    version = "4.0.0",
     portable = true,
     cross_lane_transfer = false
 )]

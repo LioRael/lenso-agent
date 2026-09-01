@@ -2054,6 +2054,10 @@ fn default_loop_allows_more_than_sixteen_tool_calls() {
         turn_payload["resolved_turn_profile"]["catalog_revision"],
         turn_payload["generation_spec_digest"]
     );
+    assert_eq!(
+        turn_payload["resolved_turn_profile"]["catalog_provenance"]["source"],
+        "configured"
+    );
     let tool_requests = state["events"]
         .as_array()
         .unwrap()

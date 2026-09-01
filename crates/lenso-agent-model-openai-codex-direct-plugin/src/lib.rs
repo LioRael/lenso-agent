@@ -4,8 +4,11 @@ use std::{
     any::Any,
     cell::{Cell, RefCell},
     collections::{BTreeMap, BTreeSet, VecDeque},
-    fmt,
+    fmt, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
     rc::Rc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use futures::{
@@ -19,12 +22,15 @@ use lenso_capability_agent_auth_openai_codex::{
 };
 use lenso_capability_agent_model::{
     self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlMode,
-    CatalogControlOption, CatalogControlStatus, CatalogInputModality, CatalogModel,
-    CatalogModelLimits, CatalogRequest, CatalogResponse, CatalogWireProtocol, CompleteError,
-    CompleteMessage, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen,
-    ModelCatalog, ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
+    CatalogControlOption, CatalogControlStatus, CatalogFreshness, CatalogInputModality,
+    CatalogModel, CatalogModelLimits, CatalogProvenance, CatalogRequest, CatalogResponse,
+    CatalogSource, CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
+    ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
+use reqwest::{StatusCode, header};
+use sha2::{Digest as _, Sha256};
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 // Codex's own catalog refresh uses this compatibility ceiling to request the
@@ -32,6 +38,9 @@ const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const CODEX_CATALOG_CLIENT_VERSION: &str = "99.99.99";
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
 const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
+const MAX_CACHE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_STALE_SECONDS: u64 = 7 * 24 * 60 * 60;
+const CACHE_SCHEMA: &str = "lenso.agent.model-catalog-cache.v1";
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -45,6 +54,10 @@ struct DirectModelConfig {
     include_models: Option<Vec<String>>,
     #[serde(default)]
     exclude_models: Vec<String>,
+    #[serde(default)]
+    catalog_cache_path: Option<PathBuf>,
+    #[serde(default)]
+    catalog_max_stale_seconds: u64,
     reasoning_effort: String,
     max_event_bytes: usize,
 }
@@ -73,13 +86,18 @@ impl DirectModelConfig {
                 .any(|model| !valid_model_id(model) || model == &self.model)
             || exclude_ids.len() != exclude_models.len()
             || !include_ids.is_disjoint(&exclude_ids)
+            || self.catalog_max_stale_seconds > MAX_STALE_SECONDS
+            || (self.catalog_max_stale_seconds > 0 && self.catalog_cache_path.is_none())
+            || self.catalog_cache_path.as_ref().is_some_and(|path| {
+                !path.is_absolute() || path.to_str().is_none() || path.parent().is_none()
+            })
             || self.reasoning_effort.is_empty()
             || self.reasoning_effort.len() > 32
             || self.max_event_bytes == 0
             || self.max_event_bytes > MAX_EVENT_BYTES
         {
             return Err(invalid_plan(
-                "direct Codex model, visibility policy, or max_event_bytes is invalid",
+                "direct Codex model, visibility policy, catalog cache, or max_event_bytes is invalid",
             ));
         }
         let endpoint = self.endpoint()?;
@@ -156,12 +174,12 @@ struct DirectModel {
     catalog: Rc<RefCell<Option<CatalogResponse>>>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct CodexModelsResponse {
     models: Vec<CodexModel>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct CodexModel {
     slug: String,
     display_name: String,
@@ -193,17 +211,28 @@ struct CodexModel {
     input_modalities: Vec<String>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct CodexReasoningEffort {
     effort: String,
     description: String,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 struct CodexServiceTier {
     id: String,
     name: String,
     description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct CachedCatalog {
+    schema: String,
+    source_key: String,
+    fetched_at_unix_seconds: u64,
+    revision: String,
+    etag: Option<String>,
+    response: CodexModelsResponse,
 }
 
 fn listed_visibility() -> String {
@@ -309,30 +338,77 @@ impl ModelProvider for DirectModel {
     }
 }
 
-impl Lifecycle for DirectModel {
-    async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
-        let credential = self.auth.access(AccessRequest {}).await.map_err(|error| {
-            RuntimeFailure::PluginFailure {
-                detail: format!("direct Codex model catalog authentication failed: {error:?}"),
-            }
-        })?;
-        let response = self
+impl DirectModel {
+    async fn refresh_catalog(
+        &self,
+        access_token: &str,
+        account_id: &str,
+    ) -> Result<(), RuntimeFailure> {
+        let now = unix_now()?;
+        let source_key = cache_source_key(&self.config.base_url, account_id);
+        let cached = self
+            .config
+            .catalog_cache_path
+            .as_deref()
+            .and_then(|path| read_cache(path, &source_key, now).ok().flatten());
+        let mut request = self
             .client
             .get(self.config.catalog_endpoint()?)
-            .bearer_auth(credential.access_token)
-            .header("chatgpt-account-id", credential.account_id)
+            .bearer_auth(access_token)
+            .header("chatgpt-account-id", account_id)
             .header("originator", "lenso")
             .header(
                 "User-Agent",
                 concat!("lenso-agent/", env!("CARGO_PKG_VERSION")),
             )
-            .header("Accept", "application/json")
-            .send()
+            .header("Accept", "application/json");
+        if let Some(etag) = cached.as_ref().and_then(|cached| cached.etag.as_deref()) {
+            request = request.header(header::IF_NONE_MATCH, etag);
+        }
+        let Ok(response) = request.send().await else {
+            let catalog = stale_catalog(&self.config, cached, now, "request failed")?;
+            self.catalog.replace(Some(catalog));
+            return Ok(());
+        };
+        self.accept_catalog_response(response, cached, source_key, now)
             .await
-            .map_err(|_| RuntimeFailure::PluginFailure {
-                detail: "direct Codex model catalog request failed".to_owned(),
+    }
+
+    async fn accept_catalog_response(
+        &self,
+        response: reqwest::Response,
+        cached: Option<CachedCatalog>,
+        source_key: String,
+        now: u64,
+    ) -> Result<(), RuntimeFailure> {
+        if response.status() == StatusCode::NOT_MODIFIED {
+            let mut cached = cached.ok_or_else(|| RuntimeFailure::PluginFailure {
+                detail: "direct Codex model catalog returned 304 without a validated cache"
+                    .to_owned(),
             })?;
+            cached.fetched_at_unix_seconds = now;
+            if let Some(etag) = response_etag(&response) {
+                cached.revision.clone_from(&etag);
+                cached.etag = Some(etag);
+            }
+            let catalog = project_codex_catalog(
+                &self.config,
+                cached.response.clone(),
+                cache_provenance(&self.config, &cached, now, CatalogFreshness::Revalidated),
+            )?;
+            if let Some(path) = self.config.catalog_cache_path.as_deref() {
+                write_cache(path, &cached)?;
+            }
+            self.catalog.replace(Some(catalog));
+            return Ok(());
+        }
         if !response.status().is_success() {
+            if transient_catalog_status(response.status()) {
+                let detail = format!("returned HTTP {}", response.status().as_u16());
+                let catalog = stale_catalog(&self.config, cached, now, &detail)?;
+                self.catalog.replace(Some(catalog));
+                return Ok(());
+            }
             return Err(RuntimeFailure::PluginFailure {
                 detail: format!(
                     "direct Codex model catalog returned HTTP {}",
@@ -340,6 +416,17 @@ impl Lifecycle for DirectModel {
                 ),
             });
         }
+        self.accept_fresh_catalog_response(response, source_key, now)
+            .await
+    }
+
+    async fn accept_fresh_catalog_response(
+        &self,
+        response: reqwest::Response,
+        source_key: String,
+        now: u64,
+    ) -> Result<(), RuntimeFailure> {
+        let etag = response_etag(&response);
         if response
             .content_length()
             .is_some_and(|length| length > MAX_CATALOG_BYTES as u64)
@@ -357,9 +444,38 @@ impl Lifecycle for DirectModel {
         }
         let response = serde_json::from_slice::<CodexModelsResponse>(&bytes)
             .map_err(|_| invalid_plan("direct Codex model catalog response is invalid"))?;
-        let catalog = project_codex_catalog(&self.config, response)?;
+        let revision = etag
+            .clone()
+            .unwrap_or_else(|| format!("sha256:{:x}", Sha256::digest(&bytes)));
+        let provenance = live_provenance(&self.config, now, &revision);
+        let catalog = project_codex_catalog(&self.config, response.clone(), provenance)?;
+        if let Some(path) = self.config.catalog_cache_path.as_deref() {
+            write_cache(
+                path,
+                &CachedCatalog {
+                    schema: CACHE_SCHEMA.to_owned(),
+                    source_key,
+                    fetched_at_unix_seconds: now,
+                    revision,
+                    etag,
+                    response,
+                },
+            )?;
+        }
         self.catalog.replace(Some(catalog));
         Ok(())
+    }
+}
+
+impl Lifecycle for DirectModel {
+    async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
+        let credential = self.auth.access(AccessRequest {}).await.map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("direct Codex model catalog authentication failed: {error:?}"),
+            }
+        })?;
+        self.refresh_catalog(&credential.access_token, &credential.account_id)
+            .await
     }
 
     #[allow(clippy::unused_async_trait_impl)]
@@ -369,9 +485,158 @@ impl Lifecycle for DirectModel {
     }
 }
 
+fn unix_now() -> Result<u64, RuntimeFailure> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .map_err(|_| RuntimeFailure::PluginFailure {
+            detail: "system clock is before the Unix epoch".to_owned(),
+        })
+}
+
+fn cache_source_key(base_url: &str, account_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(base_url.trim_end_matches('/').as_bytes());
+    digest.update([0]);
+    digest.update(account_id.as_bytes());
+    let digest = digest.finalize();
+    format!("sha256:{digest:x}")
+}
+
+fn read_cache(path: &Path, source_key: &str, now: u64) -> Result<Option<CachedCatalog>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("failed to inspect catalog cache: {error}")),
+    };
+    if !metadata.file_type().is_file() || metadata.len() > MAX_CACHE_BYTES {
+        return Err("catalog cache is not a bounded regular file".to_owned());
+    }
+    let bytes = fs::read(path).map_err(|error| format!("failed to read catalog cache: {error}"))?;
+    let cache = serde_json::from_slice::<CachedCatalog>(&bytes)
+        .map_err(|_| "catalog cache document is invalid".to_owned())?;
+    if cache.schema != CACHE_SCHEMA
+        || cache.source_key != source_key
+        || cache.fetched_at_unix_seconds == 0
+        || cache.fetched_at_unix_seconds > now
+        || cache.revision.is_empty()
+        || cache.revision.len() > 256
+        || cache
+            .etag
+            .as_deref()
+            .is_some_and(|etag| etag.is_empty() || etag.len() > 256)
+    {
+        return Err("catalog cache identity or metadata is invalid".to_owned());
+    }
+    Ok(Some(cache))
+}
+
+fn write_cache(path: &Path, cache: &CachedCatalog) -> Result<(), RuntimeFailure> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_plan("direct Codex catalog cache path has no parent"))?;
+    fs::create_dir_all(parent).map_err(|error| cache_io_failure(&error))?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| cache_io_failure(&error))?;
+    serde_json::to_writer(temporary.as_file_mut(), cache).map_err(|error| {
+        RuntimeFailure::PluginFailure {
+            detail: format!("direct Codex model catalog cache serialization failed: {error}"),
+        }
+    })?;
+    temporary
+        .as_file_mut()
+        .flush()
+        .map_err(|error| cache_io_failure(&error))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| cache_io_failure(&error))?;
+    temporary
+        .persist(path)
+        .map_err(|error| cache_io_failure(&error.error))?;
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| cache_io_failure(&error))
+}
+
+fn cache_io_failure(error: &io::Error) -> RuntimeFailure {
+    RuntimeFailure::PluginFailure {
+        detail: format!("direct Codex model catalog cache write failed: {error}"),
+    }
+}
+
+fn response_etag(response: &reqwest::Response) -> Option<String> {
+    response
+        .headers()
+        .get(header::ETAG)
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 256)
+        .map(str::to_owned)
+}
+
+fn transient_catalog_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+    ) || status.is_server_error()
+}
+
+fn stale_catalog(
+    config: &DirectModelConfig,
+    cached: Option<CachedCatalog>,
+    now: u64,
+    failure: &str,
+) -> Result<CatalogResponse, RuntimeFailure> {
+    let cached = cached.ok_or_else(|| RuntimeFailure::PluginFailure {
+        detail: format!("direct Codex model catalog {failure} and no validated cache is available"),
+    })?;
+    let age = now.saturating_sub(cached.fetched_at_unix_seconds);
+    if config.catalog_max_stale_seconds == 0 || age > config.catalog_max_stale_seconds {
+        return Err(RuntimeFailure::PluginFailure {
+            detail: format!(
+                "direct Codex model catalog {failure} and cached snapshot age {age}s exceeds the {}s policy",
+                config.catalog_max_stale_seconds
+            ),
+        });
+    }
+    project_codex_catalog(
+        config,
+        cached.response.clone(),
+        cache_provenance(config, &cached, now, CatalogFreshness::Stale),
+    )
+}
+
+fn live_provenance(config: &DirectModelConfig, now: u64, revision: &str) -> CatalogProvenance {
+    CatalogProvenance {
+        source: CatalogSource::Live,
+        freshness: CatalogFreshness::Fresh,
+        fetched_at_unix_seconds: Some(Some(now.to_string())),
+        validated_at_unix_seconds: Some(Some(now.to_string())),
+        revision: Some(Some(revision.to_owned())),
+        max_stale_seconds: Some(Some(config.catalog_max_stale_seconds.to_string())),
+    }
+}
+
+fn cache_provenance(
+    config: &DirectModelConfig,
+    cached: &CachedCatalog,
+    now: u64,
+    freshness: CatalogFreshness,
+) -> CatalogProvenance {
+    CatalogProvenance {
+        source: CatalogSource::Cache,
+        freshness,
+        fetched_at_unix_seconds: Some(Some(cached.fetched_at_unix_seconds.to_string())),
+        validated_at_unix_seconds: Some(Some(now.to_string())),
+        revision: Some(Some(cached.revision.clone())),
+        max_stale_seconds: Some(Some(config.catalog_max_stale_seconds.to_string())),
+    }
+}
+
 fn project_codex_catalog(
     config: &DirectModelConfig,
     response: CodexModelsResponse,
+    provenance: CatalogProvenance,
 ) -> Result<CatalogResponse, RuntimeFailure> {
     if response.models.is_empty() || response.models.len() > 128 {
         return Err(invalid_plan(
@@ -407,7 +672,7 @@ fn project_codex_catalog(
             "configured reasoning effort is absent from the Provider catalog",
         ));
     }
-    Ok(CatalogResponse { models })
+    Ok(CatalogResponse { models, provenance })
 }
 
 fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure> {
@@ -1082,6 +1347,8 @@ mod tests {
             allowed_models: None,
             include_models: None,
             exclude_models: Vec::new(),
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         };
@@ -1101,6 +1368,8 @@ mod tests {
             allowed_models: None,
             include_models: Some(vec!["presentation-model".to_owned()]),
             exclude_models: vec!["retired-model".to_owned()],
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
@@ -1120,6 +1389,8 @@ mod tests {
             allowed_models: None,
             include_models: Some(vec!["shared-model".to_owned()]),
             exclude_models: vec!["shared-model".to_owned()],
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         };
@@ -1131,6 +1402,8 @@ mod tests {
             allowed_models: None,
             include_models: None,
             exclude_models: vec!["main-model".to_owned()],
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         };
@@ -1145,6 +1418,8 @@ mod tests {
             allowed_models: Some(vec!["legacy-auxiliary".to_owned()]),
             include_models: None,
             exclude_models: Vec::new(),
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
@@ -1162,6 +1437,8 @@ mod tests {
             allowed_models: Some(vec!["legacy-model".to_owned()]),
             include_models: Some(vec!["visible-model".to_owned()]),
             exclude_models: vec!["excluded-model".to_owned()],
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
@@ -1178,6 +1455,7 @@ mod tests {
                     catalog_model("provider-absent-model", "none"),
                 ],
             },
+            test_provenance(),
         )
         .unwrap();
 
@@ -1227,6 +1505,8 @@ mod tests {
             allowed_models: None,
             include_models: None,
             exclude_models: Vec::new(),
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
             reasoning_effort: "high".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
@@ -1266,6 +1546,7 @@ mod tests {
                     input_modalities: vec!["text".to_owned(), "image".to_owned()],
                 }],
             },
+            test_provenance(),
         )
         .unwrap();
         let model = &catalog.models[0];
@@ -1304,6 +1585,58 @@ mod tests {
             description: String::new(),
         };
         assert!(control(None, vec![duplicate.clone(), duplicate], true).is_err());
+    }
+
+    fn test_provenance() -> CatalogProvenance {
+        CatalogProvenance {
+            source: CatalogSource::Live,
+            freshness: CatalogFreshness::Fresh,
+            fetched_at_unix_seconds: Some(Some("1".to_owned())),
+            validated_at_unix_seconds: Some(Some("1".to_owned())),
+            revision: Some(Some("test".to_owned())),
+            max_stale_seconds: Some(Some("0".to_owned())),
+        }
+    }
+
+    #[test]
+    fn validated_cache_is_identity_bound_and_stale_use_is_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("catalog.json");
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: None,
+            include_models: None,
+            exclude_models: Vec::new(),
+            catalog_cache_path: Some(path.clone()),
+            catalog_max_stale_seconds: 60,
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        }
+        .validate()
+        .unwrap();
+        let source_key = cache_source_key(&config.base_url, "account-a");
+        let cached = CachedCatalog {
+            schema: CACHE_SCHEMA.to_owned(),
+            source_key: source_key.clone(),
+            fetched_at_unix_seconds: 100,
+            revision: "\"catalog-v1\"".to_owned(),
+            etag: Some("\"catalog-v1\"".to_owned()),
+            response: CodexModelsResponse {
+                models: vec![catalog_model("main-model", "list")],
+            },
+        };
+        write_cache(&path, &cached).unwrap();
+
+        assert_eq!(
+            read_cache(&path, &source_key, 160).unwrap(),
+            Some(cached.clone())
+        );
+        assert!(read_cache(&path, "sha256:other", 160).is_err());
+        let stale = stale_catalog(&config, Some(cached.clone()), 160, "request failed").unwrap();
+        assert_eq!(stale.provenance.source, CatalogSource::Cache);
+        assert_eq!(stale.provenance.freshness, CatalogFreshness::Stale);
+        assert!(stale_catalog(&config, Some(cached), 161, "request failed").is_err());
     }
     use lenso_capability_agent_model::CompleteTool;
 

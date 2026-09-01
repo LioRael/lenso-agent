@@ -10,10 +10,11 @@ use std::{
 use futures::future::{LocalBoxFuture, poll_fn, ready};
 use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlStatus,
-    CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogRequest, CatalogResponse,
-    CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput, CompleteMessageKind,
-    CompleteMessageRole, CompleteOpen, ModelCatalog, ModelCompleteInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlStatus, CatalogFreshness,
+    CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogProvenance, CatalogRequest,
+    CatalogResponse, CatalogSource, CatalogWireProtocol, CompleteError, CompleteMessage,
+    CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
+    ModelCompleteInvocationError, ModelProvider,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
@@ -84,7 +85,10 @@ impl ModelProvider for FixtureModel {
                 compaction_compatibility: "generic-text-v1".to_owned(),
             })
             .collect();
-        Box::pin(ready(Ok(Ok(CatalogResponse { models }))))
+        Box::pin(ready(Ok(Ok(CatalogResponse {
+            models,
+            provenance: configured_provenance(),
+        }))))
     }
 
     fn complete(
@@ -108,6 +112,17 @@ impl ModelProvider for FixtureModel {
                 as Box<dyn NativeStreamSession>
         });
         Box::pin(ready(result))
+    }
+}
+
+fn configured_provenance() -> CatalogProvenance {
+    CatalogProvenance {
+        source: CatalogSource::Configured,
+        freshness: CatalogFreshness::Fresh,
+        fetched_at_unix_seconds: None,
+        validated_at_unix_seconds: None,
+        revision: None,
+        max_stale_seconds: None,
     }
 }
 

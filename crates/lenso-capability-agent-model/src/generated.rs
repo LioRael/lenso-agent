@@ -4,8 +4,8 @@ use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, PluginDependencies, RequestCapability, RuntimeFailure, StreamCapability, StreamEvent};
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
-pub const CAPABILITY_ID: &str = "lenso.agent.model@3";
-pub const DESCRIPTOR_VERSION: &str = "3.0.0";
+pub const CAPABILITY_ID: &str = "lenso.agent.model@4";
+pub const DESCRIPTOR_VERSION: &str = "4.0.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const MODEL_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@3\",\"descriptor_version\":\"3.0.0\",\"operations\":[\"catalog\",\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.0.0\",\"operations\":[\"catalog\",\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.0.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.0.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const COMPLETE_OPERATION: &str = "complete";
@@ -39,6 +39,9 @@ pub struct CatalogResponse {
     #[serde(rename = "models")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub models: Vec<CatalogModel>,
+    #[serde(rename = "provenance")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub provenance: CatalogProvenance,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -192,6 +195,56 @@ pub enum CatalogWireProtocol {
     OpenaiResponses,
     #[serde(rename = "openai_chat_completions")]
     OpenaiChatCompletions,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct CatalogProvenance {
+    #[serde(rename = "fetched_at_unix_seconds")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub fetched_at_unix_seconds: OptionalValue<Uint64>,
+    #[serde(rename = "freshness")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub freshness: CatalogFreshness,
+    #[serde(rename = "max_stale_seconds")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub max_stale_seconds: OptionalValue<Uint64>,
+    #[serde(rename = "revision")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub revision: OptionalValue<String>,
+    #[serde(rename = "source")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub source: CatalogSource,
+    #[serde(rename = "validated_at_unix_seconds")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub validated_at_unix_seconds: OptionalValue<Uint64>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CatalogFreshness {
+    #[serde(rename = "fresh")]
+    Fresh,
+    #[serde(rename = "revalidated")]
+    Revalidated,
+    #[serde(rename = "stale")]
+    Stale,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum CatalogSource {
+    #[serde(rename = "live")]
+    Live,
+    #[serde(rename = "cache")]
+    Cache,
+    #[serde(rename = "configured")]
+    Configured,
 }
 
 #[derive(Clone, Debug, PartialEq)]

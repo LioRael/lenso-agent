@@ -168,11 +168,41 @@ pub enum ModelWireProtocol {
     OpenaiChatCompletions,
 }
 
+/// How the selected Provider acquired and validated one frozen model catalog.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCatalogProvenance {
+    pub source: ModelCatalogSource,
+    pub freshness: ModelCatalogFreshness,
+    pub fetched_at_unix_seconds: Option<u64>,
+    pub validated_at_unix_seconds: Option<u64>,
+    pub revision: Option<String>,
+    pub max_stale_seconds: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogSource {
+    Live,
+    Cache,
+    Configured,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelCatalogFreshness {
+    Fresh,
+    Revalidated,
+    Stale,
+}
+
 /// Exact inference profile resolved from one active Generation.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResolvedTurnProfile {
     pub catalog_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_provenance: Option<ModelCatalogProvenance>,
     pub provider_id: String,
     pub provider_instance: String,
     pub model: String,
@@ -4675,6 +4705,7 @@ mod tests {
         .unwrap();
         let profile = ResolvedTurnProfile {
             catalog_revision: format!("sha256:{}", "a".repeat(64)),
+            catalog_provenance: None,
             provider_id: "fixture".to_owned(),
             provider_instance: "lenso.agent.model.fixture/model".to_owned(),
             model: "fixture".to_owned(),
@@ -4724,6 +4755,7 @@ mod tests {
     fn compaction_test_profile(max_input_tokens: Option<u64>) -> ResolvedTurnProfile {
         ResolvedTurnProfile {
             catalog_revision: format!("sha256:{}", "a".repeat(64)),
+            catalog_provenance: None,
             provider_id: "fixture".to_owned(),
             provider_instance: "lenso.agent.model.fixture/model".to_owned(),
             model: "fixture".to_owned(),

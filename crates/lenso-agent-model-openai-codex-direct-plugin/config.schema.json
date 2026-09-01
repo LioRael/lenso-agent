@@ -19,6 +19,11 @@
       "type": "array",
       "items": { "type": "string" }
     },
+    "catalog_cache_path": { "type": "string" },
+    "catalog_max_stale_seconds": {
+      "type": "integer",
+      "minimum": 0
+    },
     "reasoning_effort": { "type": "string" },
     "max_event_bytes": { "type": "integer" }
   }

@@ -2385,7 +2385,7 @@ fn host_catalog_defaults(
     available: &BTreeSet<String>,
 ) -> Vec<HostDefaultPlugin> {
     let mut defaults = agent_defaults(available);
-    defaults.extend(default_interactive_plugins());
+    defaults.extend(default_interactive_plugins(directories));
     defaults.extend(default_boundary_plugins(directories));
     defaults.extend([
         HostDefaultPlugin::new("lenso.agent.acp", "acp"),
@@ -2543,7 +2543,7 @@ fn default_session_presentation_plugin() -> HostDefaultPlugin {
     )
 }
 
-fn default_interactive_plugins() -> [HostDefaultPlugin; 3] {
+fn default_interactive_plugins(directories: &AgentDirectories) -> [HostDefaultPlugin; 3] {
     [
         default_plugin(
             "lenso.agent.auth.openai-codex",
@@ -2559,6 +2559,8 @@ fn default_interactive_plugins() -> [HostDefaultPlugin; 3] {
             "model",
             serde_json::json!({
                 "base_url": "https://chatgpt.com/backend-api",
+                "catalog_cache_path": directories.model_catalog_cache(),
+                "catalog_max_stale_seconds": 86_400,
                 "max_event_bytes": 1_048_576,
                 "model": DEFAULT_MODEL,
                 "reasoning_effort": "medium"
@@ -2678,6 +2680,8 @@ fn model_and_auth_configurations(directories: &AgentDirectories) -> Vec<HostPlug
             "lenso.agent.model.openai-codex-direct",
             serde_json::json!({
                 "base_url": "https://chatgpt.com/backend-api",
+                "catalog_cache_path": directories.model_catalog_cache(),
+                "catalog_max_stale_seconds": 86_400,
                 "max_event_bytes": 1_048_576,
                 "model": "gpt-5.6-luna",
                 "reasoning_effort": "medium"
@@ -3519,7 +3523,7 @@ mod tests {
         assert!(bindings.iter().any(|binding| {
             binding["consumer_instance"] == "lenso.agent.session-presentation.model/semantic"
                 && binding["provider_instance"] == "lenso.agent.model.fixture/model"
-                && binding["capability_id"] == "lenso.agent.model@3"
+                && binding["capability_id"] == "lenso.agent.model@4"
         }));
         assert!(bindings.iter().any(|binding| {
             binding["consumer_instance"] == "lenso.agent.loop/agent"
