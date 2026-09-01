@@ -1,0 +1,26 @@
+[package]
+name = "lenso-agent-console-plugin-tools-plugin"
+version = "0.1.0"
+description = "Bounded Plugin Root inspection and reviewed configuration tools for Console Agent."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[package.metadata.lenso]
+plugin-id = "lenso.agent.console-plugin-tools"
+root-slot = "tool-providers"
+
+[dependencies]
+lenso.workspace = true
+lenso-agent-tool-sdk = { path = "../lenso-agent-tool-sdk" }
+lenso-capability-agent-plugin-configuration-authority = { path = "../lenso-capability-agent-plugin-configuration" }
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
+lenso-kernel.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

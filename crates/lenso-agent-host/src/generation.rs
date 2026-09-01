@@ -2,11 +2,12 @@ use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_agent_loop_plugin::{AgentBehaviorProvenance, TurnModelSelection};
 use lenso_agent_native_support::WorkspaceScope;
+use lenso_app_authoring::PluginConfigurationAuthority;
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
     authoring::{
-        HostBinding, HostCatalog, HostDefaultPlugin, HostPluginConfiguration, HostSlot,
-        PluginInstanceId, PluginRootSnapshot, resolve_plugin_root,
+        HostBinding, HostCatalog, HostDefaultPlugin, HostPluginConfiguration, HostPluginRelease,
+        HostSlot, PluginInstanceId, PluginRootSnapshot, resolve_plugin_root,
     },
 };
 use lenso_bun_adapter::{BunAdapter, BunCapabilityCodec};
@@ -96,7 +97,10 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     rc::Rc,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -106,7 +110,13 @@ pub use crate::online_generation::{
 };
 use crate::online_generation::{OnlineGenerationEventLog, OnlineGenerationTracker};
 use crate::runtime_state::{LedgerControlStateStore, RuntimeAttachment, RuntimeState};
-use crate::{AgentDirectories, AgentSurfaceKind, official_prompts};
+use crate::{
+    AgentDirectories, AgentSurfaceKind, official_prompts,
+    plugin_configuration_authority::{
+        BRIDGE_PLUGIN_ID, BRIDGE_PLUGIN_VERSION, PluginConfigurationAuthorityBridgeFactory,
+        bridge_descriptor,
+    },
+};
 
 mod online_reconciler;
 use online_reconciler::GenerationReconciler;
@@ -172,14 +182,21 @@ pub fn online_reconcile_telemetry() -> OnlineReconcileTelemetry {
 }
 
 #[derive(Debug)]
-struct AgentCatalogFactory;
+struct AgentCatalogFactory {
+    plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+}
 
 impl CatalogFactory for AgentCatalogFactory {
     fn catalog(
         &self,
         generation: &ResolvedGeneration,
     ) -> Result<ExecutionAdapterCatalog, ControlPlaneError> {
-        let (registry, _) = native_host_build();
+        let (mut registry, _) = native_host_build();
+        if let Some(authority) = &self.plugin_configuration_authority {
+            registry = registry.with_factory(PluginConfigurationAuthorityBridgeFactory::new(
+                Arc::clone(authority),
+            ));
+        }
         let mut catalog =
             ExecutionAdapterCatalog::single(registry.with_resources(generation.resources.clone()));
         if generation
@@ -433,6 +450,7 @@ impl AgentApp {
         surface: AgentSurfaceKind,
         profile_name: Option<String>,
         host_build: HostBuildIdentity,
+        plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     ) -> Result<Self, String> {
         let resolved_plan: ResolvedAppPlan = serde_json::from_slice(plan_bytes)
             .map_err(|error| format!("failed to decode the resolved App Plan: {error}"))?;
@@ -444,7 +462,8 @@ impl AgentApp {
         let generation = initial.generation.clone();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
-        let runtime = KernelGenerationRuntime::new(agent_catalog_factory());
+        let runtime =
+            KernelGenerationRuntime::new(agent_catalog_factory(plugin_configuration_authority));
         let mut host =
             recover_or_open_host(plan_bytes, store_root, &host_build, runtime, store, durable)
                 .await?;
@@ -2322,6 +2341,16 @@ fn native_host_build() -> (NativePluginRegistry, Vec<EmbeddedPlugin>) {
             execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
         })
         .collect::<Vec<_>>();
+    if built_in_plugins
+        .iter()
+        .any(|plugin| plugin.package_id == "lenso.agent.console-plugin-tools")
+    {
+        built_in_plugins.push(EmbeddedPlugin {
+            package_id: BRIDGE_PLUGIN_ID.to_owned(),
+            factory_identity: format!("{BRIDGE_PLUGIN_ID}@{BRIDGE_PLUGIN_VERSION}"),
+            execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        });
+    }
     built_in_plugins.sort_by(|left, right| left.factory_identity.cmp(&right.factory_identity));
     (registry, built_in_plugins)
 }
@@ -2346,21 +2375,29 @@ fn linked_host_catalog_for_agent_in(
     root_agent: &PluginInstanceId,
 ) -> Result<HostCatalog, String> {
     let registry = NativePluginRegistry::new().with_linked_factories();
-    let available = registry
+    let mut available = registry
         .factories()
         .map(|factory| factory.package_id().to_owned())
         .collect::<BTreeSet<_>>();
+    let console_plugin_tools = available.contains("lenso.agent.console-plugin-tools");
+    if console_plugin_tools {
+        available.insert(BRIDGE_PLUGIN_ID.to_owned());
+    }
     let defaults = host_catalog_defaults(directories, &available)
         .into_iter()
         .filter(|plugin| available.contains(plugin.id().plugin_id()))
         .collect::<Vec<_>>();
-    let configurations = host_catalog_configurations(directories)
+    let configurations = host_catalog_configurations(directories, &available)
         .into_iter()
         .filter(|configuration| available.contains(configuration.id().plugin_id()))
         .collect::<Vec<_>>();
-    NativePluginRegistry::host_catalog(host_catalog_slots(), defaults)
-        .map(|catalog| {
-            catalog
+    NativePluginRegistry::host_catalog([], [])
+        .map(|native_catalog| {
+            let mut releases = native_catalog.plugins().to_vec();
+            if console_plugin_tools {
+                releases.push(HostPluginRelease::new(bridge_descriptor()));
+            }
+            HostCatalog::new(host_catalog_slots(), releases, defaults)
                 .with_configurations(configurations)
                 .with_bindings(host_catalog_bindings(root_agent, &available))
         })
@@ -2373,6 +2410,7 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::one("artifact").replaceable(),
         HostSlot::optional("auth"),
         HostSlot::optional("console"),
+        HostSlot::optional("plugin-configuration-authority"),
         HostSlot::one("context-compactor").replaceable(),
         HostSlot::one("memory").replaceable(),
         HostSlot::many("surfaces"),
@@ -2400,6 +2438,10 @@ fn host_catalog_slots() -> Vec<HostSlot> {
     ]
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one catalog function keeps every Host default auditable together"
+)]
 fn host_catalog_defaults(
     directories: &AgentDirectories,
     available: &BTreeSet<String>,
@@ -2497,6 +2539,25 @@ fn host_catalog_defaults(
         ),
         HostDefaultPlugin::new("lenso.agent.workspace-read-tools", "restricted-read-tools"),
     ]);
+    if available.contains("lenso.agent.console-plugin-tools") {
+        defaults.extend([
+            HostDefaultPlugin::new(BRIDGE_PLUGIN_ID, "selected"),
+            default_plugin(
+                "lenso.agent.console-plugin-tools",
+                "default",
+                serde_json::json!({
+                    "max_output_bytes": 131_072
+                }),
+            )
+            .disableable(),
+            default_plugin(
+                "lenso.agent.interactive-approval-hook",
+                "default",
+                console_interactive_approval_configuration(),
+            )
+            .disableable(),
+        ]);
+    }
     defaults
 }
 
@@ -2653,8 +2714,12 @@ fn default_skills_plugin() -> HostDefaultPlugin {
     )
 }
 
-fn host_catalog_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
-    let mut configurations = local_tool_configurations(directories);
+fn host_catalog_configurations(
+    directories: &AgentDirectories,
+    available: &BTreeSet<String>,
+) -> Vec<HostPluginConfiguration> {
+    let console_plugin_tools = available.contains("lenso.agent.console-plugin-tools");
+    let mut configurations = local_tool_configurations(directories, console_plugin_tools);
     configurations.extend(model_and_auth_configurations(directories));
     configurations.extend(official_prompts::configurations());
     configurations.extend(["worker-a", "worker-b"].into_iter().map(|instance| {
@@ -2726,8 +2791,11 @@ fn model_and_auth_configurations(directories: &AgentDirectories) -> Vec<HostPlug
     clippy::too_many_lines,
     reason = "one catalog function keeps every local Tool default auditable together"
 )]
-fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginConfiguration> {
-    vec![
+fn local_tool_configurations(
+    directories: &AgentDirectories,
+    console_plugin_tools: bool,
+) -> Vec<HostPluginConfiguration> {
+    let mut configurations = vec![
         host_plugin_configuration(
             "lenso.agent.approval-hook",
             serde_json::json!({
@@ -2853,7 +2921,25 @@ fn local_tool_configurations(directories: &AgentDirectories) -> Vec<HostPluginCo
                 "max_total_bytes": 1_048_576
             }),
         ),
-    ]
+    ];
+    if console_plugin_tools {
+        configurations.retain(|configuration| {
+            configuration.id().plugin_id() != "lenso.agent.interactive-approval-hook"
+        });
+    }
+    configurations
+}
+
+fn console_interactive_approval_configuration() -> serde_json::Value {
+    serde_json::json!({
+        "allow_tools": [
+            "inspect_app", "list_plugins", "inspect_plugin", "check_plugin_change"
+        ],
+        "ask_tools": ["apply_plugin_change"],
+        "default_decision": "ask",
+        "deny_tools": [],
+        "max_preview_bytes": 16_384
+    })
 }
 
 fn sandbox_process_configuration(directories: &AgentDirectories) -> HostPluginConfiguration {
@@ -2913,6 +2999,16 @@ fn host_catalog_bindings(
         )
         .with_admission(tool_admission),
     ];
+    if available.contains("lenso.agent.console-plugin-tools") {
+        bindings.push(
+            HostBinding::to_instance(
+                PluginInstanceId::new("lenso.agent.console-plugin-tools", "default"),
+                lenso_capability_agent_plugin_configuration_authority::CAPABILITY_ID,
+                PluginInstanceId::new(BRIDGE_PLUGIN_ID, "selected"),
+            )
+            .with_admission(RequestAdmissionPlan::new(4, 1)),
+        );
+    }
     if available.contains("lenso.agent.subagent-tools")
         && available.contains("lenso.agent.workspace-read-tools")
     {
@@ -3144,59 +3240,63 @@ pub(crate) fn resolve_host_plan_for_agent_in(
         .map_err(|error| format!("failed to resolve Host Plugins for Agent `{agent}`: {error}"))
 }
 
-fn agent_catalog_factory() -> MultiExecutionCatalogFactory<AgentCatalogFactory> {
-    MultiExecutionCatalogFactory::new(AgentCatalogFactory)
-        .with_wasm_codec(AgentJsonCodec)
-        .with_wasm_codec(ArtifactJsonCodec)
-        .with_wasm_codec(ContextCompactionJsonCodec)
-        .with_wasm_codec(ContextSourceJsonCodec)
-        .with_wasm_codec(MemoryJsonCodec)
-        .with_wasm_codec(HttpFetchJsonCodec)
-        .with_wasm_codec(LifecycleJsonCodec)
-        .with_wasm_codec(ModelJsonCodec)
-        .with_wasm_codec(ModelSelectionJsonCodec)
-        .with_wasm_codec(OauthAccessJsonCodec)
-        .with_wasm_codec(PromptJsonCodec)
-        .with_wasm_codec(SessionJsonCodec)
-        .with_wasm_codec(SessionPresentationJsonCodec)
-        .with_wasm_codec(ToolHookJsonCodec)
-        .with_wasm_codec(ToolProviderJsonCodec)
-        .with_wasm_codec(TurnInputJsonCodec)
-        .with_wasm_codec(ToolsJsonCodec)
-        .with_wasm_codec(UserInteractionJsonCodec)
-        .with_wasm_codec(WorkspaceReadJsonCodec)
-        .with_quickjs_codec(AgentJsonCodec)
-        .with_quickjs_codec(ArtifactJsonCodec)
-        .with_quickjs_codec(ContextCompactionJsonCodec)
-        .with_quickjs_codec(ContextSourceJsonCodec)
-        .with_quickjs_codec(MemoryJsonCodec)
-        .with_quickjs_codec(LifecycleJsonCodec)
-        .with_quickjs_codec(ModelJsonCodec)
-        .with_quickjs_codec(OauthAccessJsonCodec)
-        .with_quickjs_codec(PromptJsonCodec)
-        .with_quickjs_codec(SessionJsonCodec)
-        .with_quickjs_codec(ToolHookJsonCodec)
-        .with_quickjs_codec(TurnInputJsonCodec)
-        .with_quickjs_codec(ToolsJsonCodec)
-        .with_quickjs_codec(UserInteractionJsonCodec)
-        .with_quickjs_codec(WorkspaceReadJsonCodec)
-        .with_process_codec(AgentJsonCodec)
-        .with_process_codec(ArtifactJsonCodec)
-        .with_process_codec(ContextCompactionJsonCodec)
-        .with_process_codec(ContextSourceJsonCodec)
-        .with_process_codec(MemoryJsonCodec)
-        .with_process_codec(HttpFetchJsonCodec)
-        .with_process_codec(LifecycleJsonCodec)
-        .with_process_codec(ModelJsonCodec)
-        .with_process_codec(OauthAccessJsonCodec)
-        .with_process_codec(PromptJsonCodec)
-        .with_process_codec(SessionJsonCodec)
-        .with_process_codec(ToolHookJsonCodec)
-        .with_process_codec(ToolProviderJsonCodec)
-        .with_process_codec(TurnInputJsonCodec)
-        .with_process_codec(ToolsJsonCodec)
-        .with_process_codec(UserInteractionJsonCodec)
-        .with_process_codec(WorkspaceReadJsonCodec)
+fn agent_catalog_factory(
+    plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+) -> MultiExecutionCatalogFactory<AgentCatalogFactory> {
+    MultiExecutionCatalogFactory::new(AgentCatalogFactory {
+        plugin_configuration_authority,
+    })
+    .with_wasm_codec(AgentJsonCodec)
+    .with_wasm_codec(ArtifactJsonCodec)
+    .with_wasm_codec(ContextCompactionJsonCodec)
+    .with_wasm_codec(ContextSourceJsonCodec)
+    .with_wasm_codec(MemoryJsonCodec)
+    .with_wasm_codec(HttpFetchJsonCodec)
+    .with_wasm_codec(LifecycleJsonCodec)
+    .with_wasm_codec(ModelJsonCodec)
+    .with_wasm_codec(ModelSelectionJsonCodec)
+    .with_wasm_codec(OauthAccessJsonCodec)
+    .with_wasm_codec(PromptJsonCodec)
+    .with_wasm_codec(SessionJsonCodec)
+    .with_wasm_codec(SessionPresentationJsonCodec)
+    .with_wasm_codec(ToolHookJsonCodec)
+    .with_wasm_codec(ToolProviderJsonCodec)
+    .with_wasm_codec(TurnInputJsonCodec)
+    .with_wasm_codec(ToolsJsonCodec)
+    .with_wasm_codec(UserInteractionJsonCodec)
+    .with_wasm_codec(WorkspaceReadJsonCodec)
+    .with_quickjs_codec(AgentJsonCodec)
+    .with_quickjs_codec(ArtifactJsonCodec)
+    .with_quickjs_codec(ContextCompactionJsonCodec)
+    .with_quickjs_codec(ContextSourceJsonCodec)
+    .with_quickjs_codec(MemoryJsonCodec)
+    .with_quickjs_codec(LifecycleJsonCodec)
+    .with_quickjs_codec(ModelJsonCodec)
+    .with_quickjs_codec(OauthAccessJsonCodec)
+    .with_quickjs_codec(PromptJsonCodec)
+    .with_quickjs_codec(SessionJsonCodec)
+    .with_quickjs_codec(ToolHookJsonCodec)
+    .with_quickjs_codec(TurnInputJsonCodec)
+    .with_quickjs_codec(ToolsJsonCodec)
+    .with_quickjs_codec(UserInteractionJsonCodec)
+    .with_quickjs_codec(WorkspaceReadJsonCodec)
+    .with_process_codec(AgentJsonCodec)
+    .with_process_codec(ArtifactJsonCodec)
+    .with_process_codec(ContextCompactionJsonCodec)
+    .with_process_codec(ContextSourceJsonCodec)
+    .with_process_codec(MemoryJsonCodec)
+    .with_process_codec(HttpFetchJsonCodec)
+    .with_process_codec(LifecycleJsonCodec)
+    .with_process_codec(ModelJsonCodec)
+    .with_process_codec(OauthAccessJsonCodec)
+    .with_process_codec(PromptJsonCodec)
+    .with_process_codec(SessionJsonCodec)
+    .with_process_codec(ToolHookJsonCodec)
+    .with_process_codec(ToolProviderJsonCodec)
+    .with_process_codec(TurnInputJsonCodec)
+    .with_process_codec(ToolsJsonCodec)
+    .with_process_codec(UserInteractionJsonCodec)
+    .with_process_codec(WorkspaceReadJsonCodec)
 }
 
 fn now_unix_nanos() -> Result<u128, String> {
@@ -3274,6 +3374,25 @@ mod tests {
         ] {
             assert!(DEFAULT_AGENT_INSTRUCTION.contains(required));
         }
+    }
+
+    #[test]
+    fn console_plugin_publication_requires_interactive_approval() {
+        let configuration = console_interactive_approval_configuration();
+        assert_eq!(
+            configuration["allow_tools"],
+            serde_json::json!([
+                "inspect_app",
+                "list_plugins",
+                "inspect_plugin",
+                "check_plugin_change"
+            ])
+        );
+        assert_eq!(
+            configuration["ask_tools"],
+            serde_json::json!(["apply_plugin_change"])
+        );
+        assert_eq!(configuration["default_decision"], "ask");
     }
 
     #[test]
@@ -3479,7 +3598,7 @@ mod tests {
             .filter(|plugin| plugin.id().plugin_id() != "lenso.agent.session-presentation")
             .filter(|plugin| available.contains(plugin.id().plugin_id()))
             .collect::<Vec<_>>();
-        let configurations = host_catalog_configurations(&directories)
+        let configurations = host_catalog_configurations(&directories, &available)
             .into_iter()
             .filter(|configuration| available.contains(configuration.id().plugin_id()))
             .collect::<Vec<_>>();

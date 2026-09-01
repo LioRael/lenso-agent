@@ -11,6 +11,7 @@ mod host;
 mod model_catalog_resources;
 mod official_prompts;
 mod online_generation;
+mod plugin_configuration_authority;
 mod plugin_root;
 mod profile;
 pub mod provenance;

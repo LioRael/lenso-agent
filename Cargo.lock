@@ -2997,14 +2997,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-console-plugin-tools-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-agent-tool-sdk",
+ "lenso-capability-agent-plugin-configuration-authority",
+ "lenso-capability-agent-tool-provider",
+ "lenso-kernel",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-console-plugins"
 version = "0.1.0"
 dependencies = [
  "lenso-agent-artifact-file-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
+ "lenso-agent-console-plugin-tools-plugin",
  "lenso-agent-context-compaction-plugin",
  "lenso-agent-http-fetch-plugin",
+ "lenso-agent-interactive-approval-hook-plugin",
  "lenso-agent-loop-plugin",
  "lenso-agent-memory-sqlite-plugin",
  "lenso-agent-model-openai-codex-direct-plugin",
@@ -3133,6 +3149,7 @@ dependencies = [
 name = "lenso-agent-host"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "directories",
  "fs2",
  "jsonschema",
@@ -3156,6 +3173,7 @@ dependencies = [
  "lenso-capability-agent-model",
  "lenso-capability-agent-model-selection",
  "lenso-capability-agent-oauth-access",
+ "lenso-capability-agent-plugin-configuration-authority",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-control",
@@ -3170,6 +3188,7 @@ dependencies = [
  "lenso-capability-terminal-command",
  "lenso-capability-tui-panel",
  "lenso-capability-tui-suggestion",
+ "lenso-cli",
  "lenso-kernel",
  "lenso-native-adapter",
  "lenso-plugin-bundle",
@@ -4139,6 +4158,24 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "lenso-capability-agent-plugin-configuration-authority"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_request" },
+    { "const": "not_found" },
+    { "const": "conflict" },
+    { "const": "proposal_mismatch" },
+    { "const": "proposal_not_ready" }
+  ]
+}

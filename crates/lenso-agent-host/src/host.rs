@@ -1,4 +1,6 @@
-use std::{fmt::Debug, path::PathBuf};
+use std::{fmt::Debug, path::PathBuf, sync::Arc};
+
+use lenso_app_authoring::PluginConfigurationAuthority;
 
 use crate::{AgentDirectories, generation::AgentApp, plan_bytes_for_profile_in};
 
@@ -162,6 +164,7 @@ impl AgentHost {
     pub const fn builder() -> AgentHostBuilder<()> {
         AgentHostBuilder {
             directories: None,
+            plugin_configuration_authority: None,
             surface: (),
         }
     }
@@ -171,6 +174,7 @@ impl AgentHost {
 #[derive(Debug)]
 pub struct AgentHostBuilder<S> {
     directories: Option<AgentDirectories>,
+    plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     surface: S,
 }
 
@@ -188,10 +192,21 @@ impl<S> AgentHostBuilder<S> {
         self
     }
 
+    /// Supplies the Host-owned authority used by Plugin configuration capability consumers.
+    #[must_use]
+    pub fn plugin_configuration_authority(
+        mut self,
+        authority: Arc<dyn PluginConfigurationAuthority>,
+    ) -> Self {
+        self.plugin_configuration_authority = Some(authority);
+        self
+    }
+
     /// Selects the process-owned surface without turning it into a Plugin.
     pub fn surface<T: AgentSurface>(self, surface: T) -> AgentHostBuilder<T> {
         AgentHostBuilder {
             directories: self.directories,
+            plugin_configuration_authority: self.plugin_configuration_authority,
             surface,
         }
     }
@@ -204,6 +219,7 @@ impl<S: AgentSurface> AgentHostBuilder<S> {
             directories: self
                 .directories
                 .map_or_else(AgentDirectories::resolve, Ok)?,
+            plugin_configuration_authority: self.plugin_configuration_authority,
             surface: self.surface,
         })
     }
@@ -213,6 +229,7 @@ impl<S: AgentSurface> AgentHostBuilder<S> {
 #[derive(Debug)]
 pub struct ConfiguredAgentHost<S> {
     directories: AgentDirectories,
+    plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     surface: S,
 }
 
@@ -225,6 +242,17 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
     /// resolution.
     pub fn prepare_authoring(&self) -> Result<(), String> {
         crate::ensure_host_catalog(&self.directories)
+    }
+
+    /// Supplies the Host-owned authority after authoring preparation has made
+    /// the current Host Catalog available to authority implementations.
+    #[must_use]
+    pub fn plugin_configuration_authority(
+        mut self,
+        authority: Arc<dyn PluginConfigurationAuthority>,
+    ) -> Self {
+        self.plugin_configuration_authority = Some(authority);
+        self
     }
 
     /// Resolves the selected Profile and starts one immutable App Generation.
@@ -244,6 +272,7 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
             self.surface.kind(),
             profile_name,
             crate::generation::HostBuildIdentity::current()?,
+            self.plugin_configuration_authority,
         )
         .await
         .map_err(|error| format!("App startup failed: {error}"))
