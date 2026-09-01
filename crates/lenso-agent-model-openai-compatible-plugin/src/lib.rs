@@ -15,8 +15,10 @@ use futures::{
 };
 use lenso::prelude::*;
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
-    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
+    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlStatus,
+    CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogRequest, CatalogResponse,
+    CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput, CompleteMessageKind,
+    CompleteMessageRole, CompleteOpen, ModelCatalog, ModelCompleteInvocationError, ModelProvider,
     ProviderFailurePayload,
 };
 use lenso_capability_secrets::{self as secrets_contract, ResolveRequest};
@@ -127,19 +129,50 @@ struct OpenAiCompatibleModel {
 
 #[lenso::provides(model_contract::Model)]
 impl ModelProvider for OpenAiCompatibleModel {
+    fn catalog(
+        &self,
+        _context: InvocationContext,
+        _request: CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<ModelCatalog> {
+        let models = std::iter::once(self.config.model.as_str())
+            .chain(self.config.allowed_models.iter().map(String::as_str))
+            .map(|id| CatalogModel {
+                id: id.to_owned(),
+                display_name: id.to_owned(),
+                description: "Configured OpenAI-compatible model".to_owned(),
+                hidden: false,
+                limits: CatalogModelLimits {
+                    context_window_tokens: None,
+                    max_input_tokens: None,
+                    max_output_tokens: None,
+                },
+                input_modalities: vec![CatalogInputModality::Text],
+                text_output: true,
+                tool_calls: true,
+                parallel_tool_calls: true,
+                reasoning: unknown_control(),
+                service_tiers: unknown_control(),
+                wire_protocol: CatalogWireProtocol::OpenaiChatCompletions,
+                compaction_compatibility: "generic-text-v1".to_owned(),
+            })
+            .collect();
+        Box::pin(ready(Ok(Ok(CatalogResponse { models }))))
+    }
+
     fn complete(
         &self,
         context: InvocationContext,
         request: CompleteOpen,
-    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
+    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelCompleteInvocationError>>
+    {
         if !self.config.admits_model(&request.model) {
-            return Box::pin(ready(Err(ModelInvocationError::Domain(
+            return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ))));
         }
         let body = match chat_request(&request) {
             Ok(body) => body,
-            Err(error) => return Box::pin(ready(Err(ModelInvocationError::Domain(error)))),
+            Err(error) => return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(error)))),
         };
         let secrets = self.secrets.clone();
         let client = self.client.clone();
@@ -161,7 +194,11 @@ impl ModelProvider for OpenAiCompatibleModel {
                     )
                 })?;
             let mut request = client
-                .post(config.endpoint().map_err(ModelInvocationError::Runtime)?)
+                .post(
+                    config
+                        .endpoint()
+                        .map_err(ModelCompleteInvocationError::Runtime)?,
+                )
                 .bearer_auth(credential.value);
             if let Some(referer) = config.http_referer.as_deref() {
                 request = request.header("HTTP-Referer", referer);
@@ -178,6 +215,14 @@ impl ModelProvider for OpenAiCompatibleModel {
             let chunks = response.bytes_stream().boxed_local();
             Ok(Box::new(OpenAiStream::new(chunks)) as Box<dyn NativeStreamSession>)
         })
+    }
+}
+
+fn unknown_control() -> CatalogControl {
+    CatalogControl {
+        status: CatalogControlStatus::Unknown,
+        options: Vec::new(),
+        default: None,
     }
 }
 
@@ -276,13 +321,13 @@ fn chat_message(message: &CompleteMessageInput) -> Result<serde_json::Value, Com
     }
 }
 
-fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
+fn map_status(status: reqwest::StatusCode) -> ModelCompleteInvocationError {
     match status {
         reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY => {
-            ModelInvocationError::Domain(CompleteError::InvalidRequest)
+            ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest)
         }
         reqwest::StatusCode::NOT_FOUND => {
-            ModelInvocationError::Domain(CompleteError::UnsupportedModel)
+            ModelCompleteInvocationError::Domain(CompleteError::UnsupportedModel)
         }
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => provider_failure(
             "credential_rejected",
@@ -290,13 +335,13 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
             false,
         ),
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            ModelInvocationError::Domain(CompleteError::RateLimited)
+            ModelCompleteInvocationError::Domain(CompleteError::RateLimited)
         }
         reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
-            ModelInvocationError::Domain(CompleteError::ContextOverflow)
+            ModelCompleteInvocationError::Domain(CompleteError::ContextOverflow)
         }
         reqwest::StatusCode::SERVICE_UNAVAILABLE => {
-            ModelInvocationError::Domain(CompleteError::Overloaded)
+            ModelCompleteInvocationError::Domain(CompleteError::Overloaded)
         }
         _ => provider_failure(
             "provider_error",
@@ -306,8 +351,12 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
     }
 }
 
-fn provider_failure(reason_code: &str, message: &str, retryable: bool) -> ModelInvocationError {
-    ModelInvocationError::Domain(CompleteError::ProviderFailure {
+fn provider_failure(
+    reason_code: &str,
+    message: &str,
+    retryable: bool,
+) -> ModelCompleteInvocationError {
+    ModelCompleteInvocationError::Domain(CompleteError::ProviderFailure {
         payload: ProviderFailurePayload {
             message: message.to_owned(),
             reason_code: reason_code.to_owned(),

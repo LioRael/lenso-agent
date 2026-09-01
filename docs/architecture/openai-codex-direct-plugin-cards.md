@@ -25,21 +25,27 @@ Status: experimental direct-provider baseline.
 
 ## `lenso.agent.model.openai-codex-direct`
 
-- **Deletion boundary:** removes direct Codex Responses request conversion,
-  subscription headers, SSE decoding, and provider-error translation.
-- **Owned facts:** allowed backend URL, selected model, Responses wire mapping,
-  event bound, and sanitized status policy.
-- **Provides:** `lenso.agent.model@2` (`complete`, stream).
+- **Deletion boundary:** removes direct Codex model discovery, Responses request
+  conversion, subscription headers, SSE decoding, and provider-error
+  translation.
+- **Owned facts:** allowed backend URL, discovered model metadata, optional model
+  allowlist, selected model, Responses wire mapping, event bound, and sanitized
+  status policy.
+- **Provides:** `lenso.agent.model@2.2` (`catalog`, request; `complete`, stream).
 - **Requires:** exactly one `lenso.agent.auth.openai-codex@1` provider selected
   by the Host Profile.
-- **Configuration:** official backend base URL, model, reasoning effort, and
-  maximum SSE event bytes. The shipped Profile selects `gpt-5.6-luna` with
-  medium reasoning.
+- **Configuration:** official backend base URL, selected model, optional
+  `allowed_models` restriction, reasoning effort, and maximum SSE event bytes.
+  With no allowlist, all Provider-discovered models are admitted. The shipped
+  Profile selects `gpt-5.6-luna` with medium reasoning.
 - **Lifecycle/resources:** activation constructs the generated Auth client only
-  from `PluginDependencies`; every completion owns one HTTP response stream.
-- **Failure policy:** invalid request and unsupported model are Domain Errors;
-  auth, network, rate limit, malformed SSE, truncation, and provider failure
-  remain sanitized Runtime Failures.
+  from `PluginDependencies`, fetches and validates the authenticated model
+  catalog, then freezes it for the candidate Generation. Every completion owns
+  one HTTP response stream.
+- **Failure policy:** catalog authentication, network, status, or validation
+  failure rejects the candidate Ready Gate. Invalid completion requests and
+  unsupported models are Domain Errors; rate limit, malformed SSE, truncation,
+  and provider failure remain sanitized Runtime Failures.
 - **First behavior:** asks the direct provider to call
   `read`, sends the Tool result in a second Responses request,
   and streams the final text and usage through the existing Agent Loop. The

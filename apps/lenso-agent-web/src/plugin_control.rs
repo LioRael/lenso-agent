@@ -2680,6 +2680,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn opaque_authority_that_wraps_local_publication_does_not_self_deadlock() {
         let root = tempfile::tempdir().unwrap();
+        crate::configure_test_fixture_model(root.path());
         let published = Arc::new(AtomicBool::new(false));
         let authority = WrappedLocalConfigurationAuthority {
             local: LocalPluginRootAuthority::new(root.path()),
@@ -2699,24 +2700,20 @@ mod tests {
                 assert!(control.configuration_publication_has_authority_gap());
                 let revision = control.inspect().unwrap().revision.parse().unwrap();
                 let toml = concat!(
-                    "model = \"gpt-5.6-luna\"\n",
-                    "max_steps = 9\n",
-                    "max_tool_calls = 4\n",
-                    "max_parallel_tool_calls = 4\n",
-                    "max_output_tokens = 1024\n",
-                    "max_history_events = 200\n",
-                    "max_compaction_summary_characters = 8192\n",
-                    "max_memory_items = 8\n",
-                    "max_memory_characters = 16384\n",
+                    "model = \"fixture/readme-summary-v1\"\n",
+                    "allowed_models = [\"fixture/alternate-v1\", \"fixture/alternate-v2\"]\n",
                 );
-                let source_digest =
-                    current_configuration_source_digest(root.path(), "lenso.agent.loop", "agent")
-                        .unwrap()
-                        .to_string();
+                let source_digest = current_configuration_source_digest(
+                    root.path(),
+                    "lenso.agent.model.fixture",
+                    "model",
+                )
+                .unwrap()
+                .to_string();
                 let proposal = control
                     .propose_configuration(
-                        "lenso.agent.loop",
-                        "agent",
+                        "lenso.agent.model.fixture",
+                        "model",
                         &revision,
                         &source_digest,
                         toml.as_bytes(),
@@ -2725,8 +2722,8 @@ mod tests {
                 let proposal_digest = proposal.proposal_digest;
                 let task = tokio::task::spawn_blocking(move || {
                     control.publish_configuration(
-                        "lenso.agent.loop",
-                        "agent",
+                        "lenso.agent.model.fixture",
+                        "model",
                         ReviewedPluginConfiguration {
                             bytes: toml.as_bytes(),
                             expected_proposal_digest: &proposal_digest,
@@ -2755,6 +2752,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn opaque_publication_receipt_replays_switch_before_handler_registration() {
         let root = tempfile::tempdir().unwrap();
+        crate::configure_test_fixture_model(root.path());
         let (materialized, materialization) = mpsc::channel();
         let (release, released) = mpsc::channel();
         let authority = PausingWrappedLocalConfigurationAuthority {
@@ -2785,24 +2783,20 @@ mod tests {
                 let control = runtime.plugin_control.clone().unwrap();
                 let revision = control.inspect().unwrap().revision.parse().unwrap();
                 let toml = concat!(
-                    "model = \"gpt-5.6-luna\"\n",
-                    "max_steps = 9\n",
-                    "max_tool_calls = 4\n",
-                    "max_parallel_tool_calls = 4\n",
-                    "max_output_tokens = 1024\n",
-                    "max_history_events = 200\n",
-                    "max_compaction_summary_characters = 8192\n",
-                    "max_memory_items = 8\n",
-                    "max_memory_characters = 16384\n",
+                    "model = \"fixture/readme-summary-v1\"\n",
+                    "allowed_models = [\"fixture/alternate-v1\", \"fixture/alternate-v2\"]\n",
                 );
-                let source_digest =
-                    current_configuration_source_digest(root.path(), "lenso.agent.loop", "agent")
-                        .unwrap()
-                        .to_string();
+                let source_digest = current_configuration_source_digest(
+                    root.path(),
+                    "lenso.agent.model.fixture",
+                    "model",
+                )
+                .unwrap()
+                .to_string();
                 let proposal = control
                     .propose_configuration(
-                        "lenso.agent.loop",
-                        "agent",
+                        "lenso.agent.model.fixture",
+                        "model",
                         &revision,
                         &source_digest,
                         toml.as_bytes(),
@@ -2821,7 +2815,7 @@ mod tests {
                     publish_plugin_instance_configuration(
                         State(handler_runtime),
                         HeaderMap::new(),
-                        AxumPath(("lenso.agent.loop".to_owned(), "agent".to_owned())),
+                        AxumPath(("lenso.agent.model.fixture".to_owned(), "model".to_owned())),
                         Json(request),
                     )
                     .await
@@ -2877,7 +2871,7 @@ mod tests {
         fs::write(
             loop_plugin.join("agent.toml"),
             concat!(
-                "model = \"gpt-5.6-luna\"\n",
+                "model = \"fixture/readme-summary-v1\"\n",
                 "max_steps = 8\n",
                 "max_tool_calls = 4\n",
                 "max_parallel_tool_calls = 4\n",
@@ -2915,7 +2909,7 @@ mod tests {
         let before = fs::read(&target).ok();
         let revision = control.inspect().unwrap().revision.parse().unwrap();
         let toml = concat!(
-            "model = \"gpt-5.6-luna\"\n",
+            "model = \"fixture/readme-summary-v1\"\n",
             "max_steps = 9\n",
             "max_tool_calls = 4\n",
             "max_parallel_tool_calls = 4\n",
@@ -2960,6 +2954,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn host_global_budget_rejection_precedes_local_publication() {
         let root = tempfile::tempdir().unwrap();
+        crate::configure_test_fixture_model(root.path());
         let mut config = crate::AgentWebConfig::new(lenso_agent_console_plugins::link);
         config.agent_home = Some(root.path().to_path_buf());
         config.control = crate::AgentWebControl::HostAuthorized;
@@ -2980,6 +2975,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn host_global_budget_rejection_precedes_sqlite_publication() {
         let root = tempfile::tempdir().unwrap();
+        crate::configure_test_fixture_model(root.path());
         let database = root.path().join("configuration.sqlite3");
         let mut config = crate::AgentWebConfig::new(lenso_agent_console_plugins::link);
         config.agent_home = Some(root.path().to_path_buf());
@@ -3022,6 +3018,7 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn host_global_budget_rejection_never_calls_an_opaque_authority_publish() {
         let root = tempfile::tempdir().unwrap();
+        crate::configure_test_fixture_model(root.path());
         let published = Arc::new(AtomicBool::new(false));
         let authority = WrappedLocalConfigurationAuthority {
             local: LocalPluginRootAuthority::new(root.path()),

@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use lenso::prelude::*;
 use lenso_capability_agent_model::{
     self as model_contract, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole,
-    CompleteOpen, ModelEvent,
+    CompleteOpen, ModelCompleteEvent,
 };
 use lenso_capability_agent_model_selection::{
     self as selection_contract, SelectError, SelectRequest, SelectResponse,
@@ -339,7 +339,7 @@ async fn classify(
     let mut output = String::new();
     loop {
         match stream.receive().await.map_err(|_| ())? {
-            ModelEvent::Message(message) => match message.kind {
+            ModelCompleteEvent::Message(message) => match message.kind {
                 CompleteMessageKind::TextDelta => {
                     if output
                         .chars()

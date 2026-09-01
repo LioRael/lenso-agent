@@ -24,7 +24,10 @@ use lenso_capability_agent_context_source::{
 use lenso_capability_agent_http_fetch::HttpFetchJsonCodec;
 use lenso_capability_agent_lifecycle::LifecycleJsonCodec;
 use lenso_capability_agent_memory::MemoryJsonCodec;
-use lenso_capability_agent_model::ModelJsonCodec;
+use lenso_capability_agent_model::{
+    CATALOG_OPERATION as MODEL_CATALOG_OPERATION, CatalogRequest as ModelCatalogRequest,
+    ModelCatalog, ModelJsonCodec,
+};
 use lenso_capability_agent_model_selection::{
     CAPABILITY_ID as MODEL_SELECTION_CAPABILITY_ID, ModelSelectionJsonCodec,
 };
@@ -557,7 +560,14 @@ impl AgentApp {
             })?;
         let directories = directories_for_store_root(self.runtime.state().root())?;
         let host = linked_host_catalog_in(&directories)?;
-        crate::provider_catalog::project(&host, &plan, route.generation_spec_digest())
+        let agent_provider = selected_surface_agent_provider(&plan)?;
+        let catalog = selected_model_catalog(&route, &agent_provider).await?;
+        crate::provider_catalog::project(
+            &host,
+            &plan,
+            route.generation_spec_digest(),
+            Some(&catalog),
+        )
     }
 
     /// Snapshots explicit disabled Instance markers for management surfaces.
@@ -913,15 +923,7 @@ impl AgentApp {
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
         let route = self.host.route().await.map_err(control_error)?;
-        let consumer_instance = match consumer_instance {
-            "acp" => "lenso.agent.acp/acp",
-            "cli" => "lenso.agent.cli/cli",
-            "tui" => "lenso.agent.tui/tui",
-            "telegram" => "lenso.agent.telegram/telegram",
-            "discord" => "lenso.agent.discord/discord",
-            "web" => "lenso.agent.web/web",
-            other => return Err(format!("unknown Agent surface `{other}`")),
-        };
+        let consumer_instance = surface_consumer_instance(consumer_instance)?;
         let handle = Rc::new(
             route
                 .target()
@@ -950,8 +952,13 @@ impl AgentApp {
             let behavior_digest = agent_behavior_digest(&plan, &agent_provider)?;
             let directories = directories_for_store_root(self.runtime.state().root())?;
             let host = linked_host_catalog_in(&directories)?;
-            let catalog =
-                crate::provider_catalog::project(&host, &plan, route.generation_spec_digest())?;
+            let provider_catalog = selected_model_catalog(&route, &agent_provider).await?;
+            let catalog = crate::provider_catalog::project(
+                &host,
+                &plan,
+                route.generation_spec_digest(),
+                Some(&provider_catalog),
+            )?;
             let resolved_turn_profile = catalog.resolved_turn_profile.clone().ok_or_else(|| {
                 "leased Generation Agent has no resolved Turn model profile".to_owned()
             })?;
@@ -1145,6 +1152,65 @@ fn session_control_handle(
                 })
         })
         .transpose()
+}
+
+fn selected_surface_agent_provider(plan: &ResolvedAppPlan) -> Result<String, String> {
+    let providers = plan
+        .capability_bindings()
+        .iter()
+        .filter(|binding| {
+            binding.capability_id() == AGENT_CAPABILITY_ID
+                && is_agent_surface(binding.consumer_instance())
+        })
+        .map(lenso_app_plan::CapabilityBinding::provider_instance)
+        .collect::<BTreeSet<_>>();
+    match providers.len() {
+        1 => providers
+            .into_iter()
+            .next()
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "active Generation has no surface Agent provider".to_owned()),
+        0 => Err("active Generation has no surface Agent provider".to_owned()),
+        _ => Err("active Generation surfaces select more than one Agent provider".to_owned()),
+    }
+}
+
+async fn selected_model_catalog(
+    route: &DurableGenerationRoute<NativeApp>,
+    agent_provider: &str,
+) -> Result<lenso_capability_agent_model::CatalogResponse, String> {
+    route
+        .target()
+        .handle::<ModelCatalog>(agent_provider)
+        .map_err(|error| format!("Generation Agent has no Model catalog route: {error:?}"))?
+        .invoke(MODEL_CATALOG_OPERATION, ModelCatalogRequest {})
+        .await
+        .map_err(|error| format!("Model catalog snapshot failed: {error:?}"))?
+        .map_err(|error| format!("Model catalog snapshot was rejected: {error:?}"))
+}
+
+fn is_agent_surface(instance: &str) -> bool {
+    matches!(
+        instance,
+        "lenso.agent.acp/acp"
+            | "lenso.agent.cli/cli"
+            | "lenso.agent.tui/tui"
+            | "lenso.agent.telegram/telegram"
+            | "lenso.agent.discord/discord"
+            | "lenso.agent.web/web"
+    )
+}
+
+fn surface_consumer_instance(surface: &str) -> Result<&'static str, String> {
+    match surface {
+        "acp" => Ok("lenso.agent.acp/acp"),
+        "cli" => Ok("lenso.agent.cli/cli"),
+        "tui" => Ok("lenso.agent.tui/tui"),
+        "telegram" => Ok("lenso.agent.telegram/telegram"),
+        "discord" => Ok("lenso.agent.discord/discord"),
+        "web" => Ok("lenso.agent.web/web"),
+        other => Err(format!("unknown Agent surface `{other}")),
+    }
 }
 
 fn agent_has_model_selection(

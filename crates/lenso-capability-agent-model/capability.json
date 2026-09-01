@@ -1,9 +1,16 @@
 {
   "id": "lenso.agent.model@2",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "portable": true,
   "cross_lane_transfer": false,
   "operations": [
+    {
+      "name": "catalog",
+      "interaction": "request",
+      "request_schema": "schemas/catalog-request.schema.json",
+      "response_schema": "schemas/catalog-response.schema.json",
+      "domain_error_schema": "schemas/catalog-error.schema.json"
+    },
     {
       "name": "complete",
       "interaction": "stream",

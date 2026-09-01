@@ -22,7 +22,7 @@ use lenso_capability_agent_context_source::{
 };
 use lenso_capability_agent_model::{
     CompleteMessage, CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen,
-    CompleteTool, ModelEvent, ModelInvocationError,
+    CompleteTool, ModelCompleteEvent, ModelCompleteInvocationError,
 };
 use lenso_capability_agent_oauth_access as oauth_contract;
 use lenso_capability_agent_tool_provider::{
@@ -736,7 +736,7 @@ impl McpClientPlugin {
         let mut tool_call: Option<CompleteMessage> = None;
         loop {
             match stream.receive().await? {
-                ModelEvent::Message(message) => match message.kind {
+                ModelCompleteEvent::Message(message) => match message.kind {
                     CompleteMessageKind::TextDelta => {
                         text.push_str(&message.text);
                         if text.len() > MAX_OUTPUT_BYTES {
@@ -753,9 +753,9 @@ impl McpClientPlugin {
                     }
                     CompleteMessageKind::ReasoningSummaryDelta | CompleteMessageKind::Usage => {}
                 },
-                ModelEvent::PeerHalfClosed => {}
-                ModelEvent::Terminal(Ok(())) => break,
-                ModelEvent::Terminal(Err(error)) => {
+                ModelCompleteEvent::PeerHalfClosed => {}
+                ModelCompleteEvent::Terminal(Ok(())) => break,
+                ModelCompleteEvent::Terminal(Err(error)) => {
                     return Err(protocol_failure(format!("MCP Sampling failed: {error:?}")));
                 }
             }
@@ -881,10 +881,10 @@ fn map_interaction_failure(error: UserInteractionAskInvocationError) -> RuntimeF
     }
 }
 
-fn map_model_failure(error: ModelInvocationError) -> RuntimeFailure {
+fn map_model_failure(error: ModelCompleteInvocationError) -> RuntimeFailure {
     match error {
-        ModelInvocationError::Runtime(error) => error,
-        ModelInvocationError::Domain(error) => {
+        ModelCompleteInvocationError::Runtime(error) => error,
+        ModelCompleteInvocationError::Domain(error) => {
             protocol_failure(format!("MCP Sampling failed: {error:?}"))
         }
     }

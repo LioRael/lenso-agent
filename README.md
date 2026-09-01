@@ -374,11 +374,14 @@ instances = [
 ```
 
 The model request goes through the Profile's Plan-bound Model provider, which
-must admit the configured model ID. To use a cheaper presentation model while
-the Agent keeps its primary model, add that ID to the selected Model Plugin's
-`allowed_models` array and select both configured Instances in the Profile.
-Unlisted model IDs fail closed. `/rename <title>` remains authoritative and is
-never overwritten by automatic projection.
+must admit the configured model ID. The Codex Provider discovers its models and
+controls while the candidate Generation enters the Ready Gate. With no
+`allowed_models` setting, all discovered models are admitted. To restrict a
+Profile, configure `allowed_models`; the selected primary model is always kept
+and other unlisted IDs fail closed. Select both configured Instances in the
+Profile when a cheaper admitted model should own presentation. `/rename
+<title>` remains authoritative and is never overwritten by automatic
+projection.
 
 The Profile is an authoring-time selector. The resolved immutable Generation,
 including exact Plugin configurations and bindings, remains the execution and

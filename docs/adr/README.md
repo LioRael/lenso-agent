@@ -91,3 +91,4 @@
 - [0089 — Name the product Lenso Agent](0089-name-the-product-lenso-agent.md)
 - [0090 — Compose terminal commands through Capabilities](0090-compose-terminal-commands-through-capabilities.md)
 - [0091 — Distribute installable Lenso Agent releases](0091-distribute-installable-agent-releases.md)
+- [0092 — Discover selected Provider models at Generation readiness](0092-discover-selected-provider-models-at-generation-readiness.md)

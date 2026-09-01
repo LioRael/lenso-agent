@@ -1,8 +1,14 @@
 use std::{
     fs,
+    io::{Read, Write},
     net::{SocketAddr, TcpListener},
     path::Path,
     process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
@@ -732,6 +738,7 @@ async fn updates_and_recovers_the_durable_tool_policy_with_revision_fencing() {
 async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
+    let catalog_server = write_direct_catalog_fixture(root.path());
     let control_token = ["fixture", "plugin", "control"].join("-");
     let address = available_address();
     let mut server = ChildGuard(
@@ -748,15 +755,17 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let client = reqwest::Client::new();
     wait_until_ready(&client, address, &mut server.0).await;
     let endpoint = format!(
-        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/configuration"
+        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.model.openai-codex-direct/model/configuration"
     );
     let proposals_endpoint = format!("{endpoint}/proposals");
     let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
     let catalog_endpoint =
         format!("http://{address}/api/console/v1/agent/control/plugins/catalog?query=fixture");
     let inventory_endpoint = format!("http://{address}/api/console/v1/agent/plugins");
-    let configuration = root.path().join("plugins/lenso.agent.loop/agent.toml");
-    assert!(!configuration.exists());
+    let configuration = root
+        .path()
+        .join("plugins/lenso.agent.model.openai-codex-direct/model.toml");
+    let initial_configuration = fs::read(&configuration).unwrap();
     let initial_generation = active_generation_digest(root.path());
 
     assert_plugin_management_forbidden(&client, &management_endpoint).await;
@@ -794,8 +803,11 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "local_plugin_root"
     );
     let initial_revision = initial_management["revision"].as_str().unwrap();
-    let initial_source_digest =
-        managed_source_digest(&initial_management, "lenso.agent.loop", "agent");
+    let initial_source_digest = managed_source_digest(
+        &initial_management,
+        "lenso.agent.model.openai-codex-direct",
+        "model",
+    );
     let initial_inventory = read_plugin_inventory(&client, &inventory_endpoint).await;
     let initial_stream_id = initial_inventory["streamId"].as_str().unwrap();
     assert_eq!(initial_inventory["desiredRevision"], initial_revision);
@@ -852,7 +864,7 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
             .status(),
         reqwest::StatusCode::FORBIDDEN
     );
-    assert!(!configuration.exists());
+    assert_eq!(fs::read(&configuration).unwrap(), initial_configuration);
 
     let large_configuration = format!("unexpected = true\n#{}\n", "x".repeat(70 * 1024));
     assert!(large_configuration.len() > 65_536);
@@ -909,10 +921,10 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     assert_eq!(rejected["status"], "rejected");
     assert_eq!(rejected["application"], "blocked");
     assert_eq!(rejected["diagnostics"][0]["code"], "invalid_configuration");
-    assert!(!configuration.exists());
+    assert_eq!(fs::read(&configuration).unwrap(), initial_configuration);
     assert_eq!(active_generation_digest(root.path()), initial_generation);
 
-    let updated_configuration = default_loop_configuration();
+    let updated_configuration = direct_model_configuration(catalog_server.address, 1_048_575);
     let proposal = client
         .post(&proposals_endpoint)
         .bearer_auth(&control_token)
@@ -939,7 +951,7 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         "local_plugin_root"
     );
     assert_ne!(proposal["candidateRevision"], initial_revision);
-    assert!(!configuration.exists());
+    assert_eq!(fs::read(&configuration).unwrap(), initial_configuration);
 
     let rejected_publication = client
         .put(&endpoint)
@@ -965,7 +977,7 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     );
     assert_eq!(rejected_publication["operation"]["status"], "rejected");
     assert!(rejected_publication["desired"].is_null());
-    assert!(!configuration.exists());
+    assert_eq!(fs::read(&configuration).unwrap(), initial_configuration);
 
     let accepted = client
         .put(&endpoint)
@@ -1035,12 +1047,13 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
     let updated_management =
         read_plugin_management(&client, &management_endpoint, &control_token).await;
     assert_eq!(updated_management["revision"], accepted["revision"]);
-    let updated_loop = managed_plugin(&updated_management, "lenso.agent.loop");
+    let updated_model =
+        managed_plugin(&updated_management, "lenso.agent.model.openai-codex-direct");
     assert_eq!(
-        updated_loop["instances"][0]["rootConfigurationToml"],
+        updated_model["instances"][0]["rootConfigurationToml"],
         updated_configuration
     );
-    assert_eq!(updated_loop["instances"][0]["hasRootDifference"], true);
+    assert_eq!(updated_model["instances"][0]["hasRootDifference"], true);
 
     assert_eq!(
         client
@@ -1082,6 +1095,7 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
 async fn persists_managed_plugin_configuration_across_host_restart() {
     let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
+    let catalog_server = write_direct_catalog_fixture(root.path());
     let database = root.path().join("configuration.sqlite3");
     let control_token = ["fixture", "managed", "configuration"].join("-");
     let address = available_address();
@@ -1108,7 +1122,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
     let client = reqwest::Client::new();
     wait_until_ready(&client, address, &mut server.0).await;
     let endpoint = format!(
-        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.loop/agent/configuration"
+        "http://{address}/api/console/v1/agent/control/plugins/lenso.agent.model.openai-codex-direct/model/configuration"
     );
     let proposals_endpoint = format!("{endpoint}/proposals");
     let management_endpoint = format!("http://{address}/api/console/v1/agent/control/plugins");
@@ -1126,7 +1140,8 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         })
     );
     let initial_revision = initial["revision"].as_str().unwrap();
-    let initial_source_digest = managed_source_digest(&initial, "lenso.agent.loop", "agent");
+    let initial_source_digest =
+        managed_source_digest(&initial, "lenso.agent.model.openai-codex-direct", "model");
     assert_eq!(
         client
             .post(format!(
@@ -1146,17 +1161,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         read_plugin_management(&client, &management_endpoint, &control_token).await["revision"],
         initial_revision
     );
-    let configuration = concat!(
-        "model = \"gpt-5.6-luna\"\n",
-        "max_steps = 7\n",
-        "max_tool_calls = 4\n",
-        "max_parallel_tool_calls = 4\n",
-        "max_output_tokens = 1024\n",
-        "max_history_events = 200\n",
-        "max_compaction_summary_characters = 8192\n",
-        "max_memory_items = 8\n",
-        "max_memory_characters = 16384\n",
-    );
+    let configuration = direct_model_configuration(catalog_server.address, 1_048_575);
     let proposal = client
         .post(&proposals_endpoint)
         .bearer_auth(&control_token)
@@ -1200,7 +1205,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
             "expectedSourceDigest": proposal["baseSourceDigest"],
             "expectedStreamId": initial_stream_id,
             "proposalDigest": proposal["proposalDigest"],
-            "toml": configuration,
+            "toml": &configuration,
         }))
         .send()
         .await
@@ -1219,7 +1224,11 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
     let recovered_stream_id = recovered_inventory["streamId"].as_str().unwrap().to_owned();
     assert_ne!(recovered_stream_id, initial_stream_id);
     let management = read_plugin_management(&client, &management_endpoint, &control_token).await;
-    let published_source_digest = managed_source_digest(&management, "lenso.agent.loop", "agent");
+    let published_source_digest = managed_source_digest(
+        &management,
+        "lenso.agent.model.openai-codex-direct",
+        "model",
+    );
     assert_eq!(management["revision"], published_revision);
     assert_eq!(
         management["configurationAuthority"],
@@ -1251,7 +1260,9 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
             .status(),
         reqwest::StatusCode::NOT_MODIFIED
     );
-    let target = root.path().join("plugins/lenso.agent.loop/agent.toml");
+    let target = root
+        .path()
+        .join("plugins/lenso.agent.model.openai-codex-direct/model.toml");
     let bytes_before_stale_requests = fs::read(&target).unwrap();
     let proposals_before_stale_requests = configuration_proposal_count(&database);
     let stale_configuration_request = serde_json::json!({
@@ -1369,7 +1380,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         read_plugin_management(&client, &management_endpoint, &control_token).await["revision"],
         published_revision
     );
-    let second_configuration = configuration.replacen("max_steps = 7", "max_steps = 8", 1);
+    let second_configuration = configuration.replacen("1048575", "1048574", 1);
     let second_proposal = client
         .post(&proposals_endpoint)
         .bearer_auth(&control_token)
@@ -1425,7 +1436,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         reqwest::StatusCode::CONFLICT
     );
     assert_eq!(fs::read_to_string(&target).unwrap(), externally_reformatted);
-    fs::write(&target, configuration).unwrap();
+    fs::write(&target, &configuration).unwrap();
     let second_publication = client
         .put(&endpoint)
         .bearer_auth(&control_token)
@@ -1470,7 +1481,11 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         configuration
     );
     let after_second = read_plugin_management(&client, &management_endpoint, &control_token).await;
-    let second_source_digest = managed_source_digest(&after_second, "lenso.agent.loop", "agent");
+    let second_source_digest = managed_source_digest(
+        &after_second,
+        "lenso.agent.model.openai-codex-direct",
+        "model",
+    );
 
     let rollback = client
         .post(format!("{endpoint}/rollback-proposals"))
@@ -1496,7 +1511,11 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
     assert_eq!(rollback["configurationToml"], configuration);
     assert_eq!(rollback["proposal"]["status"], "ready");
     assert_eq!(
-        fs::read_to_string(root.path().join("plugins/lenso.agent.loop/agent.toml")).unwrap(),
+        fs::read_to_string(
+            root.path()
+                .join("plugins/lenso.agent.model.openai-codex-direct/model.toml")
+        )
+        .unwrap(),
         second_configuration
     );
     client
@@ -1566,21 +1585,6 @@ fn configuration_proposal_count(database: &Path) -> i64 {
             row.get(0)
         })
         .unwrap()
-}
-
-fn default_loop_configuration() -> &'static str {
-    concat!(
-        "model = \"gpt-5.6-luna\"\n",
-        "max_steps = 9\n",
-        "max_tool_calls = 4\n",
-        "max_user_resumes = 8\n",
-        "max_parallel_tool_calls = 4\n",
-        "max_output_tokens = 1024\n",
-        "max_history_events = 200\n",
-        "max_compaction_summary_characters = 8192\n",
-        "max_memory_items = 8\n",
-        "max_memory_characters = 16384\n",
-    )
 }
 
 async fn assert_inventory_cursor_is_non_destructive(client: &reqwest::Client, address: SocketAddr) {
@@ -1924,6 +1928,136 @@ fn write_web_fixture(root: &std::path::Path) {
         ),
     )
     .unwrap();
+}
+
+fn write_direct_catalog_fixture(root: &Path) -> CatalogServerGuard {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let address = listener.local_addr().unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server_stopped = Arc::clone(&stopped);
+    let thread = thread::spawn(move || {
+        while !server_stopped.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    if server_stopped.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                        let mut buffer = [0_u8; 2_048];
+                        let read = stream.read(&mut buffer).unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&buffer[..read]);
+                    }
+                    let body = direct_catalog_response();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .unwrap();
+                    stream.flush().unwrap();
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("catalog fixture accept failed: {error}"),
+            }
+        }
+    });
+
+    let credential = root.join("direct-catalog-credential.json");
+    fs::write(
+        &credential,
+        serde_json::to_vec(&serde_json::json!({
+            "openai-codex": {
+                "type": "oauth",
+                "access": "catalog-fixture-access",
+                "refresh": "catalog-fixture-refresh",
+                "accountId": "catalog-fixture-account",
+                "expires": u64::MAX,
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let model_directory = root.join("plugins/lenso.agent.model.openai-codex-direct");
+    fs::create_dir_all(&model_directory).unwrap();
+    fs::write(
+        model_directory.join("model.toml"),
+        direct_model_configuration(address, 1_048_576),
+    )
+    .unwrap();
+    let auth_directory = root.join("plugins/lenso.agent.auth.openai-codex");
+    fs::create_dir_all(&auth_directory).unwrap();
+    fs::write(
+        auth_directory.join("auth.toml"),
+        format!(
+            "issuer = \"https://auth.openai.com\"\nprofile = \"default\"\ncredential_file = \"{}\"\nrefresh_margin_seconds = 60\n",
+            credential.display()
+        ),
+    )
+    .unwrap();
+
+    CatalogServerGuard {
+        address,
+        stopped,
+        thread: Some(thread),
+    }
+}
+
+fn direct_model_configuration(address: SocketAddr, max_event_bytes: usize) -> String {
+    format!(
+        "base_url = \"http://{address}\"\nmodel = \"gpt-5.6-luna\"\nreasoning_effort = \"medium\"\nmax_event_bytes = {max_event_bytes}\n"
+    )
+}
+
+fn direct_catalog_response() -> String {
+    serde_json::json!({
+        "models": [{
+            "slug": "gpt-5.6-luna",
+            "display_name": "GPT-5.6 Luna",
+            "description": "Fixture model",
+            "default_reasoning_level": "medium",
+            "supported_reasoning_levels": [
+                {"effort": "low", "description": "Light reasoning"},
+                {"effort": "medium", "description": "Balanced reasoning"},
+                {"effort": "high", "description": "Deep reasoning"}
+            ],
+            "visibility": "list",
+            "additional_speed_tiers": ["fast"],
+            "service_tiers": [],
+            "default_service_tier": null,
+            "supports_parallel_tool_calls": true,
+            "context_window": 272_000,
+            "effective_context_window_percent": 95,
+            "input_modalities": ["text", "image"]
+        }]
+    })
+    .to_string()
+}
+
+struct CatalogServerGuard {
+    address: SocketAddr,
+    stopped: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Drop for CatalogServerGuard {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Relaxed);
+        let _ = std::net::TcpStream::connect(self.address);
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
+    }
 }
 
 fn initialize_git_workspace(workspace: &Path) {

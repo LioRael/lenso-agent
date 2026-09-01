@@ -18,14 +18,17 @@ use lenso_capability_agent_auth_openai_codex::{
     self as auth_contract, AccessRequest, OpenaiCodexInvocationError,
 };
 use lenso_capability_agent_model::{
-    self as model_contract, CAPABILITY_ID, CompleteError, CompleteMessage, CompleteMessageInput,
-    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelInvocationError, ModelProvider,
-    ProviderFailurePayload,
+    self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlOption,
+    CatalogControlStatus, CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogRequest,
+    CatalogResponse, CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
+    ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const MAX_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_CATALOG_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,25 +36,22 @@ struct DirectModelConfig {
     base_url: String,
     model: String,
     #[serde(default)]
-    allowed_models: Vec<String>,
+    allowed_models: Option<Vec<String>>,
     reasoning_effort: String,
     max_event_bytes: usize,
 }
 
 impl DirectModelConfig {
     fn validate(self) -> Result<Self, RuntimeFailure> {
+        let allowed_models = self.allowed_models.as_deref().unwrap_or_default();
         if !valid_model_id(&self.model)
-            || self.allowed_models.len() > 16
-            || self
-                .allowed_models
+            || allowed_models.len() > 128
+            || allowed_models
                 .iter()
                 .any(|model| !valid_model_id(model) || model == &self.model)
-            || self.allowed_models.iter().collect::<BTreeSet<_>>().len()
-                != self.allowed_models.len()
-            || !matches!(
-                self.reasoning_effort.as_str(),
-                "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-            )
+            || allowed_models.iter().collect::<BTreeSet<_>>().len() != allowed_models.len()
+            || self.reasoning_effort.is_empty()
+            || self.reasoning_effort.len() > 32
             || self.max_event_bytes == 0
             || self.max_event_bytes > MAX_EVENT_BYTES
         {
@@ -86,8 +86,21 @@ impl DirectModelConfig {
         .map_err(|_| invalid_plan("direct Codex base_url is invalid"))
     }
 
+    fn catalog_endpoint(&self) -> Result<reqwest::Url, RuntimeFailure> {
+        reqwest::Url::parse(&format!(
+            "{}/codex/models?client_version={}",
+            self.base_url.trim_end_matches('/'),
+            env!("CARGO_PKG_VERSION")
+        ))
+        .map_err(|_| invalid_plan("direct Codex catalog URL is invalid"))
+    }
+
     fn admits_model(&self, model: &str) -> bool {
-        model == self.model || self.allowed_models.iter().any(|allowed| allowed == model)
+        model == self.model
+            || self
+                .allowed_models
+                .as_ref()
+                .is_some_and(|allowed| allowed.iter().any(|candidate| candidate == model))
     }
 }
 
@@ -99,24 +112,112 @@ fn validate_config(config: &DirectModelConfig) -> Result<(), RuntimeFailure> {
     config.clone().validate().map(|_| ())
 }
 
-#[lenso::plugin(configuration_schema = "config.schema.json", validate = validate_config)]
+#[lenso::plugin(
+    lifecycle,
+    configuration_schema = "config.schema.json",
+    validate = validate_config
+)]
 #[derive(Clone, Debug)]
 struct DirectModel {
     #[config]
     config: DirectModelConfig,
     client: reqwest::Client,
     auth: Port<auth_contract::OpenaiCodexClient>,
+    catalog: Rc<RefCell<Option<CatalogResponse>>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodexModelsResponse {
+    models: Vec<CodexModel>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodexModel {
+    slug: String,
+    display_name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    default_reasoning_level: Option<String>,
+    #[serde(default)]
+    supported_reasoning_levels: Vec<CodexReasoningEffort>,
+    #[serde(default = "listed_visibility")]
+    visibility: String,
+    #[serde(default)]
+    additional_speed_tiers: Vec<String>,
+    #[serde(default)]
+    service_tiers: Vec<CodexServiceTier>,
+    #[serde(default)]
+    default_service_tier: Option<String>,
+    #[serde(default)]
+    supports_parallel_tool_calls: bool,
+    #[serde(default)]
+    context_window: Option<i64>,
+    #[serde(default)]
+    max_context_window: Option<i64>,
+    #[serde(default = "default_effective_context_window_percent")]
+    effective_context_window_percent: i64,
+    #[serde(default)]
+    comp_hash: Option<String>,
+    #[serde(default = "default_codex_input_modalities")]
+    input_modalities: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodexReasoningEffort {
+    effort: String,
+    description: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CodexServiceTier {
+    id: String,
+    name: String,
+    description: String,
+}
+
+fn listed_visibility() -> String {
+    "list".to_owned()
+}
+
+const fn default_effective_context_window_percent() -> i64 {
+    95
+}
+
+fn default_codex_input_modalities() -> Vec<String> {
+    vec!["text".to_owned(), "image".to_owned()]
 }
 
 #[lenso::provides(model_contract::Model)]
 impl ModelProvider for DirectModel {
+    fn catalog(
+        &self,
+        _context: InvocationContext,
+        _request: CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<ModelCatalog> {
+        let result = self
+            .catalog
+            .borrow()
+            .clone()
+            .ok_or(RuntimeFailure::Unavailable {
+                capability: model_contract::CAPABILITY_ID,
+            });
+        Box::pin(ready(result.map(Ok)))
+    }
+
     fn complete(
         &self,
         context: InvocationContext,
         request: CompleteOpen,
-    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelInvocationError>> {
-        if !self.config.admits_model(&request.model) {
-            return Box::pin(ready(Err(ModelInvocationError::Domain(
+    ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelCompleteInvocationError>>
+    {
+        if !self
+            .catalog
+            .borrow()
+            .as_ref()
+            .is_some_and(|catalog| catalog.models.iter().any(|model| model.id == request.model))
+        {
+            return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(
                 CompleteError::UnsupportedModel,
             ))));
         }
@@ -126,7 +227,7 @@ impl ModelProvider for DirectModel {
             .unwrap_or(&self.config.reasoning_effort);
         let wire_request = match responses_request(&request, reasoning_effort) {
             Ok(body) => body,
-            Err(error) => return Box::pin(ready(Err(ModelInvocationError::Domain(error)))),
+            Err(error) => return Box::pin(ready(Err(ModelCompleteInvocationError::Domain(error)))),
         };
         let auth = self.auth.clone();
         let config = self.config.clone();
@@ -137,7 +238,11 @@ impl ModelProvider for DirectModel {
                 .await
                 .map_err(map_auth_error)?;
             let response = client
-                .post(config.endpoint().map_err(ModelInvocationError::Runtime)?)
+                .post(
+                    config
+                        .endpoint()
+                        .map_err(ModelCompleteInvocationError::Runtime)?,
+                )
                 .bearer_auth(credential.access_token)
                 .header("chatgpt-account-id", credential.account_id)
                 .header("originator", "lenso")
@@ -161,6 +266,239 @@ impl ModelProvider for DirectModel {
             )) as Box<dyn NativeStreamSession>)
         })
     }
+}
+
+impl Lifecycle for DirectModel {
+    async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
+        let credential = self.auth.access(AccessRequest {}).await.map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("direct Codex model catalog authentication failed: {error:?}"),
+            }
+        })?;
+        let response = self
+            .client
+            .get(self.config.catalog_endpoint()?)
+            .bearer_auth(credential.access_token)
+            .header("chatgpt-account-id", credential.account_id)
+            .header("originator", "lenso")
+            .header(
+                "User-Agent",
+                concat!("lenso-agent/", env!("CARGO_PKG_VERSION")),
+            )
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .map_err(|_| RuntimeFailure::PluginFailure {
+                detail: "direct Codex model catalog request failed".to_owned(),
+            })?;
+        if !response.status().is_success() {
+            return Err(RuntimeFailure::PluginFailure {
+                detail: format!(
+                    "direct Codex model catalog returned HTTP {}",
+                    response.status().as_u16()
+                ),
+            });
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_CATALOG_BYTES as u64)
+        {
+            return Err(invalid_plan("direct Codex model catalog is too large"));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| RuntimeFailure::PluginFailure {
+                detail: "direct Codex model catalog body failed".to_owned(),
+            })?;
+        if bytes.len() > MAX_CATALOG_BYTES {
+            return Err(invalid_plan("direct Codex model catalog is too large"));
+        }
+        let response = serde_json::from_slice::<CodexModelsResponse>(&bytes)
+            .map_err(|_| invalid_plan("direct Codex model catalog response is invalid"))?;
+        let catalog = project_codex_catalog(&self.config, response)?;
+        self.catalog.replace(Some(catalog));
+        Ok(())
+    }
+
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn deactivate(&self, _context: DeactivateContext) -> Result<(), RuntimeFailure> {
+        self.catalog.replace(None);
+        Ok(())
+    }
+}
+
+fn project_codex_catalog(
+    config: &DirectModelConfig,
+    response: CodexModelsResponse,
+) -> Result<CatalogResponse, RuntimeFailure> {
+    if response.models.is_empty() || response.models.len() > 128 {
+        return Err(invalid_plan(
+            "direct Codex model catalog must contain one to 128 models",
+        ));
+    }
+    let mut ids = BTreeSet::new();
+    let mut models = Vec::new();
+    for model in response.models {
+        if model.visibility == "none"
+            || (!config.admits_model(&model.slug) && config.allowed_models.is_some())
+        {
+            continue;
+        }
+        let projected = project_codex_model(model)?;
+        if !ids.insert(projected.id.clone()) {
+            return Err(invalid_plan(
+                "direct Codex model catalog contains duplicate models",
+            ));
+        }
+        models.push(projected);
+    }
+    if models.is_empty() || !models.iter().any(|model| model.id == config.model) {
+        return Err(invalid_plan(
+            "configured direct Codex model is absent from the Provider catalog",
+        ));
+    }
+    let selected = models
+        .iter()
+        .find(|model| model.id == config.model)
+        .expect("configured model presence was checked");
+    if !control_supports(&selected.reasoning, &config.reasoning_effort) {
+        return Err(invalid_plan(
+            "configured reasoning effort is absent from the Provider catalog",
+        ));
+    }
+    Ok(CatalogResponse { models })
+}
+
+fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure> {
+    if !valid_model_id(&model.slug)
+        || model.display_name.is_empty()
+        || model.display_name.len() > 256
+        || model
+            .description
+            .as_deref()
+            .is_some_and(|value| value.len() > 4_096)
+        || !matches!(model.visibility.as_str(), "list" | "hide" | "none")
+        || !(1..=100).contains(&model.effective_context_window_percent)
+        || !model.input_modalities.iter().any(|value| value == "text")
+    {
+        return Err(invalid_plan("direct Codex model metadata is invalid"));
+    }
+    let context_window = model.context_window.or(model.max_context_window);
+    let max_input_tokens = context_window
+        .map(|tokens| tokens.saturating_mul(model.effective_context_window_percent) / 100);
+    let reasoning = control(
+        model.default_reasoning_level,
+        model
+            .supported_reasoning_levels
+            .into_iter()
+            .map(|item| CatalogControlOption {
+                name: item.effort.clone(),
+                id: item.effort,
+                description: item.description,
+            })
+            .collect(),
+    )?;
+    let mut tiers = Vec::new();
+    for tier in model.service_tiers {
+        tiers.push(CatalogControlOption {
+            id: tier.id,
+            name: tier.name,
+            description: tier.description,
+        });
+    }
+    for tier in model.additional_speed_tiers {
+        tiers.push(CatalogControlOption {
+            id: tier.clone(),
+            name: tier,
+            description: "Provider speed tier".to_owned(),
+        });
+    }
+    let service_tiers = control(model.default_service_tier, tiers)?;
+    let compaction_compatibility = model
+        .comp_hash
+        .unwrap_or_else(|| "generic-text-v1".to_owned());
+    if compaction_compatibility.is_empty() || compaction_compatibility.len() > 128 {
+        return Err(invalid_plan(
+            "direct Codex compaction compatibility is invalid",
+        ));
+    }
+    Ok(CatalogModel {
+        id: model.slug,
+        display_name: model.display_name,
+        description: model.description.unwrap_or_default(),
+        hidden: model.visibility != "list",
+        limits: CatalogModelLimits {
+            context_window_tokens: optional_tokens(context_window)?,
+            max_input_tokens: optional_tokens(max_input_tokens)?,
+            max_output_tokens: None,
+        },
+        input_modalities: vec![CatalogInputModality::Text],
+        text_output: true,
+        tool_calls: true,
+        parallel_tool_calls: model.supports_parallel_tool_calls,
+        reasoning,
+        service_tiers,
+        wire_protocol: CatalogWireProtocol::OpenaiResponses,
+        compaction_compatibility,
+    })
+}
+
+fn control(
+    default: Option<String>,
+    options: Vec<CatalogControlOption>,
+) -> Result<CatalogControl, RuntimeFailure> {
+    let unique_ids = options
+        .iter()
+        .map(|option| option.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if options.len() > 16
+        || unique_ids.len() != options.len()
+        || options.iter().any(|option| {
+            option.id.is_empty()
+                || option.id.len() > 32
+                || option.name.is_empty()
+                || option.name.len() > 128
+                || option.description.len() > 1_024
+        })
+        || default
+            .as_deref()
+            .is_some_and(|value| !options.iter().any(|option| option.id == value))
+    {
+        return Err(invalid_plan(
+            "direct Codex model control metadata is invalid",
+        ));
+    }
+    Ok(CatalogControl {
+        status: if options.is_empty() {
+            CatalogControlStatus::Unsupported
+        } else {
+            CatalogControlStatus::Selectable
+        },
+        options,
+        default: default.map(Some),
+    })
+}
+
+fn control_supports(control: &CatalogControl, selected: &str) -> bool {
+    control.status == CatalogControlStatus::Selectable
+        && control.options.iter().any(|option| option.id == selected)
+}
+
+#[allow(
+    clippy::option_option,
+    reason = "generated portable optional fields distinguish omitted from explicit null"
+)]
+fn optional_tokens(value: Option<i64>) -> Result<Option<Option<String>>, RuntimeFailure> {
+    value
+        .map(|value| {
+            u64::try_from(value)
+                .ok()
+                .filter(|value| *value > 0)
+                .map(|value| Some(value.to_string()))
+                .ok_or_else(|| invalid_plan("direct Codex model token limit is invalid"))
+        })
+        .transpose()
 }
 
 struct ResponsesRequest {
@@ -234,9 +572,6 @@ fn responses_request(
         body["temperature"] = serde_json::json!(request.temperature);
     }
     if let Some(service_tier) = request.service_tier.as_deref() {
-        if service_tier != "fast" {
-            return Err(CompleteError::InvalidRequest);
-        }
         body["service_tier"] = serde_json::json!(service_tier);
     }
     Ok(ResponsesRequest {
@@ -333,7 +668,7 @@ fn require_no_tool_fields(message: &CompleteMessageInput) -> Result<(), Complete
     }
 }
 
-fn map_auth_error(_error: OpenaiCodexInvocationError) -> ModelInvocationError {
+fn map_auth_error(_error: OpenaiCodexInvocationError) -> ModelCompleteInvocationError {
     provider_failure(
         "authentication_required",
         "direct Codex authentication failed; run direct login",
@@ -341,13 +676,13 @@ fn map_auth_error(_error: OpenaiCodexInvocationError) -> ModelInvocationError {
     )
 }
 
-fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
+fn map_status(status: reqwest::StatusCode) -> ModelCompleteInvocationError {
     match status {
         reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNPROCESSABLE_ENTITY => {
-            ModelInvocationError::Domain(CompleteError::InvalidRequest)
+            ModelCompleteInvocationError::Domain(CompleteError::InvalidRequest)
         }
         reqwest::StatusCode::NOT_FOUND => {
-            ModelInvocationError::Domain(CompleteError::UnsupportedModel)
+            ModelCompleteInvocationError::Domain(CompleteError::UnsupportedModel)
         }
         reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => provider_failure(
             "credential_rejected",
@@ -355,13 +690,13 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
             false,
         ),
         reqwest::StatusCode::TOO_MANY_REQUESTS => {
-            ModelInvocationError::Domain(CompleteError::RateLimited)
+            ModelCompleteInvocationError::Domain(CompleteError::RateLimited)
         }
         reqwest::StatusCode::PAYLOAD_TOO_LARGE => {
-            ModelInvocationError::Domain(CompleteError::ContextOverflow)
+            ModelCompleteInvocationError::Domain(CompleteError::ContextOverflow)
         }
         reqwest::StatusCode::SERVICE_UNAVAILABLE => {
-            ModelInvocationError::Domain(CompleteError::Overloaded)
+            ModelCompleteInvocationError::Domain(CompleteError::Overloaded)
         }
         _ => provider_failure(
             "provider_error",
@@ -371,8 +706,12 @@ fn map_status(status: reqwest::StatusCode) -> ModelInvocationError {
     }
 }
 
-fn provider_failure(reason_code: &str, message: &str, retryable: bool) -> ModelInvocationError {
-    ModelInvocationError::Domain(CompleteError::ProviderFailure {
+fn provider_failure(
+    reason_code: &str,
+    message: &str,
+    retryable: bool,
+) -> ModelCompleteInvocationError {
+    ModelCompleteInvocationError::Domain(CompleteError::ProviderFailure {
         payload: ProviderFailurePayload {
             message: message.to_owned(),
             reason_code: reason_code.to_owned(),
@@ -694,7 +1033,7 @@ mod tests {
         let config = DirectModelConfig {
             base_url: DEFAULT_BASE_URL.to_owned(),
             model: "main-model".to_owned(),
-            allowed_models: vec!["presentation-model".to_owned()],
+            allowed_models: Some(vec!["presentation-model".to_owned()]),
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
         }
@@ -703,6 +1042,91 @@ mod tests {
         assert!(config.admits_model("main-model"));
         assert!(config.admits_model("presentation-model"));
         assert!(!config.admits_model("unreviewed-model"));
+    }
+
+    #[test]
+    fn provider_catalog_owns_models_reasoning_tiers_and_limits() {
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "gpt-current".to_owned(),
+            allowed_models: None,
+            reasoning_effort: "high".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        }
+        .validate()
+        .unwrap();
+        let catalog = project_codex_catalog(
+            &config,
+            CodexModelsResponse {
+                models: vec![CodexModel {
+                    slug: "gpt-current".to_owned(),
+                    display_name: "GPT Current".to_owned(),
+                    description: Some("Provider-discovered model".to_owned()),
+                    default_reasoning_level: Some("medium".to_owned()),
+                    supported_reasoning_levels: vec![
+                        CodexReasoningEffort {
+                            effort: "medium".to_owned(),
+                            description: "Balanced".to_owned(),
+                        },
+                        CodexReasoningEffort {
+                            effort: "high".to_owned(),
+                            description: "Deep".to_owned(),
+                        },
+                    ],
+                    visibility: "list".to_owned(),
+                    additional_speed_tiers: vec!["fast".to_owned()],
+                    service_tiers: vec![CodexServiceTier {
+                        id: "priority".to_owned(),
+                        name: "Priority".to_owned(),
+                        description: "Provider priority processing".to_owned(),
+                    }],
+                    default_service_tier: None,
+                    supports_parallel_tool_calls: true,
+                    context_window: Some(272_000),
+                    max_context_window: None,
+                    effective_context_window_percent: 95,
+                    comp_hash: Some("codex-current".to_owned()),
+                    input_modalities: vec!["text".to_owned(), "image".to_owned()],
+                }],
+            },
+        )
+        .unwrap();
+        let model = &catalog.models[0];
+        assert_eq!(model.id, "gpt-current");
+        assert_eq!(
+            model.limits.context_window_tokens,
+            Some(Some("272000".to_owned()))
+        );
+        assert_eq!(
+            model.limits.max_input_tokens,
+            Some(Some("258400".to_owned()))
+        );
+        assert_eq!(
+            model
+                .reasoning
+                .options
+                .iter()
+                .map(|option| option.id.as_str())
+                .collect::<Vec<_>>(),
+            ["medium", "high"]
+        );
+        assert_eq!(
+            model
+                .service_tiers
+                .options
+                .iter()
+                .map(|option| option.id.as_str())
+                .collect::<Vec<_>>(),
+            ["priority", "fast"]
+        );
+        assert_eq!(model.input_modalities, [CatalogInputModality::Text]);
+
+        let duplicate = CatalogControlOption {
+            id: "high".to_owned(),
+            name: "High".to_owned(),
+            description: String::new(),
+        };
+        assert!(control(None, vec![duplicate.clone(), duplicate]).is_err());
     }
     use lenso_capability_agent_model::CompleteTool;
 
