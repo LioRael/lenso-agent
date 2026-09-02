@@ -9,6 +9,7 @@ members = [
     "crates/lenso-agent-host",
     "crates/lenso-agent-default-plugins",
     "crates/lenso-agent-console-plugins",
+    "crates/lenso-agent-console-instructions-plugin",
     "crates/lenso-agent-console-plugin-tools-plugin",
     "crates/lenso-capability-agent-plugin-configuration",
     "crates/lenso-agent-auth-openai-codex-plugin",

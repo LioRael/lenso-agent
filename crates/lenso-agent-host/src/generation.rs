@@ -2558,6 +2558,11 @@ fn host_catalog_defaults(
             .disableable(),
         ]);
     }
+    if available.contains("lenso.agent.console-instructions") {
+        defaults.push(
+            HostDefaultPlugin::new("lenso.agent.console-instructions", "default").disableable(),
+        );
+    }
     defaults
 }
 
@@ -3393,6 +3398,25 @@ mod tests {
             serde_json::json!(["apply_plugin_change"])
         );
         assert_eq!(configuration["default_decision"], "ask");
+    }
+
+    #[test]
+    fn console_instruction_is_a_disableable_default_only_when_linked() {
+        let directories = AgentDirectories::resolve().unwrap();
+        let available = BTreeSet::from(["lenso.agent.console-instructions".to_owned()]);
+        let defaults = host_catalog_defaults(&directories, &available);
+        let instruction = defaults
+            .iter()
+            .find(|plugin| plugin.id().plugin_id() == "lenso.agent.console-instructions")
+            .expect("linked Console instruction should be a Host default");
+
+        assert_eq!(instruction.id().instance_key(), "default");
+        assert!(instruction.is_disableable());
+        assert!(
+            host_catalog_defaults(&directories, &BTreeSet::new())
+                .iter()
+                .all(|plugin| plugin.id().plugin_id() != "lenso.agent.console-instructions")
+        );
     }
 
     #[test]
