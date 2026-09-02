@@ -1,6 +1,29 @@
 # Architecture decision records
 
-- [0001 — Compose the Agent Harness from ordinary Lenso Modules](0001-compose-the-agent-harness-from-ordinary-lenso-plugins.md)
+ADRs preserve choices that are both hard to reverse and consequential beyond a
+single implementation. Write one when a decision changes a cross-repository
+contract, durable data or wire format, security or authority boundary, public
+compatibility policy, or foundational ownership direction. For example,
+changing Session event compatibility or moving Auth authority warrants an ADR;
+adding a bounded retry, implementing an already-decided Plugin, or recording
+test and release evidence does not.
+
+For ordinary work, keep behavior in code and tests, delivery evidence in the
+pull request, and the current system shape in architecture documentation. A
+review should ask whether the change crosses the ADR threshold, not require an
+ADR or a `Proof` section by default. Existing records and proof sections remain
+historical evidence.
+
+Use the same ownership test before creating a Rust crate. A separate crate is
+appropriate when it independently owns a published or consumed API, Capability
+contract, removable Plugin identity, unsafe/process/platform boundary,
+proc-macro compilation boundary, surface entrypoint or composition, or a
+dependency-cycle break with a named abstraction. A short Capability wrapper or
+Plugin composition can therefore justify a crate; a long cohesive
+implementation can remain a module. File length and “one feature” are not
+reasons on their own.
+
+- [0001 — Compose the Agent Harness from ordinary Lenso Modules](0001-compose-the-agent-harness-from-ordinary-lenso-modules.md)
 - [0002 — Own direct ChatGPT subscription access](0002-own-direct-chatgpt-subscription-access.md)
 - [0003 — Compose Prompt and Skill contributions](0003-compose-prompt-and-skill-contributions.md)
 - [0004 — Use minimal composed Tool profiles and progressive Skills](0004-use-minimal-composed-tool-profiles-and-progressive-skills.md)
@@ -22,7 +45,7 @@
 - [0020 — Enter a composed TUI from the product entrypoint](0020-enter-a-composed-tui-from-the-product-entrypoint.md)
 - [0021 — Bind reviewed Wasm Tools to one Host-selected workspace reader](0021-bind-reviewed-wasm-tools-to-workspace-read.md)
 - [0022 — Compose optional built-ins through Plugin state](0022-compose-optional-builtins-through-plugin-state.md)
-- [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-plugins-through-plugin-state.md)
+- [0023 — Keep one base App and select optional Modules through Plugin state](0023-keep-one-base-app-and-select-optional-modules-through-plugin-state.md)
 - [0024 — Derive typed Agent Tool Providers](0024-derive-agent-tool-providers.md)
 - [0025 — Enforce reviewed network grants through one HTTP Capability](0025-enforce-reviewed-network-grants-through-http-capability.md)
 - [0026 — Reconcile committed Plugin state online](0026-reconcile-committed-plugin-state-online.md)
