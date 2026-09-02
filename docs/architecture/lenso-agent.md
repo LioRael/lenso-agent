@@ -55,9 +55,11 @@ running graph.
 - Tool Runtime owns catalog aggregation and routing, but no second Plugin list.
 - Tool Providers own definitions, resource policy, execution, and final domain
   authorization.
-- Model Plugins own provider protocol, egress, cancellation, and error mapping.
-- Host owns Catalog generation, Plugin Root resolution, readiness, routing
-  leases, and Generation drain.
+- Model Plugins own provider protocol, egress, cancellation, error mapping, and
+  authenticated Model catalog acquisition and refresh.
+- Host owns the latest validated Provider Catalog projection for new Turn
+  admission, Plugin Root resolution, readiness, routing leases, and Generation
+  drain. See [Model Catalog lifecycle](model-catalog-lifecycle.md).
 - Kernel executes only the immutable Plan and owns no product composition.
 
 ## Trust

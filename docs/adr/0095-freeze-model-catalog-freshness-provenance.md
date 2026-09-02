@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+The freshness policy remains current; its Generation-owned catalog revision
+was superseded by the
+[Model Catalog lifecycle](../architecture/model-catalog-lifecycle.md).
+
 ## Context
 
 ADR-0092 lets the selected Model Provider acquire and freeze its catalog at the

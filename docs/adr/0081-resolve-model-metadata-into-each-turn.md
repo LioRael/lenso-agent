@@ -2,6 +2,9 @@
 
 Status: Accepted
 
+Catalog-revision ownership in this ADR was superseded by the
+[Model Catalog lifecycle](../architecture/model-catalog-lifecycle.md).
+
 ## Context
 
 The v1 Provider/Model Catalog projected authentication and Provider-wide
