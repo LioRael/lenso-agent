@@ -8,6 +8,7 @@ pub use lenso_agent_loop_plugin::{
 use lenso_app_plan::{ResolvedAppPlan, authoring::HostCatalog};
 use lenso_capability_agent_model as model_contract;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, Sha256};
 
 const MODEL_CAPABILITY: &str = "lenso.agent.model@4";
 const MAX_CATALOG_STALE_SECONDS: u64 = 7 * 24 * 60 * 60;
@@ -330,9 +331,9 @@ const PROVIDERS: [ProviderDefinition; 4] = [
 pub(crate) fn project(
     host: &HostCatalog,
     plan: &ResolvedAppPlan,
-    catalog_revision: &str,
     selected_catalog: Option<&model_contract::CatalogResponse>,
 ) -> Result<ProviderModelCatalog, String> {
+    let catalog_revision = catalog_content_revision(selected_catalog)?;
     let catalog_provenance = selected_catalog
         .map(|catalog| project_catalog_provenance(&catalog.provenance))
         .transpose()?;
@@ -379,16 +380,25 @@ pub(crate) fn project(
         selected_model.as_deref(),
         selected_reasoning_effort,
         selected_service_tier,
-        catalog_revision,
+        &catalog_revision,
         catalog_provenance.as_ref(),
     )?;
     Ok(ProviderModelCatalog {
-        schema: "lenso.agent.provider-model-catalog.v3".to_owned(),
-        catalog_revision: catalog_revision.to_owned(),
+        schema: "lenso.agent.provider-model-catalog.v4".to_owned(),
+        catalog_revision,
         catalog_provenance,
         resolved_turn_profile,
         providers,
     })
+}
+
+fn catalog_content_revision(
+    selected_catalog: Option<&model_contract::CatalogResponse>,
+) -> Result<String, String> {
+    let models = selected_catalog.map(|catalog| &catalog.models);
+    let bytes = serde_json::to_vec(&models)
+        .map_err(|error| format!("failed to encode normalized Model catalog: {error}"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn project_provider(
@@ -1152,7 +1162,7 @@ mod tests {
             compaction_compatibility: model.compaction_compatibility.clone(),
         };
         ProviderModelCatalog {
-            schema: "lenso.agent.provider-model-catalog.v3".to_owned(),
+            schema: "lenso.agent.provider-model-catalog.v4".to_owned(),
             catalog_revision: profile.catalog_revision.clone(),
             catalog_provenance: None,
             resolved_turn_profile: Some(profile),

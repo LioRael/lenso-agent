@@ -24,7 +24,10 @@
       "type": "integer",
       "minimum": 0
     },
-    "catalog_snapshot_path": { "type": "string" },
+    "catalog_snapshot_path": {
+      "type": "string",
+      "description": "Compatibility name for the Provider-owned effective catalog publication path."
+    },
     "catalog_refresh_seconds": {
       "type": "integer",
       "minimum": 0

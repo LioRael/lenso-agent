@@ -277,7 +277,7 @@ pub struct AgentBehaviorProvenance {
 
 impl AgentBehaviorProvenance {
     pub fn new(digest: String) -> Result<Self, String> {
-        if !canonical_generation_digest(&digest) {
+        if !canonical_sha256_digest(&digest) {
             return Err("Agent behavior digest is not canonical SHA-256".to_owned());
         }
         Ok(Self { digest })
@@ -354,13 +354,13 @@ pub fn inspect_turn_generation_provenance(
         .map_err(|error| format!("Turn provenance payload is invalid: {error}"))?;
     let _ = payload.input;
     let _ = payload.run_scope;
-    if !canonical_generation_digest(&payload.generation_spec_digest) {
+    if !canonical_sha256_digest(&payload.generation_spec_digest) {
         return Err("Turn Generation Spec digest is invalid".to_owned());
     }
     if payload
         .agent_behavior_digest
         .as_deref()
-        .is_some_and(|digest| !canonical_generation_digest(digest))
+        .is_some_and(|digest| !canonical_sha256_digest(digest))
     {
         return Err("Turn Agent behavior digest is invalid".to_owned());
     }
@@ -377,7 +377,7 @@ pub fn inspect_turn_generation_provenance(
     })
 }
 
-fn canonical_generation_digest(value: &str) -> bool {
+fn canonical_sha256_digest(value: &str) -> bool {
     value.strip_prefix("sha256:").is_some_and(|digest| {
         digest.len() == 64
             && digest
@@ -885,9 +885,8 @@ async fn run_turn(
     let turn_input = request.input;
     let generation_spec_digest = generation_spec_digest(context)?;
     let agent_behavior = agent_behavior_provenance(context)?;
-    let base_turn_profile = resolved_turn_profile(context, generation_spec_digest)?;
-    let model_selection =
-        turn_model_selection(context, generation_spec_digest, &base_turn_profile)?;
+    let base_turn_profile = resolved_turn_profile(context)?;
+    let model_selection = turn_model_selection(context, &base_turn_profile)?;
     let run_scope = run_scope(context)?;
     let opened = clients
         .session
@@ -1121,10 +1120,7 @@ fn run_scope(context: &InvocationContext) -> Result<Option<RunScope>, TurnFailur
     })
 }
 
-fn resolved_turn_profile(
-    context: &InvocationContext,
-    generation_spec_digest: &str,
-) -> Result<ResolvedTurnProfile, TurnFailure> {
+fn resolved_turn_profile(context: &InvocationContext) -> Result<ResolvedTurnProfile, TurnFailure> {
     let profile = context
         .typed_extension::<ResolvedTurnProfile>()
         .map_err(|error| {
@@ -1137,9 +1133,14 @@ fn resolved_turn_profile(
                 detail: "Agent Turn is missing its resolved model profile".to_owned(),
             })
         })?;
-    if profile.catalog_revision != generation_spec_digest || profile.provider_instance.is_empty() {
+    if !canonical_sha256_digest(&profile.catalog_revision)
+        || profile.provider_id.is_empty()
+        || profile.provider_instance.is_empty()
+        || !profile.provider_instance.contains('/')
+        || profile.model.is_empty()
+    {
         return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
-            detail: "Agent Turn model profile does not match its immutable Generation".to_owned(),
+            detail: "Agent Turn model profile has invalid admission provenance".to_owned(),
         }));
     }
     Ok(profile)
@@ -1147,7 +1148,6 @@ fn resolved_turn_profile(
 
 fn turn_model_selection(
     context: &InvocationContext,
-    generation_spec_digest: &str,
     base_profile: &ResolvedTurnProfile,
 ) -> Result<Option<TurnModelSelection>, TurnFailure> {
     let selection = context
@@ -1166,8 +1166,9 @@ fn turn_model_selection(
         || selection.candidates.is_empty()
         || selection.candidates.len() > 16
         || selection.candidates.iter().any(|profile| {
-            profile.catalog_revision != generation_spec_digest
+            profile.catalog_revision != base_profile.catalog_revision
                 || profile.provider_instance != base_profile.provider_instance
+                || profile.provider_id != base_profile.provider_id
                 || !models.insert(profile.model.as_str())
         })
     {
@@ -3176,7 +3177,7 @@ fn validate_system_instruction(
             "installed System Instruction digest does not match its content",
         ));
     }
-    if !canonical_generation_digest(&instruction.generation_spec_digest) {
+    if !canonical_sha256_digest(&instruction.generation_spec_digest) {
         return Err(invalid_system_instruction(
             "installed System Instruction has invalid Generation provenance",
         ));

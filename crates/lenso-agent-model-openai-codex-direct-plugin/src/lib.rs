@@ -30,7 +30,6 @@ use lenso_capability_agent_model::{
     ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
-use lenso_native_adapter::InstanceResources;
 use reqwest::{StatusCode, header};
 use sha2::{Digest as _, Sha256};
 
@@ -44,8 +43,7 @@ const MAX_CACHE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_STALE_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_REFRESH_SECONDS: u64 = 24 * 60 * 60;
 const CACHE_SCHEMA: &str = "lenso.agent.model-catalog-cache.v1";
-const SNAPSHOT_SCHEMA: &str = "lenso.agent.model-catalog-generation-snapshot.v1";
-const SNAPSHOT_RESOURCE_PATH: &str = "model-catalog.json";
+const SNAPSHOT_SCHEMA: &str = "lenso.agent.model-catalog-provider-snapshot.v1";
 
 static NEXT_REFRESH_PUBLISHER: AtomicU64 = AtomicU64::new(1);
 
@@ -70,6 +68,7 @@ struct DirectModelConfig {
     #[serde(default)]
     catalog_max_stale_seconds: u64,
     #[serde(default)]
+    /// Compatibility name for the Provider-owned effective publication path.
     catalog_snapshot_path: Option<PathBuf>,
     #[serde(default)]
     catalog_refresh_seconds: u64,
@@ -193,8 +192,6 @@ struct DirectModel {
     client: reqwest::Client,
     auth: Port<auth_contract::OpenaiCodexClient>,
     catalog: Rc<RefCell<Option<CatalogResponse>>>,
-    #[resources]
-    resources: InstanceResources,
     #[tasks]
     tasks: ManagedTasks,
 }
@@ -262,7 +259,7 @@ struct CachedCatalog {
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
-struct GenerationCatalogSnapshot {
+struct ProviderCatalogSnapshot {
     schema: String,
     source_key: String,
     fetched_at_unix_seconds: u64,
@@ -272,7 +269,7 @@ struct GenerationCatalogSnapshot {
 
 struct AcquiredCatalog {
     catalog: CatalogResponse,
-    snapshot: GenerationCatalogSnapshot,
+    snapshot: ProviderCatalogSnapshot,
 }
 
 fn listed_visibility() -> String {
@@ -439,7 +436,7 @@ impl DirectModel {
             if let Some(path) = self.config.catalog_cache_path.as_deref() {
                 write_cache(path, &cached)?;
             }
-            let snapshot = snapshot_from_cache(&cached);
+            let snapshot = snapshot_from_catalog(&source_key, &catalog, Some(&cached))?;
             return Ok(AcquiredCatalog { catalog, snapshot });
         }
         if !response.status().is_success() {
@@ -484,16 +481,16 @@ impl DirectModel {
         }
         let response = serde_json::from_slice::<CodexModelsResponse>(&bytes)
             .map_err(|_| invalid_plan("direct Codex model catalog response is invalid"))?;
-        let revision = etag
+        let acquisition_revision = etag
             .clone()
             .unwrap_or_else(|| format!("sha256:{:x}", Sha256::digest(&bytes)));
-        let provenance = live_provenance(&self.config, now, &revision);
+        let provenance = live_provenance(&self.config, now, &acquisition_revision);
         let catalog = project_codex_catalog(&self.config, response.clone(), provenance)?;
-        let snapshot = GenerationCatalogSnapshot {
+        let snapshot = ProviderCatalogSnapshot {
             schema: SNAPSHOT_SCHEMA.to_owned(),
             source_key: source_key.clone(),
             fetched_at_unix_seconds: now,
-            revision: revision.clone(),
+            revision: projected_catalog_revision(&catalog)?,
             response: response.clone(),
         };
         if let Some(path) = self.config.catalog_cache_path.as_deref() {
@@ -503,7 +500,7 @@ impl DirectModel {
                     schema: CACHE_SCHEMA.to_owned(),
                     source_key,
                     fetched_at_unix_seconds: now,
-                    revision,
+                    revision: acquisition_revision,
                     etag,
                     response,
                 },
@@ -520,18 +517,9 @@ impl Lifecycle for DirectModel {
                 detail: format!("direct Codex model catalog authentication failed: {error:?}"),
             }
         })?;
-        let source_key = cache_source_key(&self.config.base_url, &credential.account_id);
-        let acquired = match read_generation_snapshot(&self.resources, &source_key)? {
-            Some(snapshot) => AcquiredCatalog {
-                catalog: project_snapshot_catalog(&self.config, &snapshot)?,
-                snapshot,
-            },
-            None => {
-                self.acquire_catalog(&credential.access_token, &credential.account_id)
-                    .await?
-            }
-        };
-        self.catalog.replace(Some(acquired.catalog));
+        let acquired = self
+            .acquire_catalog(&credential.access_token, &credential.account_id)
+            .await?;
         let publisher = self
             .config
             .catalog_snapshot_path
@@ -540,7 +528,8 @@ impl Lifecycle for DirectModel {
         if let (Some(path), Some(publisher)) =
             (self.config.catalog_snapshot_path.clone(), publisher)
         {
-            publish_generation_snapshot(&path, &acquired.snapshot, publisher)?;
+            publish_provider_snapshot(&path, &acquired.snapshot, publisher)?;
+            self.catalog.replace(Some(acquired.catalog));
             if self.config.catalog_refresh_seconds > 0 {
                 let plugin = self.clone();
                 let interval = Duration::from_secs(self.config.catalog_refresh_seconds);
@@ -581,8 +570,12 @@ impl Lifecycle for DirectModel {
                             let Ok(acquired) = acquired else {
                                 continue;
                             };
-                            let _ =
-                                publish_generation_snapshot(&path, &acquired.snapshot, publisher);
+                            if publish_provider_snapshot(&path, &acquired.snapshot, publisher)
+                                .is_ok()
+                                && is_refresh_publisher(&path, publisher)
+                            {
+                                plugin.catalog.replace(Some(acquired.catalog));
+                            }
                         }
                     })
                     .map_err(|error| RuntimeFailure::PluginFailure {
@@ -591,6 +584,8 @@ impl Lifecycle for DirectModel {
                         ),
                     })?;
             }
+        } else {
+            self.catalog.replace(Some(acquired.catalog));
         }
         Ok(())
     }
@@ -602,68 +597,21 @@ impl Lifecycle for DirectModel {
     }
 }
 
-fn snapshot_from_cache(cache: &CachedCatalog) -> GenerationCatalogSnapshot {
-    GenerationCatalogSnapshot {
+fn snapshot_from_catalog(
+    source_key: &str,
+    catalog: &CatalogResponse,
+    cache: Option<&CachedCatalog>,
+) -> Result<ProviderCatalogSnapshot, RuntimeFailure> {
+    let cache = cache.ok_or_else(|| RuntimeFailure::PluginFailure {
+        detail: format!("direct Codex catalog cache for `{source_key}` is unavailable"),
+    })?;
+    Ok(ProviderCatalogSnapshot {
         schema: SNAPSHOT_SCHEMA.to_owned(),
         source_key: cache.source_key.clone(),
         fetched_at_unix_seconds: cache.fetched_at_unix_seconds,
-        revision: cache.revision.clone(),
+        revision: projected_catalog_revision(catalog)?,
         response: cache.response.clone(),
-    }
-}
-
-fn snapshot_from_catalog(
-    source_key: &str,
-    _catalog: &CatalogResponse,
-    cache: Option<&CachedCatalog>,
-) -> Result<GenerationCatalogSnapshot, RuntimeFailure> {
-    cache
-        .map(snapshot_from_cache)
-        .ok_or_else(|| RuntimeFailure::PluginFailure {
-            detail: format!("direct Codex catalog cache for `{source_key}` is unavailable"),
-        })
-}
-
-fn project_snapshot_catalog(
-    config: &DirectModelConfig,
-    snapshot: &GenerationCatalogSnapshot,
-) -> Result<CatalogResponse, RuntimeFailure> {
-    project_codex_catalog(
-        config,
-        snapshot.response.clone(),
-        CatalogProvenance {
-            source: CatalogSource::Cache,
-            freshness: CatalogFreshness::Revalidated,
-            fetched_at_unix_seconds: Some(Some(snapshot.fetched_at_unix_seconds.to_string())),
-            validated_at_unix_seconds: Some(Some(unix_now()?.to_string())),
-            revision: Some(Some(snapshot.revision.clone())),
-            max_stale_seconds: Some(Some(config.catalog_max_stale_seconds.to_string())),
-        },
-    )
-}
-
-fn read_generation_snapshot(
-    resources: &InstanceResources,
-    source_key: &str,
-) -> Result<Option<GenerationCatalogSnapshot>, RuntimeFailure> {
-    if !resources.paths().any(|path| path == SNAPSHOT_RESOURCE_PATH) {
-        return Ok(None);
-    }
-    let snapshot = serde_json::from_slice::<GenerationCatalogSnapshot>(
-        resources.read(SNAPSHOT_RESOURCE_PATH)?,
-    )
-    .map_err(|_| invalid_plan("direct Codex Generation catalog snapshot is invalid"))?;
-    if snapshot.schema != SNAPSHOT_SCHEMA
-        || snapshot.source_key != source_key
-        || snapshot.fetched_at_unix_seconds == 0
-        || snapshot.revision.is_empty()
-        || snapshot.revision.len() > 256
-    {
-        return Err(invalid_plan(
-            "direct Codex Generation catalog snapshot identity is invalid",
-        ));
-    }
-    Ok(Some(snapshot))
+    })
 }
 
 fn claim_refresh_publisher(path: &Path) -> u64 {
@@ -680,23 +628,23 @@ fn is_refresh_publisher(path: &Path, publisher: u64) -> bool {
     REFRESH_PUBLISHERS.with(|publishers| publishers.borrow().get(path) == Some(&publisher))
 }
 
-fn publish_generation_snapshot(
+fn publish_provider_snapshot(
     path: &Path,
-    snapshot: &GenerationCatalogSnapshot,
+    snapshot: &ProviderCatalogSnapshot,
     publisher: u64,
 ) -> Result<bool, RuntimeFailure> {
     if !is_refresh_publisher(path, publisher) {
         return Ok(false);
     }
     if let Ok(bytes) = fs::read(path)
-        && let Ok(current) = serde_json::from_slice::<GenerationCatalogSnapshot>(&bytes)
+        && let Ok(current) = serde_json::from_slice::<ProviderCatalogSnapshot>(&bytes)
         && current.schema == SNAPSHOT_SCHEMA
         && current.source_key == snapshot.source_key
-        && current.response == snapshot.response
+        && current.revision == snapshot.revision
     {
         return Ok(false);
     }
-    write_json_atomically(path, snapshot, "Generation catalog snapshot")?;
+    write_json_atomically(path, snapshot, "Provider catalog snapshot")?;
     Ok(true)
 }
 
@@ -905,6 +853,7 @@ fn project_codex_catalog(
         }
         models.push(projected);
     }
+    models.sort_by(|left, right| left.id.cmp(&right.id));
     if models.is_empty() || !models.iter().any(|model| model.id == config.model) {
         return Err(invalid_plan(
             "configured direct Codex model is absent from the Provider catalog",
@@ -920,6 +869,12 @@ fn project_codex_catalog(
         ));
     }
     Ok(CatalogResponse { models, provenance })
+}
+
+fn projected_catalog_revision(catalog: &CatalogResponse) -> Result<String, RuntimeFailure> {
+    serde_json::to_vec(&catalog.models)
+        .map(|bytes| format!("sha256:{:x}", Sha256::digest(bytes)))
+        .map_err(|_| invalid_plan("direct Codex model catalog revision is unavailable"))
 }
 
 fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure> {
@@ -999,7 +954,7 @@ fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure
 
 fn control(
     default: Option<String>,
-    options: Vec<CatalogControlOption>,
+    mut options: Vec<CatalogControlOption>,
     reasoning: bool,
 ) -> Result<CatalogControl, RuntimeFailure> {
     let unique_ids = options
@@ -1023,6 +978,7 @@ fn control(
             "direct Codex model control metadata is invalid",
         ));
     }
+    options.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(CatalogControl {
         status: if options.is_empty() {
             CatalogControlStatus::Unsupported
@@ -1725,12 +1681,71 @@ mod tests {
                 .map(|model| (model.id.as_str(), model.hidden))
                 .collect::<Vec<_>>(),
             [
-                ("main-model", false),
-                ("visible-model", false),
                 ("excluded-model", true),
+                ("main-model", false),
                 ("provider-hidden-model", true),
+                ("visible-model", false),
             ]
         );
+    }
+
+    #[test]
+    fn catalog_revision_tracks_normalized_provider_content_only() {
+        let config = DirectModelConfig {
+            base_url: DEFAULT_BASE_URL.to_owned(),
+            model: "main-model".to_owned(),
+            allowed_models: None,
+            include_models: None,
+            exclude_models: Vec::new(),
+            catalog_cache_path: None,
+            catalog_max_stale_seconds: 0,
+            catalog_snapshot_path: None,
+            catalog_refresh_seconds: 0,
+            reasoning_effort: "medium".to_owned(),
+            max_event_bytes: MAX_EVENT_BYTES,
+        }
+        .validate()
+        .unwrap();
+        let first = project_codex_catalog(
+            &config,
+            CodexModelsResponse {
+                models: vec![
+                    catalog_model("second-model", "list"),
+                    catalog_model("main-model", "list"),
+                ],
+            },
+            live_provenance(&config, 1, "etag-one"),
+        )
+        .unwrap();
+        let equivalent = project_codex_catalog(
+            &config,
+            CodexModelsResponse {
+                models: vec![
+                    catalog_model("main-model", "list"),
+                    catalog_model("second-model", "list"),
+                ],
+            },
+            live_provenance(&config, 2, "etag-two"),
+        )
+        .unwrap();
+        let changed = project_codex_catalog(
+            &config,
+            CodexModelsResponse {
+                models: vec![catalog_model("main-model", "list")],
+            },
+            live_provenance(&config, 3, "etag-three"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            projected_catalog_revision(&first).unwrap(),
+            projected_catalog_revision(&equivalent).unwrap()
+        );
+        assert_ne!(
+            projected_catalog_revision(&first).unwrap(),
+            projected_catalog_revision(&changed).unwrap()
+        );
+        assert_ne!(first.provenance, equivalent.provenance);
     }
 
     fn catalog_model(slug: &str, visibility: &str) -> CodexModel {
@@ -1827,7 +1842,7 @@ mod tests {
                 .iter()
                 .map(|option| option.id.as_str())
                 .collect::<Vec<_>>(),
-            ["medium", "high"]
+            ["high", "medium"]
         );
         assert_eq!(
             model
@@ -1836,7 +1851,7 @@ mod tests {
                 .iter()
                 .map(|option| option.id.as_str())
                 .collect::<Vec<_>>(),
-            ["priority", "fast"]
+            ["fast", "priority"]
         );
         assert_eq!(model.input_modalities, [CatalogInputModality::Text]);
 
@@ -2010,7 +2025,7 @@ mod tests {
     fn generation_snapshot_publication_deduplicates_facts_and_fences_old_publishers() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("effective/catalog.json");
-        let first = GenerationCatalogSnapshot {
+        let first = ProviderCatalogSnapshot {
             schema: SNAPSHOT_SCHEMA.to_owned(),
             source_key: "account".to_owned(),
             fetched_at_unix_seconds: 1,
@@ -2020,26 +2035,26 @@ mod tests {
             },
         };
         let first_publisher = claim_refresh_publisher(&path);
-        assert!(publish_generation_snapshot(&path, &first, first_publisher).unwrap());
+        assert!(publish_provider_snapshot(&path, &first, first_publisher).unwrap());
 
         let mut revalidated = first.clone();
         revalidated.fetched_at_unix_seconds = 2;
-        revalidated.revision = "two".to_owned();
-        assert!(!publish_generation_snapshot(&path, &revalidated, first_publisher).unwrap());
-        let unchanged: GenerationCatalogSnapshot =
+        assert!(!publish_provider_snapshot(&path, &revalidated, first_publisher).unwrap());
+        let unchanged: ProviderCatalogSnapshot =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(unchanged.fetched_at_unix_seconds, 1);
         assert_eq!(unchanged.revision, "one");
 
         let second_publisher = claim_refresh_publisher(&path);
         let mut changed = revalidated;
+        changed.revision = "two".to_owned();
         changed
             .response
             .models
             .push(catalog_model("new-model", "list"));
-        assert!(!publish_generation_snapshot(&path, &changed, first_publisher).unwrap());
-        assert!(publish_generation_snapshot(&path, &changed, second_publisher).unwrap());
-        let published: GenerationCatalogSnapshot =
+        assert!(!publish_provider_snapshot(&path, &changed, first_publisher).unwrap());
+        assert!(publish_provider_snapshot(&path, &changed, second_publisher).unwrap());
+        let published: ProviderCatalogSnapshot =
             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(published.response, changed.response);
     }
