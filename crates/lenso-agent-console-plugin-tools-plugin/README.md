@@ -9,9 +9,12 @@
 - `inspect_plugin` reports one Plugin's Instances, selection, origin, configuration size, and source digest without sending raw configuration into model context.
 - `check_plugin_change` validates an exact configuration candidate without changing state.
 - `apply_plugin_change` publishes only a candidate whose expected revision and proposal digest still match.
+- `list_plugin_changes` reports bounded publication metadata without returning historical configuration contents.
+- `check_plugin_rollback` validates rollback to one exact publication digest without changing state.
+- `apply_plugin_rollback` publishes only the reviewed rollback whose revision, publication digest, and proposal digest still match.
 - `set_plugin_enabled` directly enables or disables one exact Plugin Instance through the target Agent's selected selection authority.
 
-The Plugin does not own Plugin configuration facts, target discovery, authority selection, runtime activation, Console HTTP contracts, or mutation policy. It requires the Host-private `lenso.agent.plugin-management-target@1`; the Host bridge routes an explicit `agent_id` and delegates to the authority owned by that Agent. Missing or unsupported targets fail closed. A successful publication means desired state was committed; it does not claim that a new Generation is active.
+The Plugin does not own Plugin configuration facts, retained publication values, target discovery, authority selection, runtime activation, Console HTTP contracts, or mutation policy. It requires the Host-private `lenso.agent.plugin-management-target@1`; the Host bridge routes an explicit `agent_id` and delegates to the authority owned by that Agent. Missing or unsupported targets fail closed. Historical TOML remains inside that authority. A successful publication means desired state was committed; it does not claim that a new Generation is active.
 
 This internal authority role is deliberately distinct from Console's cross-Agent `lenso.agent.plugin-configuration@1`, which owns the broader management, history, rollback, publication-operation, and HTTP projection consumed by the Console UI.
 
@@ -19,7 +22,7 @@ This internal authority role is deliberately distinct from Console's cross-Agent
 
 The target authority can be the built-in local Plugin Root, SQLite, remote HTTP authority, or an injected custom implementation. Every request and response carries the target Agent identity. Responses include the authority kind and reference, are bounded, and never include raw stored configuration. Candidate configurations remain capped at 7 KiB so the complete write call fits the approval preview; read operations are parallel-safe, and publication is exclusive.
 
-The Console inventory pairs `apply_plugin_change` and `set_plugin_enabled` with the interactive approval hook. Inspection and candidate validation are allowed without approval; each mutation asks the user to approve the exact Tool call once.
+The Console inventory pairs `apply_plugin_change`, `apply_plugin_rollback`, and `set_plugin_enabled` with the interactive approval hook. Inspection and candidate validation are allowed without approval; each mutation asks the user to approve the exact Tool call once.
 
 ## Removal proof
 

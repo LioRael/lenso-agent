@@ -9,6 +9,7 @@
     { "const": "proposal_mismatch" },
     { "const": "proposal_not_ready" },
     { "const": "not_disableable" },
-    { "const": "already_selected" }
+    { "const": "already_selected" },
+    { "const": "publication_not_found" }
   ]
 }
