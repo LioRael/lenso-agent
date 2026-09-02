@@ -3014,8 +3014,7 @@ version = "0.1.0"
 dependencies = [
  "lenso",
  "lenso-agent-tool-sdk",
- "lenso-capability-agent-plugin-configuration-authority",
- "lenso-capability-agent-plugin-selection-authority",
+ "lenso-capability-agent-plugin-management-target",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "schemars 1.2.2",
@@ -3188,6 +3187,7 @@ dependencies = [
  "lenso-capability-agent-model-selection",
  "lenso-capability-agent-oauth-access",
  "lenso-capability-agent-plugin-configuration-authority",
+ "lenso-capability-agent-plugin-management-target",
  "lenso-capability-agent-plugin-selection-authority",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
@@ -4177,6 +4177,24 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-agent-plugin-configuration-authority"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-plugin-management-target"
 version = "0.1.0"
 dependencies = [
  "futures",

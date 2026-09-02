@@ -114,7 +114,7 @@ use crate::{
     AgentDirectories, AgentSurfaceKind, official_prompts,
     plugin_configuration_authority::{
         BRIDGE_PLUGIN_ID, BRIDGE_PLUGIN_VERSION, PluginConfigurationAuthorityBridgeFactory,
-        bridge_descriptor,
+        PluginManagementTarget, bridge_descriptor,
     },
 };
 
@@ -183,8 +183,9 @@ pub fn online_reconcile_telemetry() -> OnlineReconcileTelemetry {
 
 #[derive(Debug)]
 struct AgentCatalogFactory {
-    plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
-    plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
+    configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    management_target: Option<Arc<dyn PluginManagementTarget>>,
+    selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
 impl CatalogFactory for AgentCatalogFactory {
@@ -193,10 +194,11 @@ impl CatalogFactory for AgentCatalogFactory {
         generation: &ResolvedGeneration,
     ) -> Result<ExecutionAdapterCatalog, ControlPlaneError> {
         let (mut registry, _) = native_host_build();
-        if let Some(authority) = &self.plugin_configuration_authority {
+        if let Some(authority) = &self.configuration_authority {
             registry = registry.with_factory(PluginConfigurationAuthorityBridgeFactory::new(
                 Arc::clone(authority),
-                self.plugin_selection_authority.clone(),
+                self.selection_authority.clone(),
+                self.management_target.clone(),
             ));
         }
         let mut catalog =
@@ -441,6 +443,7 @@ pub struct AgentApp {
 #[derive(Debug)]
 pub(crate) struct PluginAuthoringAuthorities {
     pub(crate) configuration: Option<Arc<dyn PluginConfigurationAuthority>>,
+    pub(crate) management_target: Option<Arc<dyn PluginManagementTarget>>,
     pub(crate) selection: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
@@ -472,6 +475,7 @@ impl AgentApp {
         let durable = store.load(APP_ID).map_err(control_error)?;
         let runtime = KernelGenerationRuntime::new(agent_catalog_factory(
             plugin_authoring.configuration,
+            plugin_authoring.management_target,
             plugin_authoring.selection,
         ));
         let mut host =
@@ -3003,20 +3007,14 @@ fn host_catalog_bindings(
         .with_admission(tool_admission),
     ];
     if available.contains("lenso.agent.console-plugin-tools") {
-        bindings.extend([
+        bindings.push(
             HostBinding::to_instance(
                 PluginInstanceId::new("lenso.agent.console-plugin-tools", "default"),
-                lenso_capability_agent_plugin_configuration_authority::CAPABILITY_ID,
+                lenso_capability_agent_plugin_management_target::CAPABILITY_ID,
                 PluginInstanceId::new(BRIDGE_PLUGIN_ID, "selected"),
             )
             .with_admission(RequestAdmissionPlan::new(4, 1)),
-            HostBinding::to_instance(
-                PluginInstanceId::new("lenso.agent.console-plugin-tools", "default"),
-                lenso_capability_agent_plugin_selection_authority::CAPABILITY_ID,
-                PluginInstanceId::new(BRIDGE_PLUGIN_ID, "selected"),
-            )
-            .with_admission(RequestAdmissionPlan::new(2, 1)),
-        ]);
+        );
     }
     if available.contains("lenso.agent.subagent-tools")
         && available.contains("lenso.agent.workspace-read-tools")
@@ -3251,11 +3249,13 @@ pub(crate) fn resolve_host_plan_for_agent_in(
 
 fn agent_catalog_factory(
     plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    plugin_management_target: Option<Arc<dyn PluginManagementTarget>>,
     plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 ) -> MultiExecutionCatalogFactory<AgentCatalogFactory> {
     MultiExecutionCatalogFactory::new(AgentCatalogFactory {
-        plugin_configuration_authority,
-        plugin_selection_authority,
+        configuration_authority: plugin_configuration_authority,
+        management_target: plugin_management_target,
+        selection_authority: plugin_selection_authority,
     })
     .with_wasm_codec(AgentJsonCodec)
     .with_wasm_codec(ArtifactJsonCodec)

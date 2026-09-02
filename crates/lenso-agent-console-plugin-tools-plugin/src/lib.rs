@@ -2,8 +2,7 @@
 
 use lenso::Port;
 use lenso_agent_tool_sdk::prelude::*;
-use lenso_capability_agent_plugin_configuration_authority as configuration_contract;
-use lenso_capability_agent_plugin_selection_authority as selection_contract;
+use lenso_capability_agent_plugin_management_target as target_contract;
 use lenso_capability_agent_tool_provider::ExecutionFailedPayload;
 use lenso_kernel::RuntimeFailure;
 use schemars::JsonSchema;
@@ -27,11 +26,16 @@ struct ConsolePluginToolsConfig {
 
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-struct EmptyArguments {}
+struct TargetArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+}
 
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ListPluginsArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
     #[schemars(length(max = 256))]
     query: Option<String>,
 }
@@ -39,6 +43,8 @@ struct ListPluginsArguments {
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InspectPluginArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
     #[schemars(length(min = 1, max = 128))]
     plugin_id: String,
 }
@@ -46,6 +52,8 @@ struct InspectPluginArguments {
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CheckPluginChangeArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
     #[schemars(length(min = 1, max = 7_168))]
     configuration_toml: String,
     #[schemars(length(min = 71, max = 71))]
@@ -59,6 +67,8 @@ struct CheckPluginChangeArguments {
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ApplyPluginChangeArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
     #[schemars(length(min = 1, max = 7_168))]
     configuration_toml: String,
     #[schemars(length(min = 71, max = 71))]
@@ -74,6 +84,8 @@ struct ApplyPluginChangeArguments {
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SetPluginEnabledArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
     enabled: bool,
     #[schemars(length(min = 71, max = 71))]
     expected_revision: String,
@@ -86,7 +98,8 @@ struct SetPluginEnabledArguments {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AppInspection {
-    authority: configuration_contract::AuthoritySource,
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
     binding_count: i64,
     enabled_instance_count: i64,
     plugin_count: usize,
@@ -97,7 +110,8 @@ struct AppInspection {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginList {
-    authority: configuration_contract::AuthoritySource,
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
     plugins: Vec<PluginSummary>,
     query: String,
     revision: String,
@@ -117,7 +131,8 @@ struct PluginSummary {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PluginInspection {
-    authority: configuration_contract::AuthoritySource,
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
     instances: Vec<PluginInstanceInspection>,
     package_id: String,
     package_revision: String,
@@ -141,8 +156,9 @@ struct PluginInstanceInspection {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProposalInspection {
+    agent_id: String,
     application: String,
-    authority: configuration_contract::AuthoritySource,
+    authority: target_contract::AuthoritySource,
     base_revision: String,
     base_source_digest: String,
     candidate_revision: String,
@@ -164,7 +180,8 @@ struct ProposalDiagnostic {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct PublicationInspection {
-    authority: configuration_contract::AuthoritySource,
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
     base_revision: String,
     base_source_digest: String,
     proposal_digest: String,
@@ -176,7 +193,8 @@ struct PublicationInspection {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SelectionInspection {
-    authority: selection_contract::AuthoritySource,
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
     base_revision: String,
     enabled: bool,
     instance: String,
@@ -201,29 +219,31 @@ fn validate_config(config: &ConsolePluginToolsConfig) -> Result<(), RuntimeFailu
 struct ConsolePluginTools {
     #[config]
     config: ConsolePluginToolsConfig,
-    authority: Port<configuration_contract::PluginConfigurationAuthorityClient>,
-    selection_authority: Port<selection_contract::PluginSelectionAuthorityClient>,
+    target: Port<target_contract::PluginManagementTargetClient>,
 }
 
 #[lenso_agent_tool_sdk::tool_provider]
 impl ConsolePluginTools {
     #[tool(
         name = "inspect_app",
-        description = "Inspect the selected Plugin configuration authority, current desired revision, and resolved App size.",
+        description = "Inspect the Plugin configuration authority, desired revision, and resolved size of one exact target Agent.",
         execution = "parallel_safe"
     )]
     async fn inspect_app(
         &self,
-        _arguments: EmptyArguments,
+        arguments: TargetArguments,
     ) -> Result<ExecuteResponse, ExecuteError> {
         let state = self
-            .authority
-            .inspect(configuration_contract::InspectRequest {})
+            .target
+            .inspect(target_contract::InspectRequest {
+                agent_id: arguments.agent_id,
+            })
             .await
             .map_err(map_inspect_error)?;
         self.json_response(
             INSPECT_APP_TOOL,
             &AppInspection {
+                agent_id: state.agent_id,
                 authority: state.authority,
                 binding_count: state.binding_count,
                 enabled_instance_count: state.enabled_instance_count,
@@ -236,7 +256,7 @@ impl ConsolePluginTools {
 
     #[tool(
         name = "list_plugins",
-        description = "List Plugins visible through the selected Console Agent Plugin configuration authority.",
+        description = "List Plugins visible through one exact target Agent's configuration authority.",
         execution = "parallel_safe"
     )]
     async fn list_plugins(
@@ -244,8 +264,10 @@ impl ConsolePluginTools {
         arguments: ListPluginsArguments,
     ) -> Result<ExecuteResponse, ExecuteError> {
         let state = self
-            .authority
-            .inspect(configuration_contract::InspectRequest {})
+            .target
+            .inspect(target_contract::InspectRequest {
+                agent_id: arguments.agent_id,
+            })
             .await
             .map_err(map_inspect_error)?;
         let query = arguments.query.unwrap_or_default();
@@ -271,6 +293,7 @@ impl ConsolePluginTools {
         self.json_response(
             LIST_PLUGINS_TOOL,
             &PluginList {
+                agent_id: state.agent_id,
                 authority: state.authority,
                 plugins,
                 query,
@@ -282,7 +305,7 @@ impl ConsolePluginTools {
 
     #[tool(
         name = "inspect_plugin",
-        description = "Inspect one Plugin and its exact Instance differences through the selected configuration authority.",
+        description = "Inspect one Plugin and its Instance differences through one exact target Agent's configuration authority.",
         execution = "parallel_safe"
     )]
     async fn inspect_plugin(
@@ -290,8 +313,10 @@ impl ConsolePluginTools {
         arguments: InspectPluginArguments,
     ) -> Result<ExecuteResponse, ExecuteError> {
         let state = self
-            .authority
-            .inspect(configuration_contract::InspectRequest {})
+            .target
+            .inspect(target_contract::InspectRequest {
+                agent_id: arguments.agent_id,
+            })
             .await
             .map_err(map_inspect_error)?;
         let plugin = state
@@ -302,6 +327,7 @@ impl ConsolePluginTools {
         self.json_response(
             INSPECT_PLUGIN_TOOL,
             &PluginInspection {
+                agent_id: state.agent_id,
                 authority: state.authority,
                 instances: plugin
                     .instances
@@ -329,7 +355,7 @@ impl ConsolePluginTools {
 
     #[tool(
         name = "check_plugin_change",
-        description = "Validate one exact Plugin configuration candidate through the selected authority without publishing it.",
+        description = "Validate one exact Plugin configuration candidate through one exact target Agent's authority without publishing it.",
         execution = "parallel_safe"
     )]
     async fn check_plugin_change(
@@ -338,8 +364,9 @@ impl ConsolePluginTools {
     ) -> Result<ExecuteResponse, ExecuteError> {
         ensure_configuration_size(&arguments.configuration_toml)?;
         let proposal = self
-            .authority
-            .propose(configuration_contract::ProposeRequest {
+            .target
+            .propose(target_contract::ProposeRequest {
+                agent_id: arguments.agent_id,
                 configuration_toml: arguments.configuration_toml,
                 expected_revision: arguments.expected_revision,
                 instance: arguments.instance,
@@ -350,6 +377,7 @@ impl ConsolePluginTools {
         self.json_response(
             CHECK_PLUGIN_CHANGE_TOOL,
             &ProposalInspection {
+                agent_id: proposal.agent_id,
                 application: proposal.application,
                 authority: proposal.authority,
                 base_revision: proposal.base_revision,
@@ -374,7 +402,7 @@ impl ConsolePluginTools {
 
     #[tool(
         name = "apply_plugin_change",
-        description = "Publish one reviewed Plugin configuration proposal through the selected authority after exact revision and digest checks.",
+        description = "Publish one reviewed Plugin configuration proposal through one exact target Agent's authority after exact revision and digest checks.",
         execution = "exclusive"
     )]
     async fn apply_plugin_change(
@@ -383,8 +411,9 @@ impl ConsolePluginTools {
     ) -> Result<ExecuteResponse, ExecuteError> {
         ensure_configuration_size(&arguments.configuration_toml)?;
         let publication = self
-            .authority
-            .publish(configuration_contract::PublishRequest {
+            .target
+            .publish(target_contract::PublishRequest {
+                agent_id: arguments.agent_id,
                 configuration_toml: arguments.configuration_toml,
                 expected_revision: arguments.expected_revision,
                 instance: arguments.instance,
@@ -396,6 +425,7 @@ impl ConsolePluginTools {
         self.json_response(
             APPLY_PLUGIN_CHANGE_TOOL,
             &PublicationInspection {
+                agent_id: publication.agent_id,
                 authority: publication.authority,
                 base_revision: publication.base_revision,
                 base_source_digest: publication.base_source_digest,
@@ -409,7 +439,7 @@ impl ConsolePluginTools {
 
     #[tool(
         name = "set_plugin_enabled",
-        description = "Enable or disable one exact Plugin Instance through the Host-selected authority.",
+        description = "Enable or disable one exact Plugin Instance through one exact target Agent's selected authority.",
         execution = "exclusive"
     )]
     async fn set_plugin_enabled(
@@ -417,8 +447,9 @@ impl ConsolePluginTools {
         arguments: SetPluginEnabledArguments,
     ) -> Result<ExecuteResponse, ExecuteError> {
         let publication = self
-            .selection_authority
-            .set_enabled(selection_contract::SetEnabledRequest {
+            .target
+            .set_enabled(target_contract::SetEnabledRequest {
+                agent_id: arguments.agent_id,
                 enabled: arguments.enabled,
                 expected_revision: arguments.expected_revision,
                 instance: arguments.instance,
@@ -429,6 +460,7 @@ impl ConsolePluginTools {
         self.json_response(
             SET_PLUGIN_ENABLED_TOOL,
             &SelectionInspection {
+                agent_id: publication.agent_id,
                 authority: publication.authority,
                 base_revision: publication.base_revision,
                 enabled: publication.enabled,
@@ -509,31 +541,33 @@ fn proposal_not_ready() -> ExecuteError {
 }
 
 fn map_selection_error(
-    error: selection_contract::PluginSelectionAuthorityInvocationError,
+    error: target_contract::PluginManagementTargetSetEnabledInvocationError,
 ) -> ExecuteError {
     match error {
-        selection_contract::PluginSelectionAuthorityInvocationError::Domain(error) => match error {
-            selection_contract::SetEnabledError::InvalidRequest => invalid_request(),
-            selection_contract::SetEnabledError::NotFound => not_found(),
-            selection_contract::SetEnabledError::Conflict => conflict(),
-            selection_contract::SetEnabledError::NotDisableable => execution_failed(
-                "plugin_not_disableable",
-                "The selected Plugin Instance is required by the Host and cannot be disabled.",
-            ),
-            selection_contract::SetEnabledError::AlreadySelected => execution_failed(
-                "plugin_already_selected",
-                "The selected Plugin Instance already has the requested enabled state.",
-            ),
-            selection_contract::SetEnabledError::Unsupported => execution_failed(
-                "plugin_selection_unsupported",
-                "The selected Host authority does not support Plugin enable or disable operations.",
-            ),
-            selection_contract::SetEnabledError::Unknown(_) => execution_failed(
-                "plugin_selection_rejected",
-                "The selected Host authority rejected the Plugin selection operation.",
-            ),
-        },
-        selection_contract::PluginSelectionAuthorityInvocationError::Runtime(error) => {
+        target_contract::PluginManagementTargetSetEnabledInvocationError::Domain(error) => {
+            match error {
+                target_contract::SetEnabledError::InvalidRequest => invalid_request(),
+                target_contract::SetEnabledError::TargetNotFound => target_not_found(),
+                target_contract::SetEnabledError::Unsupported => target_unsupported(),
+                target_contract::SetEnabledError::PluginNotFound => not_found(),
+                target_contract::SetEnabledError::Conflict => conflict(),
+                target_contract::SetEnabledError::NotDisableable => execution_failed(
+                    "plugin_not_disableable",
+                    "The selected Plugin Instance is required by the Host and cannot be disabled.",
+                ),
+                target_contract::SetEnabledError::AlreadySelected => execution_failed(
+                    "plugin_already_selected",
+                    "The selected Plugin Instance already has the requested enabled state.",
+                ),
+                target_contract::SetEnabledError::ProposalMismatch
+                | target_contract::SetEnabledError::ProposalNotReady
+                | target_contract::SetEnabledError::Unknown(_) => execution_failed(
+                    "plugin_selection_rejected",
+                    "The selected Host authority rejected the Plugin selection operation.",
+                ),
+            }
+        }
+        target_contract::PluginManagementTargetSetEnabledInvocationError::Runtime(error) => {
             execution_failed(
                 "plugin_selection_failed",
                 &format!("Plugin selection authority failed: {error:?}"),
@@ -549,63 +583,86 @@ fn unknown_rejection() -> ExecuteError {
     )
 }
 
+fn target_not_found() -> ExecuteError {
+    execution_failed(
+        "agent_target_not_found",
+        "The requested Agent identity is not present in the Console Agent catalog.",
+    )
+}
+
+fn target_unsupported() -> ExecuteError {
+    execution_failed(
+        "agent_target_unsupported",
+        "The requested Agent does not expose Plugin configuration control.",
+    )
+}
+
 fn map_inspect_error(
-    error: configuration_contract::PluginConfigurationAuthorityInspectInvocationError,
+    error: target_contract::PluginManagementTargetInspectInvocationError,
 ) -> ExecuteError {
     match error {
-        configuration_contract::PluginConfigurationAuthorityInspectInvocationError::Domain(
-            error,
-        ) => match error {
-            configuration_contract::InspectError::InvalidRequest => invalid_request(),
-            configuration_contract::InspectError::NotFound => not_found(),
-            configuration_contract::InspectError::Conflict => conflict(),
-            configuration_contract::InspectError::ProposalMismatch => proposal_mismatch(),
-            configuration_contract::InspectError::ProposalNotReady => proposal_not_ready(),
-            configuration_contract::InspectError::Unknown(_) => unknown_rejection(),
+        target_contract::PluginManagementTargetInspectInvocationError::Domain(error) => match error
+        {
+            target_contract::InspectError::InvalidRequest => invalid_request(),
+            target_contract::InspectError::TargetNotFound => target_not_found(),
+            target_contract::InspectError::Unsupported => target_unsupported(),
+            target_contract::InspectError::PluginNotFound => not_found(),
+            target_contract::InspectError::Conflict => conflict(),
+            target_contract::InspectError::ProposalMismatch => proposal_mismatch(),
+            target_contract::InspectError::ProposalNotReady => proposal_not_ready(),
+            target_contract::InspectError::NotDisableable
+            | target_contract::InspectError::AlreadySelected
+            | target_contract::InspectError::Unknown(_) => unknown_rejection(),
         },
-        configuration_contract::PluginConfigurationAuthorityInspectInvocationError::Runtime(
-            error,
-        ) => map_runtime_error(error),
+        target_contract::PluginManagementTargetInspectInvocationError::Runtime(error) => {
+            map_runtime_error(error)
+        }
     }
 }
 
 fn map_propose_error(
-    error: configuration_contract::PluginConfigurationAuthorityProposeInvocationError,
+    error: target_contract::PluginManagementTargetProposeInvocationError,
 ) -> ExecuteError {
     match error {
-        configuration_contract::PluginConfigurationAuthorityProposeInvocationError::Domain(
-            error,
-        ) => match error {
-            configuration_contract::ProposeError::InvalidRequest => invalid_request(),
-            configuration_contract::ProposeError::NotFound => not_found(),
-            configuration_contract::ProposeError::Conflict => conflict(),
-            configuration_contract::ProposeError::ProposalMismatch => proposal_mismatch(),
-            configuration_contract::ProposeError::ProposalNotReady => proposal_not_ready(),
-            configuration_contract::ProposeError::Unknown(_) => unknown_rejection(),
+        target_contract::PluginManagementTargetProposeInvocationError::Domain(error) => match error
+        {
+            target_contract::ProposeError::InvalidRequest => invalid_request(),
+            target_contract::ProposeError::TargetNotFound => target_not_found(),
+            target_contract::ProposeError::Unsupported => target_unsupported(),
+            target_contract::ProposeError::PluginNotFound => not_found(),
+            target_contract::ProposeError::Conflict => conflict(),
+            target_contract::ProposeError::ProposalMismatch => proposal_mismatch(),
+            target_contract::ProposeError::ProposalNotReady => proposal_not_ready(),
+            target_contract::ProposeError::NotDisableable
+            | target_contract::ProposeError::AlreadySelected
+            | target_contract::ProposeError::Unknown(_) => unknown_rejection(),
         },
-        configuration_contract::PluginConfigurationAuthorityProposeInvocationError::Runtime(
-            error,
-        ) => map_runtime_error(error),
+        target_contract::PluginManagementTargetProposeInvocationError::Runtime(error) => {
+            map_runtime_error(error)
+        }
     }
 }
 
 fn map_publish_error(
-    error: configuration_contract::PluginConfigurationAuthorityPublishInvocationError,
+    error: target_contract::PluginManagementTargetPublishInvocationError,
 ) -> ExecuteError {
     match error {
-        configuration_contract::PluginConfigurationAuthorityPublishInvocationError::Domain(
-            error,
-        ) => match error {
-            configuration_contract::PublishError::InvalidRequest => invalid_request(),
-            configuration_contract::PublishError::NotFound => not_found(),
-            configuration_contract::PublishError::Conflict => conflict(),
-            configuration_contract::PublishError::ProposalMismatch => proposal_mismatch(),
-            configuration_contract::PublishError::ProposalNotReady => proposal_not_ready(),
-            configuration_contract::PublishError::Unknown(_) => unknown_rejection(),
+        target_contract::PluginManagementTargetPublishInvocationError::Domain(error) => match error
+        {
+            target_contract::PublishError::InvalidRequest => invalid_request(),
+            target_contract::PublishError::TargetNotFound => target_not_found(),
+            target_contract::PublishError::Unsupported => target_unsupported(),
+            target_contract::PublishError::PluginNotFound => not_found(),
+            target_contract::PublishError::Conflict => conflict(),
+            target_contract::PublishError::ProposalMismatch => proposal_mismatch(),
+            target_contract::PublishError::ProposalNotReady => proposal_not_ready(),
+            target_contract::PublishError::NotDisableable
+            | target_contract::PublishError::AlreadySelected
+            | target_contract::PublishError::Unknown(_) => unknown_rejection(),
         },
-        configuration_contract::PluginConfigurationAuthorityPublishInvocationError::Runtime(
-            error,
-        ) => map_runtime_error(error),
+        target_contract::PluginManagementTargetPublishInvocationError::Runtime(error) => {
+            map_runtime_error(error)
+        }
     }
 }
 
@@ -635,12 +692,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_plugin_descriptor_requires_the_shared_authority_capability() {
+    fn generated_plugin_descriptor_requires_the_target_routing_capability() {
         let descriptor: serde_json::Value = serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
         assert_ne!(
-            configuration_contract::CAPABILITY_ID,
+            target_contract::CAPABILITY_ID,
             "lenso.agent.plugin-configuration@1",
-            "the Host-private authority role must not collide with Console's cross-Agent capability"
+            "the Host-private target role must not collide with Console's advertised capability"
         );
         assert_eq!(descriptor["plugin_id"], PLUGIN_PACKAGE_ID);
         assert_eq!(descriptor["root_slot"], "tool-providers");
@@ -649,15 +706,10 @@ mod tests {
             "lenso.agent.tool-provider@2"
         );
         let requirements = descriptor["required_capabilities"].as_array().unwrap();
-        for capability in [
-            configuration_contract::CAPABILITY_ID,
-            selection_contract::CAPABILITY_ID,
-        ] {
-            let requirement = requirements
-                .iter()
-                .find(|requirement| requirement["capability_id"] == capability)
-                .expect("Console Plugin Tools should require each Host authority");
-            assert_eq!(requirement["cardinality"], "one");
-        }
+        let requirement = requirements
+            .iter()
+            .find(|requirement| requirement["capability_id"] == target_contract::CAPABILITY_ID)
+            .expect("Console Plugin Tools should require one target router");
+        assert_eq!(requirement["cardinality"], "one");
     }
 }

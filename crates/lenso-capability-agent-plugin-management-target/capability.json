@@ -1,0 +1,36 @@
+{
+  "id": "lenso.agent.plugin-management-target@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "inspect",
+      "interaction": "request",
+      "request_schema": "schemas/inspect-request.schema.json",
+      "response_schema": "schemas/inspect-response.schema.json",
+      "domain_error_schema": "schemas/inspect-error.schema.json"
+    },
+    {
+      "name": "propose",
+      "interaction": "request",
+      "request_schema": "schemas/propose-request.schema.json",
+      "response_schema": "schemas/propose-response.schema.json",
+      "domain_error_schema": "schemas/propose-error.schema.json"
+    },
+    {
+      "name": "publish",
+      "interaction": "request",
+      "request_schema": "schemas/publish-request.schema.json",
+      "response_schema": "schemas/publish-response.schema.json",
+      "domain_error_schema": "schemas/publish-error.schema.json"
+    },
+    {
+      "name": "set_enabled",
+      "interaction": "request",
+      "request_schema": "schemas/set-enabled-request.schema.json",
+      "response_schema": "schemas/set-enabled-response.schema.json",
+      "domain_error_schema": "schemas/set-enabled-error.schema.json"
+    }
+  ]
+}

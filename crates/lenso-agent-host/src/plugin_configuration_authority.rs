@@ -7,16 +7,46 @@ use lenso_app_authoring::{
 };
 use lenso_app_plan::{CapabilityEndpointPlan, authoring::PluginDescriptor};
 use lenso_capability_agent_plugin_configuration_authority as contract;
+use lenso_capability_agent_plugin_management_target as target_contract;
 use lenso_capability_agent_plugin_selection_authority as selection_contract;
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use lenso_native_adapter::{NativePluginFactory, NativePluginFactoryContext, NativePluginInstance};
 
 pub(crate) const BRIDGE_PLUGIN_ID: &str = "lenso.agent.plugin-configuration-authority-bridge";
 pub(crate) const BRIDGE_PLUGIN_VERSION: &str = "0.1.0";
+const CONSOLE_AGENT_ID: &str = "console";
+
+/// Host adapter used by Console Agent Tools for Agent-qualified Plugin management.
+///
+/// Implementations route only to explicitly cataloged Agent identities. They must
+/// return `TargetNotFound` or `Unsupported` rather than falling back to the local
+/// Console authority.
+pub trait PluginManagementTarget: std::fmt::Debug + Send + Sync + 'static {
+    fn inspect(
+        &self,
+        request: target_contract::InspectRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetInspect>;
+
+    fn propose(
+        &self,
+        request: target_contract::ProposeRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPropose>;
+
+    fn publish(
+        &self,
+        request: target_contract::PublishRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublish>;
+
+    fn set_enabled(
+        &self,
+        request: target_contract::SetEnabledRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetSetEnabled>;
+}
 
 #[derive(Clone, Debug)]
 pub(crate) struct PluginConfigurationAuthorityBridgeFactory {
     authority: Arc<dyn PluginConfigurationAuthority>,
+    management_target: Option<Arc<dyn PluginManagementTarget>>,
     selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
@@ -24,9 +54,11 @@ impl PluginConfigurationAuthorityBridgeFactory {
     pub(crate) fn new(
         authority: Arc<dyn PluginConfigurationAuthority>,
         selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
+        management_target: Option<Arc<dyn PluginManagementTarget>>,
     ) -> Self {
         Self {
             authority,
+            management_target,
             selection_authority,
         }
     }
@@ -53,10 +85,93 @@ impl NativePluginFactory for PluginConfigurationAuthorityBridgeFactory {
                 authority: self.selection_authority.clone(),
                 inspection: Arc::clone(&self.authority),
             });
+        let target_endpoint =
+            target_contract::PluginManagementTargetEndpoint::new(ManagementTargetProvider {
+                external: self.management_target.clone(),
+                local_configuration: Arc::clone(&self.authority),
+                local_selection: self.selection_authority.clone(),
+            });
         Ok(NativePluginInstance::new(vec![
             Rc::new(endpoint),
             Rc::new(selection_endpoint),
+            Rc::new(target_endpoint),
         ]))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ManagementTargetProvider {
+    external: Option<Arc<dyn PluginManagementTarget>>,
+    local_configuration: Arc<dyn PluginConfigurationAuthority>,
+    local_selection: Option<Arc<dyn PluginSelectionAuthority>>,
+}
+
+impl target_contract::PluginManagementTargetProvider for ManagementTargetProvider {
+    fn inspect(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::InspectRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetInspect> {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.inspect(request),
+                None => Box::pin(async { Ok(Err(target_contract::InspectError::TargetNotFound)) }),
+            };
+        }
+        let result =
+            inspect_management_target(self.local_configuration.as_ref(), &request.agent_id);
+        Box::pin(async move { result })
+    }
+
+    fn propose(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::ProposeRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPropose> {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.propose(request),
+                None => Box::pin(async { Ok(Err(target_contract::ProposeError::TargetNotFound)) }),
+            };
+        }
+        let result = propose_management_target(self.local_configuration.as_ref(), &request);
+        Box::pin(async move { result })
+    }
+
+    fn publish(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::PublishRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublish> {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.publish(request),
+                None => Box::pin(async { Ok(Err(target_contract::PublishError::TargetNotFound)) }),
+            };
+        }
+        let result = publish_management_target(self.local_configuration.as_ref(), &request);
+        Box::pin(async move { result })
+    }
+
+    fn set_enabled(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::SetEnabledRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetSetEnabled> {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.set_enabled(request),
+                None => {
+                    Box::pin(async { Ok(Err(target_contract::SetEnabledError::TargetNotFound)) })
+                }
+            };
+        }
+        let result = set_enabled_management_target(
+            self.local_configuration.as_ref(),
+            self.local_selection.as_deref(),
+            &request,
+        );
+        Box::pin(async move { result })
     }
 }
 
@@ -142,6 +257,19 @@ pub(crate) fn bridge_descriptor() -> PluginDescriptor {
         )
         .with_limits(4, 1),
     )
+    .with_capability(
+        CapabilityEndpointPlan::new(
+            target_contract::CAPABILITY_ID,
+            target_contract::DESCRIPTOR_VERSION,
+            [
+                target_contract::INSPECT_OPERATION,
+                target_contract::PROPOSE_OPERATION,
+                target_contract::PUBLISH_OPERATION,
+                target_contract::SET_ENABLED_OPERATION,
+            ],
+        )
+        .with_limits(8, 1),
+    )
 }
 
 fn set_enabled(
@@ -211,6 +339,221 @@ fn set_enabled(
         revision: publication.revision().as_str().to_owned(),
         schema: "lenso.plugin-selection-publication.v1".to_owned(),
     }))
+}
+
+fn inspect_management_target(
+    authority: &dyn PluginConfigurationAuthority,
+    agent_id: &str,
+) -> Result<Result<target_contract::InspectResponse, target_contract::InspectError>, RuntimeFailure>
+{
+    inspect_authority(authority).map(|result| {
+        result
+            .map(|state| target_contract::InspectResponse {
+                agent_id: agent_id.to_owned(),
+                authority: target_authority(state.authority),
+                binding_count: state.binding_count,
+                enabled_instance_count: state.enabled_instance_count,
+                plugins: state
+                    .plugins
+                    .into_iter()
+                    .map(|plugin| target_contract::PluginInspection {
+                        instances: plugin
+                            .instances
+                            .into_iter()
+                            .map(|instance| target_contract::PluginInstanceInspection {
+                                disableable: instance.disableable,
+                                has_root_difference: instance.has_root_difference,
+                                instance_key: instance.instance_key,
+                                origin: instance.origin,
+                                root_configuration_bytes: instance.root_configuration_bytes,
+                                root_configuration_present: instance.root_configuration_present,
+                                selection: instance.selection,
+                                source_digest: instance.source_digest,
+                            })
+                            .collect(),
+                        package_id: plugin.package_id,
+                        package_revision: plugin.package_revision,
+                        source: plugin.source,
+                    })
+                    .collect(),
+                revision: state.revision,
+            })
+            .map_err(map_inspect_target_error)
+    })
+}
+
+fn propose_management_target(
+    authority: &dyn PluginConfigurationAuthority,
+    request: &target_contract::ProposeRequest,
+) -> Result<Result<target_contract::ProposeResponse, target_contract::ProposeError>, RuntimeFailure>
+{
+    propose_configuration(
+        authority,
+        &contract::ProposeRequest {
+            configuration_toml: request.configuration_toml.clone(),
+            expected_revision: request.expected_revision.clone(),
+            instance: request.instance.clone(),
+            plugin_id: request.plugin_id.clone(),
+        },
+    )
+    .map(|result| {
+        result
+            .map(|proposal| target_contract::ProposeResponse {
+                agent_id: request.agent_id.clone(),
+                application: proposal.application,
+                authority: target_authority(proposal.authority),
+                base_revision: proposal.base_revision,
+                base_source_digest: proposal.base_source_digest,
+                candidate_revision: proposal.candidate_revision,
+                diagnostics: proposal
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| target_contract::ProposalDiagnostic {
+                        code: diagnostic.code,
+                        detail: diagnostic.detail,
+                    })
+                    .collect(),
+                instance: proposal.instance,
+                plugin_id: proposal.plugin_id,
+                proposal_digest: proposal.proposal_digest,
+                schema: proposal.schema,
+                status: proposal.status,
+            })
+            .map_err(map_propose_target_error)
+    })
+}
+
+fn publish_management_target(
+    authority: &dyn PluginConfigurationAuthority,
+    request: &target_contract::PublishRequest,
+) -> Result<Result<target_contract::PublishResponse, target_contract::PublishError>, RuntimeFailure>
+{
+    publish_configuration(
+        authority,
+        &contract::PublishRequest {
+            configuration_toml: request.configuration_toml.clone(),
+            expected_revision: request.expected_revision.clone(),
+            instance: request.instance.clone(),
+            plugin_id: request.plugin_id.clone(),
+            proposal_digest: request.proposal_digest.clone(),
+        },
+    )
+    .map(|result| {
+        result
+            .map(|publication| target_contract::PublishResponse {
+                agent_id: request.agent_id.clone(),
+                authority: target_authority(publication.authority),
+                base_revision: publication.base_revision,
+                base_source_digest: publication.base_source_digest,
+                proposal_digest: publication.proposal_digest,
+                revision: publication.revision,
+                schema: publication.schema,
+            })
+            .map_err(map_publish_target_error)
+    })
+}
+
+fn set_enabled_management_target(
+    inspection: &dyn PluginConfigurationAuthority,
+    authority: Option<&dyn PluginSelectionAuthority>,
+    request: &target_contract::SetEnabledRequest,
+) -> Result<
+    Result<target_contract::SetEnabledResponse, target_contract::SetEnabledError>,
+    RuntimeFailure,
+> {
+    set_enabled(
+        inspection,
+        authority,
+        &selection_contract::SetEnabledRequest {
+            enabled: request.enabled,
+            expected_revision: request.expected_revision.clone(),
+            instance: request.instance.clone(),
+            plugin_id: request.plugin_id.clone(),
+        },
+    )
+    .map(|result| {
+        result
+            .map(|publication| target_contract::SetEnabledResponse {
+                agent_id: request.agent_id.clone(),
+                authority: target_contract::AuthoritySource {
+                    kind: publication.authority.kind,
+                    reference: publication.authority.reference,
+                },
+                base_revision: publication.base_revision,
+                enabled: publication.enabled,
+                instance: publication.instance,
+                plugin_id: publication.plugin_id,
+                revision: publication.revision,
+                schema: publication.schema,
+            })
+            .map_err(map_selection_target_error)
+    })
+}
+
+fn target_authority(source: contract::AuthoritySource) -> target_contract::AuthoritySource {
+    target_contract::AuthoritySource {
+        kind: source.kind,
+        reference: source.reference,
+    }
+}
+
+fn map_inspect_target_error(error: contract::InspectError) -> target_contract::InspectError {
+    match error {
+        contract::InspectError::InvalidRequest => target_contract::InspectError::InvalidRequest,
+        contract::InspectError::NotFound => target_contract::InspectError::PluginNotFound,
+        contract::InspectError::Conflict => target_contract::InspectError::Conflict,
+        contract::InspectError::ProposalMismatch => target_contract::InspectError::ProposalMismatch,
+        contract::InspectError::ProposalNotReady => target_contract::InspectError::ProposalNotReady,
+        contract::InspectError::Unknown(code) => target_contract::InspectError::Unknown(code),
+    }
+}
+
+fn map_propose_target_error(error: contract::ProposeError) -> target_contract::ProposeError {
+    match error {
+        contract::ProposeError::InvalidRequest => target_contract::ProposeError::InvalidRequest,
+        contract::ProposeError::NotFound => target_contract::ProposeError::PluginNotFound,
+        contract::ProposeError::Conflict => target_contract::ProposeError::Conflict,
+        contract::ProposeError::ProposalMismatch => target_contract::ProposeError::ProposalMismatch,
+        contract::ProposeError::ProposalNotReady => target_contract::ProposeError::ProposalNotReady,
+        contract::ProposeError::Unknown(code) => target_contract::ProposeError::Unknown(code),
+    }
+}
+
+fn map_publish_target_error(error: contract::PublishError) -> target_contract::PublishError {
+    match error {
+        contract::PublishError::InvalidRequest => target_contract::PublishError::InvalidRequest,
+        contract::PublishError::NotFound => target_contract::PublishError::PluginNotFound,
+        contract::PublishError::Conflict => target_contract::PublishError::Conflict,
+        contract::PublishError::ProposalMismatch => target_contract::PublishError::ProposalMismatch,
+        contract::PublishError::ProposalNotReady => target_contract::PublishError::ProposalNotReady,
+        contract::PublishError::Unknown(code) => target_contract::PublishError::Unknown(code),
+    }
+}
+
+fn map_selection_target_error(
+    error: selection_contract::SetEnabledError,
+) -> target_contract::SetEnabledError {
+    match error {
+        selection_contract::SetEnabledError::InvalidRequest => {
+            target_contract::SetEnabledError::InvalidRequest
+        }
+        selection_contract::SetEnabledError::NotFound => {
+            target_contract::SetEnabledError::PluginNotFound
+        }
+        selection_contract::SetEnabledError::Conflict => target_contract::SetEnabledError::Conflict,
+        selection_contract::SetEnabledError::NotDisableable => {
+            target_contract::SetEnabledError::NotDisableable
+        }
+        selection_contract::SetEnabledError::AlreadySelected => {
+            target_contract::SetEnabledError::AlreadySelected
+        }
+        selection_contract::SetEnabledError::Unsupported => {
+            target_contract::SetEnabledError::Unsupported
+        }
+        selection_contract::SetEnabledError::Unknown(code) => {
+            target_contract::SetEnabledError::Unknown(code)
+        }
+    }
 }
 
 fn inspect_authority(
@@ -465,6 +808,7 @@ mod tests {
         PluginConfigurationPublication,
     };
     use lenso_app_plan::authoring::{HostCatalog, HostDefaultPlugin, HostPluginRelease, HostSlot};
+    use lenso_kernel::CancellationToken;
 
     use super::*;
 
@@ -589,6 +933,52 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, Err(contract::ProposeError::Conflict));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn target_router_never_falls_back_for_an_external_agent() {
+        let (_root, authority) = fixture();
+        let provider = ManagementTargetProvider {
+            external: None,
+            local_configuration: Arc::new(authority),
+            local_selection: None,
+        };
+
+        let response = target_contract::PluginManagementTargetProvider::inspect(
+            &provider,
+            InvocationContext::new(1, None, CancellationToken::new()),
+            target_contract::InspectRequest {
+                agent_id: "app".to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, Err(target_contract::InspectError::TargetNotFound));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn target_router_keeps_console_bound_to_its_local_authority() {
+        let (_root, authority) = fixture();
+        let provider = ManagementTargetProvider {
+            external: None,
+            local_configuration: Arc::new(authority),
+            local_selection: None,
+        };
+
+        let response = target_contract::PluginManagementTargetProvider::inspect(
+            &provider,
+            InvocationContext::new(2, None, CancellationToken::new()),
+            target_contract::InspectRequest {
+                agent_id: CONSOLE_AGENT_ID.to_owned(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(response.agent_id, CONSOLE_AGENT_ID);
+        assert_eq!(response.authority.kind, "local_plugin_root");
     }
 
     #[test]

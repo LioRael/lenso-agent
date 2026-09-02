@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_request" },
+    { "const": "target_not_found" },
+    { "const": "unsupported" },
+    { "const": "plugin_not_found" },
+    { "const": "conflict" },
+    { "const": "proposal_mismatch" },
+    { "const": "proposal_not_ready" },
+    { "const": "not_disableable" },
+    { "const": "already_selected" }
+  ]
+}
