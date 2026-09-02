@@ -45,8 +45,6 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Check formatting
         run: cargo fmt --all -- --check
-      - name: Check every target
-        run: cargo check --locked --workspace --all-targets
       - name: Lint every target
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
 
