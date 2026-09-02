@@ -609,12 +609,7 @@ impl AgentApp {
         let host = linked_host_catalog_in(&directories)?;
         let agent_provider = selected_surface_agent_provider(&plan)?;
         let catalog = selected_model_catalog(&route, &agent_provider).await?;
-        crate::provider_catalog::project(
-            &host,
-            &plan,
-            route.generation_spec_digest(),
-            Some(&catalog),
-        )
+        crate::provider_catalog::project(&host, &plan, Some(&catalog))
     }
 
     /// Snapshots explicit disabled Instance markers for management surfaces.
@@ -1000,12 +995,7 @@ impl AgentApp {
             let directories = directories_for_store_root(self.runtime.state().root())?;
             let host = linked_host_catalog_in(&directories)?;
             let provider_catalog = selected_model_catalog(&route, &agent_provider).await?;
-            let catalog = crate::provider_catalog::project(
-                &host,
-                &plan,
-                route.generation_spec_digest(),
-                Some(&provider_catalog),
-            )?;
+            let catalog = crate::provider_catalog::project(&host, &plan, Some(&provider_catalog))?;
             let resolved_turn_profile = catalog.resolved_turn_profile.clone().ok_or_else(|| {
                 "leased Generation Agent has no resolved Turn model profile".to_owned()
             })?;
@@ -2154,8 +2144,6 @@ fn resolve_generation_with_authority(
     let plan = serde_json::from_slice::<ResolvedAppPlan>(plan_bytes)
         .map_err(|error| format!("resolved Plan is invalid JSON: {error}"))?;
     let resources = crate::plugin_root::plan_resources(plugin_root, &plan)?;
-    let resources =
-        crate::model_catalog_resources::inject_selected_catalog_snapshot(&plan, resources)?;
     resolve_generation_from_plan(&plan, authority, host_build, plugin_root, resources)
 }
 

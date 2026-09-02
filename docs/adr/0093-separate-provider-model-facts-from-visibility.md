@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+The visibility decision remains current; its Generation-frozen catalog
+mechanism was superseded by the
+[Model Catalog lifecycle](../architecture/model-catalog-lifecycle.md).
+
 ## Context
 
 ADR-0092 made the selected Model Provider responsible for discovering and

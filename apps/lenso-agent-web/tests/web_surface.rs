@@ -68,7 +68,7 @@ async fn streams_lists_and_branches_a_durable_session() {
         .json::<serde_json::Value>()
         .await
         .unwrap();
-    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v3");
+    assert_eq!(models["schema"], "lenso.agent.provider-model-catalog.v4");
     assert!(
         models["catalog_revision"]
             .as_str()

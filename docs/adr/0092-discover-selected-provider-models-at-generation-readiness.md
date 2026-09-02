@@ -2,6 +2,9 @@
 
 Status: Accepted
 
+The Generation-frozen refresh behavior in this ADR was superseded by the
+[Model Catalog lifecycle](../architecture/model-catalog-lifecycle.md).
+
 ## Context
 
 The Host Catalog can identify configured Model Provider Instances, but model

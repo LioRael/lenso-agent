@@ -2050,9 +2050,13 @@ fn default_loop_allows_more_than_sixteen_tool_calls() {
         turn_payload["resolved_turn_profile"]["model"],
         "fixture/readme-summary-v1"
     );
-    assert_eq!(
-        turn_payload["resolved_turn_profile"]["catalog_revision"],
-        turn_payload["generation_spec_digest"]
+    let catalog_revision = turn_payload["resolved_turn_profile"]["catalog_revision"]
+        .as_str()
+        .unwrap();
+    assert!(catalog_revision.starts_with("sha256:"));
+    assert_ne!(
+        catalog_revision,
+        turn_payload["generation_spec_digest"].as_str().unwrap()
     );
     assert_eq!(
         turn_payload["resolved_turn_profile"]["catalog_provenance"]["source"],

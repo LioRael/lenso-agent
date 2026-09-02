@@ -1,6 +1,18 @@
 # ADR-0096: Reconcile periodic Model catalog refresh
 
-Status: Accepted
+Status: Superseded by the Provider-owned [Model Catalog lifecycle](../architecture/model-catalog-lifecycle.md)
+
+## Supersession
+
+Implementation `8cd22e1` no longer injects effective catalog bytes into
+Generation resources or watches their publication as Desired State. The active
+Provider updates its current validated catalog in place; each new Turn copies
+one immutable admitted profile, while an already-admitted Turn retains the
+profile and content revision it started with. Generation identity continues to
+cover Provider code, configuration, authority, resources, and composition, but
+not ordinary catalog data refresh.
+
+The decision below is retained as historical context for the replaced design.
 
 ## Context
 
