@@ -808,6 +808,10 @@ async fn authorizes_plugin_root_changes_and_switches_only_a_valid_generation() {
         initial_management["configurationAuthority"]["kind"],
         "local_plugin_root"
     );
+    assert_eq!(
+        initial_management["selectionAuthority"]["kind"],
+        "local_plugin_root"
+    );
     let initial_revision = initial_management["revision"].as_str().unwrap();
     let initial_source_digest = managed_source_digest(
         &initial_management,
@@ -1155,6 +1159,7 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
             ))
             .bearer_auth(&control_token)
             .json(&serde_json::json!({
+                "expectedRevision": initial_revision,
                 "expectedStreamId": initial_stream_id,
             }))
             .send()
@@ -1236,6 +1241,10 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
         "model",
     );
     assert_eq!(management["revision"], published_revision);
+    assert_eq!(
+        management["selectionAuthority"]["kind"],
+        "sqlite_configuration_store"
+    );
     assert_eq!(
         management["configurationAuthority"],
         initial["configurationAuthority"]
@@ -1339,18 +1348,25 @@ async fn persists_managed_plugin_configuration_across_host_restart() {
             "lenso.agent.loop/agent/enabled",
             serde_json::json!({
                 "enabled": false,
+                "expectedRevision": published_revision,
                 "expectedStreamId": initial_stream_id,
             }),
         ),
         (
             reqwest::Method::POST,
             "lenso.agent.loop/agent/disable",
-            serde_json::json!({"expectedStreamId": initial_stream_id}),
+            serde_json::json!({
+                "expectedRevision": published_revision,
+                "expectedStreamId": initial_stream_id,
+            }),
         ),
         (
             reqwest::Method::POST,
             "lenso.agent.loop/agent/enable",
-            serde_json::json!({"expectedStreamId": initial_stream_id}),
+            serde_json::json!({
+                "expectedRevision": published_revision,
+                "expectedStreamId": initial_stream_id,
+            }),
         ),
         (
             reqwest::Method::DELETE,

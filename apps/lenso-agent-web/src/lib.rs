@@ -97,7 +97,7 @@ pub use remote_configuration_authority::{
     RemotePluginConfigurationResource,
 };
 
-use plugin_control::{PluginControl, PluginMutationCoordinator};
+use plugin_control::{PluginControl, PluginControlAuthorities, PluginMutationCoordinator};
 use plugin_control_api::{PluginRuntimeCommand, PluginRuntimeState};
 
 const MAX_REQUEST_BYTES: usize = 65_536;
@@ -771,9 +771,8 @@ impl AgentWebSurface {
         .surface(WebSurface::browser())
         .build()?;
         host.prepare_authoring()?;
-        let app_root = managed_app_root.as_deref().unwrap_or(directories.home());
         let authorities = resolve_configuration_authorities(
-            app_root,
+            managed_app_root.as_deref().unwrap_or(directories.home()),
             plugin_configuration_authority,
             plugin_selection_authority,
             plugin_configuration_history,
@@ -788,8 +787,8 @@ impl AgentWebSurface {
             selection: plugin_selection_authority,
         } = authorities;
         let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
-        let host = match plugin_selection_authority {
-            Some(authority) => host.plugin_selection_authority(authority),
+        let host = match plugin_selection_authority.as_ref() {
+            Some(authority) => host.plugin_selection_authority(Arc::clone(authority)),
             None => host,
         };
         let app = Box::pin(host.run(selected_profile)).await?;
@@ -798,9 +797,12 @@ impl AgentWebSurface {
             managed_app_root.as_deref(),
             directories.home(),
             profile.clone(),
-            plugin_configuration_authority,
-            plugin_configuration_history,
-            authority_is_builtin_local,
+            PluginControlAuthorities {
+                configuration: plugin_configuration_authority,
+                configuration_is_builtin_local: authority_is_builtin_local,
+                history: plugin_configuration_history,
+                selection: plugin_selection_authority,
+            },
         )?;
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
@@ -3764,9 +3766,12 @@ mod tests {
             Some(managed_app.path()),
             agent_home.path(),
             None,
-            Arc::new(LocalPluginRootAuthority::new(agent_home.path())),
-            None,
-            true,
+            PluginControlAuthorities {
+                configuration: Arc::new(LocalPluginRootAuthority::new(agent_home.path())),
+                configuration_is_builtin_local: true,
+                history: None,
+                selection: None,
+            },
         )
         .unwrap_err();
 

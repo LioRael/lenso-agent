@@ -4,6 +4,7 @@ use std::{
     future::Future,
     io::Write,
     path::{Path, PathBuf},
+    str::FromStr,
     sync::{Arc, Mutex},
 };
 
@@ -18,7 +19,7 @@ use lenso_app_authoring::{
     PluginConfigurationApplication, PluginConfigurationAuthority,
     PluginConfigurationAuthoritySource, PluginConfigurationDiagnostic, PluginConfigurationProposal,
     PluginConfigurationProposalStatus, PluginConfigurationSourceDigest, PluginRootAuthoringState,
-    PluginRootRevision, add_bundle,
+    PluginRootRevision, PluginSelectionAuthority, add_bundle,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -43,10 +44,18 @@ pub(super) struct PluginControl {
     app_root: PathBuf,
     authority_home: PathBuf,
     configuration_authority: Arc<dyn PluginConfigurationAuthority>,
+    selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
     configuration_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     configuration_authority_is_builtin_local: bool,
     mutation: Arc<Mutex<()>>,
     profile: Option<String>,
+}
+
+pub(super) struct PluginControlAuthorities {
+    pub(super) configuration: Arc<dyn PluginConfigurationAuthority>,
+    pub(super) configuration_is_builtin_local: bool,
+    pub(super) history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
+    pub(super) selection: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -76,16 +85,14 @@ impl PluginControl {
         managed_app_root: Option<&Path>,
         authority_home: &Path,
         profile: Option<String>,
-        configuration_authority: Arc<dyn PluginConfigurationAuthority>,
-        configuration_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
-        configuration_authority_is_builtin_local: bool,
+        authorities: PluginControlAuthorities,
     ) -> Result<Option<Self>, String> {
         Self::validate_target(managed_app_root, authority_home)?;
         if !enabled {
             return Ok(None);
         }
         let app_root = managed_app_root.unwrap_or(authority_home);
-        if profile.is_some() && !configuration_authority_is_builtin_local {
+        if profile.is_some() && !authorities.configuration_is_builtin_local {
             return Err(
                 "named Profile Plugin control requires the built-in local configuration authority"
                     .to_owned(),
@@ -95,9 +102,7 @@ impl PluginControl {
             app_root,
             authority_home,
             profile,
-            configuration_authority,
-            configuration_history,
-            configuration_authority_is_builtin_local,
+            authorities,
         )))
     }
 
@@ -131,16 +136,21 @@ impl PluginControl {
         app_root: &Path,
         authority_home: &Path,
         profile: Option<String>,
-        configuration_authority: Arc<dyn PluginConfigurationAuthority>,
-        configuration_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
-        configuration_authority_is_builtin_local: bool,
+        authorities: PluginControlAuthorities,
     ) -> Self {
+        let PluginControlAuthorities {
+            configuration,
+            configuration_is_builtin_local,
+            history,
+            selection,
+        } = authorities;
         Self {
             app_root: app_root.to_path_buf(),
             authority_home: authority_home.to_path_buf(),
-            configuration_authority,
-            configuration_history,
-            configuration_authority_is_builtin_local,
+            configuration_authority: configuration,
+            selection_authority: selection,
+            configuration_history: history,
+            configuration_authority_is_builtin_local: configuration_is_builtin_local,
             mutation: Arc::new(Mutex::new(())),
             profile,
         }
@@ -153,6 +163,12 @@ impl PluginControl {
     pub(super) fn configuration_authority_response(&self) -> PluginConfigurationAuthorityResponse {
         PluginConfigurationAuthorityResponse::from(self.configuration_source())
             .with_history(self.configuration_history.is_some())
+    }
+
+    fn selection_authority_response(&self) -> Option<PluginSelectionAuthorityResponse> {
+        self.selection_authority
+            .as_ref()
+            .map(|authority| PluginSelectionAuthorityResponse::from(authority.source()))
     }
 
     fn configuration_publication_has_authority_gap(&self) -> bool {
@@ -210,7 +226,9 @@ impl PluginControl {
         if self.profile.is_some() {
             self.ensure_profile_configuration_authority()?;
             let _authoring = lock_plugin_root_authoring(&self.app_root)?;
-            return self.inspect_profile(authority);
+            return self.inspect_profile(authority).map(|response| {
+                response.with_selection_authority(self.selection_authority_response())
+            });
         }
         let _authoring = self
             .configuration_authority_is_builtin_local
@@ -220,7 +238,9 @@ impl PluginControl {
             .configuration_authority
             .inspect()
             .map_err(|error| error.to_string())?;
-        Ok(PluginManagementResponse::from(&state).with_configuration_authority(authority))
+        Ok(PluginManagementResponse::from(&state)
+            .with_configuration_authority(authority)
+            .with_selection_authority(self.selection_authority_response()))
     }
 
     fn catalog(&self, query: &str) -> Result<PluginCatalogResponse, String> {
@@ -238,7 +258,9 @@ impl PluginControl {
                     .iter()
                     .any(|instance| instance.selection == "enabled");
                 let mut actions = vec!["configure"];
-                if plugin.instances.iter().any(|instance| instance.disableable) {
+                if self.selection_authority.is_some()
+                    && plugin.instances.iter().any(|instance| instance.disableable)
+                {
                     actions.push("set_enabled");
                 }
                 if plugin.root_supplied {
@@ -677,33 +699,38 @@ impl PluginControl {
 
     fn set_enabled(
         &self,
+        expected_revision: &PluginRootRevision,
         plugin_id: &str,
         instance: &str,
         enabled: bool,
     ) -> Result<CommittedPluginMutation, String> {
         validate_plugin_instance(plugin_id, instance)?;
-        self.mutate(|staged| {
-            let relative = plugin_disabled_path(plugin_id, instance);
-            let staged_marker = staged.home.join(&relative);
-            if enabled {
-                if !staged_marker.is_file() {
-                    return Err(format!(
-                        "Plugin Instance `{plugin_id}/{instance}` is not disabled"
-                    ));
-                }
-                fs::remove_file(&staged_marker)
-                    .map_err(|error| format!("failed to stage enabled Plugin Instance: {error}"))?;
-            } else {
-                atomic_write(&staged_marker, &[])?;
-            }
-            self.validate_staged(staged)?;
-            let marker = self.app_root.join(relative);
-            if enabled {
-                remove_file_if_exists(&marker)?;
-            } else {
-                atomic_write(&marker, &[])?;
-            }
-            self.snapshot_committed()
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        let authority = self.selection_authority.as_ref().ok_or_else(|| {
+            "the selected Plugin authority does not support selection changes".to_owned()
+        })?;
+        let publication = authority
+            .set_enabled(expected_revision, plugin_id, instance, enabled)
+            .map_err(|error| error.to_string())?;
+        // Selection authorities own their authoring lock and CAS. Extend the
+        // Host fence only after publication to avoid inverting an opaque
+        // authority's lock order, matching opaque configuration publication.
+        let linearization =
+            PluginMutationLinearization::acquire(&self.app_root, &self.authority_home)?;
+        let desired = self.snapshot_committed()?;
+        if publication.revision().as_str() != desired.plugin_root_revision() {
+            return Err(format!(
+                "Plugin selection authority published revision {} but materialized {}",
+                publication.revision(),
+                desired.plugin_root_revision()
+            ));
+        }
+        Ok(CommittedPluginMutation {
+            desired,
+            linearization,
         })
     }
 
@@ -1293,6 +1320,23 @@ pub(super) struct PluginManagementResponse {
     plugins: Vec<ManagedPlugin>,
     revision: String,
     schema: &'static str,
+    selection_authority: Option<PluginSelectionAuthorityResponse>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginSelectionAuthorityResponse {
+    kind: String,
+    reference: String,
+}
+
+impl From<PluginConfigurationAuthoritySource> for PluginSelectionAuthorityResponse {
+    fn from(source: PluginConfigurationAuthoritySource) -> Self {
+        Self {
+            kind: source.kind().to_owned(),
+            reference: source.reference().to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1466,6 +1510,7 @@ impl ProfileManagementAuthority {
                 .collect(),
             revision,
             schema: "lenso.agent.plugin-management.v1",
+            selection_authority: None,
         })
     }
 
@@ -1566,6 +1611,7 @@ impl From<&PluginRootAuthoringState> for PluginManagementResponse {
                 .collect(),
             revision: state.revision().as_str().to_owned(),
             schema: "lenso.agent.plugin-management.v1",
+            selection_authority: None,
         }
     }
 }
@@ -1576,6 +1622,14 @@ impl PluginManagementResponse {
         authority: PluginConfigurationAuthorityResponse,
     ) -> Self {
         self.configuration_authority = authority;
+        self
+    }
+
+    fn with_selection_authority(
+        mut self,
+        authority: Option<PluginSelectionAuthorityResponse>,
+    ) -> Self {
+        self.selection_authority = authority;
         self
     }
 }
@@ -1808,6 +1862,14 @@ struct ProposePluginConfigurationRollbackRequest {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SetPluginEnabledRequest {
     enabled: bool,
+    expected_revision: String,
+    expected_stream_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExpectedPluginSelectionRequest {
+    expected_revision: String,
     expected_stream_id: String,
 }
 
@@ -2246,11 +2308,15 @@ async fn set_plugin_instance_enabled(
     Json(request): Json<SetPluginEnabledRequest>,
 ) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
     runtime.authorize_control(&headers)?;
+    let expected_revision = PluginRootRevision::from_str(&request.expected_revision)
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
     mutate_plugin_root(
         &runtime,
         request.expected_stream_id,
         "selection",
-        move |control| control.set_enabled(&plugin_id, &instance, request.enabled),
+        move |control| {
+            control.set_enabled(&expected_revision, &plugin_id, &instance, request.enabled)
+        },
     )
     .await
 }
@@ -2259,30 +2325,49 @@ async fn disable_plugin_instance(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
     path: AxumPath<(String, String)>,
-    Json(request): Json<ExpectedPluginStreamRequest>,
+    Json(request): Json<ExpectedPluginSelectionRequest>,
 ) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
-    set_plugin_enabled_alias(runtime, headers, path, request.expected_stream_id, false).await
+    set_plugin_enabled_alias(
+        runtime,
+        headers,
+        path,
+        request.expected_revision,
+        request.expected_stream_id,
+        false,
+    )
+    .await
 }
 
 async fn enable_plugin_instance(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
     path: AxumPath<(String, String)>,
-    Json(request): Json<ExpectedPluginStreamRequest>,
+    Json(request): Json<ExpectedPluginSelectionRequest>,
 ) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
-    set_plugin_enabled_alias(runtime, headers, path, request.expected_stream_id, true).await
+    set_plugin_enabled_alias(
+        runtime,
+        headers,
+        path,
+        request.expected_revision,
+        request.expected_stream_id,
+        true,
+    )
+    .await
 }
 
 async fn set_plugin_enabled_alias(
     runtime: WebRuntime,
     headers: HeaderMap,
     AxumPath((plugin_id, instance)): AxumPath<(String, String)>,
+    expected_revision: String,
     expected_stream_id: String,
     enabled: bool,
 ) -> Result<(StatusCode, Json<PluginMutationResponse>), ApiProblem> {
     runtime.authorize_control(&headers)?;
+    let expected_revision = PluginRootRevision::from_str(&expected_revision)
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
     mutate_plugin_root(&runtime, expected_stream_id, "selection", move |control| {
-        control.set_enabled(&plugin_id, &instance, enabled)
+        control.set_enabled(&expected_revision, &plugin_id, &instance, enabled)
     })
     .await
 }
@@ -2470,6 +2555,10 @@ mod tests {
             }],
             revision: "sha256:root-next".to_owned(),
             schema: "lenso.agent.plugin-management.v1",
+            selection_authority: Some(PluginSelectionAuthorityResponse {
+                kind: "sqlite_configuration_store".to_owned(),
+                reference: "agent".to_owned(),
+            }),
         };
         let proposal = PluginConfigurationProposalResponse {
             application: "app_generation",
@@ -2989,9 +3078,15 @@ mod tests {
                     root.path(),
                     root.path(),
                     None,
-                    Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>,
-                    Some(authority as Arc<dyn PluginConfigurationHistoryAuthority>),
-                    false,
+                    PluginControlAuthorities {
+                        configuration: Arc::clone(&authority)
+                            as Arc<dyn PluginConfigurationAuthority>,
+                        configuration_is_builtin_local: false,
+                        selection: Some(
+                            Arc::clone(&authority) as Arc<dyn PluginSelectionAuthority>
+                        ),
+                        history: Some(authority as Arc<dyn PluginConfigurationHistoryAuthority>),
+                    },
                 );
                 assert_global_budget_rejection_preserves_target(&control, root.path());
                 let connection = rusqlite::Connection::open(&database).unwrap();

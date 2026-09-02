@@ -143,7 +143,11 @@
       }
     ],
     "revision": "sha256:root-next",
-    "schema": "lenso.agent.plugin-management.v1"
+    "schema": "lenso.agent.plugin-management.v1",
+    "selectionAuthority": {
+      "kind": "sqlite_configuration_store",
+      "reference": "agent"
+    }
   },
   "proposal": {
     "application": "app_generation",
