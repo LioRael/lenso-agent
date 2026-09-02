@@ -1,7 +1,11 @@
 # Agent instructions
 
-Read `CONTEXT.md` and the accepted ADRs before changing architecture or
-contracts.
+Read `CONTEXT.md` and the relevant accepted ADRs before changing architecture
+or contracts. Create a new ADR only for a hard-to-reverse choice that changes a
+cross-repository contract, durable data or wire format, security or authority
+boundary, public compatibility policy, or foundational ownership direction.
+Ordinary feature behavior, implementation sequence, test evidence, and release
+proof belong in code, tests, pull requests, and current architecture pages.
 
 - Treat Lenso Agent as one Host plus a visible `plugins/` Plugin Root. Do
   not add Agent concepts, Plugin discovery, package installation, or graph
@@ -29,3 +33,8 @@ contracts.
   commands without local absolute paths.
 - Preserve unrelated work. Use `wt switch --create` for task worktrees after
   this repository has a committed base.
+- Add a crate only when it independently owns a published or consumed API, a
+  Capability contract, an installable or removable Plugin identity, an unsafe,
+  process, or platform boundary, a proc-macro compilation boundary, a surface
+  entrypoint or composition, or a dependency-cycle break with a named
+  abstraction. File length and “one feature” are not crate boundaries.
