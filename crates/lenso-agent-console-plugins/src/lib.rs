@@ -3,6 +3,7 @@
 use lenso_agent_artifact_file_plugin as _;
 use lenso_agent_ask_user_tools_plugin as _;
 use lenso_agent_auth_openai_codex_plugin as _;
+use lenso_agent_console_instructions_plugin as _;
 use lenso_agent_context_compaction_plugin as _;
 use lenso_agent_http_fetch_plugin as _;
 use lenso_agent_interactive_approval_hook_plugin as _;

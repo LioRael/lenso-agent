@@ -2997,6 +2997,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-console-instructions-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-capability-agent-prompt-provider",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-console-plugin-tools-plugin"
 version = "0.1.0"
 dependencies = [
@@ -3017,6 +3029,7 @@ dependencies = [
  "lenso-agent-artifact-file-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
+ "lenso-agent-console-instructions-plugin",
  "lenso-agent-console-plugin-tools-plugin",
  "lenso-agent-context-compaction-plugin",
  "lenso-agent-http-fetch-plugin",
