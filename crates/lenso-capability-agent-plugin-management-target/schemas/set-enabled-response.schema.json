@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "agent_id",
+    "authority",
+    "base_revision",
+    "enabled",
+    "instance",
+    "plugin_id",
+    "revision",
+    "schema"
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "authority": {
+      "$ref": "#/$defs/AuthoritySource"
+    },
+    "base_revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "instance": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "plugin_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    },
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AuthoritySource": {
+      "type": "object",
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "SetEnabledResponse"
+}

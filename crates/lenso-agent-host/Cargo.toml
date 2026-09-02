@@ -33,6 +33,7 @@ lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-capability-agent-model-selection = { path = "../lenso-capability-agent-model-selection" }
 lenso-capability-agent-oauth-access = { path = "../lenso-capability-agent-oauth-access" }
 lenso-capability-agent-plugin-configuration-authority = { path = "../lenso-capability-agent-plugin-configuration" }
+lenso-capability-agent-plugin-management-target = { path = "../lenso-capability-agent-plugin-management-target" }
 lenso-capability-agent-plugin-selection-authority = { path = "../lenso-capability-agent-plugin-selection" }
 lenso-capability-agent-prompt = { path = "../lenso-capability-agent-prompt" }
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }

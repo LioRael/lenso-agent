@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "agent_id",
+    "authority",
+    "binding_count",
+    "enabled_instance_count",
+    "plugins",
+    "revision"
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "authority": {
+      "$ref": "#/$defs/AuthoritySource"
+    },
+    "binding_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "enabled_instance_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 65536
+    },
+    "plugins": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "$ref": "#/$defs/PluginInspection"
+      }
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AuthoritySource": {
+      "type": "object",
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "PluginInspection": {
+      "type": "object",
+      "required": ["instances", "package_id", "package_revision", "source"],
+      "properties": {
+        "instances": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/PluginInstanceInspection"
+          }
+        },
+        "package_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "package_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        }
+      },
+      "additionalProperties": false
+    },
+    "PluginInstanceInspection": {
+      "type": "object",
+      "required": [
+        "disableable",
+        "has_root_difference",
+        "instance_key",
+        "origin",
+        "root_configuration_bytes",
+        "root_configuration_present",
+        "selection",
+        "source_digest"
+      ],
+      "properties": {
+        "disableable": {
+          "type": "boolean"
+        },
+        "has_root_difference": {
+          "type": "boolean"
+        },
+        "instance_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "origin": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "root_configuration_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 262144
+        },
+        "root_configuration_present": {
+          "type": "boolean"
+        },
+        "selection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "source_digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "InspectResponse"
+}

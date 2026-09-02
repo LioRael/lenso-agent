@@ -27,6 +27,7 @@ pub use host::{
 };
 pub use lenso_agent_loop_plugin::TurnModelSelection;
 pub use official_prompts::migrate_legacy_official_files;
+pub use plugin_configuration_authority::PluginManagementTarget;
 pub use provider_catalog::{
     ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelInputModality, ModelLimits,
     ModelProviderCatalogEntry, ModelProviderReadiness, ModelProviderReadinessStatus,

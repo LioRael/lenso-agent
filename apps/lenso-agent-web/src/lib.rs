@@ -16,7 +16,8 @@ use axum::{
     routing::{get, post},
 };
 use lenso_agent_host::{
-    AgentDirectories, AgentHost, Profile, ProviderModelCatalog, WebSurface,
+    AgentDirectories, AgentHost, ConfiguredAgentHost, PluginManagementTarget, Profile,
+    ProviderModelCatalog, WebSurface,
     generation::{AgentApp, RenameSessionFailure},
 };
 use lenso_agent_loop_plugin::RunScope;
@@ -188,6 +189,12 @@ pub struct AgentWebConfig {
     /// managed Plugin Root before publication returns. Omit to use the local
     /// Plugin Root authority.
     pub plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    /// Optional Host adapter for non-local Agent-qualified Plugin management targets.
+    ///
+    /// The local Console Agent remains bound to its own configuration authority.
+    /// Other identities must be resolved explicitly by this adapter and never
+    /// fall back to the local authority.
+    pub plugin_management_target: Option<Arc<dyn PluginManagementTarget>>,
     /// Optional Host-provided authority for enabling and disabling Plugin Instances.
     ///
     /// Omit when the selected configuration authority does not support selection changes.
@@ -225,6 +232,7 @@ impl AgentWebConfig {
             control: AgentWebControl::Disabled,
             plugin_control: false,
             plugin_configuration_authority: None,
+            plugin_management_target: None,
             plugin_selection_authority: None,
             plugin_configuration_history: None,
             plugin_configuration_store: None,
@@ -736,6 +744,7 @@ impl AgentWebSurface {
             control,
             plugin_control,
             plugin_configuration_authority,
+            plugin_management_target,
             plugin_selection_authority,
             plugin_configuration_history,
             plugin_configuration_store,
@@ -744,10 +753,7 @@ impl AgentWebSurface {
         } = config;
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
         let selected_profile = resolve_start_profile(plan.as_deref(), profile.as_deref())?;
-        let directories = match agent_home.as_ref() {
-            Some(agent_home) => AgentDirectories::from_home(agent_home)?,
-            None => AgentDirectories::resolve()?,
-        };
+        let directories = resolve_agent_directories(agent_home.as_deref())?;
         let authority_selection = plugin_configuration_authority_selection(
             plugin_configuration_authority.as_ref(),
             plugin_selection_authority.as_ref(),
@@ -787,10 +793,11 @@ impl AgentWebSurface {
             selection: plugin_selection_authority,
         } = authorities;
         let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
-        let host = match plugin_selection_authority.as_ref() {
-            Some(authority) => host.plugin_selection_authority(Arc::clone(authority)),
-            None => host,
-        };
+        let host = with_plugin_management_adapters(
+            host,
+            plugin_management_target,
+            plugin_selection_authority.as_ref(),
+        );
         let app = Box::pin(host.run(selected_profile)).await?;
         let plugin_control = PluginControl::resolve(
             plugin_control,
@@ -833,6 +840,27 @@ impl AgentWebSurface {
     /// Gracefully stops the App Generation owned by this Web Surface.
     pub async fn shutdown(&self) -> Result<(), String> {
         self.runtime.shutdown().await
+    }
+}
+
+fn with_plugin_management_adapters(
+    mut host: ConfiguredAgentHost<WebSurface>,
+    target: Option<Arc<dyn PluginManagementTarget>>,
+    selection: Option<&Arc<dyn PluginSelectionAuthority>>,
+) -> ConfiguredAgentHost<WebSurface> {
+    if let Some(target) = target {
+        host = host.plugin_management_target(target);
+    }
+    if let Some(selection) = selection {
+        host = host.plugin_selection_authority(Arc::clone(selection));
+    }
+    host
+}
+
+fn resolve_agent_directories(agent_home: Option<&FsPath>) -> Result<AgentDirectories, String> {
+    match agent_home {
+        Some(agent_home) => AgentDirectories::from_home(agent_home),
+        None => AgentDirectories::resolve(),
     }
 }
 
