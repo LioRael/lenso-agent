@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "agent_id",
+    "authority",
+    "instance",
+    "plugin_id",
+    "publications",
+    "revision",
+    "schema"
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "authority": {
+      "$ref": "#/$defs/AuthoritySource"
+    },
+    "instance": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "plugin_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "publications": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/PublicationRecord"
+      }
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    },
+    "schema": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AuthoritySource": {
+      "type": "object",
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "PublicationRecord": {
+      "type": "object",
+      "required": ["base_revision", "proposal_digest", "published_at_unix_ms", "revision"],
+      "properties": {
+        "base_revision": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71
+        },
+        "base_source_digest": {
+          "type": ["string", "null"],
+          "minLength": 71,
+          "maxLength": 71
+        },
+        "proposal_digest": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71
+        },
+        "published_at_unix_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 71,
+          "maxLength": 71
+        },
+        "rollback_of_proposal_digest": {
+          "type": ["string", "null"],
+          "minLength": 71,
+          "maxLength": 71
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "HistoryResponse"
+}

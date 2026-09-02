@@ -22,6 +22,11 @@ const CONSOLE_AGENT_ID: &str = "console";
 /// return `TargetNotFound` or `Unsupported` rather than falling back to the local
 /// Console authority.
 pub trait PluginManagementTarget: std::fmt::Debug + Send + Sync + 'static {
+    fn history(
+        &self,
+        request: target_contract::HistoryRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetHistory>;
+
     fn inspect(
         &self,
         request: target_contract::InspectRequest,
@@ -32,10 +37,20 @@ pub trait PluginManagementTarget: std::fmt::Debug + Send + Sync + 'static {
         request: target_contract::ProposeRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPropose>;
 
+    fn propose_rollback(
+        &self,
+        request: target_contract::ProposeRollbackRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRollback>;
+
     fn publish(
         &self,
         request: target_contract::PublishRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublish>;
+
+    fn publish_rollback(
+        &self,
+        request: target_contract::PublishRollbackRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRollback>;
 
     fn set_enabled(
         &self,
@@ -107,6 +122,20 @@ struct ManagementTargetProvider {
 }
 
 impl target_contract::PluginManagementTargetProvider for ManagementTargetProvider {
+    fn history(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::HistoryRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetHistory> {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.history(request),
+                None => Box::pin(async { Ok(Err(target_contract::HistoryError::TargetNotFound)) }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::HistoryError::Unsupported)) })
+    }
+
     fn inspect(
         &self,
         _context: InvocationContext,
@@ -138,6 +167,23 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
         Box::pin(async move { result })
     }
 
+    fn propose_rollback(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::ProposeRollbackRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRollback>
+    {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.propose_rollback(request),
+                None => Box::pin(async {
+                    Ok(Err(target_contract::ProposeRollbackError::TargetNotFound))
+                }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::ProposeRollbackError::Unsupported)) })
+    }
+
     fn publish(
         &self,
         _context: InvocationContext,
@@ -151,6 +197,23 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
         }
         let result = publish_management_target(self.local_configuration.as_ref(), &request);
         Box::pin(async move { result })
+    }
+
+    fn publish_rollback(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::PublishRollbackRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRollback>
+    {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.publish_rollback(request),
+                None => Box::pin(async {
+                    Ok(Err(target_contract::PublishRollbackError::TargetNotFound))
+                }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::PublishRollbackError::Unsupported)) })
     }
 
     fn set_enabled(
@@ -262,9 +325,12 @@ pub(crate) fn bridge_descriptor() -> PluginDescriptor {
             target_contract::CAPABILITY_ID,
             target_contract::DESCRIPTOR_VERSION,
             [
+                target_contract::HISTORY_OPERATION,
                 target_contract::INSPECT_OPERATION,
                 target_contract::PROPOSE_OPERATION,
+                target_contract::PROPOSE_ROLLBACK_OPERATION,
                 target_contract::PUBLISH_OPERATION,
+                target_contract::PUBLISH_ROLLBACK_OPERATION,
                 target_contract::SET_ENABLED_OPERATION,
             ],
         )
@@ -979,6 +1045,31 @@ mod tests {
 
         assert_eq!(response.agent_id, CONSOLE_AGENT_ID);
         assert_eq!(response.authority.kind, "local_plugin_root");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn target_router_does_not_invent_history_for_the_local_authority() {
+        let (_root, authority) = fixture();
+        let provider = ManagementTargetProvider {
+            external: None,
+            local_configuration: Arc::new(authority),
+            local_selection: None,
+        };
+
+        let response = target_contract::PluginManagementTargetProvider::history(
+            &provider,
+            InvocationContext::new(3, None, CancellationToken::new()),
+            target_contract::HistoryRequest {
+                agent_id: CONSOLE_AGENT_ID.to_owned(),
+                instance: "default".to_owned(),
+                limit: 10,
+                plugin_id: BRIDGE_PLUGIN_ID.to_owned(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(response, Err(target_contract::HistoryError::Unsupported));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.plugin-management-target@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PLUGIN_MANAGEMENT_TARGET_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,23 +13,118 @@ pub const PLUGIN_MANAGEMENT_TARGET_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_plugin_management_target { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"inspect\",\"propose\",\"publish\",\"set_enabled\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_plugin_management_target { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"history\",\"inspect\",\"propose\",\"propose_rollback\",\"publish\",\"publish_rollback\",\"set_enabled\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_plugin_management_target_client { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_plugin_management_target_client { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_plugin_management_target_client { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_plugin_management_target_client { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
 
+pub const HISTORY_OPERATION: &str = "history";
 pub const INSPECT_OPERATION: &str = "inspect";
 pub const PROPOSE_OPERATION: &str = "propose";
+pub const PROPOSE_ROLLBACK_OPERATION: &str = "propose_rollback";
 pub const PUBLISH_OPERATION: &str = "publish";
+pub const PUBLISH_ROLLBACK_OPERATION: &str = "publish_rollback";
 pub const SET_ENABLED_OPERATION: &str = "set_enabled";
 
-pub use lenso_contract_runtime::{UnknownDomainError};
+pub use lenso_contract_runtime::{OptionalValue, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HistoryRequest {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "instance")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub instance: String,
+    #[serde(rename = "limit")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub limit: i64,
+    #[serde(rename = "plugin_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub plugin_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HistoryResponse {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "authority")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub authority: AuthoritySource,
+    #[serde(rename = "instance")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub instance: String,
+    #[serde(rename = "plugin_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub plugin_id: String,
+    #[serde(rename = "publications")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub publications: Vec<PublicationRecord>,
+    #[serde(rename = "revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub revision: String,
+    #[serde(rename = "schema")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub schema: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct AuthoritySource {
+    #[serde(rename = "kind")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub kind: String,
+    #[serde(rename = "reference")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub reference: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PublicationRecord {
+    #[serde(rename = "base_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub base_revision: String,
+    #[serde(rename = "base_source_digest")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub base_source_digest: OptionalValue<String>,
+    #[serde(rename = "proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub proposal_digest: String,
+    #[serde(rename = "published_at_unix_ms")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub published_at_unix_ms: i64,
+    #[serde(rename = "revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub revision: String,
+    #[serde(rename = "rollback_of_proposal_digest")]
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_optional_value")]
+    pub rollback_of_proposal_digest: OptionalValue<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HistoryError {
+    AlreadySelected,
+    Conflict,
+    InvalidRequest,
+    NotDisableable,
+    PluginNotFound,
+    ProposalMismatch,
+    ProposalNotReady,
+    PublicationNotFound,
+    TargetNotFound,
+    Unsupported,
+    Unknown(UnknownDomainError),
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct InspectRequest {
@@ -58,16 +153,6 @@ pub struct InspectResponse {
     #[serde(rename = "revision")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub revision: String,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct AuthoritySource {
-    #[serde(rename = "kind")]
-    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub kind: String,
-    #[serde(rename = "reference")]
-    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
-    pub reference: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -123,6 +208,7 @@ pub enum InspectError {
     PluginNotFound,
     ProposalMismatch,
     ProposalNotReady,
+    PublicationNotFound,
     TargetNotFound,
     Unsupported,
     Unknown(UnknownDomainError),
@@ -206,6 +292,84 @@ pub enum ProposeError {
     PluginNotFound,
     ProposalMismatch,
     ProposalNotReady,
+    PublicationNotFound,
+    TargetNotFound,
+    Unsupported,
+    Unknown(UnknownDomainError),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProposeRollbackRequest {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "expected_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub expected_revision: String,
+    #[serde(rename = "instance")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub instance: String,
+    #[serde(rename = "plugin_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub plugin_id: String,
+    #[serde(rename = "publication_proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub publication_proposal_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ProposeRollbackResponse {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "application")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub application: String,
+    #[serde(rename = "authority")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub authority: AuthoritySource,
+    #[serde(rename = "base_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub base_revision: String,
+    #[serde(rename = "base_source_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub base_source_digest: String,
+    #[serde(rename = "candidate_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub candidate_revision: String,
+    #[serde(rename = "diagnostics")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub diagnostics: Vec<ProposalDiagnostic>,
+    #[serde(rename = "instance")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub instance: String,
+    #[serde(rename = "plugin_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub plugin_id: String,
+    #[serde(rename = "proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub proposal_digest: String,
+    #[serde(rename = "rollback_of_proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub rollback_of_proposal_digest: String,
+    #[serde(rename = "schema")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub schema: String,
+    #[serde(rename = "status")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProposeRollbackError {
+    AlreadySelected,
+    Conflict,
+    InvalidRequest,
+    NotDisableable,
+    PluginNotFound,
+    ProposalMismatch,
+    ProposalNotReady,
+    PublicationNotFound,
     TargetNotFound,
     Unsupported,
     Unknown(UnknownDomainError),
@@ -267,6 +431,72 @@ pub enum PublishError {
     PluginNotFound,
     ProposalMismatch,
     ProposalNotReady,
+    PublicationNotFound,
+    TargetNotFound,
+    Unsupported,
+    Unknown(UnknownDomainError),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PublishRollbackRequest {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "expected_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub expected_revision: String,
+    #[serde(rename = "instance")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub instance: String,
+    #[serde(rename = "plugin_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub plugin_id: String,
+    #[serde(rename = "proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub proposal_digest: String,
+    #[serde(rename = "publication_proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub publication_proposal_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PublishRollbackResponse {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "authority")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub authority: AuthoritySource,
+    #[serde(rename = "base_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub base_revision: String,
+    #[serde(rename = "base_source_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub base_source_digest: String,
+    #[serde(rename = "proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub proposal_digest: String,
+    #[serde(rename = "revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub revision: String,
+    #[serde(rename = "rollback_of_proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub rollback_of_proposal_digest: String,
+    #[serde(rename = "schema")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub schema: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PublishRollbackError {
+    AlreadySelected,
+    Conflict,
+    InvalidRequest,
+    NotDisableable,
+    PluginNotFound,
+    ProposalMismatch,
+    ProposalNotReady,
+    PublicationNotFound,
     TargetNotFound,
     Unsupported,
     Unknown(UnknownDomainError),
@@ -328,9 +558,33 @@ pub enum SetEnabledError {
     PluginNotFound,
     ProposalMismatch,
     ProposalNotReady,
+    PublicationNotFound,
     TargetNotFound,
     Unsupported,
     Unknown(UnknownDomainError),
+}
+
+#[derive(Debug)]
+pub struct PluginManagementTargetHistory;
+impl RequestCapability for PluginManagementTargetHistory {
+    type Request = HistoryRequest;
+    type Response = HistoryResponse;
+    type DomainError = HistoryError;
+    const ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn invoke_native(endpoint: &dyn NativeRequestEndpoint, operation: &str, request: Self::Request, context: InvocationContext) -> NativeRequestFuture<Self> {
+        if operation != HISTORY_OPERATION {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        }
+        let Some(typed_endpoint) = endpoint
+            .typed_endpoint()
+            .and_then(|endpoint| endpoint.downcast_ref::<PluginManagementTargetRequestEndpoint>())
+        else {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        };
+        Rc::clone(&typed_endpoint.provider).history(context, request)
+    }
 }
 
 #[derive(Debug)]
@@ -380,6 +634,29 @@ impl RequestCapability for PluginManagementTargetPropose {
 }
 
 #[derive(Debug)]
+pub struct PluginManagementTargetProposeRollback;
+impl RequestCapability for PluginManagementTargetProposeRollback {
+    type Request = ProposeRollbackRequest;
+    type Response = ProposeRollbackResponse;
+    type DomainError = ProposeRollbackError;
+    const ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn invoke_native(endpoint: &dyn NativeRequestEndpoint, operation: &str, request: Self::Request, context: InvocationContext) -> NativeRequestFuture<Self> {
+        if operation != PROPOSE_ROLLBACK_OPERATION {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        }
+        let Some(typed_endpoint) = endpoint
+            .typed_endpoint()
+            .and_then(|endpoint| endpoint.downcast_ref::<PluginManagementTargetRequestEndpoint>())
+        else {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        };
+        Rc::clone(&typed_endpoint.provider).propose_rollback(context, request)
+    }
+}
+
+#[derive(Debug)]
 pub struct PluginManagementTargetPublish;
 impl RequestCapability for PluginManagementTargetPublish {
     type Request = PublishRequest;
@@ -399,6 +676,29 @@ impl RequestCapability for PluginManagementTargetPublish {
             return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
         };
         Rc::clone(&typed_endpoint.provider).publish(context, request)
+    }
+}
+
+#[derive(Debug)]
+pub struct PluginManagementTargetPublishRollback;
+impl RequestCapability for PluginManagementTargetPublishRollback {
+    type Request = PublishRollbackRequest;
+    type Response = PublishRollbackResponse;
+    type DomainError = PublishRollbackError;
+    const ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn invoke_native(endpoint: &dyn NativeRequestEndpoint, operation: &str, request: Self::Request, context: InvocationContext) -> NativeRequestFuture<Self> {
+        if operation != PUBLISH_ROLLBACK_OPERATION {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        }
+        let Some(typed_endpoint) = endpoint
+            .typed_endpoint()
+            .and_then(|endpoint| endpoint.downcast_ref::<PluginManagementTargetRequestEndpoint>())
+        else {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        };
+        Rc::clone(&typed_endpoint.provider).publish_rollback(context, request)
     }
 }
 
@@ -425,6 +725,71 @@ impl RequestCapability for PluginManagementTargetSetEnabled {
     }
 }
 
+impl serde::Serialize for HistoryError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::AlreadySelected => serializer.serialize_str("already_selected"),
+            Self::Conflict => serializer.serialize_str("conflict"),
+            Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::NotDisableable => serializer.serialize_str("not_disableable"),
+            Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
+            Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
+            Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
+            Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::Unsupported => serializer.serialize_str("unsupported"),
+            Self::Unknown(value) => {
+                let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
+                map.serialize_entry("code", &value.code)?;
+                if let Some(payload) = &value.payload {
+                    map.serialize_entry("payload", payload)?;
+                }
+                for (key, extra) in &value.extra {
+                    map.serialize_entry(key, extra)?;
+                }
+                map.end()
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for HistoryError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(code) => match code.as_str() {
+                "already_selected" => Ok(Self::AlreadySelected),
+                "conflict" => Ok(Self::Conflict),
+                "invalid_request" => Ok(Self::InvalidRequest),
+                "not_disableable" => Ok(Self::NotDisableable),
+                "plugin_not_found" => Ok(Self::PluginNotFound),
+                "proposal_mismatch" => Ok(Self::ProposalMismatch),
+                "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
+                "target_not_found" => Ok(Self::TargetNotFound),
+                "unsupported" => Ok(Self::Unsupported),
+                _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
+            },
+            serde_json::Value::Object(mut object) => {
+                let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
+                    return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
+                };
+                let payload = object.remove("payload");
+                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+            }
+            other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
+        }
+    }
+}
+
 impl serde::Serialize for InspectError {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -439,6 +804,7 @@ impl serde::Serialize for InspectError {
             Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
             Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
@@ -471,6 +837,7 @@ impl<'de> serde::Deserialize<'de> for InspectError {
                 "plugin_not_found" => Ok(Self::PluginNotFound),
                 "proposal_mismatch" => Ok(Self::ProposalMismatch),
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
@@ -502,6 +869,7 @@ impl serde::Serialize for ProposeError {
             Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
             Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
@@ -534,6 +902,72 @@ impl<'de> serde::Deserialize<'de> for ProposeError {
                 "plugin_not_found" => Ok(Self::PluginNotFound),
                 "proposal_mismatch" => Ok(Self::ProposalMismatch),
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
+                "target_not_found" => Ok(Self::TargetNotFound),
+                "unsupported" => Ok(Self::Unsupported),
+                _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
+            },
+            serde_json::Value::Object(mut object) => {
+                let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
+                    return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
+                };
+                let payload = object.remove("payload");
+                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+            }
+            other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
+        }
+    }
+}
+
+impl serde::Serialize for ProposeRollbackError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::AlreadySelected => serializer.serialize_str("already_selected"),
+            Self::Conflict => serializer.serialize_str("conflict"),
+            Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::NotDisableable => serializer.serialize_str("not_disableable"),
+            Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
+            Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
+            Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
+            Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::Unsupported => serializer.serialize_str("unsupported"),
+            Self::Unknown(value) => {
+                let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
+                map.serialize_entry("code", &value.code)?;
+                if let Some(payload) = &value.payload {
+                    map.serialize_entry("payload", payload)?;
+                }
+                for (key, extra) in &value.extra {
+                    map.serialize_entry(key, extra)?;
+                }
+                map.end()
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ProposeRollbackError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(code) => match code.as_str() {
+                "already_selected" => Ok(Self::AlreadySelected),
+                "conflict" => Ok(Self::Conflict),
+                "invalid_request" => Ok(Self::InvalidRequest),
+                "not_disableable" => Ok(Self::NotDisableable),
+                "plugin_not_found" => Ok(Self::PluginNotFound),
+                "proposal_mismatch" => Ok(Self::ProposalMismatch),
+                "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
@@ -565,6 +999,7 @@ impl serde::Serialize for PublishError {
             Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
             Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
@@ -597,6 +1032,72 @@ impl<'de> serde::Deserialize<'de> for PublishError {
                 "plugin_not_found" => Ok(Self::PluginNotFound),
                 "proposal_mismatch" => Ok(Self::ProposalMismatch),
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
+                "target_not_found" => Ok(Self::TargetNotFound),
+                "unsupported" => Ok(Self::Unsupported),
+                _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
+            },
+            serde_json::Value::Object(mut object) => {
+                let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
+                    return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
+                };
+                let payload = object.remove("payload");
+                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+            }
+            other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
+        }
+    }
+}
+
+impl serde::Serialize for PublishRollbackError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::AlreadySelected => serializer.serialize_str("already_selected"),
+            Self::Conflict => serializer.serialize_str("conflict"),
+            Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::NotDisableable => serializer.serialize_str("not_disableable"),
+            Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
+            Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
+            Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
+            Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::Unsupported => serializer.serialize_str("unsupported"),
+            Self::Unknown(value) => {
+                let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
+                map.serialize_entry("code", &value.code)?;
+                if let Some(payload) = &value.payload {
+                    map.serialize_entry("payload", payload)?;
+                }
+                for (key, extra) in &value.extra {
+                    map.serialize_entry(key, extra)?;
+                }
+                map.end()
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PublishRollbackError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(code) => match code.as_str() {
+                "already_selected" => Ok(Self::AlreadySelected),
+                "conflict" => Ok(Self::Conflict),
+                "invalid_request" => Ok(Self::InvalidRequest),
+                "not_disableable" => Ok(Self::NotDisableable),
+                "plugin_not_found" => Ok(Self::PluginNotFound),
+                "proposal_mismatch" => Ok(Self::ProposalMismatch),
+                "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
@@ -628,6 +1129,7 @@ impl serde::Serialize for SetEnabledError {
             Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
             Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
@@ -660,6 +1162,7 @@ impl<'de> serde::Deserialize<'de> for SetEnabledError {
                 "plugin_not_found" => Ok(Self::PluginNotFound),
                 "proposal_mismatch" => Ok(Self::ProposalMismatch),
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
@@ -677,6 +1180,13 @@ impl<'de> serde::Deserialize<'de> for SetEnabledError {
     }
 }
 
+pub fn encode_history_request(value: &HistoryRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_history_request(wire: &str) -> Result<HistoryRequest, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_history_response(value: &HistoryResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_history_response(wire: &str) -> Result<HistoryResponse, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_history_error(value: &HistoryError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_history_error(wire: &str) -> Result<HistoryError, serde_json::Error> { decode_portable_json(wire) }
+
 pub fn encode_inspect_request(value: &InspectRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_inspect_request(wire: &str) -> Result<InspectRequest, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_inspect_response(value: &InspectResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
@@ -691,6 +1201,13 @@ pub fn decode_propose_response(wire: &str) -> Result<ProposeResponse, serde_json
 pub fn encode_propose_error(value: &ProposeError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_propose_error(wire: &str) -> Result<ProposeError, serde_json::Error> { decode_portable_json(wire) }
 
+pub fn encode_propose_rollback_request(value: &ProposeRollbackRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_propose_rollback_request(wire: &str) -> Result<ProposeRollbackRequest, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_propose_rollback_response(value: &ProposeRollbackResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_propose_rollback_response(wire: &str) -> Result<ProposeRollbackResponse, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_propose_rollback_error(value: &ProposeRollbackError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_propose_rollback_error(wire: &str) -> Result<ProposeRollbackError, serde_json::Error> { decode_portable_json(wire) }
+
 pub fn encode_publish_request(value: &PublishRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_publish_request(wire: &str) -> Result<PublishRequest, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_publish_response(value: &PublishResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
@@ -698,12 +1215,48 @@ pub fn decode_publish_response(wire: &str) -> Result<PublishResponse, serde_json
 pub fn encode_publish_error(value: &PublishError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_publish_error(wire: &str) -> Result<PublishError, serde_json::Error> { decode_portable_json(wire) }
 
+pub fn encode_publish_rollback_request(value: &PublishRollbackRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_publish_rollback_request(wire: &str) -> Result<PublishRollbackRequest, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_publish_rollback_response(value: &PublishRollbackResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_publish_rollback_response(wire: &str) -> Result<PublishRollbackResponse, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_publish_rollback_error(value: &PublishRollbackError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_publish_rollback_error(wire: &str) -> Result<PublishRollbackError, serde_json::Error> { decode_portable_json(wire) }
+
 pub fn encode_set_enabled_request(value: &SetEnabledRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_set_enabled_request(wire: &str) -> Result<SetEnabledRequest, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_set_enabled_response(value: &SetEnabledResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_set_enabled_response(wire: &str) -> Result<SetEnabledResponse, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_set_enabled_error(value: &SetEnabledError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_set_enabled_error(wire: &str) -> Result<SetEnabledError, serde_json::Error> { decode_portable_json(wire) }
+
+#[doc(hidden)]
+pub trait __LensoIntoPluginManagementTargetHistoryResult {
+    fn __lenso_into_result(self) -> Result<Result<HistoryResponse, HistoryError>, RuntimeFailure>;
+}
+impl __LensoIntoPluginManagementTargetHistoryResult for Result<HistoryResponse, HistoryError> {
+    fn __lenso_into_result(self) -> Result<Result<HistoryResponse, HistoryError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPluginManagementTargetHistoryResult for Result<Result<HistoryResponse, HistoryError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<HistoryResponse, HistoryError>, RuntimeFailure> { self }
+}
+impl __LensoIntoPluginManagementTargetHistoryResult for Result<HistoryResponse, lenso_plugin_authoring::PluginError<HistoryError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<HistoryResponse, HistoryError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_plugin_authoring::PluginError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_plugin_authoring::PluginError::Runtime(error)) => Err(error),
+        }
+    }
+}
+impl __LensoIntoPluginManagementTargetHistoryResult for Result<HistoryResponse, PluginManagementTargetHistoryInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<HistoryResponse, HistoryError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(PluginManagementTargetHistoryInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(PluginManagementTargetHistoryInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
 
 #[doc(hidden)]
 pub trait __LensoIntoPluginManagementTargetInspectResult {
@@ -764,6 +1317,35 @@ impl __LensoIntoPluginManagementTargetProposeResult for Result<ProposeResponse, 
 }
 
 #[doc(hidden)]
+pub trait __LensoIntoPluginManagementTargetProposeRollbackResult {
+    fn __lenso_into_result(self) -> Result<Result<ProposeRollbackResponse, ProposeRollbackError>, RuntimeFailure>;
+}
+impl __LensoIntoPluginManagementTargetProposeRollbackResult for Result<ProposeRollbackResponse, ProposeRollbackError> {
+    fn __lenso_into_result(self) -> Result<Result<ProposeRollbackResponse, ProposeRollbackError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPluginManagementTargetProposeRollbackResult for Result<Result<ProposeRollbackResponse, ProposeRollbackError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<ProposeRollbackResponse, ProposeRollbackError>, RuntimeFailure> { self }
+}
+impl __LensoIntoPluginManagementTargetProposeRollbackResult for Result<ProposeRollbackResponse, lenso_plugin_authoring::PluginError<ProposeRollbackError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<ProposeRollbackResponse, ProposeRollbackError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_plugin_authoring::PluginError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_plugin_authoring::PluginError::Runtime(error)) => Err(error),
+        }
+    }
+}
+impl __LensoIntoPluginManagementTargetProposeRollbackResult for Result<ProposeRollbackResponse, PluginManagementTargetProposeRollbackInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<ProposeRollbackResponse, ProposeRollbackError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(PluginManagementTargetProposeRollbackInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(PluginManagementTargetProposeRollbackInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
 pub trait __LensoIntoPluginManagementTargetPublishResult {
     fn __lenso_into_result(self) -> Result<Result<PublishResponse, PublishError>, RuntimeFailure>;
 }
@@ -788,6 +1370,35 @@ impl __LensoIntoPluginManagementTargetPublishResult for Result<PublishResponse, 
             Ok(value) => Ok(Ok(value)),
             Err(PluginManagementTargetPublishInvocationError::Domain(error)) => Ok(Err(error)),
             Err(PluginManagementTargetPublishInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoPluginManagementTargetPublishRollbackResult {
+    fn __lenso_into_result(self) -> Result<Result<PublishRollbackResponse, PublishRollbackError>, RuntimeFailure>;
+}
+impl __LensoIntoPluginManagementTargetPublishRollbackResult for Result<PublishRollbackResponse, PublishRollbackError> {
+    fn __lenso_into_result(self) -> Result<Result<PublishRollbackResponse, PublishRollbackError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPluginManagementTargetPublishRollbackResult for Result<Result<PublishRollbackResponse, PublishRollbackError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<PublishRollbackResponse, PublishRollbackError>, RuntimeFailure> { self }
+}
+impl __LensoIntoPluginManagementTargetPublishRollbackResult for Result<PublishRollbackResponse, lenso_plugin_authoring::PluginError<PublishRollbackError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<PublishRollbackResponse, PublishRollbackError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_plugin_authoring::PluginError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_plugin_authoring::PluginError::Runtime(error)) => Err(error),
+        }
+    }
+}
+impl __LensoIntoPluginManagementTargetPublishRollbackResult for Result<PublishRollbackResponse, PluginManagementTargetPublishRollbackInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<PublishRollbackResponse, PublishRollbackError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(PluginManagementTargetPublishRollbackInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(PluginManagementTargetPublishRollbackInvocationError::Runtime(error)) => Err(error),
         }
     }
 }
@@ -822,9 +1433,12 @@ impl __LensoIntoPluginManagementTargetSetEnabledResult for Result<SetEnabledResp
 }
 
 pub trait PluginManagementTargetProvider: fmt::Debug + 'static {
+    fn history(&self, context: InvocationContext, request: HistoryRequest) -> NativeRequestFuture<PluginManagementTargetHistory>;
     fn inspect(&self, context: InvocationContext, request: InspectRequest) -> NativeRequestFuture<PluginManagementTargetInspect>;
     fn propose(&self, context: InvocationContext, request: ProposeRequest) -> NativeRequestFuture<PluginManagementTargetPropose>;
+    fn propose_rollback(&self, context: InvocationContext, request: ProposeRollbackRequest) -> NativeRequestFuture<PluginManagementTargetProposeRollback>;
     fn publish(&self, context: InvocationContext, request: PublishRequest) -> NativeRequestFuture<PluginManagementTargetPublish>;
+    fn publish_rollback(&self, context: InvocationContext, request: PublishRollbackRequest) -> NativeRequestFuture<PluginManagementTargetPublishRollback>;
     fn set_enabled(&self, context: InvocationContext, request: SetEnabledRequest) -> NativeRequestFuture<PluginManagementTargetSetEnabled>;
 }
 
@@ -834,6 +1448,13 @@ macro_rules! __lenso_native_lower_plugin_management_target {
     ($plugin:ty, $support:path) => {
         use $support as __LensoNativeSupportPluginManagementTarget;
         impl $crate::PluginManagementTargetProvider for $plugin {
+        fn history(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::HistoryRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetHistory> {
+            let plugin = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$plugin>::history(&plugin, context, request).await;
+                $crate::__LensoIntoPluginManagementTargetHistoryResult::__lenso_into_result(result)
+            })
+        }
         fn inspect(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::InspectRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetInspect> {
             let plugin = self.clone();
             ::std::boxed::Box::pin(async move {
@@ -848,11 +1469,25 @@ macro_rules! __lenso_native_lower_plugin_management_target {
                 $crate::__LensoIntoPluginManagementTargetProposeResult::__lenso_into_result(result)
             })
         }
+        fn propose_rollback(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRollbackRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeRollback> {
+            let plugin = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$plugin>::propose_rollback(&plugin, context, request).await;
+                $crate::__LensoIntoPluginManagementTargetProposeRollbackResult::__lenso_into_result(result)
+            })
+        }
         fn publish(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublish> {
             let plugin = self.clone();
             ::std::boxed::Box::pin(async move {
                 let result = <$plugin>::publish(&plugin, context, request).await;
                 $crate::__LensoIntoPluginManagementTargetPublishResult::__lenso_into_result(result)
+            })
+        }
+        fn publish_rollback(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRollbackRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishRollback> {
+            let plugin = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$plugin>::publish_rollback(&plugin, context, request).await;
+                $crate::__LensoIntoPluginManagementTargetPublishRollbackResult::__lenso_into_result(result)
             })
         }
         fn set_enabled(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::SetEnabledRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetSetEnabled> {
@@ -883,14 +1518,30 @@ impl<P: PluginManagementTargetProvider> NativeRequestEndpoint for PluginManageme
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
     fn operations(&self) -> &'static [&'static str] { &[
+        HISTORY_OPERATION,
         INSPECT_OPERATION,
         PROPOSE_OPERATION,
+        PROPOSE_ROLLBACK_OPERATION,
         PUBLISH_OPERATION,
+        PUBLISH_ROLLBACK_OPERATION,
         SET_ENABLED_OPERATION,
     ] }
     fn typed_endpoint(&self) -> Option<&dyn std::any::Any> { Some(&self.request_endpoint) }
     fn invoke(&self, operation: &str, request: Box<dyn std::any::Any>, context: InvocationContext) -> LocalBoxFuture<'static, Result<Result<Box<dyn std::any::Any>, Box<dyn std::any::Any>>, RuntimeFailure>> {
         match operation {
+            HISTORY_OPERATION => {
+                let Ok(request) = request.downcast::<HistoryRequest>() else {
+                    return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
+                };
+                let invocation = Rc::clone(&self.provider).history(context, *request);
+                Box::pin(async move {
+                    invocation.await.map(|result| {
+                        result
+                            .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                            .map_err(|error| Box::new(error) as Box<dyn std::any::Any>)
+                    })
+                })
+            },
             INSPECT_OPERATION => {
                 let Ok(request) = request.downcast::<InspectRequest>() else {
                     return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
@@ -917,11 +1568,37 @@ impl<P: PluginManagementTargetProvider> NativeRequestEndpoint for PluginManageme
                     })
                 })
             },
+            PROPOSE_ROLLBACK_OPERATION => {
+                let Ok(request) = request.downcast::<ProposeRollbackRequest>() else {
+                    return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
+                };
+                let invocation = Rc::clone(&self.provider).propose_rollback(context, *request);
+                Box::pin(async move {
+                    invocation.await.map(|result| {
+                        result
+                            .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                            .map_err(|error| Box::new(error) as Box<dyn std::any::Any>)
+                    })
+                })
+            },
             PUBLISH_OPERATION => {
                 let Ok(request) = request.downcast::<PublishRequest>() else {
                     return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
                 };
                 let invocation = Rc::clone(&self.provider).publish(context, *request);
+                Box::pin(async move {
+                    invocation.await.map(|result| {
+                        result
+                            .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                            .map_err(|error| Box::new(error) as Box<dyn std::any::Any>)
+                    })
+                })
+            },
+            PUBLISH_ROLLBACK_OPERATION => {
+                let Ok(request) = request.downcast::<PublishRollbackRequest>() else {
+                    return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
+                };
+                let invocation = Rc::clone(&self.provider).publish_rollback(context, *request);
                 Box::pin(async move {
                     invocation.await.map(|result| {
                         result
@@ -980,14 +1657,29 @@ macro_rules! __lenso_native_provide_plugin_management_target {
 
 #[derive(Debug)]
 pub struct PluginManagementTargetClient {
+    history: NativeRequestHandle<PluginManagementTargetHistory>,
     inspect: NativeRequestHandle<PluginManagementTargetInspect>,
     propose: NativeRequestHandle<PluginManagementTargetPropose>,
+    propose_rollback: NativeRequestHandle<PluginManagementTargetProposeRollback>,
     publish: NativeRequestHandle<PluginManagementTargetPublish>,
+    publish_rollback: NativeRequestHandle<PluginManagementTargetPublishRollback>,
     set_enabled: NativeRequestHandle<PluginManagementTargetSetEnabled>,
 }
 impl PluginManagementTargetClient {
     pub fn from_dependencies(dependencies: &PluginDependencies) -> Result<Self, RuntimeFailure> {
         <Self as CapabilityClient>::from_dependencies(dependencies)
+    }
+
+    pub async fn history(&self, request: HistoryRequest) -> Result<HistoryResponse, PluginManagementTargetHistoryInvocationError> {
+        self.history.invoke(HISTORY_OPERATION, request).await
+            .map_err(PluginManagementTargetHistoryInvocationError::Runtime)?
+            .map_err(PluginManagementTargetHistoryInvocationError::Domain)
+    }
+
+    pub async fn history_with_context(&self, context: InvocationContext, request: HistoryRequest) -> Result<HistoryResponse, PluginManagementTargetHistoryInvocationError> {
+        self.history.invoke_with_context(HISTORY_OPERATION, context, request).await
+            .map_err(PluginManagementTargetHistoryInvocationError::Runtime)?
+            .map_err(PluginManagementTargetHistoryInvocationError::Domain)
     }
 
     pub async fn inspect(&self, request: InspectRequest) -> Result<InspectResponse, PluginManagementTargetInspectInvocationError> {
@@ -1014,6 +1706,18 @@ impl PluginManagementTargetClient {
             .map_err(PluginManagementTargetProposeInvocationError::Domain)
     }
 
+    pub async fn propose_rollback(&self, request: ProposeRollbackRequest) -> Result<ProposeRollbackResponse, PluginManagementTargetProposeRollbackInvocationError> {
+        self.propose_rollback.invoke(PROPOSE_ROLLBACK_OPERATION, request).await
+            .map_err(PluginManagementTargetProposeRollbackInvocationError::Runtime)?
+            .map_err(PluginManagementTargetProposeRollbackInvocationError::Domain)
+    }
+
+    pub async fn propose_rollback_with_context(&self, context: InvocationContext, request: ProposeRollbackRequest) -> Result<ProposeRollbackResponse, PluginManagementTargetProposeRollbackInvocationError> {
+        self.propose_rollback.invoke_with_context(PROPOSE_ROLLBACK_OPERATION, context, request).await
+            .map_err(PluginManagementTargetProposeRollbackInvocationError::Runtime)?
+            .map_err(PluginManagementTargetProposeRollbackInvocationError::Domain)
+    }
+
     pub async fn publish(&self, request: PublishRequest) -> Result<PublishResponse, PluginManagementTargetPublishInvocationError> {
         self.publish.invoke(PUBLISH_OPERATION, request).await
             .map_err(PluginManagementTargetPublishInvocationError::Runtime)?
@@ -1024,6 +1728,18 @@ impl PluginManagementTargetClient {
         self.publish.invoke_with_context(PUBLISH_OPERATION, context, request).await
             .map_err(PluginManagementTargetPublishInvocationError::Runtime)?
             .map_err(PluginManagementTargetPublishInvocationError::Domain)
+    }
+
+    pub async fn publish_rollback(&self, request: PublishRollbackRequest) -> Result<PublishRollbackResponse, PluginManagementTargetPublishRollbackInvocationError> {
+        self.publish_rollback.invoke(PUBLISH_ROLLBACK_OPERATION, request).await
+            .map_err(PluginManagementTargetPublishRollbackInvocationError::Runtime)?
+            .map_err(PluginManagementTargetPublishRollbackInvocationError::Domain)
+    }
+
+    pub async fn publish_rollback_with_context(&self, context: InvocationContext, request: PublishRollbackRequest) -> Result<PublishRollbackResponse, PluginManagementTargetPublishRollbackInvocationError> {
+        self.publish_rollback.invoke_with_context(PUBLISH_ROLLBACK_OPERATION, context, request).await
+            .map_err(PluginManagementTargetPublishRollbackInvocationError::Runtime)?
+            .map_err(PluginManagementTargetPublishRollbackInvocationError::Domain)
     }
 
     pub async fn set_enabled(&self, request: SetEnabledRequest) -> Result<SetEnabledResponse, PluginManagementTargetSetEnabledInvocationError> {
@@ -1048,9 +1764,12 @@ impl CapabilityClient for PluginManagementTargetClient {
 
     fn from_dependencies(dependencies: &PluginDependencies) -> Result<Self, RuntimeFailure> {
         Ok(Self {
+            history: dependencies.one::<PluginManagementTargetHistory>()?,
             inspect: dependencies.one::<PluginManagementTargetInspect>()?,
             propose: dependencies.one::<PluginManagementTargetPropose>()?,
+            propose_rollback: dependencies.one::<PluginManagementTargetProposeRollback>()?,
             publish: dependencies.one::<PluginManagementTargetPublish>()?,
+            publish_rollback: dependencies.one::<PluginManagementTargetPublishRollback>()?,
             set_enabled: dependencies.one::<PluginManagementTargetSetEnabled>()?,
         })
     }
@@ -1074,9 +1793,12 @@ impl CapabilityClientMany for PluginManagementTargetClient {
                 Ok(BoundCapabilityClient::new(
                     binding.provider_instance(),
                     Self {
+                    history: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetHistory>()?,
                     inspect: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetInspect>()?,
                     propose: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetPropose>()?,
+                    propose_rollback: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetProposeRollback>()?,
                     publish: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetPublish>()?,
+                    publish_rollback: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetPublishRollback>()?,
                     set_enabled: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetSetEnabled>()?,
                     },
                 ))
@@ -1085,6 +1807,11 @@ impl CapabilityClientMany for PluginManagementTargetClient {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum PluginManagementTargetHistoryInvocationError {
+    Domain(HistoryError),
+    Runtime(RuntimeFailure),
+}
 #[derive(Clone, Debug, PartialEq)]
 pub enum PluginManagementTargetInspectInvocationError {
     Domain(InspectError),
@@ -1096,8 +1823,18 @@ pub enum PluginManagementTargetProposeInvocationError {
     Runtime(RuntimeFailure),
 }
 #[derive(Clone, Debug, PartialEq)]
+pub enum PluginManagementTargetProposeRollbackInvocationError {
+    Domain(ProposeRollbackError),
+    Runtime(RuntimeFailure),
+}
+#[derive(Clone, Debug, PartialEq)]
 pub enum PluginManagementTargetPublishInvocationError {
     Domain(PublishError),
+    Runtime(RuntimeFailure),
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum PluginManagementTargetPublishRollbackInvocationError {
+    Domain(PublishRollbackError),
     Runtime(RuntimeFailure),
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -1114,8 +1851,12 @@ pub struct PluginManagementTargetGuestClient<'a, H: lenso_guest_sdk::HostImports
 impl<'a, H: lenso_guest_sdk::HostImports> PluginManagementTargetGuestClient<'a, H> {
     pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
         context
-            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[INSPECT_OPERATION, PROPOSE_OPERATION, PUBLISH_OPERATION, SET_ENABLED_OPERATION], &[])
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION], &[])
             .map(|capability| Self { capability })
+    }
+
+    pub fn history(&self, request: &HistoryRequest) -> Result<HistoryResponse, lenso_guest_sdk::GuestError<HistoryError>> {
+        self.capability.request(HISTORY_OPERATION, request)
     }
 
     pub fn inspect(&self, request: &InspectRequest) -> Result<InspectResponse, lenso_guest_sdk::GuestError<InspectError>> {
@@ -1126,8 +1867,16 @@ impl<'a, H: lenso_guest_sdk::HostImports> PluginManagementTargetGuestClient<'a, 
         self.capability.request(PROPOSE_OPERATION, request)
     }
 
+    pub fn propose_rollback(&self, request: &ProposeRollbackRequest) -> Result<ProposeRollbackResponse, lenso_guest_sdk::GuestError<ProposeRollbackError>> {
+        self.capability.request(PROPOSE_ROLLBACK_OPERATION, request)
+    }
+
     pub fn publish(&self, request: &PublishRequest) -> Result<PublishResponse, lenso_guest_sdk::GuestError<PublishError>> {
         self.capability.request(PUBLISH_OPERATION, request)
+    }
+
+    pub fn publish_rollback(&self, request: &PublishRollbackRequest) -> Result<PublishRollbackResponse, lenso_guest_sdk::GuestError<PublishRollbackError>> {
+        self.capability.request(PUBLISH_ROLLBACK_OPERATION, request)
     }
 
     pub fn set_enabled(&self, request: &SetEnabledRequest) -> Result<SetEnabledResponse, lenso_guest_sdk::GuestError<SetEnabledError>> {
@@ -1143,11 +1892,15 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
 
-    fn request_operations(&self) -> &'static [&'static str] { &[INSPECT_OPERATION, PROPOSE_OPERATION, PUBLISH_OPERATION, SET_ENABLED_OPERATION] }
+    fn request_operations(&self) -> &'static [&'static str] { &[HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }
 
     fn encode_request(&self, operation: &str, request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         match operation {
+            HISTORY_OPERATION => {
+                let value = request.downcast_ref::<HistoryRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
             INSPECT_OPERATION => {
                 let value = request.downcast_ref::<InspectRequest>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
@@ -1156,8 +1909,16 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
                 let value = request.downcast_ref::<ProposeRequest>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
             },
+            PROPOSE_ROLLBACK_OPERATION => {
+                let value = request.downcast_ref::<ProposeRollbackRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
             PUBLISH_OPERATION => {
                 let value = request.downcast_ref::<PublishRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
+            PUBLISH_ROLLBACK_OPERATION => {
+                let value = request.downcast_ref::<PublishRollbackRequest>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
             },
             SET_ENABLED_OPERATION => {
@@ -1170,13 +1931,22 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
 
     fn decode_response(&self, operation: &str, value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
         match operation {
+            HISTORY_OPERATION => serde_json::from_value::<HistoryResponse>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
             INSPECT_OPERATION => serde_json::from_value::<InspectResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             PROPOSE_OPERATION => serde_json::from_value::<ProposeResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
+            PROPOSE_ROLLBACK_OPERATION => serde_json::from_value::<ProposeRollbackResponse>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
             PUBLISH_OPERATION => serde_json::from_value::<PublishResponse>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
+            PUBLISH_ROLLBACK_OPERATION => serde_json::from_value::<PublishRollbackResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             SET_ENABLED_OPERATION => serde_json::from_value::<SetEnabledResponse>(value)
@@ -1188,13 +1958,22 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
 
     fn decode_domain_error(&self, operation: &str, value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
         match operation {
+            HISTORY_OPERATION => serde_json::from_value::<HistoryError>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
             INSPECT_OPERATION => serde_json::from_value::<InspectError>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             PROPOSE_OPERATION => serde_json::from_value::<ProposeError>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
+            PROPOSE_ROLLBACK_OPERATION => serde_json::from_value::<ProposeRollbackError>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
             PUBLISH_OPERATION => serde_json::from_value::<PublishError>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
+            PUBLISH_ROLLBACK_OPERATION => serde_json::from_value::<PublishRollbackError>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             SET_ENABLED_OPERATION => serde_json::from_value::<SetEnabledError>(value)
@@ -1222,6 +2001,21 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
 
     fn invoke_host_request(&self, dependency: lenso_kernel::PluginDependencyHandle, operation: String, request: serde_json::Value, context: InvocationContext) -> lenso_runtime_codec::JsonHostRequestFuture {
         match operation.as_str() {
+            HISTORY_OPERATION => {
+                let request = serde_json::from_value::<HistoryRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                Box::pin(async move {
+                    let request = request?;
+                    let handle = dependency.typed::<PluginManagementTargetHistory>()?;
+                    match handle.invoke_with_context(HISTORY_OPERATION, context, request).await? {
+                        Ok(response) => serde_json::to_value(response)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                        Err(error) => serde_json::to_value(error)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::DomainError)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                    }
+                })
+            },
             INSPECT_OPERATION => {
                 let request = serde_json::from_value::<InspectRequest>(request).map_err(|_| runtime_codec_protocol_failure());
                 Box::pin(async move {
@@ -1252,12 +2046,42 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
                     }
                 })
             },
+            PROPOSE_ROLLBACK_OPERATION => {
+                let request = serde_json::from_value::<ProposeRollbackRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                Box::pin(async move {
+                    let request = request?;
+                    let handle = dependency.typed::<PluginManagementTargetProposeRollback>()?;
+                    match handle.invoke_with_context(PROPOSE_ROLLBACK_OPERATION, context, request).await? {
+                        Ok(response) => serde_json::to_value(response)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                        Err(error) => serde_json::to_value(error)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::DomainError)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                    }
+                })
+            },
             PUBLISH_OPERATION => {
                 let request = serde_json::from_value::<PublishRequest>(request).map_err(|_| runtime_codec_protocol_failure());
                 Box::pin(async move {
                     let request = request?;
                     let handle = dependency.typed::<PluginManagementTargetPublish>()?;
                     match handle.invoke_with_context(PUBLISH_OPERATION, context, request).await? {
+                        Ok(response) => serde_json::to_value(response)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                        Err(error) => serde_json::to_value(error)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::DomainError)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                    }
+                })
+            },
+            PUBLISH_ROLLBACK_OPERATION => {
+                let request = serde_json::from_value::<PublishRollbackRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                Box::pin(async move {
+                    let request = request?;
+                    let handle = dependency.typed::<PluginManagementTargetPublishRollback>()?;
+                    match handle.invoke_with_context(PUBLISH_ROLLBACK_OPERATION, context, request).await? {
                         Ok(response) => serde_json::to_value(response)
                             .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
                             .map_err(|_| runtime_codec_protocol_failure()),

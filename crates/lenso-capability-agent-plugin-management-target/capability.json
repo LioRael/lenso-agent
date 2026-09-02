@@ -1,6 +1,6 @@
 {
   "id": "lenso.agent.plugin-management-target@1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "portable": false,
   "cross_lane_transfer": false,
   "operations": [
@@ -24,6 +24,27 @@
       "request_schema": "schemas/publish-request.schema.json",
       "response_schema": "schemas/publish-response.schema.json",
       "domain_error_schema": "schemas/publish-error.schema.json"
+    },
+    {
+      "name": "history",
+      "interaction": "request",
+      "request_schema": "schemas/history-request.schema.json",
+      "response_schema": "schemas/history-response.schema.json",
+      "domain_error_schema": "schemas/history-error.schema.json"
+    },
+    {
+      "name": "propose_rollback",
+      "interaction": "request",
+      "request_schema": "schemas/propose-rollback-request.schema.json",
+      "response_schema": "schemas/propose-rollback-response.schema.json",
+      "domain_error_schema": "schemas/propose-rollback-error.schema.json"
+    },
+    {
+      "name": "publish_rollback",
+      "interaction": "request",
+      "request_schema": "schemas/publish-rollback-request.schema.json",
+      "response_schema": "schemas/publish-rollback-response.schema.json",
+      "domain_error_schema": "schemas/publish-rollback-error.schema.json"
     },
     {
       "name": "set_enabled",

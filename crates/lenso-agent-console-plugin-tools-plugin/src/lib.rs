@@ -13,6 +13,9 @@ pub const LIST_PLUGINS_TOOL: &str = "list_plugins";
 pub const INSPECT_PLUGIN_TOOL: &str = "inspect_plugin";
 pub const CHECK_PLUGIN_CHANGE_TOOL: &str = "check_plugin_change";
 pub const APPLY_PLUGIN_CHANGE_TOOL: &str = "apply_plugin_change";
+pub const LIST_PLUGIN_CHANGES_TOOL: &str = "list_plugin_changes";
+pub const CHECK_PLUGIN_ROLLBACK_TOOL: &str = "check_plugin_rollback";
+pub const APPLY_PLUGIN_ROLLBACK_TOOL: &str = "apply_plugin_rollback";
 pub const SET_PLUGIN_ENABLED_TOOL: &str = "set_plugin_enabled";
 pub const PLUGIN_PACKAGE_ID: &str = "lenso.agent.console-plugin-tools";
 
@@ -93,6 +96,51 @@ struct SetPluginEnabledArguments {
     instance: String,
     #[schemars(length(min = 1, max = 128))]
     plugin_id: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListPluginChangesArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    instance: String,
+    #[schemars(range(min = 1, max = 50))]
+    limit: Option<u32>,
+    #[schemars(length(min = 1, max = 128))]
+    plugin_id: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckPluginRollbackArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    instance: String,
+    #[schemars(length(min = 1, max = 128))]
+    plugin_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    publication_proposal_digest: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyPluginRollbackArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    instance: String,
+    #[schemars(length(min = 1, max = 128))]
+    plugin_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    proposal_digest: String,
+    #[schemars(length(min = 71, max = 71))]
+    publication_proposal_digest: String,
 }
 
 #[derive(Serialize)]
@@ -200,6 +248,61 @@ struct SelectionInspection {
     instance: String,
     plugin_id: String,
     revision: String,
+    schema: String,
+    status: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginChangeHistory {
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
+    instance: String,
+    plugin_id: String,
+    publications: Vec<PluginChangeSummary>,
+    revision: String,
+    schema: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginChangeSummary {
+    base_revision: String,
+    base_source_digest: Option<String>,
+    proposal_digest: String,
+    published_at_unix_ms: i64,
+    revision: String,
+    rollback_of_proposal_digest: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RollbackProposalInspection {
+    agent_id: String,
+    application: String,
+    authority: target_contract::AuthoritySource,
+    base_revision: String,
+    base_source_digest: String,
+    candidate_revision: String,
+    diagnostics: Vec<ProposalDiagnostic>,
+    instance: String,
+    plugin_id: String,
+    proposal_digest: String,
+    rollback_of_proposal_digest: String,
+    schema: String,
+    status: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RollbackPublicationInspection {
+    agent_id: String,
+    authority: target_contract::AuthoritySource,
+    base_revision: String,
+    base_source_digest: String,
+    proposal_digest: String,
+    revision: String,
+    rollback_of_proposal_digest: String,
     schema: String,
     status: &'static str,
 }
@@ -438,6 +541,136 @@ impl ConsolePluginTools {
     }
 
     #[tool(
+        name = "list_plugin_changes",
+        description = "List bounded publication metadata for one exact Plugin Instance without exposing historical configuration contents.",
+        execution = "parallel_safe"
+    )]
+    async fn list_plugin_changes(
+        &self,
+        arguments: ListPluginChangesArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let history = self
+            .target
+            .history(target_contract::HistoryRequest {
+                agent_id: arguments.agent_id,
+                instance: arguments.instance,
+                limit: i64::from(arguments.limit.unwrap_or(10)),
+                plugin_id: arguments.plugin_id,
+            })
+            .await
+            .map_err(map_history_error)?;
+        self.json_response(
+            LIST_PLUGIN_CHANGES_TOOL,
+            &PluginChangeHistory {
+                agent_id: history.agent_id,
+                authority: history.authority,
+                instance: history.instance,
+                plugin_id: history.plugin_id,
+                publications: history
+                    .publications
+                    .into_iter()
+                    .map(|publication| PluginChangeSummary {
+                        base_revision: publication.base_revision,
+                        base_source_digest: publication.base_source_digest.flatten(),
+                        proposal_digest: publication.proposal_digest,
+                        published_at_unix_ms: publication.published_at_unix_ms,
+                        revision: publication.revision,
+                        rollback_of_proposal_digest: publication
+                            .rollback_of_proposal_digest
+                            .flatten(),
+                    })
+                    .collect(),
+                revision: history.revision,
+                schema: history.schema,
+            },
+        )
+    }
+
+    #[tool(
+        name = "check_plugin_rollback",
+        description = "Validate rollback to one exact historical Plugin publication without exposing or publishing its configuration.",
+        execution = "parallel_safe"
+    )]
+    async fn check_plugin_rollback(
+        &self,
+        arguments: CheckPluginRollbackArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let proposal = self
+            .target
+            .propose_rollback(target_contract::ProposeRollbackRequest {
+                agent_id: arguments.agent_id,
+                expected_revision: arguments.expected_revision,
+                instance: arguments.instance,
+                plugin_id: arguments.plugin_id,
+                publication_proposal_digest: arguments.publication_proposal_digest,
+            })
+            .await
+            .map_err(map_propose_rollback_error)?;
+        self.json_response(
+            CHECK_PLUGIN_ROLLBACK_TOOL,
+            &RollbackProposalInspection {
+                agent_id: proposal.agent_id,
+                application: proposal.application,
+                authority: proposal.authority,
+                base_revision: proposal.base_revision,
+                base_source_digest: proposal.base_source_digest,
+                candidate_revision: proposal.candidate_revision,
+                diagnostics: proposal
+                    .diagnostics
+                    .into_iter()
+                    .map(|diagnostic| ProposalDiagnostic {
+                        code: diagnostic.code,
+                        detail: diagnostic.detail,
+                    })
+                    .collect(),
+                instance: proposal.instance,
+                plugin_id: proposal.plugin_id,
+                proposal_digest: proposal.proposal_digest,
+                rollback_of_proposal_digest: proposal.rollback_of_proposal_digest,
+                schema: proposal.schema,
+                status: proposal.status,
+            },
+        )
+    }
+
+    #[tool(
+        name = "apply_plugin_rollback",
+        description = "Publish one reviewed rollback through one exact target Agent's authority after exact revision, publication, and proposal digest checks.",
+        execution = "exclusive"
+    )]
+    async fn apply_plugin_rollback(
+        &self,
+        arguments: ApplyPluginRollbackArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let publication = self
+            .target
+            .publish_rollback(target_contract::PublishRollbackRequest {
+                agent_id: arguments.agent_id,
+                expected_revision: arguments.expected_revision,
+                instance: arguments.instance,
+                plugin_id: arguments.plugin_id,
+                proposal_digest: arguments.proposal_digest,
+                publication_proposal_digest: arguments.publication_proposal_digest,
+            })
+            .await
+            .map_err(map_publish_rollback_error)?;
+        self.json_response(
+            APPLY_PLUGIN_ROLLBACK_TOOL,
+            &RollbackPublicationInspection {
+                agent_id: publication.agent_id,
+                authority: publication.authority,
+                base_revision: publication.base_revision,
+                base_source_digest: publication.base_source_digest,
+                proposal_digest: publication.proposal_digest,
+                revision: publication.revision,
+                rollback_of_proposal_digest: publication.rollback_of_proposal_digest,
+                schema: publication.schema,
+                status: "published_desired_state",
+            },
+        )
+    }
+
+    #[tool(
         name = "set_plugin_enabled",
         description = "Enable or disable one exact Plugin Instance through one exact target Agent's selected authority.",
         execution = "exclusive"
@@ -540,6 +773,13 @@ fn proposal_not_ready() -> ExecuteError {
     )
 }
 
+fn publication_not_found() -> ExecuteError {
+    execution_failed(
+        "plugin_publication_not_found",
+        "The selected Plugin configuration publication was not found.",
+    )
+}
+
 fn map_selection_error(
     error: target_contract::PluginManagementTargetSetEnabledInvocationError,
 ) -> ExecuteError {
@@ -559,6 +799,7 @@ fn map_selection_error(
                     "plugin_already_selected",
                     "The selected Plugin Instance already has the requested enabled state.",
                 ),
+                target_contract::SetEnabledError::PublicationNotFound => publication_not_found(),
                 target_contract::SetEnabledError::ProposalMismatch
                 | target_contract::SetEnabledError::ProposalNotReady
                 | target_contract::SetEnabledError::Unknown(_) => execution_failed(
@@ -610,6 +851,7 @@ fn map_inspect_error(
             target_contract::InspectError::Conflict => conflict(),
             target_contract::InspectError::ProposalMismatch => proposal_mismatch(),
             target_contract::InspectError::ProposalNotReady => proposal_not_ready(),
+            target_contract::InspectError::PublicationNotFound => publication_not_found(),
             target_contract::InspectError::NotDisableable
             | target_contract::InspectError::AlreadySelected
             | target_contract::InspectError::Unknown(_) => unknown_rejection(),
@@ -633,6 +875,7 @@ fn map_propose_error(
             target_contract::ProposeError::Conflict => conflict(),
             target_contract::ProposeError::ProposalMismatch => proposal_mismatch(),
             target_contract::ProposeError::ProposalNotReady => proposal_not_ready(),
+            target_contract::ProposeError::PublicationNotFound => publication_not_found(),
             target_contract::ProposeError::NotDisableable
             | target_contract::ProposeError::AlreadySelected
             | target_contract::ProposeError::Unknown(_) => unknown_rejection(),
@@ -656,11 +899,90 @@ fn map_publish_error(
             target_contract::PublishError::Conflict => conflict(),
             target_contract::PublishError::ProposalMismatch => proposal_mismatch(),
             target_contract::PublishError::ProposalNotReady => proposal_not_ready(),
+            target_contract::PublishError::PublicationNotFound => publication_not_found(),
             target_contract::PublishError::NotDisableable
             | target_contract::PublishError::AlreadySelected
             | target_contract::PublishError::Unknown(_) => unknown_rejection(),
         },
         target_contract::PluginManagementTargetPublishInvocationError::Runtime(error) => {
+            map_runtime_error(error)
+        }
+    }
+}
+
+fn map_history_error(
+    error: target_contract::PluginManagementTargetHistoryInvocationError,
+) -> ExecuteError {
+    match error {
+        target_contract::PluginManagementTargetHistoryInvocationError::Domain(error) => match error
+        {
+            target_contract::HistoryError::InvalidRequest => invalid_request(),
+            target_contract::HistoryError::TargetNotFound => target_not_found(),
+            target_contract::HistoryError::Unsupported => target_unsupported(),
+            target_contract::HistoryError::PluginNotFound => not_found(),
+            target_contract::HistoryError::Conflict => conflict(),
+            target_contract::HistoryError::PublicationNotFound => publication_not_found(),
+            target_contract::HistoryError::ProposalMismatch => proposal_mismatch(),
+            target_contract::HistoryError::ProposalNotReady => proposal_not_ready(),
+            target_contract::HistoryError::NotDisableable
+            | target_contract::HistoryError::AlreadySelected
+            | target_contract::HistoryError::Unknown(_) => unknown_rejection(),
+        },
+        target_contract::PluginManagementTargetHistoryInvocationError::Runtime(error) => {
+            map_runtime_error(error)
+        }
+    }
+}
+
+fn map_propose_rollback_error(
+    error: target_contract::PluginManagementTargetProposeRollbackInvocationError,
+) -> ExecuteError {
+    match error {
+        target_contract::PluginManagementTargetProposeRollbackInvocationError::Domain(error) => {
+            match error {
+                target_contract::ProposeRollbackError::InvalidRequest => invalid_request(),
+                target_contract::ProposeRollbackError::TargetNotFound => target_not_found(),
+                target_contract::ProposeRollbackError::Unsupported => target_unsupported(),
+                target_contract::ProposeRollbackError::PluginNotFound => not_found(),
+                target_contract::ProposeRollbackError::Conflict => conflict(),
+                target_contract::ProposeRollbackError::PublicationNotFound => {
+                    publication_not_found()
+                }
+                target_contract::ProposeRollbackError::ProposalMismatch => proposal_mismatch(),
+                target_contract::ProposeRollbackError::ProposalNotReady => proposal_not_ready(),
+                target_contract::ProposeRollbackError::NotDisableable
+                | target_contract::ProposeRollbackError::AlreadySelected
+                | target_contract::ProposeRollbackError::Unknown(_) => unknown_rejection(),
+            }
+        }
+        target_contract::PluginManagementTargetProposeRollbackInvocationError::Runtime(error) => {
+            map_runtime_error(error)
+        }
+    }
+}
+
+fn map_publish_rollback_error(
+    error: target_contract::PluginManagementTargetPublishRollbackInvocationError,
+) -> ExecuteError {
+    match error {
+        target_contract::PluginManagementTargetPublishRollbackInvocationError::Domain(error) => {
+            match error {
+                target_contract::PublishRollbackError::InvalidRequest => invalid_request(),
+                target_contract::PublishRollbackError::TargetNotFound => target_not_found(),
+                target_contract::PublishRollbackError::Unsupported => target_unsupported(),
+                target_contract::PublishRollbackError::PluginNotFound => not_found(),
+                target_contract::PublishRollbackError::Conflict => conflict(),
+                target_contract::PublishRollbackError::PublicationNotFound => {
+                    publication_not_found()
+                }
+                target_contract::PublishRollbackError::ProposalMismatch => proposal_mismatch(),
+                target_contract::PublishRollbackError::ProposalNotReady => proposal_not_ready(),
+                target_contract::PublishRollbackError::NotDisableable
+                | target_contract::PublishRollbackError::AlreadySelected
+                | target_contract::PublishRollbackError::Unknown(_) => unknown_rejection(),
+            }
+        }
+        target_contract::PluginManagementTargetPublishRollbackInvocationError::Runtime(error) => {
             map_runtime_error(error)
         }
     }
