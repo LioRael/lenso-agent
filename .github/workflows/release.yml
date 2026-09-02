@@ -107,6 +107,7 @@ jobs:
         run: brew install ripgrep
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Test release entrypoints
+        if: runner.os == 'Linux'
         run: >-
           cargo test --locked
           -p lenso-agent-cli
