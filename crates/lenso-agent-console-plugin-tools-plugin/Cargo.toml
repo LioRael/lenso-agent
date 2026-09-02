@@ -16,6 +16,7 @@ root-slot = "tool-providers"
 lenso.workspace = true
 lenso-agent-tool-sdk = { path = "../lenso-agent-tool-sdk" }
 lenso-capability-agent-plugin-configuration-authority = { path = "../lenso-capability-agent-plugin-configuration" }
+lenso-capability-agent-plugin-selection-authority = { path = "../lenso-capability-agent-plugin-selection" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-kernel.workspace = true
 schemars.workspace = true

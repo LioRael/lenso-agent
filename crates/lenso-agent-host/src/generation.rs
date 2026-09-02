@@ -2,7 +2,7 @@ use lenso::CtxExt;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_agent_loop_plugin::{AgentBehaviorProvenance, TurnModelSelection};
 use lenso_agent_native_support::WorkspaceScope;
-use lenso_app_authoring::PluginConfigurationAuthority;
+use lenso_app_authoring::{PluginConfigurationAuthority, PluginSelectionAuthority};
 use lenso_app_plan::{
     RequestAdmissionPlan, ResolvedAppPlan,
     authoring::{
@@ -184,6 +184,7 @@ pub fn online_reconcile_telemetry() -> OnlineReconcileTelemetry {
 #[derive(Debug)]
 struct AgentCatalogFactory {
     plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
 impl CatalogFactory for AgentCatalogFactory {
@@ -195,6 +196,7 @@ impl CatalogFactory for AgentCatalogFactory {
         if let Some(authority) = &self.plugin_configuration_authority {
             registry = registry.with_factory(PluginConfigurationAuthorityBridgeFactory::new(
                 Arc::clone(authority),
+                self.plugin_selection_authority.clone(),
             ));
         }
         let mut catalog =
@@ -436,6 +438,12 @@ pub struct AgentApp {
     legacy_event_cursor: Cell<u64>,
 }
 
+#[derive(Debug)]
+pub(crate) struct PluginAuthoringAuthorities {
+    pub(crate) configuration: Option<Arc<dyn PluginConfigurationAuthority>>,
+    pub(crate) selection: Option<Arc<dyn PluginSelectionAuthority>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RenameSessionFailure {
     Domain(RenameError),
@@ -450,7 +458,7 @@ impl AgentApp {
         surface: AgentSurfaceKind,
         profile_name: Option<String>,
         host_build: HostBuildIdentity,
-        plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+        plugin_authoring: PluginAuthoringAuthorities,
     ) -> Result<Self, String> {
         let resolved_plan: ResolvedAppPlan = serde_json::from_slice(plan_bytes)
             .map_err(|error| format!("failed to decode the resolved App Plan: {error}"))?;
@@ -462,8 +470,10 @@ impl AgentApp {
         let generation = initial.generation.clone();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
-        let runtime =
-            KernelGenerationRuntime::new(agent_catalog_factory(plugin_configuration_authority));
+        let runtime = KernelGenerationRuntime::new(agent_catalog_factory(
+            plugin_authoring.configuration,
+            plugin_authoring.selection,
+        ));
         let mut host =
             recover_or_open_host(plan_bytes, store_root, &host_build, runtime, store, durable)
                 .await?;
@@ -2940,7 +2950,7 @@ fn console_interactive_approval_configuration() -> serde_json::Value {
         "allow_tools": [
             "inspect_app", "list_plugins", "inspect_plugin", "check_plugin_change"
         ],
-        "ask_tools": ["apply_plugin_change"],
+        "ask_tools": ["apply_plugin_change", "set_plugin_enabled"],
         "default_decision": "ask",
         "deny_tools": [],
         "max_preview_bytes": 16_384
@@ -3005,14 +3015,20 @@ fn host_catalog_bindings(
         .with_admission(tool_admission),
     ];
     if available.contains("lenso.agent.console-plugin-tools") {
-        bindings.push(
+        bindings.extend([
             HostBinding::to_instance(
                 PluginInstanceId::new("lenso.agent.console-plugin-tools", "default"),
                 lenso_capability_agent_plugin_configuration_authority::CAPABILITY_ID,
                 PluginInstanceId::new(BRIDGE_PLUGIN_ID, "selected"),
             )
             .with_admission(RequestAdmissionPlan::new(4, 1)),
-        );
+            HostBinding::to_instance(
+                PluginInstanceId::new("lenso.agent.console-plugin-tools", "default"),
+                lenso_capability_agent_plugin_selection_authority::CAPABILITY_ID,
+                PluginInstanceId::new(BRIDGE_PLUGIN_ID, "selected"),
+            )
+            .with_admission(RequestAdmissionPlan::new(2, 1)),
+        ]);
     }
     if available.contains("lenso.agent.subagent-tools")
         && available.contains("lenso.agent.workspace-read-tools")
@@ -3247,9 +3263,11 @@ pub(crate) fn resolve_host_plan_for_agent_in(
 
 fn agent_catalog_factory(
     plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 ) -> MultiExecutionCatalogFactory<AgentCatalogFactory> {
     MultiExecutionCatalogFactory::new(AgentCatalogFactory {
         plugin_configuration_authority,
+        plugin_selection_authority,
     })
     .with_wasm_codec(AgentJsonCodec)
     .with_wasm_codec(ArtifactJsonCodec)
@@ -3395,7 +3413,7 @@ mod tests {
         );
         assert_eq!(
             configuration["ask_tools"],
-            serde_json::json!(["apply_plugin_change"])
+            serde_json::json!(["apply_plugin_change", "set_plugin_enabled"])
         );
         assert_eq!(configuration["default_decision"], "ask");
     }

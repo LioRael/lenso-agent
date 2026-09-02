@@ -12,6 +12,7 @@ members = [
     "crates/lenso-agent-console-instructions-plugin",
     "crates/lenso-agent-console-plugin-tools-plugin",
     "crates/lenso-capability-agent-plugin-configuration",
+    "crates/lenso-capability-agent-plugin-selection",
     "crates/lenso-agent-auth-openai-codex-plugin",
     "crates/lenso-agent-artifact-file-plugin",
     "crates/lenso-agent-oauth-client-credentials-plugin",
@@ -124,7 +125,7 @@ proc-macro2 = "1"
 quote = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
 lenso-capability-secrets = { version = "0.1.2", git = "https://github.com/LioRael/lenso-secrets-plugin", rev = "967fa0d2908b58c24a4b1ad26103a3d9173bbac0" }
-lenso-app-authoring = { package = "lenso-cli", version = "0.4.8", git = "https://github.com/LioRael/lenso-cli", rev = "1716fb7a0795dbe705f8d62ae7e54ef475a0adbc", default-features = false }
+lenso-app-authoring = { package = "lenso-cli", version = "0.4.8", git = "https://github.com/LioRael/lenso-cli", rev = "1a9155b7a8309882b81ca5bde305281594b07577", default-features = false }
 lenso-app-plan = { version = "0.3.0", git = "https://github.com/LioRael/lenso", rev = "8599db7e4a214ed92f32089f81d14c833d4becf6" }
 lenso-bun-adapter = { version = "0.1.3", git = "https://github.com/LioRael/lenso-bun-adapter", rev = "1d9cee8f7296ddd237a7fa9f054c8078adb5e0f2" }
 lenso = { version = "0.5.0", git = "https://github.com/LioRael/lenso-runtime-rust", rev = "89815107385475c8b5be378bdcf5e21aa74e02f0" }

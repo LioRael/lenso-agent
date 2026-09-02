@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.plugin-selection-authority@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "set_enabled",
+      "interaction": "request",
+      "request_schema": "schemas/set-enabled-request.schema.json",
+      "response_schema": "schemas/set-enabled-response.schema.json",
+      "domain_error_schema": "schemas/set-enabled-error.schema.json"
+    }
+  ]
+}
