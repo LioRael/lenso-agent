@@ -20,16 +20,17 @@ use lenso_agent_user_interaction_local_plugin as _;
 
 pub use lenso_agent_console_plugin_tools_plugin::{
     APPLY_PLUGIN_CHANGE_TOOL, CHECK_PLUGIN_CHANGE_TOOL, INSPECT_APP_TOOL, INSPECT_PLUGIN_TOOL,
-    LIST_PLUGINS_TOOL,
+    LIST_PLUGINS_TOOL, SET_PLUGIN_ENABLED_TOOL,
 };
 
 /// First-party Plugin management Tools available to the Console Agent.
-pub const PLUGIN_CONTROL_TOOLS: [&str; 5] = [
+pub const PLUGIN_CONTROL_TOOLS: [&str; 6] = [
     INSPECT_APP_TOOL,
     LIST_PLUGINS_TOOL,
     INSPECT_PLUGIN_TOOL,
     CHECK_PLUGIN_CHANGE_TOOL,
     APPLY_PLUGIN_CHANGE_TOOL,
+    SET_PLUGIN_ENABLED_TOOL,
 ];
 
 /// Forces only the Console Agent's reviewed Plugin inventory into the Host executable.

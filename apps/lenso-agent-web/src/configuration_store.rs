@@ -10,7 +10,8 @@ use fs2::FileExt;
 use lenso_app_authoring::{
     LocalPluginRootAuthority, PluginConfigurationAuthority, PluginConfigurationAuthoritySource,
     PluginConfigurationProposal, PluginConfigurationProposalStatus, PluginConfigurationPublication,
-    PluginRootAuthoringState, PluginRootRevision,
+    PluginRootAuthoringState, PluginRootRevision, PluginSelectionAuthority,
+    PluginSelectionPublication,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -604,6 +605,44 @@ impl PluginConfigurationAuthority for SqlitePluginConfigurationAuthority {
     }
 }
 
+impl PluginSelectionAuthority for SqlitePluginConfigurationAuthority {
+    fn source(&self) -> PluginConfigurationAuthoritySource {
+        self.source.clone()
+    }
+
+    fn set_enabled(
+        &self,
+        expected_revision: &PluginRootRevision,
+        plugin_id: &str,
+        instance: &str,
+        enabled: bool,
+    ) -> anyhow::Result<PluginSelectionPublication> {
+        self.with_operation(|connection| {
+            let materialized = self.reconcile(connection)?;
+            if materialized.revision() != expected_revision {
+                bail!(
+                    "Plugin configuration store revision conflict: expected {expected_revision}, current {}",
+                    materialized.revision()
+                );
+            }
+            let publication = self.local.set_enabled(
+                expected_revision,
+                plugin_id,
+                instance,
+                enabled,
+            )?;
+            let changed = connection.execute(
+                "UPDATE authority_state SET desired_revision = ?1 WHERE singleton = 1 AND desired_revision = ?2",
+                params![publication.revision().as_str(), publication.base_revision().as_str()],
+            )?;
+            if changed != 1 {
+                bail!("Plugin configuration store lost selection mutation authority");
+            }
+            Ok(publication)
+        })
+    }
+}
+
 impl PluginConfigurationHistoryAuthority for SqlitePluginConfigurationAuthority {
     fn publications(
         &self,
@@ -1024,9 +1063,9 @@ mod tests {
                 "additionalProperties": false
             }));
         let host = HostCatalog::new(
-            [HostSlot::one("agent")],
+            [HostSlot::optional("agent")],
             [HostPluginRelease::new(descriptor)],
-            [HostDefaultPlugin::new("example.agent", "default")],
+            [HostDefaultPlugin::new("example.agent", "default").disableable()],
         );
         fs::write(
             root.path().join(".lenso/host-catalog.json"),
@@ -1132,6 +1171,35 @@ mod tests {
         assert_eq!(stored.1, "published");
         assert_eq!(stored.2, proposal.digest());
         assert_eq!(stored.3, publication.base_source_digest().as_str());
+    }
+
+    #[test]
+    fn selection_mutation_advances_the_managed_revision() {
+        let root = fixture_root();
+        let database = root.path().join("configuration.sqlite3");
+        let authority = open_authority(&root, &database);
+        let base = authority.inspect().unwrap().revision().clone();
+
+        let disabled = authority
+            .set_enabled(&base, "example.agent", "default", false)
+            .unwrap();
+
+        assert!(!disabled.enabled());
+        assert_eq!(authority.inspect().unwrap().revision(), disabled.revision());
+        assert!(
+            root.path()
+                .join("plugins/example.agent/default.disabled")
+                .is_file()
+        );
+        let stored = Connection::open(database)
+            .unwrap()
+            .query_row(
+                "SELECT desired_revision FROM authority_state WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
+        assert_eq!(stored, disabled.revision().as_str());
     }
 
     #[test]

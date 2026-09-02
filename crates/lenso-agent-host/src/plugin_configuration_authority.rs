@@ -3,10 +3,11 @@ use std::{rc::Rc, str::FromStr, sync::Arc};
 use lenso_app_authoring::{
     PluginConfigurationApplication, PluginConfigurationAuthority, PluginConfigurationDiagnostic,
     PluginConfigurationProposal, PluginConfigurationProposalStatus, PluginRootAuthoringState,
-    PluginRootRevision,
+    PluginRootRevision, PluginSelectionAuthority,
 };
 use lenso_app_plan::{CapabilityEndpointPlan, authoring::PluginDescriptor};
 use lenso_capability_agent_plugin_configuration_authority as contract;
+use lenso_capability_agent_plugin_selection_authority as selection_contract;
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use lenso_native_adapter::{NativePluginFactory, NativePluginFactoryContext, NativePluginInstance};
 
@@ -16,11 +17,18 @@ pub(crate) const BRIDGE_PLUGIN_VERSION: &str = "0.1.0";
 #[derive(Clone, Debug)]
 pub(crate) struct PluginConfigurationAuthorityBridgeFactory {
     authority: Arc<dyn PluginConfigurationAuthority>,
+    selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
 impl PluginConfigurationAuthorityBridgeFactory {
-    pub(crate) fn new(authority: Arc<dyn PluginConfigurationAuthority>) -> Self {
-        Self { authority }
+    pub(crate) fn new(
+        authority: Arc<dyn PluginConfigurationAuthority>,
+        selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
+    ) -> Self {
+        Self {
+            authority,
+            selection_authority,
+        }
     }
 }
 
@@ -40,7 +48,36 @@ impl NativePluginFactory for PluginConfigurationAuthorityBridgeFactory {
         let endpoint = contract::PluginConfigurationAuthorityEndpoint::new(AuthorityProvider {
             authority: Arc::clone(&self.authority),
         });
-        Ok(NativePluginInstance::new(vec![Rc::new(endpoint)]))
+        let selection_endpoint =
+            selection_contract::PluginSelectionAuthorityEndpoint::new(SelectionAuthorityProvider {
+                authority: self.selection_authority.clone(),
+                inspection: Arc::clone(&self.authority),
+            });
+        Ok(NativePluginInstance::new(vec![
+            Rc::new(endpoint),
+            Rc::new(selection_endpoint),
+        ]))
+    }
+}
+
+#[derive(Clone, Debug)]
+struct SelectionAuthorityProvider {
+    authority: Option<Arc<dyn PluginSelectionAuthority>>,
+    inspection: Arc<dyn PluginConfigurationAuthority>,
+}
+
+impl selection_contract::PluginSelectionAuthorityProvider for SelectionAuthorityProvider {
+    fn set_enabled(
+        &self,
+        _context: InvocationContext,
+        request: selection_contract::SetEnabledRequest,
+    ) -> lenso_kernel::NativeRequestFuture<selection_contract::PluginSelectionAuthority> {
+        let result = set_enabled(
+            self.inspection.as_ref(),
+            self.authority.as_deref(),
+            &request,
+        );
+        Box::pin(async move { result })
     }
 }
 
@@ -97,6 +134,83 @@ pub(crate) fn bridge_descriptor() -> PluginDescriptor {
         )
         .with_limits(8, 1),
     )
+    .with_capability(
+        CapabilityEndpointPlan::new(
+            selection_contract::CAPABILITY_ID,
+            selection_contract::DESCRIPTOR_VERSION,
+            [selection_contract::SET_ENABLED_OPERATION],
+        )
+        .with_limits(4, 1),
+    )
+}
+
+fn set_enabled(
+    inspection: &dyn PluginConfigurationAuthority,
+    authority: Option<&dyn PluginSelectionAuthority>,
+    request: &selection_contract::SetEnabledRequest,
+) -> Result<
+    Result<selection_contract::SetEnabledResponse, selection_contract::SetEnabledError>,
+    RuntimeFailure,
+> {
+    let Some(authority) = authority else {
+        return Ok(Err(selection_contract::SetEnabledError::Unsupported));
+    };
+    let Ok(expected) = PluginRootRevision::from_str(&request.expected_revision) else {
+        return Ok(Err(selection_contract::SetEnabledError::InvalidRequest));
+    };
+    let state = inspection.inspect().map_err(selection_authority_failure)?;
+    if state.revision() != &expected {
+        return Ok(Err(selection_contract::SetEnabledError::Conflict));
+    }
+    let Some(instance) = state
+        .plugins()
+        .iter()
+        .find(|plugin| plugin.plugin_id() == request.plugin_id)
+        .and_then(|plugin| {
+            plugin
+                .instances()
+                .iter()
+                .find(|instance| instance.id().instance_key() == request.instance)
+        })
+    else {
+        return Ok(Err(selection_contract::SetEnabledError::NotFound));
+    };
+    if !request.enabled && !instance.is_disableable() {
+        return Ok(Err(selection_contract::SetEnabledError::NotDisableable));
+    }
+    if request.enabled == instance.is_enabled() {
+        return Ok(Err(selection_contract::SetEnabledError::AlreadySelected));
+    }
+    let publication = match authority.set_enabled(
+        &expected,
+        &request.plugin_id,
+        &request.instance,
+        request.enabled,
+    ) {
+        Ok(publication) => publication,
+        Err(error) => {
+            if inspection
+                .inspect()
+                .is_ok_and(|current| current.revision() != &expected)
+            {
+                return Ok(Err(selection_contract::SetEnabledError::Conflict));
+            }
+            return Err(selection_authority_failure(error));
+        }
+    };
+    let source = authority.source();
+    Ok(Ok(selection_contract::SetEnabledResponse {
+        authority: selection_contract::AuthoritySource {
+            kind: source.kind().to_owned(),
+            reference: source.reference().to_owned(),
+        },
+        base_revision: publication.base_revision().as_str().to_owned(),
+        enabled: publication.enabled(),
+        instance: publication.instance().to_owned(),
+        plugin_id: publication.plugin_id().to_owned(),
+        revision: publication.revision().as_str().to_owned(),
+        schema: "lenso.plugin-selection-publication.v1".to_owned(),
+    }))
 }
 
 fn inspect_authority(
@@ -331,6 +445,16 @@ fn authority_failure(error: anyhow::Error) -> RuntimeFailure {
     }
 }
 
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "map_err transfers the owned authority error into the Runtime failure"
+)]
+fn selection_authority_failure(error: anyhow::Error) -> RuntimeFailure {
+    RuntimeFailure::PluginFailure {
+        detail: format!("Plugin selection authority failed: {error}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -340,7 +464,7 @@ mod tests {
         LocalPluginRootAuthority, PluginConfigurationAuthoritySource,
         PluginConfigurationPublication,
     };
-    use lenso_app_plan::authoring::{HostCatalog, HostDefaultPlugin, HostSlot};
+    use lenso_app_plan::authoring::{HostCatalog, HostDefaultPlugin, HostPluginRelease, HostSlot};
 
     use super::*;
 
@@ -391,11 +515,20 @@ mod tests {
             [
                 HostSlot::many("tool-providers"),
                 HostSlot::one("plugin-configuration-authority"),
+                HostSlot::optional("optional"),
             ],
-            [lenso_app_plan::authoring::HostPluginRelease::new(
-                bridge_descriptor(),
-            )],
-            [HostDefaultPlugin::new(BRIDGE_PLUGIN_ID, "default")],
+            [
+                HostPluginRelease::new(bridge_descriptor()),
+                HostPluginRelease::new(PluginDescriptor::new(
+                    "example.optional",
+                    "1.0.0",
+                    "optional",
+                )),
+            ],
+            [
+                HostDefaultPlugin::new(BRIDGE_PLUGIN_ID, "default"),
+                HostDefaultPlugin::new("example.optional", "default").disableable(),
+            ],
         );
         fs::write(
             root.path().join(".lenso/host-catalog.json"),
@@ -456,6 +589,33 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result, Err(contract::ProposeError::Conflict));
+    }
+
+    #[test]
+    fn bridge_dispatches_a_direct_selection_change() {
+        let (root, authority) = fixture();
+        let before = authority.inspect().unwrap();
+
+        let response = set_enabled(
+            &authority,
+            Some(&authority),
+            &selection_contract::SetEnabledRequest {
+                enabled: false,
+                expected_revision: before.revision().as_str().to_owned(),
+                instance: "default".to_owned(),
+                plugin_id: "example.optional".to_owned(),
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(!response.enabled);
+        assert_eq!(response.plugin_id, "example.optional");
+        assert!(
+            root.path()
+                .join("plugins/example.optional/default.disabled")
+                .is_file()
+        );
     }
 
     #[test]

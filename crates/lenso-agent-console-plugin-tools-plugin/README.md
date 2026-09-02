@@ -9,6 +9,7 @@
 - `inspect_plugin` reports one Plugin's Instances, selection, origin, configuration size, and source digest without sending raw configuration into model context.
 - `check_plugin_change` validates an exact configuration candidate without changing state.
 - `apply_plugin_change` publishes only a candidate whose expected revision and proposal digest still match.
+- `set_plugin_enabled` directly enables or disables one exact Plugin Instance through the Host-selected selection authority.
 
 The Plugin does not own Plugin configuration facts, authority selection, runtime activation, Console HTTP contracts, or mutation policy. It requires the Host-private `lenso.agent.plugin-configuration-authority@1`; the Host bridge delegates that Capability to the same authority instance used by Console HTTP control. A successful publication means desired state was committed; it does not claim that a new Generation is active.
 
@@ -18,7 +19,7 @@ This internal authority role is deliberately distinct from Console's cross-Agent
 
 The selected authority can be the built-in local Plugin Root, SQLite, remote HTTP authority, or an injected custom implementation. Responses include the authority kind and reference, are bounded, and never include raw stored configuration. Candidate configurations remain capped at 7 KiB so the complete write call fits the approval preview; read operations are parallel-safe, and publication is exclusive.
 
-The Console inventory pairs `apply_plugin_change` with the interactive approval hook. Inspection and candidate validation are allowed without approval; publication asks the user to approve the exact Tool call once.
+The Console inventory pairs `apply_plugin_change` and `set_plugin_enabled` with the interactive approval hook. Inspection and candidate validation are allowed without approval; each mutation asks the user to approve the exact Tool call once.
 
 ## Removal proof
 

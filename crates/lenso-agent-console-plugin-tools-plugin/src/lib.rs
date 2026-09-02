@@ -3,6 +3,7 @@
 use lenso::Port;
 use lenso_agent_tool_sdk::prelude::*;
 use lenso_capability_agent_plugin_configuration_authority as configuration_contract;
+use lenso_capability_agent_plugin_selection_authority as selection_contract;
 use lenso_capability_agent_tool_provider::ExecutionFailedPayload;
 use lenso_kernel::RuntimeFailure;
 use schemars::JsonSchema;
@@ -13,6 +14,7 @@ pub const LIST_PLUGINS_TOOL: &str = "list_plugins";
 pub const INSPECT_PLUGIN_TOOL: &str = "inspect_plugin";
 pub const CHECK_PLUGIN_CHANGE_TOOL: &str = "check_plugin_change";
 pub const APPLY_PLUGIN_CHANGE_TOOL: &str = "apply_plugin_change";
+pub const SET_PLUGIN_ENABLED_TOOL: &str = "set_plugin_enabled";
 pub const PLUGIN_PACKAGE_ID: &str = "lenso.agent.console-plugin-tools";
 
 const MAX_CONFIGURATION_BYTES: usize = 7 * 1024;
@@ -63,6 +65,18 @@ struct ApplyPluginChangeArguments {
     expected_revision: String,
     #[schemars(length(min = 71, max = 71))]
     proposal_digest: String,
+    #[schemars(length(min = 1, max = 128))]
+    instance: String,
+    #[schemars(length(min = 1, max = 128))]
+    plugin_id: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetPluginEnabledArguments {
+    enabled: bool,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
     #[schemars(length(min = 1, max = 128))]
     instance: String,
     #[schemars(length(min = 1, max = 128))]
@@ -159,6 +173,19 @@ struct PublicationInspection {
     status: &'static str,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionInspection {
+    authority: selection_contract::AuthoritySource,
+    base_revision: String,
+    enabled: bool,
+    instance: String,
+    plugin_id: String,
+    revision: String,
+    schema: String,
+    status: &'static str,
+}
+
 fn validate_config(config: &ConsolePluginToolsConfig) -> Result<(), RuntimeFailure> {
     if !(4_096..=262_144).contains(&config.max_output_bytes) {
         return Err(RuntimeFailure::InvalidResolvedPlan {
@@ -175,6 +202,7 @@ struct ConsolePluginTools {
     #[config]
     config: ConsolePluginToolsConfig,
     authority: Port<configuration_contract::PluginConfigurationAuthorityClient>,
+    selection_authority: Port<selection_contract::PluginSelectionAuthorityClient>,
 }
 
 #[lenso_agent_tool_sdk::tool_provider]
@@ -379,6 +407,44 @@ impl ConsolePluginTools {
         )
     }
 
+    #[tool(
+        name = "set_plugin_enabled",
+        description = "Enable or disable one exact Plugin Instance through the Host-selected authority.",
+        execution = "exclusive"
+    )]
+    async fn set_plugin_enabled(
+        &self,
+        arguments: SetPluginEnabledArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let publication = self
+            .selection_authority
+            .set_enabled(selection_contract::SetEnabledRequest {
+                enabled: arguments.enabled,
+                expected_revision: arguments.expected_revision,
+                instance: arguments.instance,
+                plugin_id: arguments.plugin_id,
+            })
+            .await
+            .map_err(map_selection_error)?;
+        self.json_response(
+            SET_PLUGIN_ENABLED_TOOL,
+            &SelectionInspection {
+                authority: publication.authority,
+                base_revision: publication.base_revision,
+                enabled: publication.enabled,
+                instance: publication.instance,
+                plugin_id: publication.plugin_id,
+                revision: publication.revision,
+                schema: publication.schema,
+                status: if publication.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+            },
+        )
+    }
+
     fn json_response(
         &self,
         operation: &str,
@@ -440,6 +506,40 @@ fn proposal_not_ready() -> ExecuteError {
         "proposal_not_ready",
         "Plugin configuration proposal did not pass candidate validation.",
     )
+}
+
+fn map_selection_error(
+    error: selection_contract::PluginSelectionAuthorityInvocationError,
+) -> ExecuteError {
+    match error {
+        selection_contract::PluginSelectionAuthorityInvocationError::Domain(error) => match error {
+            selection_contract::SetEnabledError::InvalidRequest => invalid_request(),
+            selection_contract::SetEnabledError::NotFound => not_found(),
+            selection_contract::SetEnabledError::Conflict => conflict(),
+            selection_contract::SetEnabledError::NotDisableable => execution_failed(
+                "plugin_not_disableable",
+                "The selected Plugin Instance is required by the Host and cannot be disabled.",
+            ),
+            selection_contract::SetEnabledError::AlreadySelected => execution_failed(
+                "plugin_already_selected",
+                "The selected Plugin Instance already has the requested enabled state.",
+            ),
+            selection_contract::SetEnabledError::Unsupported => execution_failed(
+                "plugin_selection_unsupported",
+                "The selected Host authority does not support Plugin enable or disable operations.",
+            ),
+            selection_contract::SetEnabledError::Unknown(_) => execution_failed(
+                "plugin_selection_rejected",
+                "The selected Host authority rejected the Plugin selection operation.",
+            ),
+        },
+        selection_contract::PluginSelectionAuthorityInvocationError::Runtime(error) => {
+            execution_failed(
+                "plugin_selection_failed",
+                &format!("Plugin selection authority failed: {error:?}"),
+            )
+        }
+    }
 }
 
 fn unknown_rejection() -> ExecuteError {
@@ -548,10 +648,16 @@ mod tests {
             descriptor["provided_capabilities"][0]["capability_id"],
             "lenso.agent.tool-provider@2"
         );
-        assert_eq!(
-            descriptor["required_capabilities"][0]["capability_id"],
-            configuration_contract::CAPABILITY_ID
-        );
-        assert_eq!(descriptor["required_capabilities"][0]["cardinality"], "one");
+        let requirements = descriptor["required_capabilities"].as_array().unwrap();
+        for capability in [
+            configuration_contract::CAPABILITY_ID,
+            selection_contract::CAPABILITY_ID,
+        ] {
+            let requirement = requirements
+                .iter()
+                .find(|requirement| requirement["capability_id"] == capability)
+                .expect("Console Plugin Tools should require each Host authority");
+            assert_eq!(requirement["cardinality"], "one");
+        }
     }
 }

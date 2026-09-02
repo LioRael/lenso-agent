@@ -25,7 +25,9 @@ use lenso_agent_session_inspection::{
 };
 use lenso_agent_session_terminal_plugin as _;
 use lenso_agent_web_plugin as _;
-use lenso_app_authoring::{LocalPluginRootAuthority, PluginConfigurationAuthority};
+use lenso_app_authoring::{
+    LocalPluginRootAuthority, PluginConfigurationAuthority, PluginSelectionAuthority,
+};
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse};
 use lenso_capability_agent_context_source::{
     ContextRole, ReadResourceRequest, RenderPromptRequest,
@@ -186,6 +188,10 @@ pub struct AgentWebConfig {
     /// managed Plugin Root before publication returns. Omit to use the local
     /// Plugin Root authority.
     pub plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    /// Optional Host-provided authority for enabling and disabling Plugin Instances.
+    ///
+    /// Omit when the selected configuration authority does not support selection changes.
+    pub plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
     /// Optional history and rollback capability paired with the selected authority.
     ///
     /// A remote authority may implement this port without exposing its storage
@@ -219,6 +225,7 @@ impl AgentWebConfig {
             control: AgentWebControl::Disabled,
             plugin_control: false,
             plugin_configuration_authority: None,
+            plugin_selection_authority: None,
             plugin_configuration_history: None,
             plugin_configuration_store: None,
             plugin_configuration_remote: None,
@@ -729,26 +736,21 @@ impl AgentWebSurface {
             control,
             plugin_control,
             plugin_configuration_authority,
+            plugin_selection_authority,
             plugin_configuration_history,
             plugin_configuration_store,
             plugin_configuration_remote,
             plugins,
         } = config;
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
-        let selected_profile = match (&plan, &profile) {
-            (Some(plan), None) => Profile::resolved_plan(plan),
-            (None, Some(profile)) => Profile::named(profile),
-            (None, None) => Profile::Default,
-            (Some(_), Some(_)) => {
-                return Err("an exact Plan conflicts with a named Agent Profile".to_owned());
-            }
-        };
+        let selected_profile = resolve_start_profile(plan.as_deref(), profile.as_deref())?;
         let directories = match agent_home.as_ref() {
             Some(agent_home) => AgentDirectories::from_home(agent_home)?,
             None => AgentDirectories::resolve()?,
         };
         let authority_selection = plugin_configuration_authority_selection(
             plugin_configuration_authority.as_ref(),
+            plugin_selection_authority.as_ref(),
             plugin_configuration_history.as_ref(),
             plugin_configuration_store.as_ref(),
             plugin_configuration_remote.as_ref(),
@@ -773,6 +775,7 @@ impl AgentWebSurface {
         let authorities = resolve_configuration_authorities(
             app_root,
             plugin_configuration_authority,
+            plugin_selection_authority,
             plugin_configuration_history,
             plugin_configuration_store,
             plugin_configuration_remote,
@@ -782,8 +785,13 @@ impl AgentWebSurface {
             authority_is_builtin_local,
             history: plugin_configuration_history,
             remote,
+            selection: plugin_selection_authority,
         } = authorities;
         let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
+        let host = match plugin_selection_authority {
+            Some(authority) => host.plugin_selection_authority(authority),
+            None => host,
+        };
         let app = Box::pin(host.run(selected_profile)).await?;
         let plugin_control = PluginControl::resolve(
             plugin_control,
@@ -826,6 +834,15 @@ impl AgentWebSurface {
     }
 }
 
+fn resolve_start_profile(plan: Option<&FsPath>, profile: Option<&str>) -> Result<Profile, String> {
+    match (plan, profile) {
+        (Some(plan), None) => Ok(Profile::resolved_plan(plan)),
+        (None, Some(profile)) => Ok(Profile::named(profile)),
+        (None, None) => Ok(Profile::Default),
+        (Some(_), Some(_)) => Err("an exact Plan conflicts with a named Agent Profile".to_owned()),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PluginConfigurationAuthoritySelection {
     Local,
@@ -837,11 +854,13 @@ enum PluginConfigurationAuthoritySelection {
 
 fn plugin_configuration_authority_selection(
     injected_authority: Option<&Arc<dyn PluginConfigurationAuthority>>,
+    injected_selection: Option<&Arc<dyn PluginSelectionAuthority>>,
     injected_history: Option<&Arc<dyn PluginConfigurationHistoryAuthority>>,
     store: Option<&PluginConfigurationStoreConfig>,
     remote: Option<&RemotePluginConfigurationConfig>,
 ) -> Result<PluginConfigurationAuthoritySelection, String> {
     let injected_authority = injected_authority.is_some();
+    let injected_selection = injected_selection.is_some();
     let injected_history = injected_history.is_some();
     let store = store.is_some();
     let remote = remote.is_some();
@@ -849,6 +868,11 @@ fn plugin_configuration_authority_selection(
         return Err(
             "a concrete Plugin configuration authority conflicts with an injected configuration authority"
                 .to_owned(),
+        );
+    }
+    if injected_selection && !injected_authority {
+        return Err(
+            "a Plugin selection authority requires an injected configuration authority".to_owned(),
         );
     }
     if store && remote {
@@ -881,11 +905,13 @@ struct ResolvedConfigurationAuthorities {
     authority_is_builtin_local: bool,
     history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     remote: Option<Arc<RemotePluginConfigurationAuthority>>,
+    selection: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
 fn resolve_configuration_authorities(
     app_root: &FsPath,
     injected_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
+    injected_selection: Option<Arc<dyn PluginSelectionAuthority>>,
     injected_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     store: Option<PluginConfigurationStoreConfig>,
     remote: Option<RemotePluginConfigurationConfig>,
@@ -899,8 +925,11 @@ fn resolve_configuration_authorities(
             Ok(ResolvedConfigurationAuthorities {
                 authority: Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>,
                 authority_is_builtin_local: false,
-                history: Some(authority as Arc<dyn PluginConfigurationHistoryAuthority>),
+                history: Some(
+                    Arc::clone(&authority) as Arc<dyn PluginConfigurationHistoryAuthority>
+                ),
                 remote: None,
+                selection: Some(authority as Arc<dyn PluginSelectionAuthority>),
             })
         }
         (None, Some(remote)) => {
@@ -915,19 +944,27 @@ fn resolve_configuration_authorities(
                     Arc::clone(&authority) as Arc<dyn PluginConfigurationHistoryAuthority>
                 ),
                 remote: Some(authority),
+                selection: None,
             })
         }
         (None, None) => {
             let authority_is_builtin_local = injected_authority.is_none();
-            let authority = injected_authority.unwrap_or_else(|| {
-                Arc::new(LocalPluginRootAuthority::new(app_root))
-                    as Arc<dyn PluginConfigurationAuthority>
-            });
+            let (authority, selection) = injected_authority.map_or_else(
+                || {
+                    let local = Arc::new(LocalPluginRootAuthority::new(app_root));
+                    (
+                        Arc::clone(&local) as Arc<dyn PluginConfigurationAuthority>,
+                        Some(local as Arc<dyn PluginSelectionAuthority>),
+                    )
+                },
+                |authority| (authority, injected_selection),
+            );
             Ok(ResolvedConfigurationAuthorities {
                 authority,
                 authority_is_builtin_local,
                 history: injected_history,
                 remote: None,
+                selection,
             })
         }
         (Some(_), Some(_)) => unreachable!("authority selection rejects this conflict"),

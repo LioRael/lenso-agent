@@ -3015,6 +3015,7 @@ dependencies = [
  "lenso",
  "lenso-agent-tool-sdk",
  "lenso-capability-agent-plugin-configuration-authority",
+ "lenso-capability-agent-plugin-selection-authority",
  "lenso-capability-agent-tool-provider",
  "lenso-kernel",
  "schemars 1.2.2",
@@ -3187,6 +3188,7 @@ dependencies = [
  "lenso-capability-agent-model-selection",
  "lenso-capability-agent-oauth-access",
  "lenso-capability-agent-plugin-configuration-authority",
+ "lenso-capability-agent-plugin-selection-authority",
  "lenso-capability-agent-prompt",
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-control",
@@ -4192,6 +4194,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-capability-agent-plugin-selection-authority"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-capability-agent-process"
 version = "0.1.0"
 dependencies = [
@@ -4527,7 +4547,7 @@ dependencies = [
 [[package]]
 name = "lenso-cli"
 version = "0.4.8"
-source = "git+https://github.com/LioRael/lenso-cli?rev=1716fb7a0795dbe705f8d62ae7e54ef475a0adbc#1716fb7a0795dbe705f8d62ae7e54ef475a0adbc"
+source = "git+https://github.com/LioRael/lenso-cli?rev=1a9155b7a8309882b81ca5bde305281594b07577#1a9155b7a8309882b81ca5bde305281594b07577"
 dependencies = [
  "anyhow",
  "lenso-app-plan",
