@@ -5027,6 +5027,22 @@ mod tests {
     }
 
     #[test]
+    fn turn_started_round_trips_the_admitted_model_profile() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let profile = compaction_test_profile(Some(4_096));
+        let payload = serde_json::json!({
+            "generation_spec_digest": digest,
+            "resolved_turn_profile": profile.clone(),
+            "input": "hello"
+        })
+        .to_string();
+
+        let provenance = inspect_turn_generation_provenance(1, Some("turn-1"), &payload).unwrap();
+
+        assert_eq!(provenance.resolved_turn_profile, Some(profile));
+    }
+
+    #[test]
     fn interrupted_turn_is_closed_before_a_resumed_turn_starts() {
         let events = [history_event(
             "1",

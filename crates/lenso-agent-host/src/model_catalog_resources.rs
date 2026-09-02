@@ -102,7 +102,7 @@ mod tests {
     use lenso_app_plan::authoring::PluginRootSnapshot;
 
     #[test]
-    fn selected_catalog_bytes_change_the_generation_resource_identity() {
+    fn equivalent_catalog_bytes_keep_identity_and_changed_bytes_replace_it() {
         let directory = tempfile::tempdir().unwrap();
         let directories = AgentDirectories::from_home(directory.path()).unwrap();
         let plan =
@@ -117,6 +117,12 @@ mod tests {
         fs::write(&path, br#"{"schema":"one"}"#).unwrap();
         let first =
             inject_selected_catalog_snapshot(&plan, InstanceResourceCatalog::new()).unwrap();
+        let equivalent =
+            inject_selected_catalog_snapshot(&plan, InstanceResourceCatalog::new()).unwrap();
+        assert_eq!(
+            first.for_instance(&selected).digest(),
+            equivalent.for_instance(&selected).digest()
+        );
         fs::write(&path, br#"{"schema":"two"}"#).unwrap();
         let second =
             inject_selected_catalog_snapshot(&plan, InstanceResourceCatalog::new()).unwrap();

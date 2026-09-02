@@ -2026,6 +2026,10 @@ mod tests {
         revalidated.fetched_at_unix_seconds = 2;
         revalidated.revision = "two".to_owned();
         assert!(!publish_generation_snapshot(&path, &revalidated, first_publisher).unwrap());
+        let unchanged: GenerationCatalogSnapshot =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(unchanged.fetched_at_unix_seconds, 1);
+        assert_eq!(unchanged.revision, "one");
 
         let second_publisher = claim_refresh_publisher(&path);
         let mut changed = revalidated;
