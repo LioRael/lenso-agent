@@ -7,6 +7,7 @@ on:
       - "apps/lenso-agent-acp/**"
       - "apps/lenso-agent-cli/**"
       - "apps/lenso-agent-tui/**"
+      - "apps/lenso-agent-web/**"
       - "crates/**"
       - "scripts/**"
       - "Cargo.lock"
@@ -59,7 +60,7 @@ jobs:
             version="${INPUT_VERSION}"
             publish="${INPUT_PUBLISH}"
           else
-            version="0.1.0"
+            version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' apps/lenso-agent-tui/Cargo.toml | head -n 1)"
             publish=false
           fi
           ./scripts/check-release-version.sh "${version}"
@@ -108,11 +109,17 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Test release entrypoints
         if: runner.os == 'Linux'
-        run: >-
-          cargo test --locked
-          -p lenso-agent-cli
-          -p lenso-agent-tui
-          -p lenso-agent-acp
+        run: |
+          cargo test --locked \
+            -p lenso-agent-cli \
+            -p lenso-agent-tui \
+            -p lenso-agent-acp \
+            -p lenso-agent-web
+          cargo test --locked \
+            --no-default-features \
+            --features console-standalone \
+            -p lenso-agent-web \
+            --bin lenso-agent-console-web
       - name: Build release entrypoints
         run: >-
           cargo build --locked --release
@@ -120,18 +127,29 @@ jobs:
           -p lenso-agent-cli
           -p lenso-agent-tui
           -p lenso-agent-acp
+          -p lenso-agent-web
+      - name: Build Console Agent Web entrypoint
+        run: >-
+          cargo build --locked --release
+          --target "${{ matrix.rust-target }}"
+          --no-default-features
+          --features console-standalone
+          -p lenso-agent-web
+          --bin lenso-agent-console-web
       - name: Smoke release binaries
         run: |
           target="target/${{ matrix.rust-target }}/release"
           "${target}/lenso-agent" --version
           "${target}/lenso-agent-cli" --version
           "${target}/lenso-agent-acp" --version
+          "${target}/lenso-agent-web" --version
+          "${target}/lenso-agent-console-web" --version
           LENSO_AGENT_HOME="${RUNNER_TEMP}/lenso-agent-doctor" \
             "${target}/lenso-agent-cli" doctor --json
       - name: Package release binaries
         run: |
           target="target/${{ matrix.rust-target }}/release"
-          for binary in lenso-agent lenso-agent-cli lenso-agent-acp; do
+          for binary in lenso-agent lenso-agent-cli lenso-agent-acp lenso-agent-web lenso-agent-console-web; do
             ./scripts/package-release-binary.sh \
               "${{ needs.prepare.outputs.version }}" \
               "${binary}" \
@@ -185,6 +203,8 @@ jobs:
             --install-dir "${install_root}/bin" \
             --component agent \
             --component cli \
+            --component web \
+            --component console-web \
             --component acp
           LENSO_AGENT_HOME="${agent_home}" ./dist/install.sh \
             --version "${{ needs.prepare.outputs.version }}" \
@@ -193,15 +213,20 @@ jobs:
             --install-dir "${install_root}/bin" \
             --component agent \
             --component cli \
+            --component web \
             --component acp
           "${install_root}/bin/lenso-agent" --version
           "${install_root}/bin/lenso-agent-cli" --version
           "${install_root}/bin/lenso-agent-acp" --version
+          "${install_root}/bin/lenso-agent-web" --version
+          "${install_root}/bin/lenso-agent-console-web" --version
           LENSO_AGENT_HOME="${agent_home}" "${install_root}/bin/lenso-agent-cli" doctor --json
           LENSO_AGENT_HOME="${agent_home}" ./dist/install.sh \
             --install-dir "${install_root}/bin" \
             --component agent \
             --component cli \
+            --component web \
+            --component console-web \
             --component acp \
             --uninstall
           test -f "${agent_home}/sentinel"

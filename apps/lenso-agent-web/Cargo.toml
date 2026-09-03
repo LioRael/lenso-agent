@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-web"
-version = "0.1.0"
+version = "0.1.1"
 description = "HTTP and SSE surface for Lenso Agent."
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,11 @@ path = "src/main.rs"
 required-features = ["standalone"]
 
 [[bin]]
+name = "lenso-agent-console-web"
+path = "src/console_main.rs"
+required-features = ["console-standalone"]
+
+[[bin]]
 name = "lenso-plugin-configuration-service"
 path = "src/configuration_service_main.rs"
 
@@ -24,6 +29,7 @@ path = "src/lib.rs"
 [features]
 default = ["standalone"]
 standalone = ["dep:lenso-agent-default-plugins"]
+console-standalone = ["dep:lenso-agent-console-plugins"]
 
 [dependencies]
 anyhow.workspace = true
@@ -32,6 +38,7 @@ clap.workspace = true
 futures.workspace = true
 fs2.workspace = true
 lenso-agent-default-plugins = { path = "../../crates/lenso-agent-default-plugins", optional = true }
+lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins", optional = true }
 lenso-agent-host = { path = "../../crates/lenso-agent-host" }
 lenso-capability-agent-plugin-management-target = { path = "../../crates/lenso-capability-agent-plugin-management-target" }
 lenso-agent-loop-plugin = { path = "../../crates/lenso-agent-loop-plugin" }

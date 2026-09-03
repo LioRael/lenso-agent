@@ -36,7 +36,8 @@ jobs:
       - name: Check release scripts
         run: |
           bash -n scripts/*.sh
-          ./scripts/check-release-version.sh 0.1.0
+          release_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' apps/lenso-agent-tui/Cargo.toml | head -n 1)"
+          ./scripts/check-release-version.sh "${release_version}"
           ./scripts/test-release-packaging.sh
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:

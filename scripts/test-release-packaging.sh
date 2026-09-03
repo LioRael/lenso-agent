@@ -10,7 +10,7 @@ agent_home="${temporary_directory}/agent-home"
 mkdir -p "${fixtures}" "${artifacts}" "${agent_home}"
 printf 'keep\n' >"${agent_home}/sentinel"
 
-for binary in lenso-agent lenso-agent-cli lenso-agent-acp; do
+for binary in lenso-agent lenso-agent-cli lenso-agent-acp lenso-agent-web lenso-agent-console-web; do
   cp scripts/install.sh "${fixtures}/${binary}"
   chmod 0755 "${fixtures}/${binary}"
   ./scripts/package-release-binary.sh \
@@ -54,8 +54,10 @@ LENSO_AGENT_HOME="${agent_home}" ./scripts/install.sh \
   --install-dir "${install_root}/bin" \
   --component agent \
   --component cli \
+  --component web \
+  --component console-web \
   --component acp >/dev/null
-for binary in lenso-agent lenso-agent-cli lenso-agent-acp; do
+for binary in lenso-agent lenso-agent-cli lenso-agent-acp lenso-agent-web lenso-agent-console-web; do
   test -x "${install_root}/bin/${binary}"
 done
 
@@ -67,6 +69,8 @@ LENSO_AGENT_HOME="${agent_home}" ./scripts/install.sh \
   --install-dir "${install_root}/bin" \
   --component agent \
   --component cli \
+  --component web \
+  --component console-web \
   --component acp >/dev/null
 
 before="$(shasum -a 256 "${install_root}/bin/lenso-agent" | awk '{print $1}')"
@@ -87,10 +91,12 @@ LENSO_AGENT_HOME="${agent_home}" ./scripts/install.sh \
   --install-dir "${install_root}/bin" \
   --component agent \
   --component cli \
+  --component web \
+  --component console-web \
   --component acp \
   --uninstall >/dev/null
 test -f "${agent_home}/sentinel"
-for binary in lenso-agent lenso-agent-cli lenso-agent-acp; do
+for binary in lenso-agent lenso-agent-cli lenso-agent-acp lenso-agent-web lenso-agent-console-web; do
   test ! -e "${install_root}/bin/${binary}"
 done
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_VERSION="0.1.0"
+DEFAULT_VERSION="0.1.1"
 REPOSITORY="LioRael/lenso-agent"
 
 usage() {
@@ -10,17 +10,17 @@ Install or remove Lenso Agent release binaries.
 
 usage: install.sh [options]
 
-  --version <x.y.z>          Exact release version (default: 0.1.0)
+  --version <x.y.z>          Exact release version (default: 0.1.1)
   --install-dir <absolute>   Binary directory (default: ~/.local/bin)
-  --component <name>         agent, cli, or acp; may be repeated
+  --component <name>         agent, cli, web, console-web, or acp; repeatable
   --target <platform>        Override detected release target
   --base-url <URL>           Override the exact-version asset base URL
   --uninstall                Remove selected binaries and preserve Agent Home
   --purge-agent-home         With --uninstall, also remove LENSO_AGENT_HOME
   --help                     Show this help
 
-The default installation contains the interactive Agent and management CLI.
-ACP remains an independent optional distribution.
+The default installation contains the interactive Agent, management CLI, and
+both loopback Web APIs. ACP remains an independent optional distribution.
 EOF
 }
 
@@ -50,7 +50,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --component)
-      [ "$#" -ge 2 ] || fail "--component requires agent, cli, or acp"
+      [ "$#" -ge 2 ] || fail "--component requires agent, cli, web, console-web, or acp"
       components="${components} $2"
       shift 2
       ;;
@@ -99,10 +99,10 @@ case "$install_dir" in
 esac
 [ "$install_dir" != "/" ] || fail "refusing to use / as the install directory"
 
-[ -n "${components# }" ] || components=" agent cli"
+[ -n "${components# }" ] || components=" agent cli web console-web"
 for component in $components; do
   case "$component" in
-    agent|cli|acp) ;;
+    agent|cli|web|console-web|acp) ;;
     *) fail "unsupported component: $component" ;;
   esac
 done
@@ -111,6 +111,8 @@ binary_for_component() {
   case "$1" in
     agent) echo "lenso-agent" ;;
     cli) echo "lenso-agent-cli" ;;
+    web) echo "lenso-agent-web" ;;
+    console-web) echo "lenso-agent-console-web" ;;
     acp) echo "lenso-agent-acp" ;;
   esac
 }
