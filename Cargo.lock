@@ -3990,7 +3990,6 @@ name = "lenso-capability-agent"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-guest-sdk",
  "lenso-kernel",
@@ -4024,7 +4023,6 @@ name = "lenso-capability-agent-auth-openai-codex"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-plugin-authoring",
@@ -4074,7 +4072,6 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-guest-sdk",
  "lenso-kernel",
@@ -4235,7 +4232,6 @@ name = "lenso-capability-agent-process"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-plugin-authoring",
@@ -4248,7 +4244,6 @@ name = "lenso-capability-agent-prompt"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-guest-sdk",
  "lenso-kernel",
@@ -4263,7 +4258,6 @@ name = "lenso-capability-agent-prompt-provider"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-plugin-authoring",
@@ -4398,7 +4392,6 @@ name = "lenso-capability-agent-tools"
 version = "0.1.0"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-guest-sdk",
  "lenso-kernel",
@@ -4452,7 +4445,6 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-guest-sdk",
  "lenso-kernel",
