@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-web"
-version = "0.1.1"
+version = "0.1.2"
 description = "HTTP and SSE surface for Lenso Agent."
 edition.workspace = true
 license.workspace = true
