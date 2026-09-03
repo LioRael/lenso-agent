@@ -24,6 +24,7 @@ use lenso_app_authoring::{
 };
 use lenso_capability_agent_plugin_management_target as target_contract;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
@@ -2048,6 +2049,8 @@ struct PluginRemovalPublicationResponse {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManagedPlugin {
+    configuration_defaults: Value,
+    configuration_schema: Option<Value>,
     instances: Vec<ManagedPluginInstance>,
     package_id: String,
     package_revision: String,
@@ -2073,9 +2076,16 @@ struct ProfileManagementAuthority {
     enabled: BTreeSet<String>,
     host_defaults: BTreeMap<String, bool>,
     ids: BTreeSet<String>,
-    releases: BTreeMap<String, String>,
+    releases: BTreeMap<String, ManagedPluginRelease>,
     root_instances: BTreeSet<String>,
     root_releases: BTreeSet<String>,
+}
+
+#[derive(Debug)]
+struct ManagedPluginRelease {
+    configuration_defaults: Value,
+    configuration_schema: Option<Value>,
+    release_version: String,
 }
 
 impl ProfileManagementAuthority {
@@ -2128,21 +2138,36 @@ impl ProfileManagementAuthority {
             .plugins()
             .iter()
             .map(|release| {
+                let descriptor = release.descriptor();
                 (
-                    release.descriptor().plugin_id().to_owned(),
-                    release.descriptor().release_version().to_owned(),
+                    descriptor.plugin_id().to_owned(),
+                    ManagedPluginRelease {
+                        configuration_defaults: descriptor.configuration_defaults().clone(),
+                        configuration_schema: descriptor.configuration_schema().cloned(),
+                        release_version: descriptor.release_version().to_owned(),
+                    },
                 )
             })
             .chain(desired.plugin_root().releases().iter().map(|release| {
                 (
                     release.plugin_id().to_owned(),
-                    release.release_version().to_owned(),
+                    ManagedPluginRelease {
+                        configuration_defaults: release.configuration_defaults().clone(),
+                        configuration_schema: release.configuration_schema().cloned(),
+                        release_version: release.release_version().to_owned(),
+                    },
                 )
             }))
             .collect::<BTreeMap<_, _>>();
         for id in &ids {
             let (plugin_id, _) = split_plugin_instance_id(id);
-            releases.entry(plugin_id.to_owned()).or_default();
+            releases
+                .entry(plugin_id.to_owned())
+                .or_insert_with(|| ManagedPluginRelease {
+                    configuration_defaults: Value::Object(Map::default()),
+                    configuration_schema: None,
+                    release_version: String::new(),
+                });
         }
         Ok(Self {
             app_root: app_root.to_path_buf(),
@@ -2175,14 +2200,16 @@ impl ProfileManagementAuthority {
             plugins: self
                 .releases
                 .into_iter()
-                .map(|(plugin_id, release_version)| {
+                .map(|(plugin_id, release)| {
                     let mut plugin_instances = instances.remove(&plugin_id).unwrap_or_default();
                     plugin_instances
                         .sort_by(|left, right| left.instance_key.cmp(&right.instance_key));
                     ManagedPlugin {
+                        configuration_defaults: release.configuration_defaults,
+                        configuration_schema: release.configuration_schema,
                         instances: plugin_instances,
                         package_id: plugin_id.clone(),
-                        package_revision: release_version,
+                        package_revision: release.release_version,
                         root_supplied: self.root_releases.contains(&plugin_id),
                     }
                 })
@@ -2260,6 +2287,8 @@ impl From<&PluginRootAuthoringState> for PluginManagementResponse {
                 .plugins()
                 .iter()
                 .map(|plugin| ManagedPlugin {
+                    configuration_defaults: plugin.configuration_defaults().clone(),
+                    configuration_schema: plugin.configuration_schema().cloned(),
                     instances: plugin
                         .instances()
                         .iter()
@@ -3378,6 +3407,14 @@ mod tests {
         let management = PluginManagementResponse {
             configuration_authority: authority.clone(),
             plugins: vec![ManagedPlugin {
+                configuration_defaults: serde_json::json!({ "enabled": false }),
+                configuration_schema: Some(serde_json::json!({
+                    "additionalProperties": false,
+                    "properties": {
+                        "enabled": { "type": "boolean" }
+                    },
+                    "type": "object"
+                })),
                 instances: vec![ManagedPluginInstance {
                     disableable: true,
                     has_root_difference: true,
