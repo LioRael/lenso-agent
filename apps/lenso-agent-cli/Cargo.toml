@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-cli"
-version = "0.1.1"
+version = "0.1.2"
 description = "Headless command-line surface for Lenso Agent."
 default-run = "lenso-agent-cli"
 edition.workspace = true

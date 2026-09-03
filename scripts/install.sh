@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_VERSION="0.1.1"
+DEFAULT_VERSION="0.1.2"
 REPOSITORY="LioRael/lenso-agent"
 
 usage() {
@@ -10,7 +10,7 @@ Install or remove Lenso Agent release binaries.
 
 usage: install.sh [options]
 
-  --version <x.y.z>          Exact release version (default: 0.1.1)
+  --version <x.y.z>          Exact release version (default: 0.1.2)
   --install-dir <absolute>   Binary directory (default: ~/.local/bin)
   --component <name>         agent, cli, web, console-web, or acp; repeatable
   --target <platform>        Override detected release target
