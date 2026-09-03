@@ -24,7 +24,7 @@ use lenso_app_authoring::{
 };
 use lenso_capability_agent_plugin_management_target as target_contract;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
@@ -2164,7 +2164,7 @@ impl ProfileManagementAuthority {
             releases
                 .entry(plugin_id.to_owned())
                 .or_insert_with(|| ManagedPluginRelease {
-                    configuration_defaults: Value::Object(Default::default()),
+                    configuration_defaults: Value::Object(Map::default()),
                     configuration_schema: None,
                     release_version: String::new(),
                 });
