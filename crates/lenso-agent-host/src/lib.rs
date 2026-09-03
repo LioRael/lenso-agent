@@ -18,6 +18,7 @@ mod provider_catalog;
 mod runtime_state;
 #[cfg(test)]
 mod test_support;
+mod tool_target;
 
 pub use directories::{AGENT_HOME_ENV, AgentDirectories};
 pub use host::{
@@ -28,6 +29,11 @@ pub use host::{
 pub use lenso_agent_loop_plugin::TurnModelSelection;
 pub use official_prompts::migrate_legacy_official_files;
 pub use plugin_configuration_authority::PluginManagementTarget;
+pub use tool_target::AgentToolTarget;
+/// Contract types used by embedding Hosts that implement [`AgentToolTarget`].
+pub mod agent_tool_target_contract {
+    pub use lenso_capability_agent_tool_target::*;
+}
 pub use provider_catalog::{
     ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelInputModality, ModelLimits,
     ModelProviderCatalogEntry, ModelProviderReadiness, ModelProviderReadinessStatus,

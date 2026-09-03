@@ -1,10 +1,23 @@
-use std::{fmt, net::IpAddr, time::Duration};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    net::IpAddr,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
-use lenso_agent_host::PluginManagementTarget;
+use lenso_agent_host::{
+    AgentToolTarget, PluginManagementTarget, agent_tool_target_contract as tool_contract,
+};
 use lenso_capability_agent_plugin_management_target as contract;
 use lenso_kernel::RuntimeFailure;
 use reqwest::{Method, Response, StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
+
+use lenso_agent_web::{
+    AgentToolCatalogResponse, AgentToolExecuteRequest, AgentToolExecuteResponse,
+    AgentToolExecutionClass,
+};
 
 #[derive(Clone, Debug)]
 pub(super) struct AppAgentAdapter {
@@ -72,6 +85,212 @@ impl AppAgentAdapter {
 
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Debug)]
+struct FrozenToolRoute {
+    agent: AppAgentAdapter,
+    generation: String,
+    target_name: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FrozenToolCatalog {
+    routes: BTreeMap<String, FrozenToolRoute>,
+    tools: Vec<tool_contract::ToolDefinition>,
+}
+
+#[derive(Clone)]
+pub(super) struct AppAgentToolTarget {
+    agents: Vec<AppAgentAdapter>,
+    frozen: Arc<RwLock<Option<FrozenToolCatalog>>>,
+}
+
+impl AppAgentToolTarget {
+    pub(super) fn new(agents: Vec<AppAgentAdapter>) -> Self {
+        Self {
+            agents,
+            frozen: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub(super) async fn prepare(&self) -> Result<Vec<String>, RuntimeFailure> {
+        let mut frozen = FrozenToolCatalog::default();
+        for agent in &self.agents {
+            let catalog: AgentToolCatalogResponse =
+                match get_json(agent, &["tools"], "read Tool catalog").await {
+                    Ok(catalog) => catalog,
+                    Err(_) => continue,
+                };
+            for tool in catalog.tools {
+                let name = proxy_tool_name(&agent.id, &tool.name)?;
+                let route = FrozenToolRoute {
+                    agent: agent.clone(),
+                    generation: catalog.generation.clone(),
+                    target_name: tool.name,
+                };
+                if frozen.routes.insert(name.clone(), route).is_some() {
+                    return Err(runtime_failure(format!(
+                        "App Agent Tool name `{name}` is ambiguous"
+                    )));
+                }
+                frozen.tools.push(tool_contract::ToolDefinition {
+                    description: format!("On App Agent `{}`: {}", agent.id, tool.description),
+                    execution: match tool.execution {
+                        AgentToolExecutionClass::ParallelSafe => {
+                            tool_contract::ToolExecutionClass::ParallelSafe
+                        }
+                        AgentToolExecutionClass::Exclusive => {
+                            tool_contract::ToolExecutionClass::Exclusive
+                        }
+                    },
+                    input_schema_json: tool.input_schema_json,
+                    name,
+                });
+            }
+        }
+        frozen
+            .tools
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        let names = frozen.tools.iter().map(|tool| tool.name.clone()).collect();
+        *self
+            .frozen
+            .write()
+            .map_err(|_| runtime_failure("App Agent Tool catalog lock is unavailable"))? =
+            Some(frozen);
+        Ok(names)
+    }
+}
+
+impl fmt::Debug for AppAgentToolTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AppAgentToolTarget")
+            .field(
+                "agent_ids",
+                &self
+                    .agents
+                    .iter()
+                    .map(|agent| &agent.id)
+                    .collect::<Vec<_>>(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl AgentToolTarget for AppAgentToolTarget {
+    fn catalog(
+        &self,
+        _request: tool_contract::CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_contract::ToolTargetCatalog> {
+        let result = self
+            .frozen
+            .read()
+            .map_err(|_| runtime_failure("App Agent Tool catalog lock is unavailable"))
+            .and_then(|catalog| {
+                catalog
+                    .as_ref()
+                    .cloned()
+                    .ok_or_else(|| runtime_failure("App Agent Tool catalog was not prepared"))
+            })
+            .map(|catalog| {
+                Ok(tool_contract::CatalogResponse {
+                    tools: catalog.tools,
+                })
+            });
+        Box::pin(async move { result })
+    }
+
+    fn execute(
+        &self,
+        request: tool_contract::ExecuteRequest,
+    ) -> lenso_kernel::NativeRequestFuture<tool_contract::ToolTargetExecute> {
+        let route = self
+            .frozen
+            .read()
+            .map_err(|_| runtime_failure("App Agent Tool catalog lock is unavailable"))
+            .map(|catalog| {
+                catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.routes.get(&request.name))
+                    .cloned()
+            });
+        Box::pin(async move {
+            let Some(route) = route? else {
+                return Ok(Err(tool_contract::ExecuteError::ToolNotFound));
+            };
+            let body = serde_json::to_value(AgentToolExecuteRequest {
+                arguments_json: request.arguments_json,
+                expected_generation: route.generation,
+                name: route.target_name,
+            })
+            .map_err(|error| runtime_failure(format!("Tool request failed: {error}")))?;
+            let response: AgentToolExecuteResponse = send_json(
+                &route.agent,
+                Method::POST,
+                &["tools", "execute"],
+                body,
+                "execute Tool",
+            )
+            .await
+            .map_err(|error| match error {
+                TargetRequestError::Domain(status) => {
+                    runtime_failure(format!("App Agent Tool execution failed with {status}"))
+                }
+                TargetRequestError::Runtime(error) => error,
+            })?;
+            Ok(match response {
+                AgentToolExecuteResponse::Succeeded { response } => {
+                    let response_json = serde_json::to_string(&response)
+                        .map_err(|error| runtime_failure(format!("Tool response failed: {error}")))?
+                        .parse()
+                        .map_err(|error| {
+                            runtime_failure(format!("Tool response failed: {error}"))
+                        })?;
+                    Ok(tool_contract::ExecuteResponse { response_json })
+                }
+                AgentToolExecuteResponse::StaleCatalog { .. } => {
+                    Err(tool_contract::ExecuteError::StaleCatalog)
+                }
+                AgentToolExecuteResponse::Failed {
+                    code,
+                    details_json,
+                    message,
+                } => Err(match code.as_str() {
+                    "invalid_arguments" => tool_contract::ExecuteError::InvalidRequest,
+                    "unknown_tool" => tool_contract::ExecuteError::ToolNotFound,
+                    "tool_not_allowed" => tool_contract::ExecuteError::PermissionDenied,
+                    _ => tool_contract::ExecuteError::ExecutionFailed {
+                        payload: tool_contract::ExecutionFailedPayload {
+                            details_json,
+                            message,
+                            reason_code: code,
+                        },
+                    },
+                }),
+            })
+        })
+    }
+}
+
+fn proxy_tool_name(agent_id: &str, tool_name: &str) -> Result<String, RuntimeFailure> {
+    let agent = agent_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_lowercase() || character.is_ascii_digit() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let name = format!("app_{agent}_{tool_name}");
+    if name.len() > 64 {
+        return Err(runtime_failure(format!(
+            "App Agent Tool name `{name}` exceeds the model Tool name limit"
+        )));
+    }
+    Ok(name)
+}
 
 #[derive(Clone)]
 pub(super) struct AppAgentPluginManagementTarget {

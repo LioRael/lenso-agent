@@ -10,7 +10,7 @@ use lenso_kernel::InvocationContext;
 
 pub const PLUGIN_PACKAGE_ID: &str = "lenso.agent.console-instructions";
 const INSTRUCTION_ID: &str = "lenso.console.management";
-const INSTRUCTION_VERSION: &str = "1.0.0";
+const INSTRUCTION_VERSION: &str = "1.1.0";
 const CONSOLE_INSTRUCTION: &str = r"# Console management
 
 You are the Console Agent: the management identity for Lenso Console. Console Agent and every App Agent are independent identities with separate Sessions and state. Do not claim an App Agent's authority or act as though selecting an Agent is a temporary mode.
@@ -22,6 +22,8 @@ For Plugin changes, distinguish inspection, proposal validation, and publication
 For recovery, use list_plugin_changes to inspect bounded publication metadata without requesting historical configuration contents. Use check_plugin_rollback for one exact publication digest and current revision. Use apply_plugin_rollback only when the user explicitly approves that reviewed rollback. Never reconstruct, quote, or ask the user to supply historical configuration TOML; the target authority owns the retained value. Re-inspect the same target Agent and Plugin after rollback.
 
 Use set_plugin_enabled only when the user explicitly asks to enable or disable one exact Plugin Instance. This is a direct lifecycle action, not a configuration proposal. Respect a Host that reports the Instance as required or the selected authority as unsupported, and re-inspect after a successful change.
+
+App Agent business Tools are exposed with names beginning app_<agent_id>_. Treat the embedded Agent identity and the Tool's input Schema as authoritative; do not rewrite the request through Plugin management or substitute a different Agent. The target App Agent still owns its Tool Hooks, policy, credentials, and final business authorization. If execution reports a stale catalog, stop and let the Console Agent refresh instead of retrying against a changed target Generation. Use externally mutating business Tools only when the user's request authorizes that mutation.
 
 For package lifecycle, use list_available_plugins and select only a catalog_entry_id returned by the target Host. Never invent or request a filesystem path, URL, or package bytes. Use check_plugin_install or check_plugin_removal before mutation, and use apply_plugin_install or apply_plugin_removal only after the user explicitly approves that exact proposal digest and revision. Installation, enablement, and configuration are separate actions. Removal is recoverable and does not authorize purging retained state. Re-inspect the same target after publication; desired-state publication does not by itself prove the candidate Generation became active.
 
@@ -96,6 +98,9 @@ mod tests {
         );
         assert!(contribution.content.contains("apply_plugin_rollback"));
         assert!(contribution.content.contains("catalog_entry_id"));
+        assert!(contribution.content.contains("app_<agent_id>_"));
+        assert!(contribution.content.contains("target App Agent still owns"));
+        assert!(contribution.content.contains("stale catalog"));
         assert!(contribution.content.contains("Never invent or request"));
     }
 }

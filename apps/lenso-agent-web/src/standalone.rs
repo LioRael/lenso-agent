@@ -7,7 +7,9 @@ use lenso_agent_web::{
     RemotePluginConfigurationResource, TrustedPluginBundle,
 };
 
-use crate::app_agent_management::{AppAgentAdapter, AppAgentPluginManagementTarget};
+use crate::app_agent_management::{
+    AppAgentAdapter, AppAgentPluginManagementTarget, AppAgentToolTarget,
+};
 
 const REMOTE_CONFIGURATION_TOKEN_ENV: &str = "LENSO_PLUGIN_CONFIGURATION_REMOTE_TOKEN";
 
@@ -107,6 +109,14 @@ async fn run(args: Args, linked_plugins: fn(), console: bool) -> Result<(), Stri
         if !console {
             return Err("--managed-agent requires lenso-agent-console-web".to_owned());
         }
+        let tool_target = Arc::new(AppAgentToolTarget::new(managed_agents.clone()));
+        config.allowed_tools.extend(
+            tool_target
+                .prepare()
+                .await
+                .map_err(|error| format!("managed Agent Tool catalog failed: {error:?}"))?,
+        );
+        config.agent_tool_target = Some(tool_target);
         config.plugin_management_target = Some(Arc::new(AppAgentPluginManagementTarget::new(
             managed_agents,
         )));
