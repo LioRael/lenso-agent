@@ -2791,8 +2791,9 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 
 [[package]]
 name = "lenso"
-version = "0.5.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d523132053b8b6a73ec107e50797e0c631f9973a1ddb0178f37a2f2266de64ed"
 dependencies = [
  "futures",
  "lenso-kernel",
@@ -3963,17 +3964,20 @@ dependencies = [
 
 [[package]]
 name = "lenso-app-plan"
-version = "0.3.0"
-source = "git+https://github.com/LioRael/lenso?rev=8599db7e4a214ed92f32089f81d14c833d4becf6#8599db7e4a214ed92f32089f81d14c833d4becf6"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "235c515fae1c80eb41c615b026a3ab7d75f83475c937257c9fe77ea26179d48a"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]
 name = "lenso-bun-adapter"
 version = "0.1.3"
-source = "git+https://github.com/LioRael/lenso-bun-adapter?rev=1d9cee8f7296ddd237a7fa9f054c8078adb5e0f2#1d9cee8f7296ddd237a7fa9f054c8078adb5e0f2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0130f8b8fd97a786a172ed77e8130d6b433d6537792ebba9957b732125ec9d9e"
 dependencies = [
  "futures",
  "jsonrpsee",
@@ -4473,11 +4477,11 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-secrets"
-version = "0.1.2"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a55fa757dadb4d7a38b67ce5f1ecd129034c17efad0133ff36d28510a3cdf2fb"
 dependencies = [
  "futures",
- "lenso-contract-codegen",
  "lenso-contract-runtime",
  "lenso-kernel",
  "lenso-plugin-authoring",
@@ -4488,7 +4492,8 @@ dependencies = [
 [[package]]
 name = "lenso-capability-terminal-command"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5016bae616c47740f79674fc662574aafbb519097652c9f5f4f7bae07f710855"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
@@ -4506,7 +4511,8 @@ dependencies = [
 [[package]]
 name = "lenso-capability-terminal-command-provider"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2e8eb924d2b717c7338c813e8dc5fe68456688ff84f41455d61dc63ed224b0f"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
@@ -4557,8 +4563,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-cli"
-version = "0.4.8"
-source = "git+https://github.com/LioRael/lenso-cli?rev=1a9155b7a8309882b81ca5bde305281594b07577#1a9155b7a8309882b81ca5bde305281594b07577"
+version = "0.4.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aebd6bb4eb86e63c1c823f0fc7b64b2b7debf52fe5801bfb015423a2153cf93a"
 dependencies = [
  "anyhow",
  "lenso-app-plan",
@@ -4578,7 +4585,8 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring"
 version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc63a5ac04360e9cb92816da#9d2774c767fd64a6cc63a5ac04360e9cb92816da"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ec01f1454a3df57b67ce2403f0d3037ed7f8612a0837946a871fac0271738bc"
 dependencies = [
  "lenso-contract-authoring-macros",
  "schemars 1.2.2",
@@ -4588,7 +4596,8 @@ dependencies = [
 [[package]]
 name = "lenso-contract-authoring-macros"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc63a5ac04360e9cb92816da#9d2774c767fd64a6cc63a5ac04360e9cb92816da"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33c892d3c036ec192859b90ff83f5c3c02b4a09f89fd385f7aedb8f8bc2a08a8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4597,10 +4606,12 @@ dependencies = [
 
 [[package]]
 name = "lenso-contract-codegen"
-version = "0.6.4"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc63a5ac04360e9cb92816da#9d2774c767fd64a6cc63a5ac04360e9cb92816da"
+version = "0.6.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b7db7b1073704e4ba863bda6db5896b6beb6db57da84ef78d66bba1ef9ff47b0"
 dependencies = [
  "lenso-contract-authoring",
+ "regex",
  "semver",
  "serde_json",
 ]
@@ -4608,7 +4619,8 @@ dependencies = [
 [[package]]
 name = "lenso-contract-runtime"
 version = "0.1.3"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc63a5ac04360e9cb92816da#9d2774c767fd64a6cc63a5ac04360e9cb92816da"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfe0fcb14bdeab759dbba8263142b387a70690597974dc1ae219d8cc95b06571"
 dependencies = [
  "base64",
  "bytes",
@@ -4618,8 +4630,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-dylib-adapter"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cf21cfb303b30cba02dc30b440f8a6aae43e8fddb75d2ee1813a05341787dfc"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -4633,7 +4646,8 @@ dependencies = [
 [[package]]
 name = "lenso-guest-sdk"
 version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c94cad4370ff9fdefba039a001ea099889db91ac676707330b2f09d3940326df"
 dependencies = [
  "serde",
  "serde_json",
@@ -4641,8 +4655,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-kernel"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso?rev=8599db7e4a214ed92f32089f81d14c833d4becf6#8599db7e4a214ed92f32089f81d14c833d4becf6"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a24275fb082b9a0604b9a5e439171482c4daf19a47111d80f3521fe616732add"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -4650,8 +4665,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-native-adapter"
-version = "0.3.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e91c0328d68c1184810df10b0f912a570aa74b9adb757955cac4fd4441586e3"
 dependencies = [
  "futures",
  "inventory",
@@ -4664,8 +4680,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-native-adapter-macros"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a9b5959f39cae0905f521a0a245e0c73efae21a10b68f9919644be41666dbe4"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -4678,12 +4695,14 @@ dependencies = [
 [[package]]
 name = "lenso-plugin-authoring"
 version = "0.1.1"
-source = "git+https://github.com/LioRael/lenso-protocols?rev=9d2774c767fd64a6cc63a5ac04360e9cb92816da#9d2774c767fd64a6cc63a5ac04360e9cb92816da"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ac3a849f34b5aac0470f5bfdc0e3a9dcd4804d495754001fe6b847b4cb67120"
 
 [[package]]
 name = "lenso-plugin-bundle"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6204d7493cd8b9c3a0afe04aba06b11de489531a6bf584d056c319990e2674a2"
 dependencies = [
  "hex",
  "lenso-app-plan",
@@ -4699,8 +4718,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-plugin-control-plane"
-version = "0.3.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9cf910574eb9c1eb7afb9abcacde44cc8f288a1a1deaa668c29501d03048a18"
 dependencies = [
  "fs2",
  "futures",
@@ -4725,7 +4745,8 @@ dependencies = [
 [[package]]
 name = "lenso-process-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a675f85f77f2295a6272daf532192d0b846118206def511ec8c312a4051c9bd1"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -4739,7 +4760,8 @@ dependencies = [
 [[package]]
 name = "lenso-process-sdk"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "157bd0d84c8bd829dfe9b999ce644268e4f6d308fa5d5604658c731c9062f631"
 dependencies = [
  "serde",
  "serde_json",
@@ -4747,8 +4769,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-quickjs-adapter"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "506257c87b0444a3b55c879e2c234fb3d023ef1af3911e34b7a1c80f98cba7ac"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -4761,7 +4784,8 @@ dependencies = [
 [[package]]
 name = "lenso-remote-adapter"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "766d9f893ea9d0da1bd9702e5a0f316008563b6b47e5687e395582da64f15637"
 dependencies = [
  "futures",
  "lenso-app-plan",
@@ -4775,8 +4799,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-runner"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d57af9f9ec2476cf3da7d3cb294dbd870d0a2a02482f03e4d7fcb8cec6d816d"
 dependencies = [
  "cpu-time",
  "futures",
@@ -4787,8 +4812,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-runtime-codec"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27ec41632fb502779cc832fdd9e8d12cbe17a4c8b59851d5cec8d86dd2a8286b"
 dependencies = [
  "futures",
  "hex",
@@ -4797,12 +4823,14 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]
 name = "lenso-secrets-command-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eccf62ddce10f9ee7cddb294765aac207ddc4cf903dc0b1dc3e428f25a2c1a73"
 dependencies = [
  "futures",
  "lenso",
@@ -4817,13 +4845,15 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-encrypted-file-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30520dee23b2cd617b0a1fec47c3498a362bad81bacc87ac99aafe38220daae7"
 dependencies = [
  "age",
  "futures",
  "lenso",
  "lenso-capability-secrets",
  "lenso-kernel",
+ "libc",
  "serde",
  "serde_json",
  "zeroize",
@@ -4831,8 +4861,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-secrets-env-plugin"
-version = "0.1.2"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7200766f2200a04a022c89363fe4174445a74e797a601eece86e951a52b79967"
 dependencies = [
  "futures",
  "lenso-capability-secrets",
@@ -4845,7 +4876,8 @@ dependencies = [
 [[package]]
 name = "lenso-secrets-keychain-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-secrets-plugin?rev=967fa0d2908b58c24a4b1ad26103a3d9173bbac0#967fa0d2908b58c24a4b1ad26103a3d9173bbac0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4bc8d715d143ef33c4107480e862aaf5fe559b2b618af6aaee2d9aa1d50aa48"
 dependencies = [
  "futures",
  "lenso",
@@ -4860,7 +4892,8 @@ dependencies = [
 [[package]]
 name = "lenso-terminal-cli-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd4caf5346072ca6288c7234904c8dee8ea427e2cc7f8b4568644eb4518588e6"
 dependencies = [
  "lenso",
  "lenso-capability-terminal-command",
@@ -4869,7 +4902,8 @@ dependencies = [
 [[package]]
 name = "lenso-terminal-cli-surface"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a88b644ddb3c6b124021671cd517cc39b711295f44d3e05ca6d82d65b9a656b3"
 dependencies = [
  "clap",
  "lenso-capability-terminal-command",
@@ -4880,7 +4914,8 @@ dependencies = [
 [[package]]
 name = "lenso-terminal-command-plugin"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-terminal?rev=01fbda985b49dd5bb58483ea11dec5f848a503b9#01fbda985b49dd5bb58483ea11dec5f848a503b9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1240a196913a18f186c75d55bc60fc87b9de4b79e56ccc3c37ce3722e915882"
 dependencies = [
  "futures",
  "lenso",
@@ -4913,8 +4948,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-wasm-component-adapter"
-version = "0.2.0"
-source = "git+https://github.com/LioRael/lenso-runtime-rust?rev=89815107385475c8b5be378bdcf5e21aa74e02f0#89815107385475c8b5be378bdcf5e21aa74e02f0"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9e458640d766115fefca4ce5514bc5b6e62fe27513caab03696f3edc736e0e5"
 dependencies = [
  "futures",
  "lenso-app-plan",

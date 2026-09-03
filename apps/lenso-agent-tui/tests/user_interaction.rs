@@ -14,7 +14,7 @@ mod support;
 async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -80,7 +80,7 @@ async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation
             drop(stream);
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
 
@@ -88,7 +88,7 @@ async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation
 async fn tui_turn_may_resolve_a_dynamic_model_policy_before_turn_start() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -153,7 +153,7 @@ async fn tui_turn_may_resolve_a_dynamic_model_policy_before_turn_start() {
             drop(stream);
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
 
@@ -161,7 +161,7 @@ async fn tui_turn_may_resolve_a_dynamic_model_policy_before_turn_start() {
 async fn tui_manual_compaction_uses_the_agent_session_control_transaction() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -227,7 +227,7 @@ async fn tui_manual_compaction_uses_the_agent_session_control_transaction() {
 
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
 
@@ -235,7 +235,7 @@ async fn tui_manual_compaction_uses_the_agent_session_control_transaction() {
 async fn tui_answers_ask_user_through_the_same_generation() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -333,7 +333,7 @@ async fn tui_answers_ask_user_through_the_same_generation() {
             drop(stream);
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
 
@@ -341,7 +341,7 @@ async fn tui_answers_ask_user_through_the_same_generation() {
 async fn answered_interaction_renews_the_turn_execution_budget() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -422,7 +422,7 @@ async fn answered_interaction_renews_the_turn_execution_budget() {
             drop(stream);
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
 
@@ -430,7 +430,7 @@ async fn answered_interaction_renews_the_turn_execution_budget() {
 async fn answered_interaction_does_not_reset_the_total_tool_call_limit() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -509,7 +509,7 @@ async fn answered_interaction_does_not_reset_the_total_tool_call_limit() {
             drop(stream);
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
 
@@ -517,7 +517,7 @@ async fn answered_interaction_does_not_reset_the_total_tool_call_limit() {
 async fn explicit_zero_user_resume_limit_stops_after_the_answer() {
     let temporary = tempfile::tempdir().unwrap();
     tokio::task::LocalSet::new()
-        .run_until(async {
+        .run_until(Box::pin(async {
             let host = AgentHost::builder()
                 .agent_home(temporary.path())
                 .unwrap()
@@ -596,6 +596,6 @@ async fn explicit_zero_user_resume_limit_stops_after_the_answer() {
             drop(stream);
             drop(lease);
             app.shutdown().await.unwrap();
-        })
+        }))
         .await;
 }
