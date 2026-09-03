@@ -315,6 +315,174 @@ pub struct SetEnabledResponse {
     pub schema: String,
 }
 
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogRequest {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(max = 128))]
+    pub query: String,
+}
+
+#[derive(Clone, lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+#[allow(
+    clippy::struct_field_names,
+    reason = "catalog_entry_id is the stable Host-issued identifier consumed by install requests"
+)]
+pub struct CatalogEntry {
+    #[schemars(length(min = 1, max = 128))]
+    pub catalog_entry_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub source_digest: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct CatalogResponse {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    pub authority: AuthoritySource,
+    #[schemars(length(max = 256))]
+    pub entries: Vec<CatalogEntry>,
+    #[schemars(length(max = 128))]
+    pub query: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub revision: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ProposeInstallRequest {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub catalog_entry_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub expected_revision: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct InstallProposalResponse {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    pub authority: AuthoritySource,
+    #[schemars(length(min = 71, max = 71))]
+    pub base_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub catalog_entry_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub candidate_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub source_digest: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct PublishInstallRequest {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub catalog_entry_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub expected_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct PublishInstallResponse {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    pub authority: AuthoritySource,
+    #[schemars(length(min = 71, max = 71))]
+    pub base_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub catalog_entry_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub revision: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ProposeRemovalRequest {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub expected_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub plugin_id: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct RemovalProposalResponse {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    pub authority: AuthoritySource,
+    #[schemars(length(min = 71, max = 71))]
+    pub base_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub candidate_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+    pub recoverable: bool,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct PublishRemovalRequest {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub expected_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub plugin_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct PublishRemovalResponse {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    pub authority: AuthoritySource,
+    #[schemars(length(min = 71, max = 71))]
+    pub base_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub package_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+    pub recoverable: bool,
+    #[schemars(length(min = 71, max = 71))]
+    pub revision: String,
+}
+
 #[derive(lenso::DomainError)]
 pub enum PluginManagementTargetError {
     InvalidRequest,
@@ -332,7 +500,7 @@ pub enum PluginManagementTargetError {
 #[lenso::capability(
     id = "lenso.agent.plugin-management-target",
     major = 1,
-    version = "1.1.0",
+    version = "1.2.0",
     portable = false,
     cross_lane_transfer = false
 )]
@@ -378,4 +546,34 @@ pub trait PluginManagementTarget {
         context: lenso::Ctx<'_>,
         request: SetEnabledRequest,
     ) -> Result<SetEnabledResponse, PluginManagementTargetError>;
+
+    async fn catalog(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: CatalogRequest,
+    ) -> Result<CatalogResponse, PluginManagementTargetError>;
+
+    async fn propose_install(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: ProposeInstallRequest,
+    ) -> Result<InstallProposalResponse, PluginManagementTargetError>;
+
+    async fn publish_install(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: PublishInstallRequest,
+    ) -> Result<PublishInstallResponse, PluginManagementTargetError>;
+
+    async fn propose_removal(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: ProposeRemovalRequest,
+    ) -> Result<RemovalProposalResponse, PluginManagementTargetError>;
+
+    async fn publish_removal(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: PublishRemovalRequest,
+    ) -> Result<PublishRemovalResponse, PluginManagementTargetError>;
 }

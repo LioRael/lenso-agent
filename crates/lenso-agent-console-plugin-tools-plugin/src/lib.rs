@@ -17,6 +17,11 @@ pub const LIST_PLUGIN_CHANGES_TOOL: &str = "list_plugin_changes";
 pub const CHECK_PLUGIN_ROLLBACK_TOOL: &str = "check_plugin_rollback";
 pub const APPLY_PLUGIN_ROLLBACK_TOOL: &str = "apply_plugin_rollback";
 pub const SET_PLUGIN_ENABLED_TOOL: &str = "set_plugin_enabled";
+pub const LIST_AVAILABLE_PLUGINS_TOOL: &str = "list_available_plugins";
+pub const CHECK_PLUGIN_INSTALL_TOOL: &str = "check_plugin_install";
+pub const APPLY_PLUGIN_INSTALL_TOOL: &str = "apply_plugin_install";
+pub const CHECK_PLUGIN_REMOVAL_TOOL: &str = "check_plugin_removal";
+pub const APPLY_PLUGIN_REMOVAL_TOOL: &str = "apply_plugin_removal";
 pub const PLUGIN_PACKAGE_ID: &str = "lenso.agent.console-plugin-tools";
 
 const MAX_CONFIGURATION_BYTES: usize = 7 * 1024;
@@ -141,6 +146,63 @@ struct ApplyPluginRollbackArguments {
     proposal_digest: String,
     #[schemars(length(min = 71, max = 71))]
     publication_proposal_digest: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ListAvailablePluginsArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(max = 128))]
+    query: Option<String>,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckPluginInstallArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    catalog_entry_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyPluginInstallArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 1, max = 128))]
+    catalog_entry_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
+    #[schemars(length(min = 71, max = 71))]
+    proposal_digest: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckPluginRemovalArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    plugin_id: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplyPluginRemovalArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    expected_revision: String,
+    #[schemars(length(min = 1, max = 128))]
+    plugin_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    proposal_digest: String,
 }
 
 #[derive(Serialize)]
@@ -327,6 +389,112 @@ struct ConsolePluginTools {
 
 #[lenso_agent_tool_sdk::tool_provider]
 impl ConsolePluginTools {
+    #[tool(
+        name = "list_available_plugins",
+        description = "List only Plugin Bundles explicitly trusted by one exact target Agent Host; paths and package bytes are never exposed.",
+        execution = "parallel_safe"
+    )]
+    async fn list_available_plugins(
+        &self,
+        arguments: ListAvailablePluginsArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let response = self
+            .target
+            .catalog(target_contract::CatalogRequest {
+                agent_id: arguments.agent_id,
+                query: arguments.query.unwrap_or_default(),
+            })
+            .await
+            .map_err(map_catalog_error)?;
+        self.json_response(LIST_AVAILABLE_PLUGINS_TOOL, &response)
+    }
+
+    #[tool(
+        name = "check_plugin_install",
+        description = "Validate installing one Host-trusted catalog entry and return an exact proposal without changing desired state.",
+        execution = "parallel_safe"
+    )]
+    async fn check_plugin_install(
+        &self,
+        arguments: CheckPluginInstallArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let response = self
+            .target
+            .propose_install(target_contract::ProposeInstallRequest {
+                agent_id: arguments.agent_id,
+                catalog_entry_id: arguments.catalog_entry_id,
+                expected_revision: arguments.expected_revision,
+            })
+            .await
+            .map_err(map_propose_install_error)?;
+        self.json_response(CHECK_PLUGIN_INSTALL_TOOL, &response)
+    }
+
+    #[tool(
+        name = "apply_plugin_install",
+        description = "Publish one reviewed Plugin installation after exact catalog-entry, revision, and proposal-digest checks.",
+        execution = "exclusive"
+    )]
+    async fn apply_plugin_install(
+        &self,
+        arguments: ApplyPluginInstallArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let response = self
+            .target
+            .publish_install(target_contract::PublishInstallRequest {
+                agent_id: arguments.agent_id,
+                catalog_entry_id: arguments.catalog_entry_id,
+                expected_revision: arguments.expected_revision,
+                proposal_digest: arguments.proposal_digest,
+            })
+            .await
+            .map_err(map_publish_install_error)?;
+        self.json_response(APPLY_PLUGIN_INSTALL_TOOL, &response)
+    }
+
+    #[tool(
+        name = "check_plugin_removal",
+        description = "Validate recoverable removal of one root-supplied Plugin without changing desired state.",
+        execution = "parallel_safe"
+    )]
+    async fn check_plugin_removal(
+        &self,
+        arguments: CheckPluginRemovalArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let response = self
+            .target
+            .propose_removal(target_contract::ProposeRemovalRequest {
+                agent_id: arguments.agent_id,
+                expected_revision: arguments.expected_revision,
+                plugin_id: arguments.plugin_id,
+            })
+            .await
+            .map_err(map_propose_removal_error)?;
+        self.json_response(CHECK_PLUGIN_REMOVAL_TOOL, &response)
+    }
+
+    #[tool(
+        name = "apply_plugin_removal",
+        description = "Publish one reviewed recoverable Plugin removal after exact revision and proposal-digest checks.",
+        execution = "exclusive"
+    )]
+    async fn apply_plugin_removal(
+        &self,
+        arguments: ApplyPluginRemovalArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let response = self
+            .target
+            .publish_removal(target_contract::PublishRemovalRequest {
+                agent_id: arguments.agent_id,
+                expected_revision: arguments.expected_revision,
+                plugin_id: arguments.plugin_id,
+                proposal_digest: arguments.proposal_digest,
+            })
+            .await
+            .map_err(map_publish_removal_error)?;
+        self.json_response(APPLY_PLUGIN_REMOVAL_TOOL, &response)
+    }
+
     #[tool(
         name = "inspect_app",
         description = "Inspect the Plugin configuration authority, desired revision, and resolved size of one exact target Agent.",
@@ -837,6 +1005,80 @@ fn target_unsupported() -> ExecuteError {
         "The requested Agent does not expose Plugin configuration control.",
     )
 }
+
+fn lifecycle_domain_error(kind: &str) -> ExecuteError {
+    match kind {
+        "invalid_request" => invalid_request(),
+        "target_not_found" => target_not_found(),
+        "unsupported" => execution_failed(
+            "plugin_lifecycle_unsupported",
+            "The requested Agent does not expose a Plugin package lifecycle authority.",
+        ),
+        "plugin_not_found" => not_found(),
+        "conflict" => conflict(),
+        "proposal_mismatch" => proposal_mismatch(),
+        "proposal_not_ready" => proposal_not_ready(),
+        _ => execution_failed(
+            "plugin_lifecycle_rejected",
+            "The selected Host lifecycle authority rejected the operation.",
+        ),
+    }
+}
+
+macro_rules! lifecycle_error_mapper {
+    ($name:ident, $invocation:ident, $domain:ident) => {
+        fn $name(error: target_contract::$invocation) -> ExecuteError {
+            match error {
+                target_contract::$invocation::Domain(error) => {
+                    let kind = match error {
+                        target_contract::$domain::InvalidRequest => "invalid_request",
+                        target_contract::$domain::TargetNotFound => "target_not_found",
+                        target_contract::$domain::Unsupported => "unsupported",
+                        target_contract::$domain::PluginNotFound => "plugin_not_found",
+                        target_contract::$domain::Conflict => "conflict",
+                        target_contract::$domain::ProposalMismatch => "proposal_mismatch",
+                        target_contract::$domain::ProposalNotReady => "proposal_not_ready",
+                        target_contract::$domain::NotDisableable => "not_disableable",
+                        target_contract::$domain::AlreadySelected => "already_selected",
+                        target_contract::$domain::PublicationNotFound => "publication_not_found",
+                        target_contract::$domain::Unknown(_) => "unknown",
+                    };
+                    lifecycle_domain_error(kind)
+                }
+                target_contract::$invocation::Runtime(error) => execution_failed(
+                    "plugin_lifecycle_failed",
+                    &format!("Plugin lifecycle authority failed: {error:?}"),
+                ),
+            }
+        }
+    };
+}
+
+lifecycle_error_mapper!(
+    map_catalog_error,
+    PluginManagementTargetCatalogInvocationError,
+    CatalogError
+);
+lifecycle_error_mapper!(
+    map_propose_install_error,
+    PluginManagementTargetProposeInstallInvocationError,
+    ProposeInstallError
+);
+lifecycle_error_mapper!(
+    map_publish_install_error,
+    PluginManagementTargetPublishInstallInvocationError,
+    PublishInstallError
+);
+lifecycle_error_mapper!(
+    map_propose_removal_error,
+    PluginManagementTargetProposeRemovalInvocationError,
+    ProposeRemovalError
+);
+lifecycle_error_mapper!(
+    map_publish_removal_error,
+    PluginManagementTargetPublishRemovalInvocationError,
+    PublishRemovalError
+);
 
 fn map_inspect_error(
     error: target_contract::PluginManagementTargetInspectInvocationError,

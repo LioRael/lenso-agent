@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["agent_id", "query"],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "query": {
+      "type": "string",
+      "maxLength": 128
+    }
+  },
+  "additionalProperties": false,
+  "title": "CatalogRequest"
+}

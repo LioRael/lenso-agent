@@ -4,7 +4,7 @@ use clap::{ArgAction, Parser};
 use lenso_agent_web::{
     AgentWebAccess, AgentWebConfig, AgentWebControl, AgentWebSurface, CONTROL_TOKEN_ENV,
     DATA_PLANE_TOKEN_ENV, PluginConfigurationStoreConfig, RemotePluginConfigurationConfig,
-    RemotePluginConfigurationResource,
+    RemotePluginConfigurationResource, TrustedPluginBundle,
 };
 
 const REMOTE_CONFIGURATION_TOKEN_ENV: &str = "LENSO_PLUGIN_CONFIGURATION_REMOTE_TOKEN";
@@ -35,6 +35,10 @@ struct Args {
     /// Allow the authorized Console Host to mutate this Agent Home's Plugin Root.
     #[arg(long)]
     plugin_control: bool,
+
+    /// Trust one local Bundle for model-visible installation as `ID=ABSOLUTE_PATH`.
+    #[arg(long = "trusted-plugin-bundle", value_name = "ID=PATH", action = ArgAction::Append, requires = "plugin_control")]
+    trusted_plugin_bundles: Vec<String>,
 
     /// SQLite store for managed Plugin configuration proposals and publications.
     #[arg(long, value_name = "PATH", requires = "plugin_control")]
@@ -85,6 +89,11 @@ async fn run(args: Args) -> Result<(), String> {
     config.allowed_tools = args.allowed_tools;
     config.tool_policy = args.tool_policy;
     config.plugin_control = args.plugin_control;
+    config.trusted_plugin_bundles = args
+        .trusted_plugin_bundles
+        .into_iter()
+        .map(|value| parse_trusted_plugin_bundle(&value))
+        .collect::<Result<_, _>>()?;
     config.plugin_configuration_store = args
         .plugin_configuration_store
         .map(|database| PluginConfigurationStoreConfig::new(database, "agent"));
@@ -125,6 +134,13 @@ async fn run(args: Args) -> Result<(), String> {
         .await
         .map_err(|error| format!("Agent Web server failed: {error}"))?;
     surface.shutdown().await
+}
+
+fn parse_trusted_plugin_bundle(value: &str) -> Result<TrustedPluginBundle, String> {
+    let (id, path) = value
+        .split_once('=')
+        .ok_or_else(|| "trusted Plugin Bundle must use ID=ABSOLUTE_PATH".to_owned())?;
+    TrustedPluginBundle::new(id, PathBuf::from(path))
 }
 
 fn access_for_listener(
@@ -172,5 +188,20 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(access, AgentWebAccess::Bearer(token) if token == "fixture-token"));
+    }
+
+    #[test]
+    fn trusted_bundle_argument_keeps_the_path_inside_host_configuration() {
+        let bundle =
+            parse_trusted_plugin_bundle("reviewed.tools=/tmp/reviewed.lenso-plugin").unwrap();
+
+        assert_eq!(bundle.id, "reviewed.tools");
+        assert_eq!(bundle.path, PathBuf::from("/tmp/reviewed.lenso-plugin"));
+    }
+
+    #[test]
+    fn trusted_bundle_argument_rejects_paths_without_host_identity() {
+        assert!(parse_trusted_plugin_bundle("/tmp/reviewed.lenso-plugin").is_err());
+        assert!(parse_trusted_plugin_bundle("reviewed=relative.lenso-plugin").is_err());
     }
 }

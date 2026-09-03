@@ -3832,6 +3832,7 @@ dependencies = [
  "lenso-app-plan",
  "lenso-capability-agent",
  "lenso-capability-agent-context-source",
+ "lenso-capability-agent-plugin-management-target",
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-control",
  "lenso-capability-agent-task-supervisor",

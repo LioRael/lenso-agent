@@ -98,7 +98,10 @@ pub use remote_configuration_authority::{
     RemotePluginConfigurationResource,
 };
 
-use plugin_control::{PluginControl, PluginControlAuthorities, PluginMutationCoordinator};
+use plugin_control::{
+    PluginControl, PluginControlAuthorities, PluginMutationCoordinator,
+    RoutedPluginManagementTarget,
+};
 use plugin_control_api::{PluginRuntimeCommand, PluginRuntimeState};
 
 const MAX_REQUEST_BYTES: usize = 65_536;
@@ -183,6 +186,10 @@ pub struct AgentWebConfig {
     pub control: AgentWebControl,
     /// Enables Host-authorized mutation of the visible App Plugin Root.
     pub plugin_control: bool,
+    /// Exact local Bundle files the Host trusts for model-visible installation.
+    ///
+    /// The model sees only `id`; paths remain inside the target Host authority.
+    pub trusted_plugin_bundles: Vec<TrustedPluginBundle>,
     /// Optional Host-provided authority for Plugin configuration authoring.
     ///
     /// The authority must materialize its complete desired state through the
@@ -231,6 +238,7 @@ impl AgentWebConfig {
             tool_policy: None,
             control: AgentWebControl::Disabled,
             plugin_control: false,
+            trusted_plugin_bundles: Vec::new(),
             plugin_configuration_authority: None,
             plugin_management_target: None,
             plugin_selection_authority: None,
@@ -239,6 +247,32 @@ impl AgentWebConfig {
             plugin_configuration_remote: None,
             plugins,
         }
+    }
+}
+
+/// One Host-approved local Bundle exposed to lifecycle proposals by stable ID.
+#[derive(Clone, Debug)]
+pub struct TrustedPluginBundle {
+    pub id: String,
+    pub path: PathBuf,
+}
+
+impl TrustedPluginBundle {
+    pub fn new(id: impl Into<String>, path: impl Into<PathBuf>) -> Result<Self, String> {
+        let id = id.into();
+        let path = path.into();
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            return Err("trusted Plugin Bundle ID is invalid".to_owned());
+        }
+        if !path.is_absolute() {
+            return Err("trusted Plugin Bundle path must be absolute".to_owned());
+        }
+        Ok(Self { id, path })
     }
 }
 
@@ -732,6 +766,10 @@ impl IntoResponse for ApiProblem {
 
 impl AgentWebSurface {
     /// Resolves the selected App, starts its Generation, and creates an embeddable Web Surface.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "startup keeps authority resolution, Host wiring, and runtime ownership in one ordered boundary"
+    )]
     pub async fn start(config: AgentWebConfig) -> Result<Self, String> {
         let AgentWebConfig {
             access,
@@ -743,6 +781,7 @@ impl AgentWebSurface {
             tool_policy,
             control,
             plugin_control,
+            trusted_plugin_bundles,
             plugin_configuration_authority,
             plugin_management_target,
             plugin_selection_authority,
@@ -792,25 +831,29 @@ impl AgentWebSurface {
             remote,
             selection: plugin_selection_authority,
         } = authorities;
-        let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
-        let host = with_plugin_management_adapters(
-            host,
-            plugin_management_target,
-            plugin_selection_authority.as_ref(),
-        );
-        let app = Box::pin(host.run(selected_profile)).await?;
         let plugin_control = PluginControl::resolve(
             plugin_control,
             managed_app_root.as_deref(),
             directories.home(),
             profile.clone(),
+            trusted_plugin_bundles,
             PluginControlAuthorities {
-                configuration: plugin_configuration_authority,
+                configuration: Arc::clone(&plugin_configuration_authority),
                 configuration_is_builtin_local: authority_is_builtin_local,
-                history: plugin_configuration_history,
-                selection: plugin_selection_authority,
+                history: plugin_configuration_history.clone(),
+                selection: plugin_selection_authority.clone(),
             },
         )?;
+        let management_target: Arc<dyn PluginManagementTarget> = Arc::new(
+            RoutedPluginManagementTarget::new(plugin_control.clone(), plugin_management_target),
+        );
+        let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
+        let host = with_plugin_management_adapters(
+            host,
+            Some(management_target),
+            plugin_selection_authority.as_ref(),
+        );
+        let app = Box::pin(host.run(selected_profile)).await?;
         let available_tools = resolve_tool_policy(&app, &configured_tools).await?;
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
             return Err(format!("a Tool policy requires {CONTROL_TOKEN_ENV}"));
@@ -3794,6 +3837,7 @@ mod tests {
             Some(managed_app.path()),
             agent_home.path(),
             None,
+            Vec::new(),
             PluginControlAuthorities {
                 configuration: Arc::new(LocalPluginRootAuthority::new(agent_home.path())),
                 configuration_is_builtin_local: true,

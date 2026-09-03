@@ -13,6 +13,9 @@
 - `check_plugin_rollback` validates rollback to one exact publication digest without changing state.
 - `apply_plugin_rollback` publishes only the reviewed rollback whose revision, publication digest, and proposal digest still match.
 - `set_plugin_enabled` directly enables or disables one exact Plugin Instance through the target Agent's selected selection authority.
+- `list_available_plugins` lists only Bundle identities explicitly trusted by the target Host, never paths or bytes.
+- `check_plugin_install` and `apply_plugin_install` form a revision- and digest-bound install proposal/publication pair.
+- `check_plugin_removal` and `apply_plugin_removal` form the same pair for recoverable package removal.
 
 The Plugin does not own Plugin configuration facts, retained publication values, target discovery, authority selection, runtime activation, Console HTTP contracts, or mutation policy. It requires the Host-private `lenso.agent.plugin-management-target@1`; the Host bridge routes an explicit `agent_id` and delegates to the authority owned by that Agent. Missing or unsupported targets fail closed. Historical TOML remains inside that authority. A successful publication means desired state was committed; it does not claim that a new Generation is active.
 
@@ -20,9 +23,9 @@ This internal authority role is deliberately distinct from Console's cross-Agent
 
 ## Boundary
 
-The target authority can be the built-in local Plugin Root, SQLite, remote HTTP authority, or an injected custom implementation. Every request and response carries the target Agent identity. Responses include the authority kind and reference, are bounded, and never include raw stored configuration. Candidate configurations remain capped at 7 KiB so the complete write call fits the approval preview; read operations are parallel-safe, and publication is exclusive.
+Configuration and package lifecycle remain separate authorities. Configuration can be local, SQLite, remote HTTP, or custom; package installation is available only when the target Host explicitly supplies trusted Bundle entries and keeps their absolute paths private. Every request and response carries the target Agent identity. Responses include the authority kind and reference, are bounded, and never include raw stored configuration or Bundle bytes.
 
-The Console inventory pairs `apply_plugin_change`, `apply_plugin_rollback`, and `set_plugin_enabled` with the interactive approval hook. Inspection and candidate validation are allowed without approval; each mutation asks the user to approve the exact Tool call once.
+The Console inventory pairs every `apply_*` lifecycle/configuration Tool and `set_plugin_enabled` with the interactive approval hook. Inspection and candidate validation are allowed without approval; each mutation asks the user to approve the exact Tool call once.
 
 ## Removal proof
 
