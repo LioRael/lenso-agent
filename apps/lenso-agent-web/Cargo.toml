@@ -52,6 +52,7 @@ lenso-capability-agent-context-source = { path = "../../crates/lenso-capability-
 lenso-capability-agent-session = { path = "../../crates/lenso-capability-agent-session" }
 lenso-capability-agent-session-control = { path = "../../crates/lenso-capability-agent-session-control" }
 lenso-capability-agent-task-supervisor = { path = "../../crates/lenso-capability-agent-task-supervisor" }
+lenso-capability-agent-tools = { path = "../../crates/lenso-capability-agent-tools" }
 lenso-capability-agent-user-interaction = { path = "../../crates/lenso-capability-agent-user-interaction" }
 lenso-capability-terminal-command.workspace = true
 lenso-kernel.workspace = true

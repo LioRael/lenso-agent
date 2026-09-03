@@ -2998,6 +2998,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-console-app-tools-plugin"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-tool-target",
+ "lenso-kernel",
+ "serde_json",
+]
+
+[[package]]
 name = "lenso-agent-console-instructions-plugin"
 version = "0.1.0"
 dependencies = [
@@ -3030,6 +3041,7 @@ dependencies = [
  "lenso-agent-artifact-file-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
+ "lenso-agent-console-app-tools-plugin",
  "lenso-agent-console-instructions-plugin",
  "lenso-agent-console-plugin-tools-plugin",
  "lenso-agent-context-compaction-plugin",
@@ -3197,6 +3209,7 @@ dependencies = [
  "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-tool-target",
  "lenso-capability-agent-tools",
  "lenso-capability-agent-turn-input",
  "lenso-capability-agent-user-interaction",
@@ -3837,6 +3850,7 @@ dependencies = [
  "lenso-capability-agent-session",
  "lenso-capability-agent-session-control",
  "lenso-capability-agent-task-supervisor",
+ "lenso-capability-agent-tools",
  "lenso-capability-agent-user-interaction",
  "lenso-capability-terminal-command",
  "lenso-cli",
@@ -4379,6 +4393,24 @@ name = "lenso-capability-agent-tool-provider"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-tool-target"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
  "lenso-contract-authoring",
  "lenso-contract-codegen",
  "lenso-contract-runtime",

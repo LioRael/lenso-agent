@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["tools"],
+  "properties": {
+    "tools": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/ToolDefinition"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ToolDefinition": {
+      "type": "object",
+      "required": ["name", "description", "input_schema_json", "execution"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "input_schema_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536
+        },
+        "execution": {
+          "$ref": "#/$defs/ToolExecutionClass"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ToolExecutionClass": {
+      "type": "string",
+      "enum": ["parallel_safe", "exclusive"]
+    }
+  },
+  "title": "CatalogResponse"
+}

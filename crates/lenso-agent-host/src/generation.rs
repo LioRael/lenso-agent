@@ -54,7 +54,8 @@ use lenso_capability_agent_task_supervisor::{
 use lenso_capability_agent_tool_hook::ToolHookJsonCodec;
 use lenso_capability_agent_tool_provider::ToolProviderJsonCodec;
 use lenso_capability_agent_tools::{
-    CATALOG_OPERATION, CatalogRequest, CatalogResponseToolsItem, ToolsCatalog, ToolsJsonCodec,
+    CATALOG_OPERATION, CatalogRequest, CatalogResponseToolsItem, EXECUTE_OPERATION, ExecuteError,
+    ExecuteRequest, ExecuteResponse, ToolsCatalog, ToolsExecute, ToolsJsonCodec,
 };
 use lenso_capability_agent_turn_input::TurnInputJsonCodec;
 use lenso_capability_agent_user_interaction::{
@@ -115,6 +116,12 @@ use crate::{
     plugin_configuration_authority::{
         BRIDGE_PLUGIN_ID, BRIDGE_PLUGIN_VERSION, PluginConfigurationAuthorityBridgeFactory,
         PluginManagementTarget, bridge_descriptor,
+    },
+    tool_target::{
+        AgentToolTarget, AgentToolTargetBridgeFactory,
+        BRIDGE_PLUGIN_ID as TOOL_TARGET_BRIDGE_PLUGIN_ID,
+        BRIDGE_PLUGIN_VERSION as TOOL_TARGET_BRIDGE_PLUGIN_VERSION,
+        bridge_descriptor as tool_target_bridge_descriptor,
     },
 };
 
@@ -185,6 +192,7 @@ pub fn online_reconcile_telemetry() -> OnlineReconcileTelemetry {
 struct AgentCatalogFactory {
     configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     management_target: Option<Arc<dyn PluginManagementTarget>>,
+    tool_target: Option<Arc<dyn AgentToolTarget>>,
     selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
@@ -201,6 +209,8 @@ impl CatalogFactory for AgentCatalogFactory {
                 self.management_target.clone(),
             ));
         }
+        registry =
+            registry.with_factory(AgentToolTargetBridgeFactory::new(self.tool_target.clone()));
         let mut catalog =
             ExecutionAdapterCatalog::single(registry.with_resources(generation.resources.clone()));
         if generation
@@ -444,6 +454,7 @@ pub struct AgentApp {
 pub(crate) struct PluginAuthoringAuthorities {
     pub(crate) configuration: Option<Arc<dyn PluginConfigurationAuthority>>,
     pub(crate) management_target: Option<Arc<dyn PluginManagementTarget>>,
+    pub(crate) tool_target: Option<Arc<dyn AgentToolTarget>>,
     pub(crate) selection: Option<Arc<dyn PluginSelectionAuthority>>,
 }
 
@@ -476,6 +487,7 @@ impl AgentApp {
         let runtime = KernelGenerationRuntime::new(agent_catalog_factory(
             plugin_authoring.configuration,
             plugin_authoring.management_target,
+            plugin_authoring.tool_target,
             plugin_authoring.selection,
         ));
         let mut host =
@@ -1011,6 +1023,12 @@ impl AgentApp {
             .map_err(|error| {
                 format!("leased Generation Agent has no Tool catalog route: {error:?}")
             })?;
+        let tools_execute = route
+            .target()
+            .handle::<ToolsExecute>(&agent_provider)
+            .map_err(|error| {
+                format!("leased Generation Agent has no Tool execution route: {error:?}")
+            })?;
         let has_model_selection = agent_has_model_selection(&route, &agent_provider)?;
         let has_session_control = surface_dependencies.bindings().iter().any(|binding| {
             binding.capability_id() == lenso_capability_agent_session_control::CAPABILITY_ID
@@ -1048,6 +1066,7 @@ impl AgentApp {
             interaction,
             interactive,
             tools_catalog: Rc::new(tools_catalog),
+            tools_execute: Rc::new(tools_execute),
             session_control,
             has_model_selection,
             behavior_digest,
@@ -1501,6 +1520,7 @@ pub struct TurnGeneration {
     interaction: Option<UserInteractionSurfaceHandles>,
     interactive: bool,
     tools_catalog: Rc<NativeRequestHandle<ToolsCatalog>>,
+    tools_execute: Rc<NativeRequestHandle<ToolsExecute>>,
     session_control: Option<Rc<NativeRequestHandle<SessionControl>>>,
     has_model_selection: bool,
     behavior_digest: String,
@@ -1671,6 +1691,20 @@ impl TurnGeneration {
             .map_err(|error| format!("Tool catalog snapshot failed: {error:?}"))?
             .map(|response| response.tools)
             .map_err(|error| format!("Tool catalog snapshot was rejected: {error:?}"))
+    }
+
+    /// Executes one Tool through the aggregate bound to this immutable Generation.
+    ///
+    /// This intentionally preserves Tool Hook policy and Provider routing instead
+    /// of exposing a raw Tool Provider handle to embedding surfaces.
+    pub async fn execute_tool(
+        &self,
+        request: ExecuteRequest,
+    ) -> Result<Result<ExecuteResponse, ExecuteError>, String> {
+        self.tools_execute
+            .invoke_with_context(EXECUTE_OPERATION, self.invocation_context()?, request)
+            .await
+            .map_err(|error| format!("Tool execution failed: {error:?}"))
     }
 
     /// Compacts the current Session through the leased Agent's durable control boundary.
@@ -1980,7 +2014,8 @@ impl TurnGeneration {
         }
     }
 
-    fn generation_spec_digest(&self) -> &str {
+    /// Returns the immutable Generation identity leased by this Turn.
+    pub fn generation_spec_digest(&self) -> &str {
         self.route.generation_spec_digest()
     }
 }
@@ -2353,6 +2388,18 @@ fn native_host_build() -> (NativePluginRegistry, Vec<EmbeddedPlugin>) {
             execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
         });
     }
+    if built_in_plugins
+        .iter()
+        .any(|plugin| plugin.package_id == "lenso.agent.console-app-tools")
+    {
+        built_in_plugins.push(EmbeddedPlugin {
+            package_id: TOOL_TARGET_BRIDGE_PLUGIN_ID.to_owned(),
+            factory_identity: format!(
+                "{TOOL_TARGET_BRIDGE_PLUGIN_ID}@{TOOL_TARGET_BRIDGE_PLUGIN_VERSION}"
+            ),
+            execution_class: NATIVE_EXECUTION_CLASS.to_owned(),
+        });
+    }
     built_in_plugins.sort_by(|left, right| left.factory_identity.cmp(&right.factory_identity));
     (registry, built_in_plugins)
 }
@@ -2382,8 +2429,12 @@ fn linked_host_catalog_for_agent_in(
         .map(|factory| factory.package_id().to_owned())
         .collect::<BTreeSet<_>>();
     let console_plugin_tools = available.contains("lenso.agent.console-plugin-tools");
+    let console_app_tools = available.contains("lenso.agent.console-app-tools");
     if console_plugin_tools {
         available.insert(BRIDGE_PLUGIN_ID.to_owned());
+    }
+    if console_app_tools {
+        available.insert(TOOL_TARGET_BRIDGE_PLUGIN_ID.to_owned());
     }
     let defaults = host_catalog_defaults(directories, &available)
         .into_iter()
@@ -2396,8 +2447,13 @@ fn linked_host_catalog_for_agent_in(
     NativePluginRegistry::host_catalog([], [])
         .map(|native_catalog| {
             let mut releases = native_catalog.plugins().to_vec();
-            if console_plugin_tools {
-                releases.push(HostPluginRelease::new(bridge_descriptor()));
+            if console_plugin_tools || console_app_tools {
+                if console_plugin_tools {
+                    releases.push(HostPluginRelease::new(bridge_descriptor()));
+                }
+                if console_app_tools {
+                    releases.push(HostPluginRelease::new(tool_target_bridge_descriptor()));
+                }
             }
             HostCatalog::new(host_catalog_slots(), releases, defaults)
                 .with_configurations(configurations)
@@ -2411,13 +2467,14 @@ fn host_catalog_slots() -> Vec<HostSlot> {
         HostSlot::many("agents"),
         HostSlot::one("artifact").replaceable(),
         HostSlot::optional("auth"),
-        HostSlot::optional("console"),
+        HostSlot::optional("console").replaceable(),
         HostSlot::optional("plugin-configuration-authority"),
         HostSlot::one("context-compactor").replaceable(),
         HostSlot::one("memory").replaceable(),
         HostSlot::many("surfaces"),
         HostSlot::many("tool-providers"),
         HostSlot::many("tool-hooks"),
+        HostSlot::optional("tool-target"),
         HostSlot::many("lifecycle-hooks"),
         HostSlot::one("http-fetch"),
         HostSlot::one("model").replaceable(),
@@ -2542,8 +2599,16 @@ fn host_catalog_defaults(
         HostDefaultPlugin::new("lenso.agent.workspace-read-tools", "restricted-read-tools"),
     ]);
     if available.contains("lenso.agent.console-plugin-tools") {
+        defaults.push(HostDefaultPlugin::new(BRIDGE_PLUGIN_ID, "selected"));
+    }
+    if available.contains("lenso.agent.console-app-tools") {
+        defaults.push(HostDefaultPlugin::new(
+            TOOL_TARGET_BRIDGE_PLUGIN_ID,
+            "selected",
+        ));
+    }
+    if available.contains("lenso.agent.console-plugin-tools") {
         defaults.extend([
-            HostDefaultPlugin::new(BRIDGE_PLUGIN_ID, "selected"),
             default_plugin(
                 "lenso.agent.console-plugin-tools",
                 "default",
@@ -2559,6 +2624,10 @@ fn host_catalog_defaults(
             )
             .disableable(),
         ]);
+    }
+    if available.contains("lenso.agent.console-app-tools") {
+        defaults
+            .push(HostDefaultPlugin::new("lenso.agent.console-app-tools", "default").disableable());
     }
     if available.contains("lenso.agent.console-instructions") {
         defaults.push(
@@ -3021,6 +3090,16 @@ fn host_catalog_bindings(
             .with_admission(RequestAdmissionPlan::new(4, 1)),
         );
     }
+    if available.contains("lenso.agent.console-app-tools") {
+        bindings.push(
+            HostBinding::to_instance(
+                PluginInstanceId::new("lenso.agent.console-app-tools", "default"),
+                lenso_capability_agent_tool_target::CAPABILITY_ID,
+                PluginInstanceId::new(TOOL_TARGET_BRIDGE_PLUGIN_ID, "selected"),
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 1)),
+        );
+    }
     if available.contains("lenso.agent.subagent-tools")
         && available.contains("lenso.agent.workspace-read-tools")
     {
@@ -3255,11 +3334,13 @@ pub(crate) fn resolve_host_plan_for_agent_in(
 fn agent_catalog_factory(
     plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     plugin_management_target: Option<Arc<dyn PluginManagementTarget>>,
+    agent_tool_target: Option<Arc<dyn AgentToolTarget>>,
     plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
 ) -> MultiExecutionCatalogFactory<AgentCatalogFactory> {
     MultiExecutionCatalogFactory::new(AgentCatalogFactory {
         configuration_authority: plugin_configuration_authority,
         management_target: plugin_management_target,
+        tool_target: agent_tool_target,
         selection_authority: plugin_selection_authority,
     })
     .with_wasm_codec(AgentJsonCodec)

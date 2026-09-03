@@ -3,7 +3,8 @@ use std::{fmt::Debug, path::PathBuf, sync::Arc};
 use lenso_app_authoring::{PluginConfigurationAuthority, PluginSelectionAuthority};
 
 use crate::{
-    AgentDirectories, PluginManagementTarget, generation::AgentApp, plan_bytes_for_profile_in,
+    AgentDirectories, AgentToolTarget, PluginManagementTarget, generation::AgentApp,
+    plan_bytes_for_profile_in,
 };
 
 /// Selects the product configuration for one Agent Host session.
@@ -168,6 +169,7 @@ impl AgentHost {
             directories: None,
             plugin_configuration_authority: None,
             plugin_management_target: None,
+            agent_tool_target: None,
             plugin_selection_authority: None,
             surface: (),
         }
@@ -180,6 +182,7 @@ pub struct AgentHostBuilder<S> {
     directories: Option<AgentDirectories>,
     plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     plugin_management_target: Option<Arc<dyn PluginManagementTarget>>,
+    agent_tool_target: Option<Arc<dyn AgentToolTarget>>,
     plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
     surface: S,
 }
@@ -225,12 +228,20 @@ impl<S> AgentHostBuilder<S> {
         self
     }
 
+    /// Supplies the Host-owned App Agent Tool routing target to Console Agent Plugins.
+    #[must_use]
+    pub fn agent_tool_target(mut self, target: Arc<dyn AgentToolTarget>) -> Self {
+        self.agent_tool_target = Some(target);
+        self
+    }
+
     /// Selects the process-owned surface without turning it into a Plugin.
     pub fn surface<T: AgentSurface>(self, surface: T) -> AgentHostBuilder<T> {
         AgentHostBuilder {
             directories: self.directories,
             plugin_configuration_authority: self.plugin_configuration_authority,
             plugin_management_target: self.plugin_management_target,
+            agent_tool_target: self.agent_tool_target,
             plugin_selection_authority: self.plugin_selection_authority,
             surface,
         }
@@ -246,6 +257,7 @@ impl<S: AgentSurface> AgentHostBuilder<S> {
                 .map_or_else(AgentDirectories::resolve, Ok)?,
             plugin_configuration_authority: self.plugin_configuration_authority,
             plugin_management_target: self.plugin_management_target,
+            agent_tool_target: self.agent_tool_target,
             plugin_selection_authority: self.plugin_selection_authority,
             surface: self.surface,
         })
@@ -258,6 +270,7 @@ pub struct ConfiguredAgentHost<S> {
     directories: AgentDirectories,
     plugin_configuration_authority: Option<Arc<dyn PluginConfigurationAuthority>>,
     plugin_management_target: Option<Arc<dyn PluginManagementTarget>>,
+    agent_tool_target: Option<Arc<dyn AgentToolTarget>>,
     plugin_selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
     surface: S,
 }
@@ -301,6 +314,13 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
         self
     }
 
+    /// Supplies the Host-owned App Agent Tool target after authoring preparation.
+    #[must_use]
+    pub fn agent_tool_target(mut self, target: Arc<dyn AgentToolTarget>) -> Self {
+        self.agent_tool_target = Some(target);
+        self
+    }
+
     /// Resolves the selected Profile and starts one immutable App Generation.
     pub async fn run(self, profile: Profile) -> Result<AgentApp, String> {
         let (plan, profile_name) = match profile {
@@ -321,6 +341,7 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
             crate::generation::PluginAuthoringAuthorities {
                 configuration: self.plugin_configuration_authority,
                 management_target: self.plugin_management_target,
+                tool_target: self.agent_tool_target,
                 selection: self.plugin_selection_authority,
             },
         )

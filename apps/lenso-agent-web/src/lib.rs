@@ -16,8 +16,8 @@ use axum::{
     routing::{get, post},
 };
 use lenso_agent_host::{
-    AgentDirectories, AgentHost, ConfiguredAgentHost, PluginManagementTarget, Profile,
-    ProviderModelCatalog, WebSurface,
+    AgentDirectories, AgentHost, AgentToolTarget, ConfiguredAgentHost, PluginManagementTarget,
+    Profile, ProviderModelCatalog, WebSurface,
     generation::{AgentApp, RenameSessionFailure},
 };
 use lenso_agent_loop_plugin::RunScope;
@@ -40,6 +40,12 @@ use lenso_capability_agent_session::{
 };
 use lenso_capability_agent_session_control::CompactSessionResponse;
 use lenso_capability_agent_task_supervisor::SnapshotResponse as TaskSnapshotResponse;
+pub use lenso_capability_agent_tools::CatalogResponseToolsItemExecution as AgentToolExecutionClass;
+use lenso_capability_agent_tools::{
+    CatalogResponseToolsItem, ExecuteError as AgentToolExecuteError,
+    ExecuteRequest as AgentToolExecuteCapabilityRequest,
+    ExecuteResponse as AgentToolExecuteCapabilityResponse, RawJson,
+};
 use lenso_capability_agent_user_interaction::{
     InteractionAnswer, InteractionOption, InteractionQuestion, PendingInteraction,
 };
@@ -202,6 +208,8 @@ pub struct AgentWebConfig {
     /// Other identities must be resolved explicitly by this adapter and never
     /// fall back to the local authority.
     pub plugin_management_target: Option<Arc<dyn PluginManagementTarget>>,
+    /// Optional Host adapter exposing generation-fenced App Agent Tools to Console Plugins.
+    pub agent_tool_target: Option<Arc<dyn AgentToolTarget>>,
     /// Optional Host-provided authority for enabling and disabling Plugin Instances.
     ///
     /// Omit when the selected configuration authority does not support selection changes.
@@ -241,6 +249,7 @@ impl AgentWebConfig {
             trusted_plugin_bundles: Vec::new(),
             plugin_configuration_authority: None,
             plugin_management_target: None,
+            agent_tool_target: None,
             plugin_selection_authority: None,
             plugin_configuration_history: None,
             plugin_configuration_store: None,
@@ -385,6 +394,13 @@ enum RuntimeCommand {
     },
     ContextSources {
         reply: oneshot::Sender<Result<ContextSnapshotResponse, String>>,
+    },
+    ToolCatalog {
+        reply: oneshot::Sender<Result<AgentToolCatalogResponse, String>>,
+    },
+    ExecuteTool {
+        reply: oneshot::Sender<Result<AgentToolExecuteResponse, String>>,
+        request: AgentToolExecuteRequest,
     },
     TerminalCatalog {
         reply: oneshot::Sender<Result<TerminalCatalogResponse, String>>,
@@ -654,6 +670,40 @@ struct BootstrapTool {
     name: String,
 }
 
+/// Generation-bound Tool catalog exposed by the Agent data plane.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentToolCatalogResponse {
+    pub generation: String,
+    pub tools: Vec<CatalogResponseToolsItem>,
+}
+
+/// One generation-fenced Tool execution request.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AgentToolExecuteRequest {
+    pub arguments_json: RawJson,
+    pub expected_generation: String,
+    pub name: String,
+}
+
+/// Stable data-plane outcome for one Tool execution.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AgentToolExecuteResponse {
+    Succeeded {
+        response: AgentToolExecuteCapabilityResponse,
+    },
+    Failed {
+        code: String,
+        details_json: RawJson,
+        message: String,
+    },
+    StaleCatalog {
+        actual_generation: String,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ToolPolicyDocument {
@@ -784,6 +834,7 @@ impl AgentWebSurface {
             trusted_plugin_bundles,
             plugin_configuration_authority,
             plugin_management_target,
+            agent_tool_target,
             plugin_selection_authority,
             plugin_configuration_history,
             plugin_configuration_store,
@@ -851,6 +902,7 @@ impl AgentWebSurface {
         let host = with_plugin_management_adapters(
             host,
             Some(management_target),
+            agent_tool_target,
             plugin_selection_authority.as_ref(),
         );
         let app = Box::pin(host.run(selected_profile)).await?;
@@ -889,10 +941,14 @@ impl AgentWebSurface {
 fn with_plugin_management_adapters(
     mut host: ConfiguredAgentHost<WebSurface>,
     target: Option<Arc<dyn PluginManagementTarget>>,
+    tool_target: Option<Arc<dyn AgentToolTarget>>,
     selection: Option<&Arc<dyn PluginSelectionAuthority>>,
 ) -> ConfiguredAgentHost<WebSurface> {
     if let Some(target) = target {
         host = host.plugin_management_target(target);
+    }
+    if let Some(tool_target) = tool_target {
+        host = host.agent_tool_target(tool_target);
     }
     if let Some(selection) = selection {
         host = host.plugin_selection_authority(Arc::clone(selection));
@@ -1073,6 +1129,11 @@ fn router(runtime: WebRuntime) -> Router {
     let data_plane = Router::new()
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
         .route("/api/console/v1/agent/models", get(model_catalog))
+        .route("/api/console/v1/agent/tools", get(agent_tool_catalog))
+        .route(
+            "/api/console/v1/agent/tools/execute",
+            post(execute_agent_tool),
+        )
         .route(
             "/api/console/v1/agent/context-sources",
             get(context_sources),
@@ -1155,6 +1216,45 @@ async fn model_catalog(
     response
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn agent_tool_catalog(
+    State(runtime): State<WebRuntime>,
+) -> Result<Json<AgentToolCatalogResponse>, ApiProblem> {
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ToolCatalog { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is unavailable"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped"))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn execute_agent_tool(
+    State(runtime): State<WebRuntime>,
+    Json(request): Json<AgentToolExecuteRequest>,
+) -> Result<Json<AgentToolExecuteResponse>, ApiProblem> {
+    if request.name.is_empty() || request.name.len() > 128 {
+        return Err(ApiProblem::bad_request("Tool name is invalid"));
+    }
+    if request.expected_generation.is_empty() || request.expected_generation.len() > 128 {
+        return Err(ApiProblem::bad_request("Tool Generation is invalid"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ExecuteTool { reply, request })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is unavailable"))?;
+    response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped"))?
         .map(Json)
         .map_err(ApiProblem::unavailable)
 }
@@ -1653,6 +1753,101 @@ async fn resolve_tool_policy(
     Ok(available_tools)
 }
 
+async fn agent_tool_catalog_on_app(
+    app: &AgentApp,
+    policy: &RwLock<ToolPolicyDocument>,
+) -> Result<AgentToolCatalogResponse, String> {
+    let allowed = policy
+        .read()
+        .map_err(|_| "Tool policy lock is unavailable".to_owned())?
+        .allowed
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let turn = app.lease_web_turn().await?;
+    let generation = turn.generation_spec_digest().to_owned();
+    let mut tools = turn
+        .tool_catalog()
+        .await?
+        .into_iter()
+        .filter(|tool| allowed.contains(&tool.name))
+        .collect::<Vec<_>>();
+    tools.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(AgentToolCatalogResponse { generation, tools })
+}
+
+async fn execute_agent_tool_on_app(
+    app: &AgentApp,
+    policy: &RwLock<ToolPolicyDocument>,
+    request: AgentToolExecuteRequest,
+) -> Result<AgentToolExecuteResponse, String> {
+    let allowed = policy
+        .read()
+        .map_err(|_| "Tool policy lock is unavailable".to_owned())?
+        .allowed
+        .contains(&request.name);
+    let turn = app.lease_web_turn().await?;
+    if turn.generation_spec_digest() != request.expected_generation {
+        return Ok(AgentToolExecuteResponse::StaleCatalog {
+            actual_generation: turn.generation_spec_digest().to_owned(),
+        });
+    }
+    if !allowed {
+        return Ok(agent_tool_failure(
+            "tool_not_allowed",
+            "Tool is not admitted by the target Agent policy",
+            RawJson::new("null").expect("null is portable JSON"),
+        ));
+    }
+    let result = turn
+        .execute_tool(AgentToolExecuteCapabilityRequest {
+            arguments_json: request.arguments_json,
+            name: request.name,
+        })
+        .await?;
+    Ok(match result {
+        Ok(response) => AgentToolExecuteResponse::Succeeded { response },
+        Err(AgentToolExecuteError::InvalidArguments) => agent_tool_failure(
+            "invalid_arguments",
+            "Target Tool rejected its arguments",
+            RawJson::new("null").expect("null is portable JSON"),
+        ),
+        Err(AgentToolExecuteError::UnknownTool) => agent_tool_failure(
+            "unknown_tool",
+            "Target Agent no longer exposes this Tool",
+            RawJson::new("null").expect("null is portable JSON"),
+        ),
+        Err(AgentToolExecuteError::ToolError { payload }) => agent_tool_failure(
+            &payload.provider_code,
+            &payload.message,
+            payload.details_json,
+        ),
+        Err(AgentToolExecuteError::Unknown(error)) => {
+            let details = RawJson::new(
+                serde_json::to_string(&error.payload).unwrap_or_else(|_| "null".to_owned()),
+            )
+            .unwrap_or_else(|_| RawJson::new("null").expect("null is portable JSON"));
+            agent_tool_failure(
+                &error.code,
+                "Target Tool returned an unknown error",
+                details,
+            )
+        }
+    })
+}
+
+fn agent_tool_failure(
+    code: impl Into<String>,
+    message: impl Into<String>,
+    details_json: RawJson,
+) -> AgentToolExecuteResponse {
+    AgentToolExecuteResponse::Failed {
+        code: code.into(),
+        details_json,
+        message: message.into(),
+    }
+}
+
 impl WebRuntime {
     fn start(app: AgentApp, config: WebRuntimeConfig) -> Self {
         let WebRuntimeConfig {
@@ -1815,6 +2010,14 @@ async fn runtime_actor(
             }
             RuntimeCommand::ContextSources { reply } => {
                 let _ = reply.send(app.web_context_sources().await);
+            }
+            RuntimeCommand::ToolCatalog { reply } => {
+                let result = agent_tool_catalog_on_app(&app, &policy).await;
+                let _ = reply.send(result);
+            }
+            RuntimeCommand::ExecuteTool { reply, request } => {
+                let result = execute_agent_tool_on_app(&app, &policy, request).await;
+                let _ = reply.send(result);
             }
             RuntimeCommand::TerminalCatalog { reply } => {
                 let result = match app.lease_web_terminal().await {
@@ -2065,6 +2268,14 @@ async fn runtime_actor(
                                     RuntimeCommand::ContextSources { reply } => {
                                         let _ = reply.send(app.web_context_sources().await);
                                     }
+                                    RuntimeCommand::ToolCatalog { reply } => {
+                                        let result = agent_tool_catalog_on_app(&app, &policy).await;
+                                        let _ = reply.send(result);
+                                    }
+                                    RuntimeCommand::ExecuteTool { reply, request } => {
+                                        let result = execute_agent_tool_on_app(&app, &policy, request).await;
+                                        let _ = reply.send(result);
+                                    }
                                     RuntimeCommand::TerminalCatalog { reply } => {
                                         let result = match app.lease_web_terminal().await {
                                             Ok(terminal) => terminal.catalog().await,
@@ -2238,6 +2449,8 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         }
         RuntimeCommand::ModelCatalog { .. }
         | RuntimeCommand::ContextSources { .. }
+        | RuntimeCommand::ToolCatalog { .. }
+        | RuntimeCommand::ExecuteTool { .. }
         | RuntimeCommand::TerminalCatalog { .. }
         | RuntimeCommand::CancelTerminal { .. }
         | RuntimeCommand::TerminalFinished { .. }
@@ -3617,6 +3830,7 @@ mod tests {
                         .any(|plugin| plugin["instanceKey"] == "lenso.terminal.web/web")
                 );
                 for instance in [
+                    "lenso.agent.console-app-tools/default",
                     "lenso.agent.console-plugin-tools/default",
                     "lenso.agent.interactive-approval-hook/default",
                 ] {
@@ -3639,6 +3853,56 @@ mod tests {
                         .iter()
                         .all(|tool| available.contains(tool))
                 );
+                let response = surface
+                    .router()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::GET)
+                            .uri("/api/console/v1/agent/tools")
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                    .await
+                    .unwrap();
+                let catalog: AgentToolCatalogResponse = serde_json::from_slice(&body).unwrap();
+                assert!(!catalog.generation.is_empty());
+                assert_eq!(
+                    catalog.tools.len(),
+                    lenso_agent_console_plugins::PLUGIN_CONTROL_TOOLS.len()
+                );
+                let response = surface
+                    .router()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/api/console/v1/agent/tools/execute")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from(
+                                serde_json::to_vec(&AgentToolExecuteRequest {
+                                    arguments_json: RawJson::new(r#"{"agent_id":"console"}"#)
+                                        .unwrap(),
+                                    expected_generation: catalog.generation,
+                                    name: lenso_agent_console_plugins::INSPECT_APP_TOOL.to_owned(),
+                                })
+                                .unwrap(),
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                    .await
+                    .unwrap();
+                let outcome: AgentToolExecuteResponse = serde_json::from_slice(&body).unwrap();
+                assert!(matches!(
+                    outcome,
+                    AgentToolExecuteResponse::Succeeded { .. }
+                ));
                 let (reply, response) = oneshot::channel();
                 surface
                     .runtime
