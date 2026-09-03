@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "agent_id",
+    "authority",
+    "base_revision",
+    "catalog_entry_id",
+    "package_id",
+    "package_revision",
+    "proposal_digest",
+    "revision"
+  ],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "authority": {
+      "$ref": "#/$defs/AuthoritySource"
+    },
+    "base_revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    },
+    "catalog_entry_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "package_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "package_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "proposal_digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    },
+    "revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AuthoritySource": {
+      "type": "object",
+      "required": ["kind", "reference"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "PublishInstallResponse"
+}

@@ -2941,10 +2941,12 @@ fn console_interactive_approval_configuration() -> serde_json::Value {
     serde_json::json!({
         "allow_tools": [
             "inspect_app", "list_plugins", "inspect_plugin", "check_plugin_change",
-            "list_plugin_changes", "check_plugin_rollback"
+            "list_plugin_changes", "check_plugin_rollback", "list_available_plugins",
+            "check_plugin_install", "check_plugin_removal"
         ],
         "ask_tools": [
-            "apply_plugin_change", "apply_plugin_rollback", "set_plugin_enabled"
+            "apply_plugin_change", "apply_plugin_rollback", "set_plugin_enabled",
+            "apply_plugin_install", "apply_plugin_removal"
         ],
         "default_decision": "ask",
         "deny_tools": [],
@@ -3401,7 +3403,10 @@ mod tests {
                 "inspect_plugin",
                 "check_plugin_change",
                 "list_plugin_changes",
-                "check_plugin_rollback"
+                "check_plugin_rollback",
+                "list_available_plugins",
+                "check_plugin_install",
+                "check_plugin_removal"
             ])
         );
         assert_eq!(
@@ -3409,7 +3414,9 @@ mod tests {
             serde_json::json!([
                 "apply_plugin_change",
                 "apply_plugin_rollback",
-                "set_plugin_enabled"
+                "set_plugin_enabled",
+                "apply_plugin_install",
+                "apply_plugin_removal"
             ])
         );
         assert_eq!(configuration["default_decision"], "ask");

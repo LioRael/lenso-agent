@@ -195,6 +195,23 @@ The store path must be absolute. Omitting it preserves direct local Plugin Root
 authority. This SQLite adapter is a single-Host persistence boundary, not a
 remote configuration service or distributed rollout coordinator.
 
+Package installation uses a separate Host-owned trust boundary. Register each
+reviewed Bundle under an opaque catalog entry ID; Console Agent can list that
+ID and request a reviewed install, but cannot supply a path, URL, or package
+bytes:
+
+```sh
+LENSO_AGENT_CONTROL_TOKEN=replace-with-a-local-control-token \
+  cargo run -p lenso-agent-web -- \
+  --listen 127.0.0.1:8788 \
+  --plugin-control \
+  --trusted-plugin-bundle uppercase=/opt/lenso/plugins/uppercase
+```
+
+The option is repeatable and requires an absolute Bundle path. Installation,
+enablement, and configuration remain distinct changes. Removal moves the
+installed package into the managed trash area; it does not purge Plugin data.
+
 A Host can instead select one remote configuration resource. The resource
 identity is explicit and the bearer token is read separately from the command
 line so it is not exposed in process arguments:

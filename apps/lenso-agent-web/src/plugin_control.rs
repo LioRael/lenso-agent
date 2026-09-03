@@ -15,18 +15,20 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
+use lenso_agent_host::PluginManagementTarget;
 use lenso_app_authoring::{
     PluginConfigurationApplication, PluginConfigurationAuthority,
     PluginConfigurationAuthoritySource, PluginConfigurationDiagnostic, PluginConfigurationProposal,
     PluginConfigurationProposalStatus, PluginConfigurationSourceDigest, PluginRootAuthoringState,
     PluginRootRevision, PluginSelectionAuthority, add_bundle,
 };
+use lenso_capability_agent_plugin_management_target as target_contract;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use super::{
     ApiProblem, PluginConfigurationHistoryAuthority, PluginConfigurationPublicationRecord,
-    RuntimeCommand, WebRuntime,
+    RuntimeCommand, TrustedPluginBundle, WebRuntime,
 };
 use crate::plugin_control_api::{
     DesiredPluginSelection, PluginConfigurationAuthorityResponse, PluginInventoryResponse,
@@ -49,6 +51,7 @@ pub(super) struct PluginControl {
     configuration_authority_is_builtin_local: bool,
     mutation: Arc<Mutex<()>>,
     profile: Option<String>,
+    trusted_bundles: BTreeMap<String, PathBuf>,
 }
 
 pub(super) struct PluginControlAuthorities {
@@ -56,6 +59,21 @@ pub(super) struct PluginControlAuthorities {
     pub(super) configuration_is_builtin_local: bool,
     pub(super) history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     pub(super) selection: Option<Arc<dyn PluginSelectionAuthority>>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RoutedPluginManagementTarget {
+    external: Option<Arc<dyn PluginManagementTarget>>,
+    local: Option<PluginControl>,
+}
+
+impl RoutedPluginManagementTarget {
+    pub(super) fn new(
+        local: Option<PluginControl>,
+        external: Option<Arc<dyn PluginManagementTarget>>,
+    ) -> Self {
+        Self { external, local }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -80,11 +98,261 @@ impl PluginMutationCoordinator {
 }
 
 impl PluginControl {
+    fn lifecycle_authority() -> PluginConfigurationAuthorityResponse {
+        PluginConfigurationAuthorityResponse {
+            kind: "trusted_local_bundle_catalog".to_owned(),
+            reference: "agent-host".to_owned(),
+            publication_history: false,
+            rollback_proposals: false,
+        }
+    }
+
+    fn trusted_catalog(&self, query: &str) -> Result<TrustedPluginCatalogResponse, String> {
+        let state = self
+            .configuration_authority
+            .inspect()
+            .map_err(|error| error.to_string())?;
+        let folded = query.to_lowercase();
+        let mut entries = Vec::new();
+        for (catalog_entry_id, bundle) in &self.trusted_bundles {
+            let staged = StagedHome::new(&self.app_root)?;
+            let verification_home = staged.root.join("catalog-verification");
+            copy_file(
+                &staged.home.join(".lenso/host-catalog.json"),
+                &verification_home.join(".lenso/host-catalog.json"),
+            )?;
+            let (package_id, package_revision, _) =
+                add_bundle(&verification_home, bundle).map_err(|error| error.to_string())?;
+            if folded.is_empty()
+                || catalog_entry_id.to_lowercase().contains(&folded)
+                || package_id.to_lowercase().contains(&folded)
+            {
+                entries.push(TrustedPluginCatalogEntry {
+                    catalog_entry_id: catalog_entry_id.clone(),
+                    package_id,
+                    package_revision,
+                    source_digest: digest_file(bundle)?,
+                });
+            }
+        }
+        Ok(TrustedPluginCatalogResponse {
+            authority: Self::lifecycle_authority(),
+            entries,
+            query: query.to_owned(),
+            revision: state.revision().as_str().to_owned(),
+            schema: "lenso.agent.trusted-plugin-catalog.v1",
+        })
+    }
+
+    fn propose_installation(
+        &self,
+        catalog_entry_id: &str,
+        expected_revision: &PluginRootRevision,
+    ) -> Result<PluginInstallProposalResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        self.installation_candidate(catalog_entry_id, expected_revision)
+    }
+
+    fn installation_candidate(
+        &self,
+        catalog_entry_id: &str,
+        expected_revision: &PluginRootRevision,
+    ) -> Result<PluginInstallProposalResponse, String> {
+        if !self.configuration_authority_is_builtin_local {
+            return Err(
+                "the selected Plugin package authority does not support local Bundle installation"
+                    .to_owned(),
+            );
+        }
+        let current = self
+            .configuration_authority
+            .inspect()
+            .map_err(|error| error.to_string())?;
+        if current.revision() != expected_revision {
+            return Err("Plugin Root revision changed before installation proposal".to_owned());
+        }
+        let bundle = self
+            .trusted_bundles
+            .get(catalog_entry_id)
+            .ok_or_else(|| "trusted Plugin catalog entry was not found".to_owned())?;
+        let staged = StagedHome::new(&self.app_root)?;
+        let (package_id, package_revision, _) =
+            add_bundle(&staged.home, bundle).map_err(|error| error.to_string())?;
+        self.validate_staged(&staged)?;
+        let desired = lenso_agent_host::snapshot_desired_plugin_root_for_home(
+            &staged.home,
+            &self.authority_home,
+            self.profile.as_deref(),
+        )?;
+        let source_digest = digest_file(bundle)?;
+        let proposal_digest = lifecycle_proposal_digest(
+            "install",
+            expected_revision.as_str(),
+            desired.plugin_root_revision(),
+            &package_id,
+            &package_revision,
+            Some(catalog_entry_id),
+            Some(&source_digest),
+        )?;
+        Ok(PluginInstallProposalResponse {
+            authority: Self::lifecycle_authority(),
+            base_revision: expected_revision.as_str().to_owned(),
+            candidate_revision: desired.plugin_root_revision().to_owned(),
+            catalog_entry_id: catalog_entry_id.to_owned(),
+            package_id,
+            package_revision,
+            proposal_digest,
+            schema: "lenso.agent.plugin-install-proposal.v1",
+            source_digest,
+        })
+    }
+
+    fn publish_installation(
+        &self,
+        catalog_entry_id: &str,
+        expected_revision: &PluginRootRevision,
+        proposal_digest: &str,
+    ) -> Result<PluginInstallPublicationResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        let proposal = self.installation_candidate(catalog_entry_id, expected_revision)?;
+        if proposal.proposal_digest != proposal_digest {
+            return Err(
+                "Plugin installation proposal no longer matches the reviewed proposal".to_owned(),
+            );
+        }
+        let committed = self.install_unlocked(
+            self.trusted_bundles
+                .get(catalog_entry_id)
+                .expect("candidate checked catalog entry"),
+        )?;
+        if committed.desired.plugin_root_revision() != proposal.candidate_revision {
+            return Err(
+                "installed Plugin Root does not match the reviewed candidate revision".to_owned(),
+            );
+        }
+        Ok(PluginInstallPublicationResponse {
+            authority: proposal.authority,
+            base_revision: proposal.base_revision,
+            catalog_entry_id: proposal.catalog_entry_id,
+            package_id: proposal.package_id,
+            package_revision: proposal.package_revision,
+            proposal_digest: proposal.proposal_digest,
+            revision: proposal.candidate_revision,
+            schema: "lenso.agent.plugin-install-publication.v1",
+        })
+    }
+
+    fn propose_removal(
+        &self,
+        plugin_id: &str,
+        expected_revision: &PluginRootRevision,
+    ) -> Result<PluginRemovalProposalResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        self.removal_candidate(plugin_id, expected_revision)
+    }
+
+    fn removal_candidate(
+        &self,
+        plugin_id: &str,
+        expected_revision: &PluginRootRevision,
+    ) -> Result<PluginRemovalProposalResponse, String> {
+        if !self.configuration_authority_is_builtin_local {
+            return Err(
+                "the selected Plugin package authority does not support direct removal".to_owned(),
+            );
+        }
+        let current = self
+            .configuration_authority
+            .inspect()
+            .map_err(|error| error.to_string())?;
+        if current.revision() != expected_revision {
+            return Err("Plugin Root revision changed before removal proposal".to_owned());
+        }
+        let plugin = current
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.plugin_id() == plugin_id && plugin.is_root_supplied())
+            .ok_or_else(|| "root-supplied Plugin was not found".to_owned())?;
+        let package_revision = plugin.release_version().to_owned();
+        let staged = StagedHome::new(&self.app_root)?;
+        fs::remove_dir_all(staged.home.join("plugins").join(plugin_id))
+            .map_err(|error| format!("failed to stage Plugin removal: {error}"))?;
+        self.validate_staged(&staged)?;
+        let desired = lenso_agent_host::snapshot_desired_plugin_root_for_home(
+            &staged.home,
+            &self.authority_home,
+            self.profile.as_deref(),
+        )?;
+        let proposal_digest = lifecycle_proposal_digest(
+            "remove",
+            expected_revision.as_str(),
+            desired.plugin_root_revision(),
+            plugin_id,
+            &package_revision,
+            None,
+            None,
+        )?;
+        Ok(PluginRemovalProposalResponse {
+            authority: Self::lifecycle_authority(),
+            base_revision: expected_revision.as_str().to_owned(),
+            candidate_revision: desired.plugin_root_revision().to_owned(),
+            package_id: plugin_id.to_owned(),
+            package_revision,
+            proposal_digest,
+            recoverable: true,
+            schema: "lenso.agent.plugin-removal-proposal.v1",
+        })
+    }
+
+    fn publish_removal(
+        &self,
+        plugin_id: &str,
+        expected_revision: &PluginRootRevision,
+        proposal_digest: &str,
+    ) -> Result<PluginRemovalPublicationResponse, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        let proposal = self.removal_candidate(plugin_id, expected_revision)?;
+        if proposal.proposal_digest != proposal_digest {
+            return Err(
+                "Plugin removal proposal no longer matches the reviewed proposal".to_owned(),
+            );
+        }
+        let committed = self.remove_unlocked(plugin_id)?;
+        if committed.desired.plugin_root_revision() != proposal.candidate_revision {
+            return Err(
+                "removed Plugin Root does not match the reviewed candidate revision".to_owned(),
+            );
+        }
+        Ok(PluginRemovalPublicationResponse {
+            authority: proposal.authority,
+            base_revision: proposal.base_revision,
+            package_id: proposal.package_id,
+            package_revision: proposal.package_revision,
+            proposal_digest: proposal.proposal_digest,
+            recoverable: true,
+            revision: proposal.candidate_revision,
+            schema: "lenso.agent.plugin-removal-publication.v1",
+        })
+    }
+
     pub(super) fn resolve(
         enabled: bool,
         managed_app_root: Option<&Path>,
         authority_home: &Path,
         profile: Option<String>,
+        trusted_bundles: Vec<TrustedPluginBundle>,
         authorities: PluginControlAuthorities,
     ) -> Result<Option<Self>, String> {
         Self::validate_target(managed_app_root, authority_home)?;
@@ -98,10 +366,19 @@ impl PluginControl {
                     .to_owned(),
             );
         }
+        let trusted_bundle_count = trusted_bundles.len();
+        let trusted_bundles = trusted_bundles
+            .into_iter()
+            .map(|entry| (entry.id, entry.path))
+            .collect::<BTreeMap<_, _>>();
+        if trusted_bundles.len() != trusted_bundle_count {
+            return Err("trusted Plugin Bundle IDs must be unique".to_owned());
+        }
         Ok(Some(Self::new(
             app_root,
             authority_home,
             profile,
+            trusted_bundles,
             authorities,
         )))
     }
@@ -136,6 +413,7 @@ impl PluginControl {
         app_root: &Path,
         authority_home: &Path,
         profile: Option<String>,
+        trusted_bundles: BTreeMap<String, PathBuf>,
         authorities: PluginControlAuthorities,
     ) -> Self {
         let PluginControlAuthorities {
@@ -153,6 +431,7 @@ impl PluginControl {
             configuration_authority_is_builtin_local: configuration_is_builtin_local,
             mutation: Arc::new(Mutex::new(())),
             profile,
+            trusted_bundles,
         }
     }
 
@@ -176,7 +455,15 @@ impl PluginControl {
     }
 
     fn install(&self, bundle: &Path) -> Result<CommittedPluginMutation, String> {
-        self.mutate(|staged| {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        self.install_unlocked(bundle)
+    }
+
+    fn install_unlocked(&self, bundle: &Path) -> Result<CommittedPluginMutation, String> {
+        self.mutate_unlocked(|staged| {
             let verification_home = staged.root.join("bundle-verification");
             copy_file(
                 &staged.home.join(".lenso/host-catalog.json"),
@@ -762,8 +1049,16 @@ impl PluginControl {
     }
 
     fn remove(&self, plugin_id: &str) -> Result<CommittedPluginMutation, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        self.remove_unlocked(plugin_id)
+    }
+
+    fn remove_unlocked(&self, plugin_id: &str) -> Result<CommittedPluginMutation, String> {
         validate_path_identity(plugin_id, "Plugin ID")?;
-        self.mutate(|staged| {
+        self.mutate_unlocked(|staged| {
             let staged_plugin = staged.home.join("plugins").join(plugin_id);
             if !staged_plugin.is_dir() {
                 return Err(format!("Plugin `{plugin_id}` has no Plugin Root directory"));
@@ -794,16 +1089,25 @@ impl PluginControl {
             &StagedHome,
         ) -> Result<lenso_agent_host::DesiredPluginRootSnapshot, String>,
     ) -> Result<CommittedPluginMutation, String> {
+        let _guard = self
+            .mutation
+            .lock()
+            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
+        self.mutate_unlocked(operation)
+    }
+
+    fn mutate_unlocked(
+        &self,
+        operation: impl FnOnce(
+            &StagedHome,
+        ) -> Result<lenso_agent_host::DesiredPluginRootSnapshot, String>,
+    ) -> Result<CommittedPluginMutation, String> {
         if !self.configuration_authority_is_builtin_local {
             return Err(
                 "the selected Plugin configuration authority does not permit direct Plugin Root mutation"
                     .to_owned(),
             );
         }
-        let _guard = self
-            .mutation
-            .lock()
-            .map_err(|_| "Plugin Root mutation lock is poisoned".to_owned())?;
         let authoring = lock_plugin_root_authoring(&self.app_root)?;
         let generation =
             lenso_agent_host::fence_plugin_root_mutation_for_home(&self.authority_home)?;
@@ -845,6 +1149,276 @@ impl PluginControl {
     }
 }
 
+fn lifecycle_authority_contract(
+    authority: PluginConfigurationAuthorityResponse,
+) -> target_contract::AuthoritySource {
+    target_contract::AuthoritySource {
+        kind: authority.kind,
+        reference: authority.reference,
+    }
+}
+
+macro_rules! forward_external {
+    ($self:ident, $request:ident, $method:ident, $error:ident) => {
+        match $self.external.as_ref() {
+            Some(target) => target.$method($request),
+            None => Box::pin(async { Ok(Err(target_contract::$error::TargetNotFound)) }),
+        }
+    };
+}
+
+impl PluginManagementTarget for RoutedPluginManagementTarget {
+    fn history(
+        &self,
+        request: target_contract::HistoryRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetHistory> {
+        forward_external!(self, request, history, HistoryError)
+    }
+    fn inspect(
+        &self,
+        request: target_contract::InspectRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetInspect> {
+        forward_external!(self, request, inspect, InspectError)
+    }
+    fn propose(
+        &self,
+        request: target_contract::ProposeRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPropose> {
+        forward_external!(self, request, propose, ProposeError)
+    }
+    fn propose_rollback(
+        &self,
+        request: target_contract::ProposeRollbackRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRollback>
+    {
+        forward_external!(self, request, propose_rollback, ProposeRollbackError)
+    }
+    fn publish(
+        &self,
+        request: target_contract::PublishRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublish> {
+        forward_external!(self, request, publish, PublishError)
+    }
+    fn publish_rollback(
+        &self,
+        request: target_contract::PublishRollbackRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRollback>
+    {
+        forward_external!(self, request, publish_rollback, PublishRollbackError)
+    }
+    fn set_enabled(
+        &self,
+        request: target_contract::SetEnabledRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetSetEnabled> {
+        forward_external!(self, request, set_enabled, SetEnabledError)
+    }
+
+    fn catalog(
+        &self,
+        request: target_contract::CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetCatalog> {
+        if request.agent_id != "console" {
+            return forward_external!(self, request, catalog, CatalogError);
+        }
+        let Some(control) = self.local.as_ref() else {
+            return Box::pin(async { Ok(Err(target_contract::CatalogError::Unsupported)) });
+        };
+        let result = control
+            .trusted_catalog(&request.query)
+            .map(|catalog| target_contract::CatalogResponse {
+                agent_id: request.agent_id,
+                authority: lifecycle_authority_contract(catalog.authority),
+                entries: catalog
+                    .entries
+                    .into_iter()
+                    .map(|entry| target_contract::CatalogEntry {
+                        catalog_entry_id: entry.catalog_entry_id,
+                        package_id: entry.package_id,
+                        package_revision: entry.package_revision,
+                        source_digest: entry.source_digest,
+                    })
+                    .collect(),
+                query: catalog.query,
+                revision: catalog.revision,
+            })
+            .map_err(|_| target_contract::CatalogError::Unsupported);
+        Box::pin(async move { Ok(result) })
+    }
+
+    fn propose_install(
+        &self,
+        request: target_contract::ProposeInstallRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeInstall>
+    {
+        if request.agent_id != "console" {
+            return forward_external!(self, request, propose_install, ProposeInstallError);
+        }
+        let Some(control) = self.local.as_ref() else {
+            return Box::pin(async { Ok(Err(target_contract::ProposeInstallError::Unsupported)) });
+        };
+        let result = request
+            .expected_revision
+            .parse::<PluginRootRevision>()
+            .map_err(|_| target_contract::ProposeInstallError::InvalidRequest)
+            .and_then(|revision| {
+                control
+                    .propose_installation(&request.catalog_entry_id, &revision)
+                    .map_err(|error| {
+                        if error.contains("revision changed") {
+                            target_contract::ProposeInstallError::Conflict
+                        } else if error.contains("not found") {
+                            target_contract::ProposeInstallError::PluginNotFound
+                        } else {
+                            target_contract::ProposeInstallError::Unsupported
+                        }
+                    })
+            })
+            .map(|proposal| target_contract::InstallProposalResponse {
+                agent_id: request.agent_id,
+                authority: lifecycle_authority_contract(proposal.authority),
+                base_revision: proposal.base_revision,
+                catalog_entry_id: proposal.catalog_entry_id,
+                candidate_revision: proposal.candidate_revision,
+                package_id: proposal.package_id,
+                package_revision: proposal.package_revision,
+                proposal_digest: proposal.proposal_digest,
+                source_digest: proposal.source_digest,
+            });
+        Box::pin(async move { Ok(result) })
+    }
+
+    fn publish_install(
+        &self,
+        request: target_contract::PublishInstallRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishInstall>
+    {
+        if request.agent_id != "console" {
+            return forward_external!(self, request, publish_install, PublishInstallError);
+        }
+        let Some(control) = self.local.as_ref() else {
+            return Box::pin(async { Ok(Err(target_contract::PublishInstallError::Unsupported)) });
+        };
+        let result = request
+            .expected_revision
+            .parse::<PluginRootRevision>()
+            .map_err(|_| target_contract::PublishInstallError::InvalidRequest)
+            .and_then(|revision| {
+                control
+                    .publish_installation(
+                        &request.catalog_entry_id,
+                        &revision,
+                        &request.proposal_digest,
+                    )
+                    .map_err(|error| {
+                        if error.contains("revision changed") {
+                            target_contract::PublishInstallError::Conflict
+                        } else if error.contains("no longer matches") {
+                            target_contract::PublishInstallError::ProposalMismatch
+                        } else if error.contains("not found") {
+                            target_contract::PublishInstallError::PluginNotFound
+                        } else {
+                            target_contract::PublishInstallError::Unsupported
+                        }
+                    })
+            })
+            .map(|publication| target_contract::PublishInstallResponse {
+                agent_id: request.agent_id,
+                authority: lifecycle_authority_contract(publication.authority),
+                base_revision: publication.base_revision,
+                catalog_entry_id: publication.catalog_entry_id,
+                package_id: publication.package_id,
+                package_revision: publication.package_revision,
+                proposal_digest: publication.proposal_digest,
+                revision: publication.revision,
+            });
+        Box::pin(async move { Ok(result) })
+    }
+
+    fn propose_removal(
+        &self,
+        request: target_contract::ProposeRemovalRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRemoval>
+    {
+        if request.agent_id != "console" {
+            return forward_external!(self, request, propose_removal, ProposeRemovalError);
+        }
+        let Some(control) = self.local.as_ref() else {
+            return Box::pin(async { Ok(Err(target_contract::ProposeRemovalError::Unsupported)) });
+        };
+        let result = request
+            .expected_revision
+            .parse::<PluginRootRevision>()
+            .map_err(|_| target_contract::ProposeRemovalError::InvalidRequest)
+            .and_then(|revision| {
+                control
+                    .propose_removal(&request.plugin_id, &revision)
+                    .map_err(|error| {
+                        if error.contains("revision changed") {
+                            target_contract::ProposeRemovalError::Conflict
+                        } else if error.contains("not found") {
+                            target_contract::ProposeRemovalError::PluginNotFound
+                        } else {
+                            target_contract::ProposeRemovalError::Unsupported
+                        }
+                    })
+            })
+            .map(|proposal| target_contract::RemovalProposalResponse {
+                agent_id: request.agent_id,
+                authority: lifecycle_authority_contract(proposal.authority),
+                base_revision: proposal.base_revision,
+                candidate_revision: proposal.candidate_revision,
+                package_id: proposal.package_id,
+                package_revision: proposal.package_revision,
+                proposal_digest: proposal.proposal_digest,
+                recoverable: proposal.recoverable,
+            });
+        Box::pin(async move { Ok(result) })
+    }
+
+    fn publish_removal(
+        &self,
+        request: target_contract::PublishRemovalRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRemoval>
+    {
+        if request.agent_id != "console" {
+            return forward_external!(self, request, publish_removal, PublishRemovalError);
+        }
+        let Some(control) = self.local.as_ref() else {
+            return Box::pin(async { Ok(Err(target_contract::PublishRemovalError::Unsupported)) });
+        };
+        let result = request
+            .expected_revision
+            .parse::<PluginRootRevision>()
+            .map_err(|_| target_contract::PublishRemovalError::InvalidRequest)
+            .and_then(|revision| {
+                control
+                    .publish_removal(&request.plugin_id, &revision, &request.proposal_digest)
+                    .map_err(|error| {
+                        if error.contains("revision changed") {
+                            target_contract::PublishRemovalError::Conflict
+                        } else if error.contains("no longer matches") {
+                            target_contract::PublishRemovalError::ProposalMismatch
+                        } else if error.contains("not found") {
+                            target_contract::PublishRemovalError::PluginNotFound
+                        } else {
+                            target_contract::PublishRemovalError::Unsupported
+                        }
+                    })
+            })
+            .map(|publication| target_contract::PublishRemovalResponse {
+                agent_id: request.agent_id,
+                authority: lifecycle_authority_contract(publication.authority),
+                base_revision: publication.base_revision,
+                package_id: publication.package_id,
+                package_revision: publication.package_revision,
+                proposal_digest: publication.proposal_digest,
+                recoverable: publication.recoverable,
+                revision: publication.revision,
+            });
+        Box::pin(async move { Ok(result) })
+    }
+}
+
 fn validate_managed_app_root(app_root: &Path) -> Result<(), String> {
     if !app_root.is_absolute() {
         return Err(format!(
@@ -859,6 +1433,39 @@ fn validate_managed_app_root(app_root: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn digest_file(path: &Path) -> Result<String, String> {
+    let bytes = fs::read(path).map_err(|error| {
+        format!(
+            "failed to read trusted Plugin Bundle {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(lenso_plugin_control_plane::sha256_digest(&bytes))
+}
+
+fn lifecycle_proposal_digest(
+    operation: &str,
+    base_revision: &str,
+    candidate_revision: &str,
+    package_id: &str,
+    package_revision: &str,
+    catalog_entry_id: Option<&str>,
+    source_digest: Option<&str>,
+) -> Result<String, String> {
+    let authority = serde_json::to_vec(&serde_json::json!({
+        "baseRevision": base_revision,
+        "candidateRevision": candidate_revision,
+        "catalogEntryId": catalog_entry_id,
+        "operation": operation,
+        "packageId": package_id,
+        "packageRevision": package_revision,
+        "schema": "lenso.agent.plugin-lifecycle-proposal@1",
+        "sourceDigest": source_digest,
+    }))
+    .map_err(|error| format!("failed to encode Plugin lifecycle proposal: {error}"))?;
+    Ok(lenso_plugin_control_plane::sha256_digest(&authority))
 }
 
 fn ensure_publishable_proposal(proposal: &PluginConfigurationProposal) -> Result<(), String> {
@@ -1368,6 +1975,78 @@ struct PluginCatalogItem {
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct TrustedPluginCatalogResponse {
+    authority: PluginConfigurationAuthorityResponse,
+    entries: Vec<TrustedPluginCatalogEntry>,
+    query: String,
+    revision: String,
+    schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrustedPluginCatalogEntry {
+    catalog_entry_id: String,
+    package_id: String,
+    package_revision: String,
+    source_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallProposalResponse {
+    authority: PluginConfigurationAuthorityResponse,
+    base_revision: String,
+    candidate_revision: String,
+    catalog_entry_id: String,
+    package_id: String,
+    package_revision: String,
+    proposal_digest: String,
+    schema: &'static str,
+    source_digest: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginInstallPublicationResponse {
+    authority: PluginConfigurationAuthorityResponse,
+    base_revision: String,
+    catalog_entry_id: String,
+    package_id: String,
+    package_revision: String,
+    proposal_digest: String,
+    revision: String,
+    schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginRemovalProposalResponse {
+    authority: PluginConfigurationAuthorityResponse,
+    base_revision: String,
+    candidate_revision: String,
+    package_id: String,
+    package_revision: String,
+    proposal_digest: String,
+    recoverable: bool,
+    schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginRemovalPublicationResponse {
+    authority: PluginConfigurationAuthorityResponse,
+    base_revision: String,
+    package_id: String,
+    package_revision: String,
+    proposal_digest: String,
+    recoverable: bool,
+    revision: String,
+    schema: &'static str,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct ManagedPlugin {
     instances: Vec<ManagedPluginInstance>,
     package_id: String,
@@ -1828,6 +2507,36 @@ struct PluginCatalogQuery {
     query: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProposePluginInstallRequest {
+    catalog_entry_id: String,
+    expected_revision: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PublishPluginInstallRequest {
+    catalog_entry_id: String,
+    expected_revision: String,
+    proposal_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ProposePluginRemovalRequest {
+    expected_revision: String,
+    plugin_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct PublishPluginRemovalRequest {
+    expected_revision: String,
+    plugin_id: String,
+    proposal_digest: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProposePluginConfigurationRequest {
@@ -1889,6 +2598,26 @@ pub(super) fn routes() -> Router<WebRuntime> {
         .route(
             "/api/console/v1/agent/control/plugins/catalog",
             get(plugin_catalog),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugins/trusted-catalog",
+            get(trusted_plugin_catalog),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugin-installations/proposals",
+            post(propose_plugin_installation),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugin-installations/publications",
+            post(publish_plugin_installation),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugin-removals/proposals",
+            post(propose_plugin_removal),
+        )
+        .route(
+            "/api/console/v1/agent/control/plugin-removals/publications",
+            post(publish_plugin_removal),
         )
         .route(
             "/api/console/v1/agent/control/plugin-operations/{operation_id}",
@@ -2062,6 +2791,117 @@ async fn plugin_catalog(
         .catalog(query)
         .map(Json)
         .map_err(ApiProblem::unavailable)
+}
+
+async fn trusted_plugin_catalog(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Query(request): Query<PluginCatalogQuery>,
+) -> Result<Json<TrustedPluginCatalogResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let query = request.query.trim();
+    if query.len() > 128 {
+        return Err(ApiProblem::bad_request(
+            "Plugin catalog query exceeds 128 bytes",
+        ));
+    }
+    runtime
+        .plugin_control()?
+        .trusted_catalog(query)
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn propose_plugin_installation(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<ProposePluginInstallRequest>,
+) -> Result<Json<PluginInstallProposalResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let expected = request
+        .expected_revision
+        .parse::<PluginRootRevision>()
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
+    let control = runtime.plugin_control()?;
+    tokio::task::spawn_blocking(move || {
+        control.propose_installation(&request.catalog_entry_id, &expected)
+    })
+    .await
+    .map_err(|error| {
+        ApiProblem::unavailable(format!("Plugin installation proposal task failed: {error}"))
+    })?
+    .map(Json)
+    .map_err(ApiProblem::conflict)
+}
+
+async fn publish_plugin_installation(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<PublishPluginInstallRequest>,
+) -> Result<Json<PluginInstallPublicationResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let expected = request
+        .expected_revision
+        .parse::<PluginRootRevision>()
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
+    let control = runtime.plugin_control()?;
+    tokio::task::spawn_blocking(move || {
+        control.publish_installation(
+            &request.catalog_entry_id,
+            &expected,
+            &request.proposal_digest,
+        )
+    })
+    .await
+    .map_err(|error| {
+        ApiProblem::unavailable(format!(
+            "Plugin installation publication task failed: {error}"
+        ))
+    })?
+    .map(Json)
+    .map_err(ApiProblem::conflict)
+}
+
+async fn propose_plugin_removal(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<ProposePluginRemovalRequest>,
+) -> Result<Json<PluginRemovalProposalResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let expected = request
+        .expected_revision
+        .parse::<PluginRootRevision>()
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
+    let control = runtime.plugin_control()?;
+    tokio::task::spawn_blocking(move || control.propose_removal(&request.plugin_id, &expected))
+        .await
+        .map_err(|error| {
+            ApiProblem::unavailable(format!("Plugin removal proposal task failed: {error}"))
+        })?
+        .map(Json)
+        .map_err(ApiProblem::conflict)
+}
+
+async fn publish_plugin_removal(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<PublishPluginRemovalRequest>,
+) -> Result<Json<PluginRemovalPublicationResponse>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let expected = request
+        .expected_revision
+        .parse::<PluginRootRevision>()
+        .map_err(|error| ApiProblem::bad_request(error.to_string()))?;
+    let control = runtime.plugin_control()?;
+    tokio::task::spawn_blocking(move || {
+        control.publish_removal(&request.plugin_id, &expected, &request.proposal_digest)
+    })
+    .await
+    .map_err(|error| {
+        ApiProblem::unavailable(format!("Plugin removal publication task failed: {error}"))
+    })?
+    .map(Json)
+    .map_err(ApiProblem::conflict)
 }
 
 fn etag_matches(candidate: &HeaderValue, current: &HeaderValue) -> bool {
@@ -3078,6 +3918,7 @@ mod tests {
                     root.path(),
                     root.path(),
                     None,
+                    BTreeMap::new(),
                     PluginControlAuthorities {
                         configuration: Arc::clone(&authority)
                             as Arc<dyn PluginConfigurationAuthority>,

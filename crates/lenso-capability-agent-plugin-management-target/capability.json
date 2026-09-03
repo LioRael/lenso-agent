@@ -1,6 +1,6 @@
 {
   "id": "lenso.agent.plugin-management-target@1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "portable": false,
   "cross_lane_transfer": false,
   "operations": [
@@ -52,6 +52,41 @@
       "request_schema": "schemas/set-enabled-request.schema.json",
       "response_schema": "schemas/set-enabled-response.schema.json",
       "domain_error_schema": "schemas/set-enabled-error.schema.json"
+    },
+    {
+      "name": "catalog",
+      "interaction": "request",
+      "request_schema": "schemas/catalog-request.schema.json",
+      "response_schema": "schemas/catalog-response.schema.json",
+      "domain_error_schema": "schemas/catalog-error.schema.json"
+    },
+    {
+      "name": "propose_install",
+      "interaction": "request",
+      "request_schema": "schemas/propose-install-request.schema.json",
+      "response_schema": "schemas/propose-install-response.schema.json",
+      "domain_error_schema": "schemas/propose-install-error.schema.json"
+    },
+    {
+      "name": "publish_install",
+      "interaction": "request",
+      "request_schema": "schemas/publish-install-request.schema.json",
+      "response_schema": "schemas/publish-install-response.schema.json",
+      "domain_error_schema": "schemas/publish-install-error.schema.json"
+    },
+    {
+      "name": "propose_removal",
+      "interaction": "request",
+      "request_schema": "schemas/propose-removal-request.schema.json",
+      "response_schema": "schemas/propose-removal-response.schema.json",
+      "domain_error_schema": "schemas/propose-removal-error.schema.json"
+    },
+    {
+      "name": "publish_removal",
+      "interaction": "request",
+      "request_schema": "schemas/publish-removal-request.schema.json",
+      "response_schema": "schemas/publish-removal-response.schema.json",
+      "domain_error_schema": "schemas/publish-removal-error.schema.json"
     }
   ]
 }

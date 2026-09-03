@@ -22,6 +22,11 @@ const CONSOLE_AGENT_ID: &str = "console";
 /// return `TargetNotFound` or `Unsupported` rather than falling back to the local
 /// Console authority.
 pub trait PluginManagementTarget: std::fmt::Debug + Send + Sync + 'static {
+    fn catalog(
+        &self,
+        request: target_contract::CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetCatalog>;
+
     fn history(
         &self,
         request: target_contract::HistoryRequest,
@@ -51,6 +56,26 @@ pub trait PluginManagementTarget: std::fmt::Debug + Send + Sync + 'static {
         &self,
         request: target_contract::PublishRollbackRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRollback>;
+
+    fn propose_install(
+        &self,
+        request: target_contract::ProposeInstallRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeInstall>;
+
+    fn publish_install(
+        &self,
+        request: target_contract::PublishInstallRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishInstall>;
+
+    fn propose_removal(
+        &self,
+        request: target_contract::ProposeRemovalRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRemoval>;
+
+    fn publish_removal(
+        &self,
+        request: target_contract::PublishRemovalRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRemoval>;
 
     fn set_enabled(
         &self,
@@ -122,6 +147,20 @@ struct ManagementTargetProvider {
 }
 
 impl target_contract::PluginManagementTargetProvider for ManagementTargetProvider {
+    fn catalog(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::CatalogRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetCatalog> {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.catalog(request),
+                None => Box::pin(async { Ok(Err(target_contract::CatalogError::TargetNotFound)) }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::CatalogError::Unsupported)) })
+    }
+
     fn history(
         &self,
         _context: InvocationContext,
@@ -214,6 +253,74 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
             };
         }
         Box::pin(async { Ok(Err(target_contract::PublishRollbackError::Unsupported)) })
+    }
+
+    fn propose_install(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::ProposeInstallRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeInstall>
+    {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.propose_install(request),
+                None => Box::pin(async {
+                    Ok(Err(target_contract::ProposeInstallError::TargetNotFound))
+                }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::ProposeInstallError::Unsupported)) })
+    }
+
+    fn publish_install(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::PublishInstallRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishInstall>
+    {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.publish_install(request),
+                None => Box::pin(async {
+                    Ok(Err(target_contract::PublishInstallError::TargetNotFound))
+                }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::PublishInstallError::Unsupported)) })
+    }
+
+    fn propose_removal(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::ProposeRemovalRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRemoval>
+    {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.propose_removal(request),
+                None => Box::pin(async {
+                    Ok(Err(target_contract::ProposeRemovalError::TargetNotFound))
+                }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::ProposeRemovalError::Unsupported)) })
+    }
+
+    fn publish_removal(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::PublishRemovalRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRemoval>
+    {
+        if request.agent_id != CONSOLE_AGENT_ID {
+            return match self.external.as_ref() {
+                Some(target) => target.publish_removal(request),
+                None => Box::pin(async {
+                    Ok(Err(target_contract::PublishRemovalError::TargetNotFound))
+                }),
+            };
+        }
+        Box::pin(async { Ok(Err(target_contract::PublishRemovalError::Unsupported)) })
     }
 
     fn set_enabled(
@@ -325,11 +432,16 @@ pub(crate) fn bridge_descriptor() -> PluginDescriptor {
             target_contract::CAPABILITY_ID,
             target_contract::DESCRIPTOR_VERSION,
             [
+                target_contract::CATALOG_OPERATION,
                 target_contract::HISTORY_OPERATION,
                 target_contract::INSPECT_OPERATION,
                 target_contract::PROPOSE_OPERATION,
+                target_contract::PROPOSE_INSTALL_OPERATION,
+                target_contract::PROPOSE_REMOVAL_OPERATION,
                 target_contract::PROPOSE_ROLLBACK_OPERATION,
                 target_contract::PUBLISH_OPERATION,
+                target_contract::PUBLISH_INSTALL_OPERATION,
+                target_contract::PUBLISH_REMOVAL_OPERATION,
                 target_contract::PUBLISH_ROLLBACK_OPERATION,
                 target_contract::SET_ENABLED_OPERATION,
             ],
