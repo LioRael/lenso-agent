@@ -11,7 +11,7 @@ version="$1"
   exit 2
 }
 
-for manifest in apps/lenso-agent-{tui,cli,acp}/Cargo.toml; do
+for manifest in apps/lenso-agent-{tui,cli,acp,web}/Cargo.toml; do
   manifest_version="$(awk -F ' *= *' '$1 == "version" { gsub(/"/, "", $2); print $2; exit }' "${manifest}")"
   [[ "${manifest_version}" == "${version}" ]] || {
     echo "error: ${manifest} is ${manifest_version}; expected ${version}" >&2

@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-tui"
-version = "0.1.0"
+version = "0.1.1"
 description = "Optional terminal UI surface for Lenso Agent."
 edition.workspace = true
 license.workspace = true

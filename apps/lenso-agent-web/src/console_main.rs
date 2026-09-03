@@ -4,5 +4,5 @@ mod app_agent_management;
 mod standalone;
 
 fn main() -> ExitCode {
-    standalone::launch(lenso_agent_default_plugins::link, false)
+    standalone::launch(lenso_agent_console_plugins::link, true)
 }
