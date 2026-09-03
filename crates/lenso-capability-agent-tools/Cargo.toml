@@ -7,7 +7,6 @@ license.workspace = true
 publish.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-build = "build.rs"
 
 [package.metadata.lenso.contract]
 descriptor = "capability.json"
@@ -23,9 +22,6 @@ lenso-plugin-authoring.workspace = true
 lenso-runtime-codec.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-[build-dependencies]
-lenso-contract-codegen.workspace = true
 
 [lints]
 workspace = true
