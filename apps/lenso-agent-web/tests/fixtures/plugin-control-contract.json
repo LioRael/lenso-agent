@@ -126,6 +126,18 @@
     },
     "plugins": [
       {
+        "configurationDefaults": {
+          "enabled": false
+        },
+        "configurationSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
         "instances": [
           {
             "disableable": true,
