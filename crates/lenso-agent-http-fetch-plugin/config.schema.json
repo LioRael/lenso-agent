@@ -12,5 +12,9 @@
     "max_response_bytes": { "title": "Response size limit (bytes)", "description": "Maximum response body size, from 1 to 1,048,576 bytes (1 MiB).", "type": "integer" },
     "timeout_ms": { "title": "Request timeout (ms)", "description": "Maximum request duration, from 1 to 30,000 milliseconds.", "type": "integer" }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "allOf": [
+    { "title": "Access", "properties": { "allowed_origins": true } },
+    { "title": "Request limits", "properties": { "max_response_bytes": true, "timeout_ms": true } }
+  ]
 }

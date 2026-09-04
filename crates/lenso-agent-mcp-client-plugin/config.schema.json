@@ -67,6 +67,44 @@
           "oauth_scopes": { "title": "OAuth scopes", "type": "array", "items": { "type": "string" } }
         }
       }
+    },
+    {
+      "title": "Connection",
+      "description": "Choose how to connect to the MCP server.",
+      "properties": {
+        "transport": true,
+        "program": true,
+        "arguments": true,
+        "working_directory": true,
+        "environment_allowlist": true,
+        "endpoint": true,
+        "authorization_environment": true,
+        "oauth_resource": true,
+        "oauth_scopes": true
+      }
+    },
+    {
+      "title": "Behavior",
+      "description": "Tool naming, protocol negotiation and request limits.",
+      "properties": {
+        "tool_namespace": true,
+        "protocol": true,
+        "startup_timeout_ms": true,
+        "request_timeout_ms": true
+      }
+    },
+    {
+      "title": "Advanced",
+      "description": "Optional server interactions, sampling and parallel execution.",
+      "properties": {
+        "allow_elicitation": true,
+        "allow_sampling": true,
+        "sampling_model": true,
+        "max_sampling_tokens": true,
+        "roots": true,
+        "parallel_safe_tools": true,
+        "continuation_max_rounds": true
+      }
     }
   ]
 }
