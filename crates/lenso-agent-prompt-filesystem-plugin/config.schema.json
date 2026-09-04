@@ -3,14 +3,16 @@
   "type": "object",
   "required": ["root", "skills", "id_prefix", "max_file_bytes", "max_total_bytes"],
   "properties": {
-    "root": { "type": "string" },
+    "root": { "title": "Skills directory", "description": "Directory on the Agent Host containing the selected skill folders. Supports ~ and ~/ paths.", "type": "string" },
     "skills": {
+      "title": "Selected skills",
+      "description": "Skill folder names, loaded in this order. Each must contain SKILL.md inside the skills directory. Select between 1 and 64 skills.",
       "type": "array",
       "items": { "type": "string" }
     },
-    "id_prefix": { "type": "string" },
-    "max_file_bytes": { "type": "integer" },
-    "max_total_bytes": { "type": "integer" }
+    "id_prefix": { "title": "Skill ID prefix", "description": "Prefix for published skill IDs: prefix/folder-name. Do not end it with a slash.", "type": "string" },
+    "max_file_bytes": { "title": "Per-file size limit (bytes)", "description": "Maximum size of each SKILL.md, from 1 to 65,536 bytes (64 KiB). Must not exceed the total size limit.", "type": "integer" },
+    "max_total_bytes": { "title": "Total size limit (bytes)", "description": "Maximum combined content size, from 1 to 262,144 bytes (256 KiB).", "type": "integer" }
   },
   "additionalProperties": false
 }
