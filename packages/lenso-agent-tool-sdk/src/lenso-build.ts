@@ -179,6 +179,7 @@ export function bindAgentTools(instance: object): CapabilityProviderBinding {
     descriptor: {
       capability_id: ${JSON.stringify(CAPABILITY_ID)},
       descriptor_version: ${JSON.stringify(DESCRIPTOR_VERSION)},
+      descriptor_digest: ${JSON.stringify(DESCRIPTOR_DIGEST)},
       operations: ["catalog", "execute"],
       stream_operations: [],
       event_operations: [],
