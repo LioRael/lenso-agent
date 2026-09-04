@@ -2553,6 +2553,31 @@ mod tests {
     use lenso_kernel::{CancellationToken, InvocationContext};
     use std::process::Command as StdCommand;
 
+    #[test]
+    fn configuration_schema_selects_transport_fields() {
+        let schema: Value = serde_json::from_str(include_str!("../config.schema.json")).unwrap();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        let mut value = json!({
+            "transport": "stdio", "protocol": "auto", "tool_namespace": "test",
+            "startup_timeout_ms": 1000, "request_timeout_ms": 1000,
+            "program": "/bin/server", "arguments": [], "working_directory": "/tmp",
+            "environment_allowlist": [], "endpoint": "https://example.com/mcp"
+        });
+        assert!(validator.is_valid(&value));
+        value["transport"] = json!("streamable_http");
+        assert!(validator.is_valid(&value));
+        assert!(serde_json::from_value::<McpClientConfig>(value.clone()).is_ok());
+        value.as_object_mut().unwrap().remove("endpoint");
+        assert!(!validator.is_valid(&value));
+        value["transport"] = json!("stdio");
+        assert!(validator.is_valid(&value));
+        value["arguments"] = json!("not an array");
+        assert!(!validator.is_valid(&value));
+        value["arguments"] = json!([]);
+        value["unknown"] = json!(true);
+        assert!(!validator.is_valid(&value));
+    }
+
     const MODERN_SERVER: &str = r#"
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')

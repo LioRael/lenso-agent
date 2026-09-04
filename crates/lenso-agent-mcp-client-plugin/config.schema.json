@@ -4,18 +4,15 @@
   "additionalProperties": false,
   "required": ["transport", "protocol", "tool_namespace", "startup_timeout_ms", "request_timeout_ms"],
   "properties": {
-    "transport": { "enum": ["stdio", "streamable_http"] },
-    "program": { "type": "string" },
-    "arguments": { "type": "array", "items": { "type": "string" } },
-    "working_directory": { "type": "string" },
-    "environment_allowlist": { "type": "array", "items": { "type": "string" } },
-    "endpoint": { "type": "string" },
-    "authorization_environment": { "type": "string" },
-    "oauth_resource": { "type": "string" },
-    "oauth_scopes": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
+    "transport": { "title": "Transport", "enum": ["stdio", "streamable_http"] },
+    "program": true,
+    "arguments": true,
+    "working_directory": true,
+    "environment_allowlist": true,
+    "endpoint": true,
+    "authorization_environment": true,
+    "oauth_resource": true,
+    "oauth_scopes": true,
     "protocol": { "enum": ["auto", "modern", "legacy"] },
     "tool_namespace": { "type": "string" },
     "startup_timeout_ms": { "type": "integer" },
@@ -44,5 +41,32 @@
     "continuation_max_rounds": { "type": "integer" },
     "sampling_model": { "type": "string" },
     "max_sampling_tokens": { "type": "integer" }
-  }
+  },
+  "$comment": "Transport fields are evaluated by the selected branch. Inactive values are retained but not consumed; unknown keys remain forbidden.",
+  "allOf": [
+    {
+      "if": { "properties": { "transport": { "const": "stdio" } }, "required": ["transport"] },
+      "then": {
+        "required": ["program", "arguments", "working_directory", "environment_allowlist"],
+        "properties": {
+          "program": { "title": "Program", "description": "Absolute path to the MCP server executable.", "type": "string" },
+          "arguments": { "title": "Arguments", "type": "array", "items": { "type": "string" } },
+          "working_directory": { "title": "Working directory", "type": "string" },
+          "environment_allowlist": { "title": "Environment variables", "description": "Host environment variable names passed to the server, not their values.", "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "transport": { "const": "streamable_http" } }, "required": ["transport"] },
+      "then": {
+        "required": ["endpoint"],
+        "properties": {
+          "endpoint": { "title": "Endpoint", "description": "HTTPS endpoint, or HTTP on loopback for local servers.", "type": "string" },
+          "authorization_environment": { "title": "Authorization environment variable", "description": "Name of the Host variable containing the full Authorization header. Use this or OAuth, not both.", "type": "string" },
+          "oauth_resource": { "title": "OAuth resource", "description": "Resource URI on the same origin as the endpoint. Tokens are managed by the Auth Plugin.", "type": "string" },
+          "oauth_scopes": { "title": "OAuth scopes", "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  ]
 }
