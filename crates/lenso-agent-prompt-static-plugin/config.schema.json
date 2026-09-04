@@ -4,15 +4,17 @@
   "required": ["contributions"],
   "properties": {
     "contributions": {
+      "title": "Instructions and skills",
+      "description": "Up to 64 text contributions. Each needs a unique ID, version and non-empty content.",
       "type": "array",
       "items": {
         "type": "object",
         "required": ["id", "version", "kind", "content"],
         "properties": {
-          "id": { "type": "string" },
-          "version": { "type": "string" },
-          "kind": { "type": "string", "enum": ["instruction", "skill"] },
-          "content": { "type": "string" }
+          "id": { "title": "Contribution ID", "description": "Stable identifier, unique within this list.", "type": "string" },
+          "version": { "title": "Version", "description": "Revision label for this contribution, up to 64 bytes.", "type": "string" },
+          "kind": { "title": "Contribution type", "description": "Publish this text as an instruction or a skill.", "type": "string", "enum": ["instruction", "skill"] },
+          "content": { "title": "Content", "description": "Instruction or skill text, up to 65,536 UTF-8 bytes (64 KiB). Line breaks are preserved.", "type": "string" }
         },
         "additionalProperties": false
       }
