@@ -1,5 +1,7 @@
 //! `ChatGPT` OAuth credential owner for direct Codex model access.
 
+mod connection;
+
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
@@ -11,9 +13,9 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use directories::BaseDirs;
 use fs2::FileExt;
-use futures::future::LocalBoxFuture;
+use lenso_capability_agent_auth_connection as connection_contract;
 use lenso_capability_agent_auth_openai_codex::{
-    self as auth_contract, AccessError, AccessRequest, AccessResponse, OpenaiCodexProvider,
+    self as auth_contract, AccessError, AccessRequest, AccessResponse,
 };
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use sha2::{Digest as _, Sha256};
@@ -170,18 +172,19 @@ struct CodexAuth {
     #[config]
     config: AuthConfig,
     client: reqwest::Client,
+    connection: std::sync::Arc<connection::ConnectionManager>,
 }
 
-#[lenso::provides(auth_contract::OpenaiCodex)]
-impl OpenaiCodexProvider for CodexAuth {
-    fn access(
+#[lenso::provides(auth_contract::OpenaiCodex, connection_contract::AuthConnection)]
+impl CodexAuth {
+    async fn access(
         &self,
         _context: InvocationContext,
         _request: AccessRequest,
-    ) -> LocalBoxFuture<'static, Result<Result<AccessResponse, AccessError>, RuntimeFailure>> {
+    ) -> Result<Result<AccessResponse, AccessError>, RuntimeFailure> {
         let config = self.config.clone();
         let client = self.client.clone();
-        Box::pin(async move {
+        async move {
             let path = config.credential_path()?;
             let _lock = CredentialLock::acquire(&path)
                 .map_err(|_| plugin_failure("direct-auth credential store is busy"))?;
@@ -218,7 +221,82 @@ impl OpenaiCodexProvider for CodexAuth {
                     .map_err(|_| plugin_failure("failed to persist refreshed credentials"))?;
             }
             Ok(Ok(credential.access_response()))
-        })
+        }
+        .await
+    }
+
+    async fn status(
+        &self,
+        _: InvocationContext,
+        _: connection_contract::StatusRequest,
+    ) -> Result<
+        Result<connection_contract::StatusResponse, connection_contract::StatusError>,
+        RuntimeFailure,
+    > {
+        let status = direct_auth_status(self.connection_options())
+            .map_err(|_| plugin_failure("failed to read authentication status"))?;
+        Ok(Ok(connection_contract::StatusResponse {
+            label: format!("ChatGPT ({})", self.config.profile),
+            connected: status.authenticated,
+            methods: vec![connection_contract::LoginMethod::DeviceCode],
+        }))
+    }
+
+    async fn begin(
+        &self,
+        _: InvocationContext,
+        request: connection_contract::BeginRequest,
+    ) -> Result<
+        Result<connection_contract::BeginResponse, connection_contract::BeginError>,
+        RuntimeFailure,
+    > {
+        self.connection
+            .begin(self.connection_options(), request)
+            .await
+    }
+
+    async fn poll(
+        &self,
+        _: InvocationContext,
+        request: connection_contract::AttemptRequest,
+    ) -> Result<
+        Result<connection_contract::PollResponse, connection_contract::PollError>,
+        RuntimeFailure,
+    > {
+        self.connection.poll(request).await
+    }
+
+    async fn cancel(
+        &self,
+        _: InvocationContext,
+        request: connection_contract::AttemptRequest,
+    ) -> Result<
+        Result<connection_contract::CancelResponse, connection_contract::CancelError>,
+        RuntimeFailure,
+    > {
+        self.connection.cancel(request).await
+    }
+
+    async fn disconnect(
+        &self,
+        _: InvocationContext,
+        _: connection_contract::DisconnectRequest,
+    ) -> Result<
+        Result<connection_contract::DisconnectResponse, connection_contract::DisconnectError>,
+        RuntimeFailure,
+    > {
+        self.connection.disconnect(self.connection_options()).await
+    }
+}
+
+impl CodexAuth {
+    fn connection_options(&self) -> DirectAuthOptions {
+        DirectAuthOptions {
+            issuer: self.config.issuer.clone(),
+            profile: self.config.profile.clone(),
+            credential_file: self.config.credential_file.clone(),
+            ..DirectAuthOptions::default()
+        }
     }
 }
 
@@ -830,9 +908,8 @@ mod tests {
     };
 
     use super::{
-        DirectAuthOptions, StoredCredential, begin_browser_login, begin_device_login,
-        complete_browser_login, complete_device_login, credential_from_store, extract_account_id,
-        read_credentials, write_credentials,
+        DirectAuthOptions, StoredCredential, begin_browser_login, complete_browser_login,
+        credential_from_store, extract_account_id, read_credentials, write_credentials,
     };
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
@@ -998,11 +1075,51 @@ mod tests {
             credential_file: Some(credential_path.clone()),
             callback_port: 0,
         };
-        let pending = begin_device_login(options.clone()).await.unwrap();
-        assert_eq!(pending.verification_url, format!("{issuer}/codex/device"));
+        let manager = super::connection::ConnectionManager::default();
+        let pending = manager
+            .begin(
+                options.clone(),
+                super::connection_contract::BeginRequest {
+                    method: super::connection_contract::LoginMethod::DeviceCode,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.authorization_url, format!("{issuer}/codex/device"));
         assert_eq!(pending.user_code, "ABCD-EFGH");
-        let status = complete_device_login(options, pending).await.unwrap();
-        assert!(status.authenticated);
+        assert!(!format!("{pending:?}").contains("ABCD-EFGH"));
+        let resumed = manager
+            .begin(
+                options,
+                super::connection_contract::BeginRequest {
+                    method: super::connection_contract::LoginMethod::DeviceCode,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resumed.attempt_id, pending.attempt_id);
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let status = manager
+                    .poll(super::connection_contract::AttemptRequest {
+                        attempt_id: pending.attempt_id.clone(),
+                    })
+                    .await
+                    .unwrap()
+                    .unwrap();
+                match status.state {
+                    super::connection_contract::LoginState::Pending => {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                    super::connection_contract::LoginState::Connected => break,
+                    other => panic!("unexpected login state: {other:?}"),
+                }
+            }
+        })
+        .await
+        .unwrap();
         let credentials = read_credentials(&credential_path).unwrap();
         let stored = credential_from_store(&credentials, "openai-codex:integration")
             .unwrap()

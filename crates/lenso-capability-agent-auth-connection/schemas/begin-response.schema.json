@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["attempt_id", "authorization_url", "user_code", "expires_at_millis"],
+  "properties": {
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "x-lenso-sensitive": true
+    },
+    "authorization_url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "x-lenso-sensitive": true
+    },
+    "user_code": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Empty for browser login. Never an access or refresh token.",
+      "x-lenso-sensitive": true
+    },
+    "expires_at_millis": {
+      "type": "string",
+      "description": "Decimal Unix milliseconds; attempts are bounded and generation-local."
+    }
+  },
+  "additionalProperties": false,
+  "title": "BeginResponse"
+}

@@ -21,6 +21,7 @@ members = [
     "crates/lenso-agent-oauth-client-credentials-plugin",
     "crates/lenso-capability-agent",
     "crates/lenso-capability-agent-auth-openai-codex",
+    "crates/lenso-capability-agent-auth-connection",
     "crates/lenso-capability-agent-artifact",
     "crates/lenso-capability-agent-oauth-access",
     "crates/lenso-capability-agent-model",

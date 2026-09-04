@@ -19,6 +19,7 @@ fs2.workspace = true
 futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent-auth-openai-codex = { path = "../lenso-capability-agent-auth-openai-codex" }
+lenso-capability-agent-auth-connection = { path = "../lenso-capability-agent-auth-connection" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 reqwest.workspace = true
