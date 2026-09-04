@@ -21,11 +21,14 @@ lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
 lenso-kernel.workspace = true
 lenso-native-adapter.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

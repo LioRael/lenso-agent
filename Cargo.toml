@@ -158,6 +158,8 @@ lenso-secrets-encrypted-file-plugin = "0.1.0"
 lenso-secrets-env-plugin = "0.1.2"
 lenso-secrets-keychain-plugin = "0.1.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "stream"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 schemars = "1.2"
 serde = { version = "1.0", features = ["derive"] }

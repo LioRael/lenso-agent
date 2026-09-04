@@ -5,7 +5,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
 pub const CAPABILITY_ID: &str = "lenso.agent.model@4";
-pub const DESCRIPTOR_VERSION: &str = "4.0.0";
+pub const DESCRIPTOR_VERSION: &str = "4.1.0";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -13,15 +13,15 @@ pub const MODEL_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.0.0\",\"operations\":[\"catalog\",\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"operations\":[\"catalog\",\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"one\"}" }; }
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"many\"}" }; }
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const COMPLETE_OPERATION: &str = "complete";
@@ -255,6 +255,9 @@ pub enum CatalogError {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CompleteOpen {
+    #[serde(rename = "continuation_scope")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuation_scope: Option<String>,
     #[serde(rename = "max_output_tokens")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub max_output_tokens: i64,

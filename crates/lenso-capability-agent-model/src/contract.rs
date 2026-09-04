@@ -163,6 +163,12 @@ pub enum CatalogError {
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
 pub struct CompleteOpen {
+    /// Optional caller-owned affinity hint for consecutive completions in one
+    /// isolated task. Providers may ignore it. Full messages remain authoritative;
+    /// this is neither a provider response ID nor authorization or durable state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String", length(min = 1, max = 128))]
+    pub continuation_scope: Option<String>,
     #[schemars(length(min = 1, max = 256))]
     pub model: String,
     #[schemars(length(max = 256))]
@@ -277,7 +283,7 @@ pub struct ProviderFailurePayload {
 #[lenso::capability(
     id = "lenso.agent.model",
     major = 4,
-    version = "4.0.0",
+    version = "4.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

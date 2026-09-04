@@ -307,6 +307,7 @@ async fn classify(
         .complete_with_context(
             context,
             CompleteOpen {
+                continuation_scope: None,
                 model: classifier_model.to_owned(),
                 reasoning_effort: None,
                 reasoning_enabled: None,

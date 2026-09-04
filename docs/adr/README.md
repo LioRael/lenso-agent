@@ -119,3 +119,4 @@ reasons on their own.
 - [0094 — Model reasoning controls as typed Turn options](0094-model-reasoning-controls-as-typed-turn-options.md)
 - [0095 — Freeze Model catalog freshness provenance](0095-freeze-model-catalog-freshness-provenance.md)
 - [0096 — Reconcile periodic Model catalog refresh](0096-reconcile-periodic-model-catalog-refresh.md)
+- [0097 — Keep Model continuation an optional affinity hint](0097-keep-model-continuation-an-optional-affinity-hint.md)

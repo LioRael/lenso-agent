@@ -24,6 +24,15 @@ fn canonical_plan_path(home: &Path) -> PathBuf {
 }
 
 fn test_plan(root: &Path, base_url: &str, credential_file: &Path) -> PathBuf {
+    test_plan_with_transport(root, base_url, credential_file, Some("sse"))
+}
+
+fn test_plan_with_transport(
+    root: &Path,
+    base_url: &str,
+    credential_file: &Path,
+    transport: Option<&str>,
+) -> PathBuf {
     let mut plan = serde_json::from_slice::<serde_json::Value>(
         &fs::read(canonical_plan_path(root)).expect("read canonical direct Codex Plan"),
     )
@@ -37,6 +46,11 @@ fn test_plan(root: &Path, base_url: &str, credential_file: &Path) -> PathBuf {
         .expect("direct Codex Model Instance");
     update_configuration(model, |configuration| {
         configuration["base_url"] = serde_json::Value::String(base_url.to_owned());
+        if let Some(transport) = transport {
+            configuration["transport"] = serde_json::Value::String(transport.to_owned());
+        } else {
+            configuration.as_object_mut().unwrap().remove("transport");
+        }
     });
     let auth = plugins
         .iter_mut()
@@ -289,6 +303,192 @@ fn spawn_model_server() -> (String, thread::JoinHandle<Vec<CapturedRequest>>) {
         requests
     });
     (format!("http://{address}"), server)
+}
+
+#[test]
+#[expect(
+    clippy::result_large_err,
+    reason = "Tungstenite's handshake callback fixes the response error type"
+)]
+fn websocket_runs_the_agent_tool_round_on_one_authenticated_connection() {
+    use tokio_tungstenite::tungstenite::{
+        Message, accept_hdr,
+        handshake::server::{Request, Response},
+    };
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Direct Fixture\n").unwrap();
+    let credential = temporary.path().join("credential.json");
+    write_credential(&credential);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut catalog, _) = listener.accept().unwrap();
+        catalog
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (headers, _) = read_request_parts(&mut catalog);
+        assert!(headers.starts_with("GET /codex/models?"));
+        write_json_response(&mut catalog, model_catalog_response().as_bytes());
+        let (tcp, _) = listener.accept().unwrap();
+        tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut socket = accept_hdr(tcp, |request: &Request, response: Response| {
+            assert_eq!(request.uri().path(), "/codex/responses");
+            assert_eq!(
+                request.headers()["authorization"],
+                "Bearer direct-access-secret"
+            );
+            assert_eq!(request.headers()["chatgpt-account-id"], "account-test-1");
+            assert_eq!(
+                request.headers()["openai-beta"],
+                "responses_websockets=2026-02-06"
+            );
+            Ok(response)
+        })
+        .unwrap();
+        let mut requests = Vec::new();
+        for response in [tool_call_response(), text_response()] {
+            let body: serde_json::Value =
+                serde_json::from_str(socket.read().unwrap().to_text().unwrap()).unwrap();
+            assert_eq!(body["type"], "response.create");
+            assert!(body.get("stream").is_none());
+            requests.push(body);
+            for event in response
+                .lines()
+                .filter_map(|line| line.strip_prefix("data: "))
+            {
+                let mut event: serde_json::Value = serde_json::from_str(event).unwrap();
+                if event["type"] == "response.completed" {
+                    event["response"]["id"] = "fixture-response".into();
+                }
+                socket
+                    .send(Message::Text(event.to_string().into()))
+                    .unwrap();
+            }
+        }
+        requests
+    });
+    // Exercise the Plugin default through the real Host with no transport setting.
+    let plan = test_plan_with_transport(temporary.path(), &base_url, &credential, None);
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
+        .args([
+            "--plan",
+            plan.to_str().unwrap(),
+            "--prompt",
+            "Summarize the README.",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "README summary: # Direct Fixture\n"
+    );
+    let requests = server.join().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1]["previous_response_id"], "fixture-response");
+    assert_eq!(requests[1]["input"].as_array().unwrap().len(), 1);
+    assert!(requests[1]["input"].as_array().unwrap().iter().any(|item| {
+        item["type"] == "function_call_output"
+            && item["output"].as_str().unwrap().contains("Direct Fixture")
+    }));
+}
+
+#[test]
+fn auto_falls_back_to_sse_only_before_sending_a_model_request() {
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("README.md"), "# Direct Fixture\n").unwrap();
+    let credential = temporary.path().join("credential.json");
+    write_credential(&credential);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (mut catalog, _) = listener.accept().unwrap();
+        catalog
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let _ = read_request_parts(&mut catalog);
+        write_json_response(&mut catalog, model_catalog_response().as_bytes());
+        let (mut upgrade, _) = listener.accept().unwrap();
+        upgrade
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (headers, body) = read_request_parts(&mut upgrade);
+        assert!(headers.starts_with("GET /codex/responses HTTP/1.1"));
+        assert!(body.is_empty());
+        write_empty_response(&mut upgrade, 426, "Upgrade Required");
+        let (mut http, _) = listener.accept().unwrap();
+        http.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let (_, body) = read_request(&mut http);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["stream"],
+            true
+        );
+        write_response(&mut http, text_response().as_bytes());
+    });
+    let plan = test_plan_with_transport(temporary.path(), &base_url, &credential, Some("auto"));
+    let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
+        .args(["--plan", plan.to_str().unwrap(), "--prompt", "Hello"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().unwrap();
+}
+
+#[test]
+#[ignore = "requires explicit LENSO_CODEX_WS_SMOKE_CREDENTIAL and a ChatGPT subscription; sends live model requests"]
+fn live_subscription_websocket_smoke() {
+    let credential = PathBuf::from(
+        std::env::var_os("LENSO_CODEX_WS_SMOKE_CREDENTIAL").expect("explicit credential path"),
+    );
+    let temporary = tempfile::tempdir().unwrap();
+    fs::write(temporary.path().join("marker.txt"), "OK").unwrap();
+    let plan = test_plan_with_transport(
+        temporary.path(),
+        "https://chatgpt.com/backend-api",
+        &credential,
+        None,
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
+        .current_dir(temporary.path())
+        .env("LENSO_AGENT_HOME", temporary.path())
+        .args([
+            "--plan",
+            plan.to_str().unwrap(),
+            "--prompt",
+            "Use the read tool to read marker.txt, then reply with exactly its contents and nothing else.",
+        ])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(90);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            let _ = child.wait();
+            panic!("live WebSocket smoke exceeded 90 seconds");
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "OK");
 }
 
 fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>) {

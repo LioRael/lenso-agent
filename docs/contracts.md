@@ -35,6 +35,16 @@ projects it as ordered `reasoning_delta` and `reasoning_completed` messages
 with one Turn-step `reasoning_id`. Reasoning progress is volatile terminal
 presentation data, not durable Session evidence or raw private chain-of-thought.
 
+Descriptor `4.1.0` adds optional `complete.continuation_scope`. It is an opaque
+caller-owned affinity hint unique to an isolated task, not authorization, a
+provider response ID, or durable Session identity. Providers may ignore it;
+every request must still supply complete authoritative messages and controls.
+The Agent Loop uses its random Turn ID; auxiliary model consumers omit the hint.
+Providers must validate context and control compatibility before using cached
+continuation state. Loss or invalidation of that state must not invalidate the
+next complete request. This is an additive minor change, checked against 4.0.0
+with the contract compatibility linter.
+
 ## Tool boundary
 
 `lenso.agent.tools@2` is the application-facing aggregate catalog. It fans out

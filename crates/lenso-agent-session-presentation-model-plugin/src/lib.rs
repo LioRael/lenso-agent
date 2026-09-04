@@ -107,6 +107,7 @@ fn model_request(config: &PresentationModelConfig, request: &ProjectRequest) -> 
     })
     .to_string();
     CompleteOpen {
+        continuation_scope: None,
         model: config.model.clone(),
         reasoning_effort: None,
         reasoning_enabled: None,

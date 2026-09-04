@@ -1,5 +1,7 @@
 //! Experimental direct `ChatGPT` subscription Model Plugin.
 
+mod websocket;
+
 use std::{
     any::Any,
     cell::{Cell, RefCell},
@@ -54,6 +56,8 @@ thread_local! {
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DirectModelConfig {
+    #[serde(default)]
+    transport: websocket::Transport,
     base_url: String,
     model: String,
     /// Deprecated migration input. Catalog admission is now Provider-owned.
@@ -190,6 +194,7 @@ struct DirectModel {
     #[config]
     config: DirectModelConfig,
     client: reqwest::Client,
+    websocket: websocket::Pool,
     auth: Port<auth_contract::OpenaiCodexClient>,
     catalog: Rc<RefCell<Option<CatalogResponse>>>,
     #[tasks]
@@ -339,11 +344,20 @@ impl ModelProvider for DirectModel {
         let auth = self.auth.clone();
         let config = self.config.clone();
         let client = self.client.clone();
+        let websocket = self.websocket.clone();
         Box::pin(async move {
             let credential = auth
                 .access_with_context(context, AccessRequest {})
                 .await
                 .map_err(map_auth_error)?;
+            if config.transport != websocket::Transport::Sse {
+                match websocket.open(&config, &credential, &wire_request).await {
+                    Ok(stream) => return Ok(Box::new(stream) as Box<dyn NativeStreamSession>),
+                    Err(websocket::OpenError::Unsupported)
+                        if config.transport == websocket::Transport::Auto => {}
+                    Err(error) => return Err(error.into_model_error()),
+                }
+            }
             let response = client
                 .post(
                     config
@@ -359,8 +373,12 @@ impl ModelProvider for DirectModel {
                 .json(&wire_request.body)
                 .send()
                 .await
-                .map_err(|_| {
-                    provider_failure("transport_error", "direct Codex request failed", true)
+                .map_err(|error| {
+                    provider_failure(
+                        "transport_error",
+                        "direct Codex request failed",
+                        error.is_connect(),
+                    )
                 })?;
             if !response.status().is_success() {
                 return Err(map_status(response.status()));
@@ -512,6 +530,26 @@ impl DirectModel {
 
 impl Lifecycle for DirectModel {
     async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
+        if self.config.transport != websocket::Transport::Sse {
+            let pool = self.websocket.clone();
+            let cancellation = self
+                .tasks
+                .cancellation()
+                .map_err(|_| protocol_failure("direct Codex WebSocket lifecycle is unavailable"))?;
+            self.tasks
+                .spawn_local(async move {
+                    let mut ticks = tokio::time::interval(Duration::from_secs(30));
+                    loop {
+                        tokio::select! {
+                            () = cancellation.cancelled() => { pool.shutdown(); break; }
+                            _ = ticks.tick() => pool.prune_idle(),
+                        }
+                    }
+                })
+                .map_err(|_| {
+                    protocol_failure("direct Codex WebSocket maintenance failed to start")
+                })?;
+        }
         let credential = self.auth.access(AccessRequest {}).await.map_err(|error| {
             RuntimeFailure::PluginFailure {
                 detail: format!("direct Codex model catalog authentication failed: {error:?}"),
@@ -592,6 +630,7 @@ impl Lifecycle for DirectModel {
 
     #[allow(clippy::unused_async_trait_impl)]
     async fn deactivate(&self, _context: DeactivateContext) -> Result<(), RuntimeFailure> {
+        self.websocket.shutdown();
         self.catalog.replace(None);
         Ok(())
     }
@@ -1017,6 +1056,7 @@ fn optional_tokens(value: Option<i64>) -> Result<Option<Option<String>>, Runtime
 
 struct ResponsesRequest {
     body: serde_json::Value,
+    continuation_scope: Option<String>,
     provider_to_lenso_tool_names: BTreeMap<String, String>,
 }
 
@@ -1090,6 +1130,7 @@ fn responses_request(
     }
     Ok(ResponsesRequest {
         body,
+        continuation_scope: request.continuation_scope.clone(),
         provider_to_lenso_tool_names,
     })
 }
@@ -1401,12 +1442,25 @@ impl ResponsesDecoder {
         }
         let event = serde_json::from_str::<serde_json::Value>(&data)
             .map_err(|_| protocol_failure("direct Codex emitted invalid SSE JSON"))?;
+        self.decode_event(&event, output)
+    }
+
+    fn decode_event(
+        &mut self,
+        event: &serde_json::Value,
+        output: &mut Vec<NativeStreamItem>,
+    ) -> Result<(), RuntimeFailure> {
+        if self.terminal {
+            return Err(protocol_failure(
+                "direct Codex emitted an event after completion",
+            ));
+        }
         match event.get("type").and_then(serde_json::Value::as_str) {
             Some("response.reasoning_summary_text.delta") => {
-                self.emit_text_delta(CompleteMessageKind::ReasoningSummaryDelta, &event, output);
+                self.emit_text_delta(CompleteMessageKind::ReasoningSummaryDelta, event, output);
             }
             Some("response.output_text.delta") => {
-                self.emit_text_delta(CompleteMessageKind::TextDelta, &event, output);
+                self.emit_text_delta(CompleteMessageKind::TextDelta, event, output);
             }
             Some("response.output_item.done") => {
                 let item = event
@@ -1556,6 +1610,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         };
 
         assert_eq!(
@@ -1579,6 +1634,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         }
         .validate()
         .unwrap();
@@ -1602,6 +1658,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         };
         assert!(overlapping.validate().is_err());
 
@@ -1617,6 +1674,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         };
         assert!(primary_hidden.validate().is_err());
     }
@@ -1635,6 +1693,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         }
         .validate()
         .unwrap();
@@ -1656,6 +1715,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         }
         .validate()
         .unwrap();
@@ -1703,6 +1763,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         }
         .validate()
         .unwrap();
@@ -1785,6 +1846,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "high".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         }
         .validate()
         .unwrap();
@@ -1890,6 +1952,7 @@ mod tests {
             catalog_refresh_seconds: 0,
             reasoning_effort: "medium".to_owned(),
             max_event_bytes: MAX_EVENT_BYTES,
+            transport: websocket::Transport::Sse,
         }
         .validate()
         .unwrap();
@@ -1921,6 +1984,7 @@ mod tests {
     #[test]
     fn request_preserves_tool_call_and_result() {
         let request = CompleteOpen {
+            continuation_scope: None,
             model: "gpt-test".to_owned(),
             reasoning_effort: None,
             reasoning_enabled: None,
@@ -1969,6 +2033,7 @@ mod tests {
     #[test]
     fn request_rejects_provider_tool_name_collisions() {
         let request = CompleteOpen {
+            continuation_scope: None,
             model: "gpt-test".to_owned(),
             reasoning_effort: None,
             reasoning_enabled: None,
