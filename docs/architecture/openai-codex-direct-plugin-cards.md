@@ -26,24 +26,28 @@ Status: experimental direct-provider baseline.
 ## `lenso.agent.model.openai-codex-direct`
 
 - **Deletion boundary:** removes direct Codex model discovery, Responses request
-  conversion, subscription headers, SSE decoding, and provider-error
+  conversion, subscription headers, SSE/WebSocket decoding, and provider-error
   translation.
 - **Owned facts:** allowed backend URL, discovered model metadata, Provider and
   App visibility, selected model, Responses wire mapping, event bound, and
   sanitized status policy.
-- **Provides:** `lenso.agent.model@4.0` (`catalog`, request; `complete`, stream).
+- **Provides:** `lenso.agent.model@4`, Descriptor `4.1.0` (`catalog`, request;
+  `complete`, stream with optional task-affinity hint).
 - **Requires:** exactly one `lenso.agent.auth.openai-codex@1` provider selected
   by the Host Profile.
 - **Configuration:** official backend base URL, selected model, optional exact
   `include_models`/`exclude_models` visibility policy, reasoning effort, and
-  maximum SSE event bytes. All valid Provider-discovered models remain in the
+  maximum event bytes, and `transport = "sse" | "websocket" | "auto"` (default
+  `websocket`). All valid Provider-discovered models remain in the
   frozen catalog. Legacy `allowed_models` is accepted only as a deprecated
   no-op migration input. The shipped Profile selects `gpt-5.6-luna` with medium
   reasoning.
-- **Lifecycle/resources:** activation constructs the generated Auth client only
-  from `PluginDependencies`, fetches and validates the authenticated model
-  catalog, then freezes it for the candidate Generation. Every completion owns
-  one HTTP response stream.
+- **Lifecycle/resources:** the generated Auth client is Plan-bound. Activation
+  acquires a valid model catalog; subsequent refresh follows the
+  [Model Catalog lifecycle](model-catalog-lifecycle.md). Each SSE completion owns
+  one HTTP response. WS completions exclusively lease connections from a bounded
+  Instance-local pool; each logical Model stream still ends independently.
+  See [Codex Responses transport](codex-responses-transport.md).
 - **Failure policy:** catalog authentication, network, status, or validation
   failure rejects the candidate Ready Gate. Invalid completion requests and
   unsupported models are Domain Errors; rate limit, malformed SSE, truncation,

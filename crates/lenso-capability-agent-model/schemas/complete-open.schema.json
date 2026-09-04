@@ -3,6 +3,12 @@
   "type": "object",
   "required": ["model", "messages", "tools", "temperature", "max_output_tokens"],
   "properties": {
+    "continuation_scope": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Optional caller-owned affinity hint for consecutive completions in one\nisolated task. Providers may ignore it. Full messages remain authoritative;\nthis is neither a provider response ID nor authorization or durable state."
+    },
     "model": {
       "type": "string",
       "minLength": 1,

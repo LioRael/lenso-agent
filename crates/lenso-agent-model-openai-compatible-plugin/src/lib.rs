@@ -873,6 +873,7 @@ mod tests {
     #[test]
     fn chat_request_preserves_assistant_tool_call() {
         let request = CompleteOpen {
+            continuation_scope: None,
             model: "test-model".to_owned(),
             reasoning_effort: None,
             reasoning_enabled: None,

@@ -719,6 +719,7 @@ impl McpClientPlugin {
             .complete_with_context(
                 context.clone(),
                 CompleteOpen {
+                    continuation_scope: None,
                     model: model.clone(),
                     reasoning_effort: None,
                     reasoning_enabled: None,

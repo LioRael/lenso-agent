@@ -4,6 +4,12 @@
   "additionalProperties": false,
   "required": ["base_url", "model", "reasoning_effort", "max_event_bytes"],
   "properties": {
+    "transport": {
+      "type": "string",
+      "enum": ["sse", "websocket", "auto"],
+      "default": "websocket",
+      "description": "Responses transport. Auto falls back only when the WebSocket handshake returns HTTP 426, before any model request is sent."
+    },
     "base_url": { "type": "string" },
     "model": { "type": "string" },
     "allowed_models": {

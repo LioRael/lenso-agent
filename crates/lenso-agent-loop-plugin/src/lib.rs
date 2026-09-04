@@ -1685,6 +1685,7 @@ async fn execute_steps(
         let (reasoning_effort, reasoning_enabled, reasoning_budget_tokens) =
             complete_reasoning_selection(resolved_turn_profile);
         let mut model_request = CompleteOpen {
+            continuation_scope: Some(turn_id.to_owned()),
             model: resolved_turn_profile.model.clone(),
             reasoning_effort,
             reasoning_enabled,

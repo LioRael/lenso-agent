@@ -2970,6 +2970,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "tokio-tungstenite",
  "uuid",
  "zip 8.6.0",
 ]
@@ -3397,11 +3398,14 @@ dependencies = [
  "lenso-kernel",
  "lenso-native-adapter",
  "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "tokio-tungstenite",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]
