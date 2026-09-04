@@ -1,0 +1,79 @@
+{
+  "name": "@lenso/agent-tool-sdk",
+  "version": "0.1.0",
+  "description": "Typed Tool Provider authoring for Lenso Agent TypeScript Plugins.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LioRael/lenso-agent.git",
+    "directory": "packages/lenso-agent-tool-sdk"
+  },
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.ts",
+      "import": "./dist/schema.js",
+      "default": "./dist/schema.js"
+    },
+    "./lenso-build": {
+      "types": "./dist/lenso-build.d.ts",
+      "import": "./dist/lenso-build.js",
+      "default": "./dist/lenso-build.js"
+    }
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "bun build src/index.ts src/schema.ts src/lenso-build.ts --target=bun --format=esm --outdir=dist --entry-naming='[name].js' --external '@lenso/bun-plugin' --external '@lenso/bun-plugin/*' && tsc -p tsconfig.json",
+    "test": "bun test test"
+  },
+  "dependencies": {
+    "@lenso/bun-plugin": "0.2.0",
+    "@lenso/contract-runtime": "0.2.0",
+    "ajv": "8.17.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.0",
+    "typescript": "7.0.2"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "engines": {
+    "bun": ">=1.2.21"
+  },
+  "lenso": {
+    "build": {
+      "api_version": 1,
+      "export": "./lenso-build",
+      "declarations": {
+        ".": [
+          "tools",
+          "tool"
+        ],
+        "./schema": [
+          "array",
+          "boolean",
+          "literal",
+          "number",
+          "object",
+          "optional",
+          "string",
+          "unknown"
+        ]
+      }
+    }
+  }
+}
