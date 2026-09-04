@@ -385,6 +385,15 @@ struct WebRuntimeConfig {
 
 #[derive(Debug)]
 enum RuntimeCommand {
+    AuthConnections {
+        reply: oneshot::Sender<
+            Result<lenso_agent_host::generation::auth_connections::ConnectionCatalog, String>,
+        >,
+    },
+    AuthConnectionAction {
+        request: lenso_agent_host::generation::auth_connections::ConnectionRequest,
+        reply: oneshot::Sender<Result<serde_json::Value, String>>,
+    },
     CompactSession {
         reply: oneshot::Sender<Result<CompactSessionResponse, String>>,
         session_id: String,
@@ -1191,6 +1200,14 @@ fn router(runtime: WebRuntime) -> Router {
             post(select_profile),
         )
         .merge(plugin_control::routes())
+        .route(
+            "/api/console/v1/agent/auth/connections",
+            get(auth_connections),
+        )
+        .route(
+            "/api/console/v1/agent/auth/connections/actions",
+            post(auth_connection_action),
+        )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(runtime)
 }
@@ -1273,6 +1290,51 @@ async fn context_sources(
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
         .map(Json)
         .map_err(ApiProblem::unavailable)
+}
+
+async fn auth_connections(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+) -> Result<Response, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::AuthConnections { reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    let catalog = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(ApiProblem::unavailable)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(catalog),
+    )
+        .into_response())
+}
+
+async fn auth_connection_action(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<lenso_agent_host::generation::auth_connections::ConnectionRequest>,
+) -> Result<Response, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::AuthConnectionAction { request, reply })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    let result = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(ApiProblem::unavailable)?;
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(result),
+    )
+        .into_response())
 }
 
 async fn terminal_catalog(
@@ -2011,6 +2073,12 @@ async fn runtime_actor(
             RuntimeCommand::ContextSources { reply } => {
                 let _ = reply.send(app.web_context_sources().await);
             }
+            RuntimeCommand::AuthConnections { reply } => {
+                let _ = reply.send(app.web_auth_connections().await);
+            }
+            RuntimeCommand::AuthConnectionAction { request, reply } => {
+                let _ = reply.send(app.web_auth_connection_action(request).await);
+            }
             RuntimeCommand::ToolCatalog { reply } => {
                 let result = agent_tool_catalog_on_app(&app, &policy).await;
                 let _ = reply.send(result);
@@ -2268,6 +2336,12 @@ async fn runtime_actor(
                                     RuntimeCommand::ContextSources { reply } => {
                                         let _ = reply.send(app.web_context_sources().await);
                                     }
+                                    RuntimeCommand::AuthConnections { reply } => {
+                                        let _ = reply.send(app.web_auth_connections().await);
+                                    }
+                                    RuntimeCommand::AuthConnectionAction { request, reply } => {
+                                        let _ = reply.send(app.web_auth_connection_action(request).await);
+                                    }
                                     RuntimeCommand::ToolCatalog { reply } => {
                                         let result = agent_tool_catalog_on_app(&app, &policy).await;
                                         let _ = reply.send(result);
@@ -2449,6 +2523,8 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         }
         RuntimeCommand::ModelCatalog { .. }
         | RuntimeCommand::ContextSources { .. }
+        | RuntimeCommand::AuthConnections { .. }
+        | RuntimeCommand::AuthConnectionAction { .. }
         | RuntimeCommand::ToolCatalog { .. }
         | RuntimeCommand::ExecuteTool { .. }
         | RuntimeCommand::TerminalCatalog { .. }
@@ -3380,6 +3456,33 @@ mod tests {
     fn embedded_web_config_disables_the_data_plane_by_default() {
         let config = AgentWebConfig::new(lenso_agent_console_plugins::link);
         assert!(matches!(config.access, AgentWebAccess::Disabled));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn auth_connections_require_management_authorization() {
+        for (method, path, body) in [
+            ("GET", "/api/console/v1/agent/auth/connections", ""),
+            (
+                "POST",
+                "/api/console/v1/agent/auth/connections/actions",
+                r#"{"generation":"test","provider":"test","action":{"kind":"disconnect","request":{}}}"#,
+            ),
+        ] {
+            let mut runtime = runtime_with_access(AgentWebAccess::HostAuthorized);
+            runtime.control = AgentWebControl::Bearer("management-secret".into()).into();
+            let response = router(runtime)
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
     }
 
     #[test]

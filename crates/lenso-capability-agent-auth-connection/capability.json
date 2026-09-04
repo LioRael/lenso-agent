@@ -1,0 +1,43 @@
+{
+  "id": "lenso.agent.auth-connection@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "status",
+      "interaction": "request",
+      "request_schema": "schemas/status-request.schema.json",
+      "response_schema": "schemas/status-response.schema.json",
+      "domain_error_schema": "schemas/status-error.schema.json"
+    },
+    {
+      "name": "begin",
+      "interaction": "request",
+      "request_schema": "schemas/begin-request.schema.json",
+      "response_schema": "schemas/begin-response.schema.json",
+      "domain_error_schema": "schemas/begin-error.schema.json"
+    },
+    {
+      "name": "poll",
+      "interaction": "request",
+      "request_schema": "schemas/poll-request.schema.json",
+      "response_schema": "schemas/poll-response.schema.json",
+      "domain_error_schema": "schemas/poll-error.schema.json"
+    },
+    {
+      "name": "cancel",
+      "interaction": "request",
+      "request_schema": "schemas/cancel-request.schema.json",
+      "response_schema": "schemas/cancel-response.schema.json",
+      "domain_error_schema": "schemas/cancel-error.schema.json"
+    },
+    {
+      "name": "disconnect",
+      "interaction": "request",
+      "request_schema": "schemas/disconnect-request.schema.json",
+      "response_schema": "schemas/disconnect-response.schema.json",
+      "domain_error_schema": "schemas/disconnect-error.schema.json"
+    }
+  ]
+}

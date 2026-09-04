@@ -619,7 +619,8 @@ async fn rejects_an_allowed_tool_outside_the_active_catalog_before_readiness() {
             .spawn()
             .unwrap(),
     );
-    for _ in 0..100 {
+    let deadline = Instant::now() + WEB_SERVER_READY_TIMEOUT;
+    while Instant::now() < deadline {
         if let Some(status) = server.0.try_wait().unwrap() {
             let stderr = server
                 .0
@@ -633,7 +634,7 @@ async fn rejects_an_allowed_tool_outside_the_active_catalog_before_readiness() {
         }
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!("Agent Web accepted an unknown Tool and reached readiness");
+    panic!("Agent Web did not exit after rejecting an unknown Tool within the startup timeout");
 }
 
 #[tokio::test(flavor = "current_thread")]

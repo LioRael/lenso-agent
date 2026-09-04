@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+lenso-capability-agent-auth-connection = { path = "../lenso-capability-agent-auth-connection" }
 anyhow.workspace = true
 directories.workspace = true
 fs2.workspace = true

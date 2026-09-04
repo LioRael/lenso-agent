@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["method"],
+  "properties": {
+    "method": {
+      "$ref": "#/$defs/LoginMethod"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "LoginMethod": {
+      "type": "string",
+      "enum": ["device_code", "browser_loopback"]
+    }
+  },
+  "title": "BeginRequest"
+}
