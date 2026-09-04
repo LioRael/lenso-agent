@@ -1,4 +1,5 @@
 use lenso::CtxExt;
+pub mod auth_connections;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_agent_loop_plugin::{AgentBehaviorProvenance, TurnModelSelection};
 use lenso_agent_native_support::WorkspaceScope;

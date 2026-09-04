@@ -13,6 +13,7 @@ plugin-id = "lenso.agent.web"
 root-slot = "surfaces"
 
 [dependencies]
+lenso-capability-agent-auth-connection = { path = "../lenso-capability-agent-auth-connection" }
 lenso.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-context-source = { path = "../lenso-capability-agent-context-source" }

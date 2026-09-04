@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "unsupported_method" },
+    { "const": "attempt_in_progress" },
+    { "const": "unknown_attempt" },
+    { "const": "authorization_rejected" }
+  ]
+}

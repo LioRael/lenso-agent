@@ -2890,6 +2890,7 @@ dependencies = [
  "fs2",
  "futures",
  "lenso",
+ "lenso-capability-agent-auth-connection",
  "lenso-capability-agent-auth-openai-codex",
  "lenso-kernel",
  "lenso-native-adapter",
@@ -3191,6 +3192,7 @@ dependencies = [
  "lenso-bun-adapter",
  "lenso-capability-agent",
  "lenso-capability-agent-artifact",
+ "lenso-capability-agent-auth-connection",
  "lenso-capability-agent-context-compaction",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-http-fetch",
@@ -3877,6 +3879,7 @@ version = "0.1.0"
 dependencies = [
  "lenso",
  "lenso-capability-agent",
+ "lenso-capability-agent-auth-connection",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-session",
  "lenso-capability-agent-task-supervisor",
@@ -4019,6 +4022,25 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-agent-artifact"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "lenso-capability-agent-auth-connection"
 version = "0.1.0"
 dependencies = [
  "futures",

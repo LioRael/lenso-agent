@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["disconnected"],
+  "properties": {
+    "disconnected": {
+      "type": "boolean",
+      "description": "Local grant removed; remote revocation is not implied."
+    }
+  },
+  "additionalProperties": false,
+  "title": "DisconnectResponse"
+}

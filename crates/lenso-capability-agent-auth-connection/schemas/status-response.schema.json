@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["label", "connected", "methods"],
+  "properties": {
+    "label": {
+      "type": "string",
+      "description": "Provider-owned display name, not a package identifier."
+    },
+    "connected": {
+      "type": "boolean",
+      "description": "Presence of a stored grant, not proof that a remote service accepts it."
+    },
+    "methods": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/LoginMethod"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "LoginMethod": {
+      "type": "string",
+      "enum": ["device_code", "browser_loopback"]
+    }
+  },
+  "title": "StatusResponse"
+}

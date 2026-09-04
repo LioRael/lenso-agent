@@ -11,6 +11,7 @@ use lenso_capability_agent_user_interaction as interaction_capability;
 #[plugin(consumer)]
 #[derive(Clone, Debug)]
 struct AgentWebAnchor {
+    auth_connections: ManyPort<lenso_capability_agent_auth_connection::AuthConnectionClient>,
     agent: Port<agent_capability::AgentClient>,
     context_sources: ManyPort<context_source_capability::ContextSourceClient>,
     interaction: Port<interaction_capability::UserInteractionClient>,
@@ -29,6 +30,11 @@ mod tests {
         assert_eq!(
             descriptor["required_capabilities"],
             serde_json::json!([
+                {
+                    "capability_id": "lenso.agent.auth-connection@1",
+                    "descriptor_version": "1.0.0",
+                    "cardinality": "many"
+                },
                 {
                     "capability_id": "lenso.agent@3",
                     "descriptor_version": "3.0.0",

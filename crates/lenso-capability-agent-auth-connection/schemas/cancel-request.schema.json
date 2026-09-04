@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["attempt_id"],
+  "properties": {
+    "attempt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "x-lenso-sensitive": true
+    }
+  },
+  "additionalProperties": false,
+  "title": "AttemptRequest"
+}
