@@ -16,16 +16,21 @@
     "max_resource_manifest_bytes"
   ],
   "properties": {
-    "root": { "type": "string" },
-    "max_skills": { "type": "integer" },
-    "max_file_bytes": { "type": "integer" },
-    "max_total_bytes": { "type": "integer" },
-    "max_catalog_bytes": { "type": "integer" },
-    "catalog_contribution_id": { "type": "string" },
-    "max_prompt_catalog_bytes": { "type": "integer" },
-    "max_resource_entries": { "type": "integer" },
-    "max_resource_file_bytes": { "type": "integer" },
-    "max_resource_total_bytes": { "type": "integer" },
-    "max_resource_manifest_bytes": { "type": "integer" }
-  }
+    "root": { "type": "string", "title": "Skills directory", "description": "Directory containing skill folders with SKILL.md files. A leading ~/ uses the home directory; a missing directory loads an empty catalog.", "minLength": 1 },
+    "max_skills": { "type": "integer", "title": "Skill count limit", "description": "Maximum number of discovered skills.", "minimum": 1, "maximum": 1024 },
+    "max_file_bytes": { "type": "integer", "title": "Skill file limit (bytes)", "description": "Maximum size of one SKILL.md file. Must not exceed the total skill content limit.", "minimum": 1, "maximum": 1048576 },
+    "max_total_bytes": { "type": "integer", "title": "Total skill content limit (bytes)", "description": "Maximum combined size of all loaded SKILL.md files.", "minimum": 1, "maximum": 16777216 },
+    "max_catalog_bytes": { "type": "integer", "title": "Catalog size limit (bytes)", "description": "Maximum size of the serialized skill catalog returned by the provider.", "minimum": 1, "maximum": 1048576 },
+    "catalog_contribution_id": { "type": "string", "title": "Prompt contribution ID", "description": "Stable ID for the skill catalog prompt contribution. Start with a lowercase letter or digit; remaining characters may also include dots, underscores, slashes and hyphens.", "minLength": 1, "maxLength": 128 },
+    "max_prompt_catalog_bytes": { "type": "integer", "title": "Prompt catalog limit (bytes)", "description": "Maximum skill catalog text included in the prompt. Entries are shortened or omitted to fit.", "minimum": 512, "maximum": 262144 },
+    "max_resource_entries": { "type": "integer", "title": "Resource entry limit", "description": "Maximum non-hidden filesystem entries visited across all skill resources.", "minimum": 1, "maximum": 65536 },
+    "max_resource_file_bytes": { "type": "integer", "title": "Resource file limit (bytes)", "description": "Maximum size of one resource file. Must not exceed the total resource content limit.", "minimum": 1, "maximum": 1048576 },
+    "max_resource_total_bytes": { "type": "integer", "title": "Total resource content limit (bytes)", "description": "Maximum combined resource file content loaded across all skills.", "minimum": 1, "maximum": 67108864 },
+    "max_resource_manifest_bytes": { "type": "integer", "title": "Resource manifest limit (bytes)", "description": "Maximum serialized resource manifest size for one skill.", "minimum": 1, "maximum": 1048576 }
+  },
+  "allOf": [
+    { "title": "Skill loading", "properties": { "root": true, "max_skills": true, "max_file_bytes": true, "max_total_bytes": true } },
+    { "title": "Catalog", "properties": { "max_catalog_bytes": true, "max_prompt_catalog_bytes": true, "catalog_contribution_id": true } },
+    { "title": "Resources", "properties": { "max_resource_entries": true, "max_resource_file_bytes": true, "max_resource_total_bytes": true, "max_resource_manifest_bytes": true } }
+  ]
 }

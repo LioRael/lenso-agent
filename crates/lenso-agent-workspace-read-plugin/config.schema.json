@@ -11,12 +11,17 @@
     "max_search_matches"
   ],
   "properties": {
-    "root": { "type": "string" },
-    "delegated_root": { "type": "string" },
-    "max_output_bytes": { "type": "integer" },
-    "max_list_entries": { "type": "integer" },
-    "max_search_entries": { "type": "integer" },
-    "max_search_bytes": { "type": "integer" },
-    "max_search_matches": { "type": "integer" }
-  }
+    "root": { "type": "string", "title": "Workspace directory", "description": "Directory available to read, list and search tools. It must exist; tool paths are resolved within this directory." },
+    "delegated_root": { "type": "string", "title": "Delegated worktree directory", "description": "Optional parent directory for delegated Git worktrees. Scoped workspaces outside the main directory must be under this directory and contain a .git entry." },
+    "max_output_bytes": { "type": "integer", "title": "Read size limit (bytes)", "description": "Maximum size of a file read and its returned content.", "minimum": 1, "maximum": 1048576 },
+    "max_list_entries": { "type": "integer", "title": "Directory entry limit", "description": "Maximum entries returned by a directory listing.", "minimum": 1, "maximum": 10000 },
+    "max_search_entries": { "type": "integer", "title": "Search entry limit", "description": "Maximum filesystem entries visited during one search.", "minimum": 1, "maximum": 100000 },
+    "max_search_bytes": { "type": "integer", "title": "Search content limit (bytes)", "description": "Maximum file content scanned during one search.", "minimum": 1, "maximum": 1073741824 },
+    "max_search_matches": { "type": "integer", "title": "Search match limit", "description": "Maximum matching lines returned by one search.", "minimum": 1, "maximum": 10000 }
+  },
+  "allOf": [
+    { "title": "Directories", "properties": { "root": true, "delegated_root": true } },
+    { "title": "Reading and listing", "properties": { "max_output_bytes": true, "max_list_entries": true } },
+    { "title": "Search limits", "properties": { "max_search_entries": true, "max_search_bytes": true, "max_search_matches": true } }
+  ]
 }

@@ -4,8 +4,12 @@
   "additionalProperties": false,
   "required": ["default_timeout_ms"],
   "properties": {
-    "default_timeout_ms": { "type": "integer" },
-    "max_background_processes": { "type": "integer" },
-    "max_background_log_bytes": { "type": "integer" }
-  }
+    "default_timeout_ms": { "type": "integer", "title": "Default timeout (ms)", "description": "Timeout used when a process tool call does not specify one.", "minimum": 1, "maximum": 3600000 },
+    "max_background_processes": { "type": "integer", "title": "Background process limit", "description": "Maximum background process handles retained by this Plugin instance. Completed processes still count until their handles are released.", "minimum": 1, "maximum": 64, "default": 8 },
+    "max_background_log_bytes": { "type": "integer", "title": "Log size limit (bytes)", "description": "Combined stdout and stderr retained per background process. Further output is truncated when this limit is reached.", "minimum": 1024, "maximum": 1048576, "default": 262144 }
+  },
+  "allOf": [
+    { "title": "Execution", "properties": { "default_timeout_ms": true } },
+    { "title": "Background processes", "properties": { "max_background_processes": true, "max_background_log_bytes": true } }
+  ]
 }

@@ -4,10 +4,15 @@
   "additionalProperties": false,
   "required": ["allowed_origins", "cdp_endpoint", "max_snapshot_bytes", "screenshot_directory", "timeout_ms"],
   "properties": {
-    "allowed_origins": { "type": "array", "items": { "type": "string" } },
-    "cdp_endpoint": { "type": "string" },
-    "max_snapshot_bytes": { "type": "integer" },
-    "screenshot_directory": { "type": "string" },
-    "timeout_ms": { "type": "integer" }
-  }
+    "allowed_origins": { "type": "array", "title": "Allowed origins", "description": "HTTP or HTTPS origins this browser may visit, such as https://example.com. Enter 1–32 normalized origins without paths, sorted in ascending order with no duplicates.", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": { "type": "string", "title": "Allowed origin" } },
+    "cdp_endpoint": { "type": "string", "title": "Browser connection URL", "description": "CDP endpoint of an existing browser. Only http:// or ws:// on localhost, 127.0.0.1 or ::1 is accepted, without credentials, query parameters or fragments." },
+    "max_snapshot_bytes": { "type": "integer", "title": "Snapshot text limit", "description": "Maximum page text returned by a browser snapshot, measured in UTF-16 code units by the current browser driver, not encoded bytes.", "minimum": 1, "maximum": 1048576 },
+    "screenshot_directory": { "type": "string", "title": "Screenshot directory", "description": "Directory relative to the process workspace for saved screenshots. Absolute paths, . and .. path components are not allowed; the path must fit within 1,024 bytes.", "minLength": 1 },
+    "timeout_ms": { "type": "integer", "title": "Operation timeout (ms)", "description": "Maximum duration of a browser operation, including its process execution.", "minimum": 1, "maximum": 120000 }
+  },
+  "allOf": [
+    { "title": "Connection and access", "properties": { "cdp_endpoint": true, "allowed_origins": true } },
+    { "title": "Output", "properties": { "screenshot_directory": true, "max_snapshot_bytes": true } },
+    { "title": "Execution", "properties": { "timeout_ms": true } }
+  ]
 }
