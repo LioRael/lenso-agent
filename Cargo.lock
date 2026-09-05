@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-agent-tool-provider"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
