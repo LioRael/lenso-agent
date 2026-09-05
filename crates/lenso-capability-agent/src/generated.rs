@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, PluginDependencies, RuntimeFailure, StreamCapability, StreamEvent};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent@3";
 pub const DESCRIPTOR_VERSION: &str = "3.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:dd1e20113ff7b688e1533bfea0410a7f1078261e066764719765d2ddaabe6d35";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AGENT_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const AGENT_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const AGENT_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const AGENT_CONTRACT: CapabilityReference<AgentClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_agent_client { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_agent_client {
+    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_agent_client { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_agent_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_agent_client {
+    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const RUN_TURN_OPERATION: &str = "run_turn";
 
@@ -245,6 +260,41 @@ macro_rules! __lenso_native_lower_agent {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_agent {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportAgent;
+        impl $crate::AgentProvider for $object {
+        fn run_turn(&self, context: __LensoNativeSupportAgent::InvocationContext, request: $crate::RunTurnRequest) -> __LensoNativeSupportAgent::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportAgent::NativeStreamSession>, $crate::AgentInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::AgentInvocationError::Runtime)?;
+                let result = <$plugin>::run_turn(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoAgentRunTurnStreamResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_agent {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportAgent;
+        impl $crate::AgentProvider for $object {
+        fn run_turn(&self, context: __LensoNativeSupportAgent::InvocationContext, request: $crate::RunTurnRequest) -> __LensoNativeSupportAgent::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportAgent::NativeStreamSession>, $crate::AgentInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::AgentInvocationError::Runtime)?;
+                <$plugin as $crate::AgentProvider>::run_turn(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 pub struct AgentEndpoint<P: AgentProvider> { provider: Rc<P> }
 impl<P: AgentProvider> AgentEndpoint<P> {
@@ -320,6 +370,13 @@ impl AgentClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn run_turn(&self, request: RunTurnRequest) -> Result<NativeStream<Agent>, AgentInvocationError> {
         self.run_turn.open(RUN_TURN_OPERATION, request).await
             .map_err(AgentInvocationError::Runtime)?
@@ -346,6 +403,14 @@ impl CapabilityClient for AgentClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -370,6 +435,14 @@ impl CapabilityClientMany for AgentClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -403,6 +476,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for AgentJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[] }
     fn stream_operations(&self) -> &'static [&'static str] { &[RUN_TURN_OPERATION] }

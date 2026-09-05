@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.auth.openai-codex@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:22f178904ed4633ee41e505889e31d52a5d3b82bc98180cfd73b9ee97c151353";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const OPENAI_CODEX_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const OPENAI_CODEX_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const OPENAI_CODEX_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const OPENAI_CODEX_CONTRACT: CapabilityReference<OpenaiCodexClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_openai_codex { () => { "{\"capability_id\":\"lenso
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_openai_codex_client { () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_openai_codex_client {
+    () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_openai_codex_client { () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_openai_codex_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_openai_codex_client {
+    () => { "{\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth.openai-codex@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const ACCESS_OPERATION: &str = "access";
 
@@ -193,6 +208,41 @@ macro_rules! __lenso_native_lower_openai_codex {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_openai_codex {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportOpenaiCodex;
+        impl $crate::OpenaiCodexProvider for $object {
+        fn access(&self, context: __LensoNativeSupportOpenaiCodex::InvocationContext, request: $crate::AccessRequest) -> __LensoNativeSupportOpenaiCodex::NativeRequestFuture<$crate::OpenaiCodex> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::access(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoOpenaiCodexAccessResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_openai_codex {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportOpenaiCodex;
+        impl $crate::OpenaiCodexProvider for $object {
+        fn access(&self, context: __LensoNativeSupportOpenaiCodex::InvocationContext, request: $crate::AccessRequest) -> __LensoNativeSupportOpenaiCodex::NativeRequestFuture<$crate::OpenaiCodex> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::OpenaiCodexProvider>::access(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct OpenaiCodexRequestEndpoint { provider: Rc<dyn OpenaiCodexProvider> }
 
@@ -276,6 +326,13 @@ impl OpenaiCodexClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn access(&self, request: AccessRequest) -> Result<AccessResponse, OpenaiCodexInvocationError> {
         self.access.invoke(ACCESS_OPERATION, request).await
             .map_err(OpenaiCodexInvocationError::Runtime)?
@@ -302,6 +359,14 @@ impl CapabilityClient for OpenaiCodexClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -326,6 +391,14 @@ impl CapabilityClientMany for OpenaiCodexClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 

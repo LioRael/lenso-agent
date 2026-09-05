@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.model-selection@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:a1fa9a86bccc39f4d8959e5d2d6edc7b53fdf39dd0f714f2c586406af4922177";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_SELECTION_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const MODEL_SELECTION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const MODEL_SELECTION_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const MODEL_SELECTION_CONTRACT: CapabilityReference<ModelSelectionClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_model_selection { () => { "{\"capability_id\":\"le
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_model_selection_client { () => { "{\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_model_selection_client {
+    () => { "{\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_model_selection_client { () => { "{\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_model_selection_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_model_selection_client {
+    () => { "{\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model-selection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const SELECT_OPERATION: &str = "select";
 
@@ -206,6 +221,41 @@ macro_rules! __lenso_native_lower_model_selection {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_model_selection {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportModelSelection;
+        impl $crate::ModelSelectionProvider for $object {
+        fn select(&self, context: __LensoNativeSupportModelSelection::InvocationContext, request: $crate::SelectRequest) -> __LensoNativeSupportModelSelection::NativeRequestFuture<$crate::ModelSelection> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::select(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoModelSelectionSelectResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_model_selection {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportModelSelection;
+        impl $crate::ModelSelectionProvider for $object {
+        fn select(&self, context: __LensoNativeSupportModelSelection::InvocationContext, request: $crate::SelectRequest) -> __LensoNativeSupportModelSelection::NativeRequestFuture<$crate::ModelSelection> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ModelSelectionProvider>::select(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ModelSelectionRequestEndpoint { provider: Rc<dyn ModelSelectionProvider> }
 
@@ -289,6 +339,13 @@ impl ModelSelectionClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn select(&self, request: SelectRequest) -> Result<SelectResponse, ModelSelectionInvocationError> {
         self.select.invoke(SELECT_OPERATION, request).await
             .map_err(ModelSelectionInvocationError::Runtime)?
@@ -315,6 +372,14 @@ impl CapabilityClient for ModelSelectionClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -339,6 +404,14 @@ impl CapabilityClientMany for ModelSelectionClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -372,6 +445,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ModelSelectionJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[SELECT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

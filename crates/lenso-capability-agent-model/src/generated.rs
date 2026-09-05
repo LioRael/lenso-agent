@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, PluginDependencies, RequestCapability, RuntimeFailure, StreamCapability, StreamEvent};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.model@4";
 pub const DESCRIPTOR_VERSION: &str = "4.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:114add54b20812e84ba4b1c3cd2d4dd829ca96dd15c3ad180d845b6533340eab";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const MODEL_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const MODEL_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const MODEL_CONTRACT: CapabilityReference<ModelClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_model_client {
+    () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_model_client { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_model_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_model_client {
+    () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const COMPLETE_OPERATION: &str = "complete";
@@ -655,6 +670,56 @@ macro_rules! __lenso_native_lower_model {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_model {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportModel;
+        impl $crate::ModelProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportModel::NativeRequestFuture<$crate::ModelCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::catalog(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoModelCatalogResult::__lenso_into_result(result)
+            })
+        }
+        fn complete(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CompleteOpen) -> __LensoNativeSupportModel::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportModel::NativeStreamSession>, $crate::ModelCompleteInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::ModelCompleteInvocationError::Runtime)?;
+                let result = <$plugin>::complete(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoModelCompleteStreamResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_model {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportModel;
+        impl $crate::ModelProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportModel::NativeRequestFuture<$crate::ModelCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ModelProvider>::catalog(plugin.as_ref(), context, request).await
+            })
+        }
+        fn complete(&self, context: __LensoNativeSupportModel::InvocationContext, request: $crate::CompleteOpen) -> __LensoNativeSupportModel::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportModel::NativeStreamSession>, $crate::ModelCompleteInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::ModelCompleteInvocationError::Runtime)?;
+                <$plugin as $crate::ModelProvider>::complete(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ModelRequestEndpoint { provider: Rc<dyn ModelProvider> }
 
@@ -761,6 +826,13 @@ impl ModelClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn catalog(&self, request: CatalogRequest) -> Result<CatalogResponse, ModelCatalogInvocationError> {
         self.catalog.invoke(CATALOG_OPERATION, request).await
             .map_err(ModelCatalogInvocationError::Runtime)?
@@ -800,6 +872,14 @@ impl CapabilityClient for ModelClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -825,6 +905,14 @@ impl CapabilityClientMany for ModelClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -867,6 +955,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ModelJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[CATALOG_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[COMPLETE_OPERATION] }

@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.turn-input@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:f569d95ca4ef25c01c138ffe5e17a4a5a21a5e4d52ae5cc74396009ee1352413";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TURN_INPUT_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const TURN_INPUT_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const TURN_INPUT_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const TURN_INPUT_CONTRACT: CapabilityReference<TurnInputClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_turn_input { () => { "{\"capability_id\":\"lenso.a
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_turn_input_client { () => { "{\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_turn_input_client {
+    () => { "{\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_turn_input_client { () => { "{\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_turn_input_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_turn_input_client {
+    () => { "{\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.turn-input@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const SUBMIT_OPERATION: &str = "submit";
 
@@ -187,6 +202,41 @@ macro_rules! __lenso_native_lower_turn_input {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_turn_input {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportTurnInput;
+        impl $crate::TurnInputProvider for $object {
+        fn submit(&self, context: __LensoNativeSupportTurnInput::InvocationContext, request: $crate::SubmitRequest) -> __LensoNativeSupportTurnInput::NativeRequestFuture<$crate::TurnInput> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::submit(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoTurnInputSubmitResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_turn_input {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportTurnInput;
+        impl $crate::TurnInputProvider for $object {
+        fn submit(&self, context: __LensoNativeSupportTurnInput::InvocationContext, request: $crate::SubmitRequest) -> __LensoNativeSupportTurnInput::NativeRequestFuture<$crate::TurnInput> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::TurnInputProvider>::submit(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct TurnInputRequestEndpoint { provider: Rc<dyn TurnInputProvider> }
 
@@ -270,6 +320,13 @@ impl TurnInputClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn submit(&self, request: SubmitRequest) -> Result<SubmitResponse, TurnInputInvocationError> {
         self.submit.invoke(SUBMIT_OPERATION, request).await
             .map_err(TurnInputInvocationError::Runtime)?
@@ -296,6 +353,14 @@ impl CapabilityClient for TurnInputClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -320,6 +385,14 @@ impl CapabilityClientMany for TurnInputClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -353,6 +426,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for TurnInputJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[SUBMIT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

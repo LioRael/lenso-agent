@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.plugin-management-target@1";
 pub const DESCRIPTOR_VERSION: &str = "1.2.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:2310ba33dd386bc15771375fc1875424850972acd3ba0bdfa06b6161b616b56c";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PLUGIN_MANAGEMENT_TARGET_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const PLUGIN_MANAGEMENT_TARGET_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const PLUGIN_MANAGEMENT_TARGET_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const PLUGIN_MANAGEMENT_TARGET_CONTRACT: CapabilityReference<PluginManagementTargetClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_plugin_management_target { () => { "{\"capability_
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_plugin_management_target_client { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_plugin_management_target_client {
+    () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_plugin_management_target_client { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_plugin_management_target_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_plugin_management_target_client {
+    () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const HISTORY_OPERATION: &str = "history";
@@ -2459,6 +2474,206 @@ macro_rules! __lenso_native_lower_plugin_management_target {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_plugin_management_target {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportPluginManagementTarget;
+        impl $crate::PluginManagementTargetProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::catalog(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetCatalogResult::__lenso_into_result(result)
+            })
+        }
+        fn history(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::HistoryRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetHistory> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::history(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetHistoryResult::__lenso_into_result(result)
+            })
+        }
+        fn inspect(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::InspectRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetInspect> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::inspect(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetInspectResult::__lenso_into_result(result)
+            })
+        }
+        fn propose(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPropose> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::propose(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetProposeResult::__lenso_into_result(result)
+            })
+        }
+        fn propose_install(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeInstallRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeInstall> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::propose_install(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetProposeInstallResult::__lenso_into_result(result)
+            })
+        }
+        fn propose_removal(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRemovalRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeRemoval> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::propose_removal(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetProposeRemovalResult::__lenso_into_result(result)
+            })
+        }
+        fn propose_rollback(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRollbackRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeRollback> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::propose_rollback(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetProposeRollbackResult::__lenso_into_result(result)
+            })
+        }
+        fn publish(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublish> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::publish(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetPublishResult::__lenso_into_result(result)
+            })
+        }
+        fn publish_install(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishInstallRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishInstall> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::publish_install(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetPublishInstallResult::__lenso_into_result(result)
+            })
+        }
+        fn publish_removal(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRemovalRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishRemoval> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::publish_removal(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetPublishRemovalResult::__lenso_into_result(result)
+            })
+        }
+        fn publish_rollback(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRollbackRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishRollback> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::publish_rollback(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetPublishRollbackResult::__lenso_into_result(result)
+            })
+        }
+        fn set_enabled(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::SetEnabledRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetSetEnabled> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::set_enabled(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetSetEnabledResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_plugin_management_target {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportPluginManagementTarget;
+        impl $crate::PluginManagementTargetProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::catalog(plugin.as_ref(), context, request).await
+            })
+        }
+        fn history(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::HistoryRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetHistory> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::history(plugin.as_ref(), context, request).await
+            })
+        }
+        fn inspect(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::InspectRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetInspect> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::inspect(plugin.as_ref(), context, request).await
+            })
+        }
+        fn propose(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPropose> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::propose(plugin.as_ref(), context, request).await
+            })
+        }
+        fn propose_install(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeInstallRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeInstall> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::propose_install(plugin.as_ref(), context, request).await
+            })
+        }
+        fn propose_removal(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRemovalRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeRemoval> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::propose_removal(plugin.as_ref(), context, request).await
+            })
+        }
+        fn propose_rollback(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRollbackRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetProposeRollback> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::propose_rollback(plugin.as_ref(), context, request).await
+            })
+        }
+        fn publish(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublish> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::publish(plugin.as_ref(), context, request).await
+            })
+        }
+        fn publish_install(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishInstallRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishInstall> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::publish_install(plugin.as_ref(), context, request).await
+            })
+        }
+        fn publish_removal(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRemovalRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishRemoval> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::publish_removal(plugin.as_ref(), context, request).await
+            })
+        }
+        fn publish_rollback(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::PublishRollbackRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPublishRollback> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::publish_rollback(plugin.as_ref(), context, request).await
+            })
+        }
+        fn set_enabled(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::SetEnabledRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetSetEnabled> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::set_enabled(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct PluginManagementTargetRequestEndpoint { provider: Rc<dyn PluginManagementTargetProvider> }
 
@@ -2703,6 +2918,13 @@ impl PluginManagementTargetClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn catalog(&self, request: CatalogRequest) -> Result<CatalogResponse, PluginManagementTargetCatalogInvocationError> {
         self.catalog.invoke(CATALOG_OPERATION, request).await
             .map_err(PluginManagementTargetCatalogInvocationError::Runtime)?
@@ -2872,6 +3094,14 @@ impl CapabilityClient for PluginManagementTargetClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -2907,6 +3137,14 @@ impl CapabilityClientMany for PluginManagementTargetClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -3039,6 +3277,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.context-compaction@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:3c865046f458b5bede7b437050bd065e382794f536dbe6667972aa1a60359b60";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const CONTEXT_COMPACTION_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const CONTEXT_COMPACTION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const CONTEXT_COMPACTION_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const CONTEXT_COMPACTION_CONTRACT: CapabilityReference<ContextCompactionClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_context_compaction { () => { "{\"capability_id\":\
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_context_compaction_client { () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_context_compaction_client {
+    () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_context_compaction_client { () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_context_compaction_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_context_compaction_client {
+    () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const COMPACT_OPERATION: &str = "compact";
 
@@ -213,6 +228,41 @@ macro_rules! __lenso_native_lower_context_compaction {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_context_compaction {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportContextCompaction;
+        impl $crate::ContextCompactionProvider for $object {
+        fn compact(&self, context: __LensoNativeSupportContextCompaction::InvocationContext, request: $crate::CompactRequest) -> __LensoNativeSupportContextCompaction::NativeRequestFuture<$crate::ContextCompaction> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::compact(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoContextCompactionCompactResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_context_compaction {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportContextCompaction;
+        impl $crate::ContextCompactionProvider for $object {
+        fn compact(&self, context: __LensoNativeSupportContextCompaction::InvocationContext, request: $crate::CompactRequest) -> __LensoNativeSupportContextCompaction::NativeRequestFuture<$crate::ContextCompaction> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ContextCompactionProvider>::compact(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ContextCompactionRequestEndpoint { provider: Rc<dyn ContextCompactionProvider> }
 
@@ -296,6 +346,13 @@ impl ContextCompactionClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn compact(&self, request: CompactRequest) -> Result<CompactResponse, ContextCompactionInvocationError> {
         self.compact.invoke(COMPACT_OPERATION, request).await
             .map_err(ContextCompactionInvocationError::Runtime)?
@@ -322,6 +379,14 @@ impl CapabilityClient for ContextCompactionClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -346,6 +411,14 @@ impl CapabilityClientMany for ContextCompactionClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -379,6 +452,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ContextCompactionJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[COMPACT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

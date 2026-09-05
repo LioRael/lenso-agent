@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.user-interaction@2";
 pub const DESCRIPTOR_VERSION: &str = "2.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:7fe3b0e843eec7ce41511b4da640eb1444417678e8a3a3f853a3b84df26af41b";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const USER_INTERACTION_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const USER_INTERACTION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const USER_INTERACTION_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const USER_INTERACTION_CONTRACT: CapabilityReference<UserInteractionClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_user_interaction { () => { "{\"capability_id\":\"l
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_user_interaction_client { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_user_interaction_client {
+    () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_user_interaction_client { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_user_interaction_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_user_interaction_client {
+    () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const ANSWER_OPERATION: &str = "answer";
 pub const ASK_OPERATION: &str = "ask";
@@ -521,6 +536,71 @@ macro_rules! __lenso_native_lower_user_interaction {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_user_interaction {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportUserInteraction;
+        impl $crate::UserInteractionProvider for $object {
+        fn answer(&self, context: __LensoNativeSupportUserInteraction::InvocationContext, request: $crate::AnswerRequest) -> __LensoNativeSupportUserInteraction::NativeRequestFuture<$crate::UserInteractionAnswer> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::answer(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoUserInteractionAnswerResult::__lenso_into_result(result)
+            })
+        }
+        fn ask(&self, context: __LensoNativeSupportUserInteraction::InvocationContext, request: $crate::AskRequest) -> __LensoNativeSupportUserInteraction::NativeRequestFuture<$crate::UserInteractionAsk> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::ask(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoUserInteractionAskResult::__lenso_into_result(result)
+            })
+        }
+        fn pending(&self, context: __LensoNativeSupportUserInteraction::InvocationContext, request: $crate::PendingRequest) -> __LensoNativeSupportUserInteraction::NativeRequestFuture<$crate::UserInteractionPending> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::pending(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoUserInteractionPendingResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_user_interaction {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportUserInteraction;
+        impl $crate::UserInteractionProvider for $object {
+        fn answer(&self, context: __LensoNativeSupportUserInteraction::InvocationContext, request: $crate::AnswerRequest) -> __LensoNativeSupportUserInteraction::NativeRequestFuture<$crate::UserInteractionAnswer> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::UserInteractionProvider>::answer(plugin.as_ref(), context, request).await
+            })
+        }
+        fn ask(&self, context: __LensoNativeSupportUserInteraction::InvocationContext, request: $crate::AskRequest) -> __LensoNativeSupportUserInteraction::NativeRequestFuture<$crate::UserInteractionAsk> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::UserInteractionProvider>::ask(plugin.as_ref(), context, request).await
+            })
+        }
+        fn pending(&self, context: __LensoNativeSupportUserInteraction::InvocationContext, request: $crate::PendingRequest) -> __LensoNativeSupportUserInteraction::NativeRequestFuture<$crate::UserInteractionPending> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::UserInteractionProvider>::pending(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct UserInteractionRequestEndpoint { provider: Rc<dyn UserInteractionProvider> }
 
@@ -630,6 +710,13 @@ impl UserInteractionClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn answer(&self, request: AnswerRequest) -> Result<AnswerResponse, UserInteractionAnswerInvocationError> {
         self.answer.invoke(ANSWER_OPERATION, request).await
             .map_err(UserInteractionAnswerInvocationError::Runtime)?
@@ -682,6 +769,14 @@ impl CapabilityClient for UserInteractionClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -708,6 +803,14 @@ impl CapabilityClientMany for UserInteractionClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -759,6 +862,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for UserInteractionJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[ANSWER_OPERATION, ASK_OPERATION, PENDING_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

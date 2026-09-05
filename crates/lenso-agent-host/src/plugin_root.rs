@@ -10,7 +10,8 @@ use lenso_app_plan::{
     authoring::{PluginDescriptor, PluginInstanceId, PluginRootInstance, PluginRootSnapshot},
 };
 use lenso_plugin_bundle::{
-    ImplementationPolicy, read_bundle_manifest, resolve_implementation, verify_bundle_directory,
+    ImplementationPolicy, RuntimeAdmission, read_bundle_manifest, resolve_implementation,
+    verify_bundle_directory,
 };
 use lenso_plugin_control_plane::{PlanArtifact, sha256_digest};
 use lenso_runtime_codec::{ArtifactHandle, InstanceResourceCatalog, InstanceResources};
@@ -690,13 +691,17 @@ fn implementation_policy() -> ImplementationPolicy {
             std::env::consts::ARCH,
             std::env::consts::OS
         ),
-        execution_classes: [
-            "lenso.quickjs@1",
-            "lenso.process@1",
-            "lenso.wasm-component@1",
+        runtimes: [
+            ("lenso.quickjs@1", "lenso.quickjs@1"),
+            ("lenso.process@1", "lenso.process-stdio@2"),
+            ("lenso.bun-process@1", "lenso.bun-authoring@2"),
+            ("lenso.wasm-component@1", "lenso.wasm-component@1"),
         ]
         .into_iter()
-        .map(ExecutionClassId::new)
+        .map(|(execution_class, runtime_profile)| RuntimeAdmission {
+            execution_class: ExecutionClassId::new(execution_class),
+            runtime_profile: runtime_profile.to_owned(),
+        })
         .collect(),
     }
 }
@@ -1101,15 +1106,18 @@ mod tests {
     }
 
     #[test]
-    fn selects_one_v3_implementation_before_plugin_root_resolution() {
+    fn selects_one_v4_implementation_before_plugin_root_resolution() {
         let directory = tempfile::tempdir().unwrap();
         let artifact = directory.path().join("plugin.js");
         std::fs::write(&artifact, "export function invoke() {}\n").unwrap();
         let bundle = directory.path().join("plugin.lenso-plugin");
-        let contract =
-            PluginContract::new("example.multi", "1.0.0", "tool-providers").with_capability(
-                CapabilityEndpointPlan::new("example.echo@1", "1.0.0", ["echo"]),
-            );
+        let contract = PluginContract::new("example.multi", "1.0.0", "tool-providers")
+            .with_authoring_version(2)
+            .with_capability(CapabilityEndpointPlan::new(
+                "example.echo@1",
+                "1.0.0",
+                ["echo"],
+            ));
         build_source_plugin_release_bundle(&SourcePluginReleaseBuild {
             contract,
             implementations: vec![SourcePluginImplementation {
@@ -1121,6 +1129,7 @@ mod tests {
                 target: "javascript-es2023".to_owned(),
                 entrypoint: "plugin.js".to_owned(),
                 execution_class: ExecutionClassId::new("lenso.quickjs@1"),
+                runtime_profile: "lenso.quickjs@1".to_owned(),
             }],
             output: bundle.clone(),
         })

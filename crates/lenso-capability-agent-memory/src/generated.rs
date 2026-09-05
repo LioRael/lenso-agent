@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.memory@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:adfc46e6522a10319f1d7ac9445b820b09bc624902a29ecf3608fe133082aba5";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MEMORY_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const MEMORY_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const MEMORY_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const MEMORY_CONTRACT: CapabilityReference<MemoryClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_memory { () => { "{\"capability_id\":\"lenso.agent
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_memory_client { () => { "{\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_memory_client {
+    () => { "{\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_memory_client { () => { "{\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_memory_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_memory_client {
+    () => { "{\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.memory@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const FORGET_OPERATION: &str = "forget";
 pub const OBSERVE_OPERATION: &str = "observe";
@@ -639,6 +654,86 @@ macro_rules! __lenso_native_lower_memory {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_memory {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportMemory;
+        impl $crate::MemoryProvider for $object {
+        fn forget(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::ForgetRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryForget> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::forget(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoMemoryForgetResult::__lenso_into_result(result)
+            })
+        }
+        fn observe(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::ObserveRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryObserve> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::observe(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoMemoryObserveResult::__lenso_into_result(result)
+            })
+        }
+        fn recall(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::RecallRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryRecall> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::recall(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoMemoryRecallResult::__lenso_into_result(result)
+            })
+        }
+        fn remember(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::RememberRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryRemember> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::remember(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoMemoryRememberResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_memory {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportMemory;
+        impl $crate::MemoryProvider for $object {
+        fn forget(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::ForgetRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryForget> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::MemoryProvider>::forget(plugin.as_ref(), context, request).await
+            })
+        }
+        fn observe(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::ObserveRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryObserve> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::MemoryProvider>::observe(plugin.as_ref(), context, request).await
+            })
+        }
+        fn recall(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::RecallRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryRecall> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::MemoryProvider>::recall(plugin.as_ref(), context, request).await
+            })
+        }
+        fn remember(&self, context: __LensoNativeSupportMemory::InvocationContext, request: $crate::RememberRequest) -> __LensoNativeSupportMemory::NativeRequestFuture<$crate::MemoryRemember> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::MemoryProvider>::remember(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct MemoryRequestEndpoint { provider: Rc<dyn MemoryProvider> }
 
@@ -763,6 +858,13 @@ impl MemoryClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn forget(&self, request: ForgetRequest) -> Result<ForgetResponse, MemoryForgetInvocationError> {
         self.forget.invoke(FORGET_OPERATION, request).await
             .map_err(MemoryForgetInvocationError::Runtime)?
@@ -828,6 +930,14 @@ impl CapabilityClient for MemoryClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -855,6 +965,14 @@ impl CapabilityClientMany for MemoryClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -915,6 +1033,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for MemoryJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[FORGET_OPERATION, OBSERVE_OPERATION, RECALL_OPERATION, REMEMBER_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

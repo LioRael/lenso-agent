@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
 pub const DESCRIPTOR_VERSION: &str = "1.6.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:b64617246962878391e5fe372e4faebfb16ad7ba502be35becc3b0dd48bbfa31";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const SESSION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const SESSION_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const SESSION_CONTRACT: CapabilityReference<SessionClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agen
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_session_client {
+    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_session_client { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_session_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_session_client {
+    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.6.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const APPEND_OPERATION: &str = "append";
 pub const LIST_OPERATION: &str = "list";
@@ -960,6 +975,101 @@ macro_rules! __lenso_native_lower_session {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_session {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportSession;
+        impl $crate::SessionProvider for $object {
+        fn append(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::AppendSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionAppend> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::append(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSessionAppendResult::__lenso_into_result(result)
+            })
+        }
+        fn list(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::ListSessionsRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionList> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::list(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSessionListResult::__lenso_into_result(result)
+            })
+        }
+        fn open(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::OpenSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionOpen> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::open(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSessionOpenResult::__lenso_into_result(result)
+            })
+        }
+        fn read(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::ReadSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionRead> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::read(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSessionReadResult::__lenso_into_result(result)
+            })
+        }
+        fn rename(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::RenameSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionRename> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::rename(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSessionRenameResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_session {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportSession;
+        impl $crate::SessionProvider for $object {
+        fn append(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::AppendSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionAppend> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SessionProvider>::append(plugin.as_ref(), context, request).await
+            })
+        }
+        fn list(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::ListSessionsRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionList> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SessionProvider>::list(plugin.as_ref(), context, request).await
+            })
+        }
+        fn open(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::OpenSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionOpen> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SessionProvider>::open(plugin.as_ref(), context, request).await
+            })
+        }
+        fn read(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::ReadSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionRead> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SessionProvider>::read(plugin.as_ref(), context, request).await
+            })
+        }
+        fn rename(&self, context: __LensoNativeSupportSession::InvocationContext, request: $crate::RenameSessionRequest) -> __LensoNativeSupportSession::NativeRequestFuture<$crate::SessionRename> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SessionProvider>::rename(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct SessionRequestEndpoint { provider: Rc<dyn SessionProvider> }
 
@@ -1099,6 +1209,13 @@ impl SessionClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn append(&self, request: AppendSessionRequest) -> Result<AppendSessionResponse, SessionAppendInvocationError> {
         self.append.invoke(APPEND_OPERATION, request).await
             .map_err(SessionAppendInvocationError::Runtime)?
@@ -1177,6 +1294,14 @@ impl CapabilityClient for SessionClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -1205,6 +1330,14 @@ impl CapabilityClientMany for SessionClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -1274,6 +1407,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[APPEND_OPERATION, LIST_OPERATION, OPEN_OPERATION, READ_OPERATION, RENAME_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

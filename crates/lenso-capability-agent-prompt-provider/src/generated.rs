@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.prompt-provider@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:72d10926cb52edf5cda2f9fe340edd7d64cdf41f059d529e3b5cf23fd22a980d";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PROMPT_PROVIDER_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const PROMPT_PROVIDER_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const PROMPT_PROVIDER_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const PROMPT_PROVIDER_CONTRACT: CapabilityReference<PromptProviderClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_prompt_provider { () => { "{\"capability_id\":\"le
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_prompt_provider_client { () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_prompt_provider_client {
+    () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_prompt_provider_client { () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_prompt_provider_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_prompt_provider_client {
+    () => { "{\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.prompt-provider@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const CONTRIBUTE_OPERATION: &str = "contribute";
 
@@ -197,6 +212,41 @@ macro_rules! __lenso_native_lower_prompt_provider {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_prompt_provider {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportPromptProvider;
+        impl $crate::PromptProviderProvider for $object {
+        fn contribute(&self, context: __LensoNativeSupportPromptProvider::InvocationContext, request: $crate::ContributeRequest) -> __LensoNativeSupportPromptProvider::NativeRequestFuture<$crate::PromptProvider> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::contribute(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPromptProviderContributeResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_prompt_provider {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportPromptProvider;
+        impl $crate::PromptProviderProvider for $object {
+        fn contribute(&self, context: __LensoNativeSupportPromptProvider::InvocationContext, request: $crate::ContributeRequest) -> __LensoNativeSupportPromptProvider::NativeRequestFuture<$crate::PromptProvider> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PromptProviderProvider>::contribute(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct PromptProviderRequestEndpoint { provider: Rc<dyn PromptProviderProvider> }
 
@@ -280,6 +330,13 @@ impl PromptProviderClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn contribute(&self, request: ContributeRequest) -> Result<ContributeResponse, PromptProviderInvocationError> {
         self.contribute.invoke(CONTRIBUTE_OPERATION, request).await
             .map_err(PromptProviderInvocationError::Runtime)?
@@ -306,6 +363,14 @@ impl CapabilityClient for PromptProviderClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -330,6 +395,14 @@ impl CapabilityClientMany for PromptProviderClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 

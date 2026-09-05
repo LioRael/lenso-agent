@@ -39,8 +39,8 @@
     "test": "bun test test"
   },
   "dependencies": {
-    "@lenso/bun-plugin": "0.2.0",
-    "@lenso/contract-runtime": "0.2.0",
+    "@lenso/bun-plugin": "0.2.1",
+    "@lenso/contract-runtime": "0.3.0",
     "ajv": "8.17.1"
   },
   "devDependencies": {
