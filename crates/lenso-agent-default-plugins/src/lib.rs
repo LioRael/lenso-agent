@@ -45,10 +45,10 @@ use lenso_agent_workspace_instructions_plugin as _;
 use lenso_agent_workspace_read_plugin as _;
 use lenso_agent_workspace_read_tools_plugin as _;
 use lenso_agent_worktree_provider_plugin as _;
-use lenso_secrets_command_plugin as _;
-use lenso_secrets_encrypted_file_plugin as _;
-use lenso_secrets_env_plugin as _;
-use lenso_secrets_keychain_plugin as _;
-
 /// Forces the standard Plugin inventory into the final Host executable.
-pub fn link() {}
+pub fn link() {
+    lenso_secrets_command_plugin::link();
+    lenso_secrets_encrypted_file_plugin::link();
+    lenso_secrets_env_plugin::link();
+    lenso_secrets_keychain_plugin::link();
+}
