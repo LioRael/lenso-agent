@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.task-supervisor@2";
 pub const DESCRIPTOR_VERSION: &str = "2.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:5caf3dff9986a4055eaec6b42e13aa25c1405dd7812f92fc5667ed676364717d";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TASK_SUPERVISOR_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const TASK_SUPERVISOR_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const TASK_SUPERVISOR_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const TASK_SUPERVISOR_CONTRACT: CapabilityReference<TaskSupervisorClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_task_supervisor { () => { "{\"capability_id\":\"le
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_task_supervisor_client { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_task_supervisor_client {
+    () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_task_supervisor_client { () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_task_supervisor_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_task_supervisor_client {
+    () => { "{\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.task-supervisor@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const SNAPSHOT_OPERATION: &str = "snapshot";
 
@@ -274,6 +289,41 @@ macro_rules! __lenso_native_lower_task_supervisor {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_task_supervisor {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportTaskSupervisor;
+        impl $crate::TaskSupervisorProvider for $object {
+        fn snapshot(&self, context: __LensoNativeSupportTaskSupervisor::InvocationContext, request: $crate::SnapshotRequest) -> __LensoNativeSupportTaskSupervisor::NativeRequestFuture<$crate::TaskSupervisor> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::snapshot(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoTaskSupervisorSnapshotResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_task_supervisor {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportTaskSupervisor;
+        impl $crate::TaskSupervisorProvider for $object {
+        fn snapshot(&self, context: __LensoNativeSupportTaskSupervisor::InvocationContext, request: $crate::SnapshotRequest) -> __LensoNativeSupportTaskSupervisor::NativeRequestFuture<$crate::TaskSupervisor> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::TaskSupervisorProvider>::snapshot(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct TaskSupervisorRequestEndpoint { provider: Rc<dyn TaskSupervisorProvider> }
 
@@ -357,6 +407,13 @@ impl TaskSupervisorClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotResponse, TaskSupervisorInvocationError> {
         self.snapshot.invoke(SNAPSHOT_OPERATION, request).await
             .map_err(TaskSupervisorInvocationError::Runtime)?
@@ -383,6 +440,14 @@ impl CapabilityClient for TaskSupervisorClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -407,6 +472,14 @@ impl CapabilityClientMany for TaskSupervisorClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -440,6 +513,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for TaskSupervisorJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[SNAPSHOT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

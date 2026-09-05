@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.http-fetch@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:6d74bec65474316a7da48beff2b5b966c84b653c55816b94f993065184974e91";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const HTTP_FETCH_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const HTTP_FETCH_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const HTTP_FETCH_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const HTTP_FETCH_CONTRACT: CapabilityReference<HttpFetchClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_http_fetch { () => { "{\"capability_id\":\"lenso.a
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_http_fetch_client { () => { "{\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_http_fetch_client {
+    () => { "{\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_http_fetch_client { () => { "{\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_http_fetch_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_http_fetch_client {
+    () => { "{\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.http-fetch@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const GET_OPERATION: &str = "get";
 
@@ -222,6 +237,41 @@ macro_rules! __lenso_native_lower_http_fetch {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_http_fetch {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportHttpFetch;
+        impl $crate::HttpFetchProvider for $object {
+        fn get(&self, context: __LensoNativeSupportHttpFetch::InvocationContext, request: $crate::GetRequest) -> __LensoNativeSupportHttpFetch::NativeRequestFuture<$crate::HttpFetch> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::get(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoHttpFetchGetResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_http_fetch {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportHttpFetch;
+        impl $crate::HttpFetchProvider for $object {
+        fn get(&self, context: __LensoNativeSupportHttpFetch::InvocationContext, request: $crate::GetRequest) -> __LensoNativeSupportHttpFetch::NativeRequestFuture<$crate::HttpFetch> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::HttpFetchProvider>::get(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct HttpFetchRequestEndpoint { provider: Rc<dyn HttpFetchProvider> }
 
@@ -305,6 +355,13 @@ impl HttpFetchClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn get(&self, request: GetRequest) -> Result<GetResponse, HttpFetchInvocationError> {
         self.get.invoke(GET_OPERATION, request).await
             .map_err(HttpFetchInvocationError::Runtime)?
@@ -331,6 +388,14 @@ impl CapabilityClient for HttpFetchClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -355,6 +420,14 @@ impl CapabilityClientMany for HttpFetchClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -388,6 +461,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for HttpFetchJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[GET_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

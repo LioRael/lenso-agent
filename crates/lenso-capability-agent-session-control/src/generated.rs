@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.session-control@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:3924168b9c4558dd456efd80b1c3edaab097df5473865e450e5bcb2396ac45e6";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CONTROL_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const SESSION_CONTROL_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const SESSION_CONTROL_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const SESSION_CONTROL_CONTRACT: CapabilityReference<SessionControlClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_session_control { () => { "{\"capability_id\":\"le
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_session_control_client { () => { "{\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_session_control_client {
+    () => { "{\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_session_control_client { () => { "{\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_session_control_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_session_control_client {
+    () => { "{\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session-control@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const COMPACT_SESSION_OPERATION: &str = "compact_session";
 
@@ -190,6 +205,41 @@ macro_rules! __lenso_native_lower_session_control {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_session_control {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportSessionControl;
+        impl $crate::SessionControlProvider for $object {
+        fn compact_session(&self, context: __LensoNativeSupportSessionControl::InvocationContext, request: $crate::CompactSessionRequest) -> __LensoNativeSupportSessionControl::NativeRequestFuture<$crate::SessionControl> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::compact_session(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSessionControlCompactSessionResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_session_control {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportSessionControl;
+        impl $crate::SessionControlProvider for $object {
+        fn compact_session(&self, context: __LensoNativeSupportSessionControl::InvocationContext, request: $crate::CompactSessionRequest) -> __LensoNativeSupportSessionControl::NativeRequestFuture<$crate::SessionControl> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SessionControlProvider>::compact_session(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct SessionControlRequestEndpoint { provider: Rc<dyn SessionControlProvider> }
 
@@ -273,6 +323,13 @@ impl SessionControlClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn compact_session(&self, request: CompactSessionRequest) -> Result<CompactSessionResponse, SessionControlInvocationError> {
         self.compact_session.invoke(COMPACT_SESSION_OPERATION, request).await
             .map_err(SessionControlInvocationError::Runtime)?
@@ -299,6 +356,14 @@ impl CapabilityClient for SessionControlClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -323,6 +388,14 @@ impl CapabilityClientMany for SessionControlClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -356,6 +429,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionControlJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[COMPACT_SESSION_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

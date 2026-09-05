@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.oauth-access@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:47ba421b23de3771df03432836a7d3ab45cb5a7aeb41bbab54c2d4b7d7feea10";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const OAUTH_ACCESS_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const OAUTH_ACCESS_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const OAUTH_ACCESS_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const OAUTH_ACCESS_CONTRACT: CapabilityReference<OauthAccessClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_oauth_access { () => { "{\"capability_id\":\"lenso
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_oauth_access_client { () => { "{\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_oauth_access_client {
+    () => { "{\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_oauth_access_client { () => { "{\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_oauth_access_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_oauth_access_client {
+    () => { "{\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.oauth-access@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const ACCESS_OPERATION: &str = "access";
 pub const INVALIDATE_OPERATION: &str = "invalidate";
@@ -343,6 +358,56 @@ macro_rules! __lenso_native_lower_oauth_access {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_oauth_access {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportOauthAccess;
+        impl $crate::OauthAccessProvider for $object {
+        fn access(&self, context: __LensoNativeSupportOauthAccess::InvocationContext, request: $crate::AccessRequest) -> __LensoNativeSupportOauthAccess::NativeRequestFuture<$crate::OauthAccessAccess> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::access(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoOauthAccessAccessResult::__lenso_into_result(result)
+            })
+        }
+        fn invalidate(&self, context: __LensoNativeSupportOauthAccess::InvocationContext, request: $crate::InvalidateRequest) -> __LensoNativeSupportOauthAccess::NativeRequestFuture<$crate::OauthAccessInvalidate> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::invalidate(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoOauthAccessInvalidateResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_oauth_access {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportOauthAccess;
+        impl $crate::OauthAccessProvider for $object {
+        fn access(&self, context: __LensoNativeSupportOauthAccess::InvocationContext, request: $crate::AccessRequest) -> __LensoNativeSupportOauthAccess::NativeRequestFuture<$crate::OauthAccessAccess> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::OauthAccessProvider>::access(plugin.as_ref(), context, request).await
+            })
+        }
+        fn invalidate(&self, context: __LensoNativeSupportOauthAccess::InvocationContext, request: $crate::InvalidateRequest) -> __LensoNativeSupportOauthAccess::NativeRequestFuture<$crate::OauthAccessInvalidate> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::OauthAccessProvider>::invalidate(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct OauthAccessRequestEndpoint { provider: Rc<dyn OauthAccessProvider> }
 
@@ -437,6 +502,13 @@ impl OauthAccessClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn access(&self, request: AccessRequest) -> Result<AccessResponse, OauthAccessAccessInvocationError> {
         self.access.invoke(ACCESS_OPERATION, request).await
             .map_err(OauthAccessAccessInvocationError::Runtime)?
@@ -476,6 +548,14 @@ impl CapabilityClient for OauthAccessClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -501,6 +581,14 @@ impl CapabilityClientMany for OauthAccessClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -543,6 +631,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for OauthAccessJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[ACCESS_OPERATION, INVALIDATE_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

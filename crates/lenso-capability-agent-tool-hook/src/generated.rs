@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.tool-hook@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:275bf5140dde66d058c407ae40a6ee0f9ff79ddd326e000384c1ac7139c8535e";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TOOL_HOOK_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const TOOL_HOOK_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const TOOL_HOOK_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const TOOL_HOOK_CONTRACT: CapabilityReference<ToolHookClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_tool_hook { () => { "{\"capability_id\":\"lenso.ag
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_tool_hook_client { () => { "{\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_tool_hook_client {
+    () => { "{\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_tool_hook_client { () => { "{\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_tool_hook_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_tool_hook_client {
+    () => { "{\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-hook@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const AFTER_EXECUTE_OPERATION: &str = "after_execute";
 pub const BEFORE_EXECUTE_OPERATION: &str = "before_execute";
@@ -364,6 +379,56 @@ macro_rules! __lenso_native_lower_tool_hook {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_tool_hook {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportToolHook;
+        impl $crate::ToolHookProvider for $object {
+        fn after_execute(&self, context: __LensoNativeSupportToolHook::InvocationContext, request: $crate::AfterExecuteRequest) -> __LensoNativeSupportToolHook::NativeRequestFuture<$crate::ToolHookAfterExecute> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::after_execute(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoToolHookAfterExecuteResult::__lenso_into_result(result)
+            })
+        }
+        fn before_execute(&self, context: __LensoNativeSupportToolHook::InvocationContext, request: $crate::BeforeExecuteRequest) -> __LensoNativeSupportToolHook::NativeRequestFuture<$crate::ToolHookBeforeExecute> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::before_execute(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoToolHookBeforeExecuteResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_tool_hook {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportToolHook;
+        impl $crate::ToolHookProvider for $object {
+        fn after_execute(&self, context: __LensoNativeSupportToolHook::InvocationContext, request: $crate::AfterExecuteRequest) -> __LensoNativeSupportToolHook::NativeRequestFuture<$crate::ToolHookAfterExecute> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ToolHookProvider>::after_execute(plugin.as_ref(), context, request).await
+            })
+        }
+        fn before_execute(&self, context: __LensoNativeSupportToolHook::InvocationContext, request: $crate::BeforeExecuteRequest) -> __LensoNativeSupportToolHook::NativeRequestFuture<$crate::ToolHookBeforeExecute> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ToolHookProvider>::before_execute(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ToolHookRequestEndpoint { provider: Rc<dyn ToolHookProvider> }
 
@@ -458,6 +523,13 @@ impl ToolHookClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn after_execute(&self, request: AfterExecuteRequest) -> Result<AfterExecuteResponse, ToolHookAfterExecuteInvocationError> {
         self.after_execute.invoke(AFTER_EXECUTE_OPERATION, request).await
             .map_err(ToolHookAfterExecuteInvocationError::Runtime)?
@@ -497,6 +569,14 @@ impl CapabilityClient for ToolHookClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -522,6 +602,14 @@ impl CapabilityClientMany for ToolHookClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -564,6 +652,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ToolHookJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[AFTER_EXECUTE_OPERATION, BEFORE_EXECUTE_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.lifecycle@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:7956ec3fa169c9a4f074bff75f14da197816da075032cef87fcca760837e2e64";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const LIFECYCLE_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const LIFECYCLE_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const LIFECYCLE_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const LIFECYCLE_CONTRACT: CapabilityReference<LifecycleClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_lifecycle { () => { "{\"capability_id\":\"lenso.ag
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_lifecycle_client { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_lifecycle_client {
+    () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_lifecycle_client { () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_lifecycle_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_lifecycle_client {
+    () => { "{\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.lifecycle@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const OBSERVE_OPERATION: &str = "observe";
 
@@ -207,6 +222,41 @@ macro_rules! __lenso_native_lower_lifecycle {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_lifecycle {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportLifecycle;
+        impl $crate::LifecycleProvider for $object {
+        fn observe(&self, context: __LensoNativeSupportLifecycle::InvocationContext, request: $crate::ObserveRequest) -> __LensoNativeSupportLifecycle::NativeRequestFuture<$crate::Lifecycle> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::observe(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoLifecycleObserveResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_lifecycle {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportLifecycle;
+        impl $crate::LifecycleProvider for $object {
+        fn observe(&self, context: __LensoNativeSupportLifecycle::InvocationContext, request: $crate::ObserveRequest) -> __LensoNativeSupportLifecycle::NativeRequestFuture<$crate::Lifecycle> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::LifecycleProvider>::observe(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct LifecycleRequestEndpoint { provider: Rc<dyn LifecycleProvider> }
 
@@ -290,6 +340,13 @@ impl LifecycleClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn observe(&self, request: ObserveRequest) -> Result<ObserveResponse, LifecycleInvocationError> {
         self.observe.invoke(OBSERVE_OPERATION, request).await
             .map_err(LifecycleInvocationError::Runtime)?
@@ -316,6 +373,14 @@ impl CapabilityClient for LifecycleClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -340,6 +405,14 @@ impl CapabilityClientMany for LifecycleClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -373,6 +446,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for LifecycleJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[OBSERVE_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

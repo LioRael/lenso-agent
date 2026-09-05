@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.worktree@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:944a7e6cff927348c8e7379cf104deb79bdbb18bbb16f6f322feb118f16fa25b";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const WORKTREE_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const WORKTREE_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const WORKTREE_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const WORKTREE_CONTRACT: CapabilityReference<WorktreeClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_worktree { () => { "{\"capability_id\":\"lenso.age
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_worktree_client { () => { "{\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_worktree_client {
+    () => { "{\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_worktree_client { () => { "{\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_worktree_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_worktree_client {
+    () => { "{\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.worktree@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const ALLOCATE_OPERATION: &str = "allocate";
 
@@ -209,6 +224,41 @@ macro_rules! __lenso_native_lower_worktree {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_worktree {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportWorktree;
+        impl $crate::WorktreeProvider for $object {
+        fn allocate(&self, context: __LensoNativeSupportWorktree::InvocationContext, request: $crate::AllocateRequest) -> __LensoNativeSupportWorktree::NativeRequestFuture<$crate::Worktree> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::allocate(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoWorktreeAllocateResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_worktree {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportWorktree;
+        impl $crate::WorktreeProvider for $object {
+        fn allocate(&self, context: __LensoNativeSupportWorktree::InvocationContext, request: $crate::AllocateRequest) -> __LensoNativeSupportWorktree::NativeRequestFuture<$crate::Worktree> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::WorktreeProvider>::allocate(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct WorktreeRequestEndpoint { provider: Rc<dyn WorktreeProvider> }
 
@@ -292,6 +342,13 @@ impl WorktreeClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn allocate(&self, request: AllocateRequest) -> Result<AllocateResponse, WorktreeInvocationError> {
         self.allocate.invoke(ALLOCATE_OPERATION, request).await
             .map_err(WorktreeInvocationError::Runtime)?
@@ -318,6 +375,14 @@ impl CapabilityClient for WorktreeClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -342,6 +407,14 @@ impl CapabilityClientMany for WorktreeClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -375,6 +448,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for WorktreeJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[ALLOCATE_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

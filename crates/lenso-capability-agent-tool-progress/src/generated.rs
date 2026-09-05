@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, PluginDependencies, RequestCapability, RuntimeFailure, StreamCapability, StreamEvent};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.tool-progress@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:ba88fc5af1eeca647caa9555a8423843a260ee6fe1d548a170c50ddf4e33e21c";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TOOL_PROGRESS_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const TOOL_PROGRESS_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const TOOL_PROGRESS_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const TOOL_PROGRESS_CONTRACT: CapabilityReference<ToolProgressClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_tool_progress { () => { "{\"capability_id\":\"lens
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_tool_progress_client { () => { "{\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_tool_progress_client {
+    () => { "{\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_tool_progress_client { () => { "{\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_tool_progress_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_tool_progress_client {
+    () => { "{\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-progress@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const EXECUTE_PROGRESS_OPERATION: &str = "execute_progress";
 pub const PROGRESS_CATALOG_OPERATION: &str = "progress_catalog";
@@ -374,6 +389,56 @@ macro_rules! __lenso_native_lower_tool_progress {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_tool_progress {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportToolProgress;
+        impl $crate::ToolProgressProvider for $object {
+        fn execute_progress(&self, context: __LensoNativeSupportToolProgress::InvocationContext, request: $crate::ExecuteOpen) -> __LensoNativeSupportToolProgress::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportToolProgress::NativeStreamSession>, $crate::ToolProgressExecuteProgressInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::ToolProgressExecuteProgressInvocationError::Runtime)?;
+                let result = <$plugin>::execute_progress(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoToolProgressExecuteProgressStreamResult::__lenso_into_result(result)
+            })
+        }
+        fn progress_catalog(&self, context: __LensoNativeSupportToolProgress::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportToolProgress::NativeRequestFuture<$crate::ToolProgressProgressCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::progress_catalog(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoToolProgressProgressCatalogResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_tool_progress {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportToolProgress;
+        impl $crate::ToolProgressProvider for $object {
+        fn execute_progress(&self, context: __LensoNativeSupportToolProgress::InvocationContext, request: $crate::ExecuteOpen) -> __LensoNativeSupportToolProgress::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportToolProgress::NativeStreamSession>, $crate::ToolProgressExecuteProgressInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::ToolProgressExecuteProgressInvocationError::Runtime)?;
+                <$plugin as $crate::ToolProgressProvider>::execute_progress(plugin.as_ref(), context, request).await
+            })
+        }
+        fn progress_catalog(&self, context: __LensoNativeSupportToolProgress::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportToolProgress::NativeRequestFuture<$crate::ToolProgressProgressCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ToolProgressProvider>::progress_catalog(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ToolProgressRequestEndpoint { provider: Rc<dyn ToolProgressProvider> }
 
@@ -480,6 +545,13 @@ impl ToolProgressClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn execute_progress(&self, request: ExecuteOpen) -> Result<NativeStream<ToolProgressExecuteProgress>, ToolProgressExecuteProgressInvocationError> {
         self.execute_progress.open(EXECUTE_PROGRESS_OPERATION, request).await
             .map_err(ToolProgressExecuteProgressInvocationError::Runtime)?
@@ -519,6 +591,14 @@ impl CapabilityClient for ToolProgressClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -544,6 +624,14 @@ impl CapabilityClientMany for ToolProgressClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -586,6 +674,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ToolProgressJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[PROGRESS_CATALOG_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[EXECUTE_PROGRESS_OPERATION] }

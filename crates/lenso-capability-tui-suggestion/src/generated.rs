@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.tui.suggestion@1";
 pub const DESCRIPTOR_VERSION: &str = "1.2.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:ea1fbe3ea855717348c2be24139543a326e459e91371b5fd6b56e82f9c2eaf4c";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SUGGESTION_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const SUGGESTION_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const SUGGESTION_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const SUGGESTION_CONTRACT: CapabilityReference<SuggestionClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_suggestion { () => { "{\"capability_id\":\"lenso.t
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_suggestion_client { () => { "{\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_suggestion_client {
+    () => { "{\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_suggestion_client { () => { "{\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_suggestion_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_suggestion_client {
+    () => { "{\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.tui.suggestion@1\",\"descriptor_version\":\"1.2.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const SNAPSHOT_OPERATION: &str = "snapshot";
 
@@ -206,6 +221,41 @@ macro_rules! __lenso_native_lower_suggestion {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_suggestion {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportSuggestion;
+        impl $crate::SuggestionProvider for $object {
+        fn snapshot(&self, context: __LensoNativeSupportSuggestion::InvocationContext, request: $crate::SnapshotRequest) -> __LensoNativeSupportSuggestion::NativeRequestFuture<$crate::Suggestion> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::snapshot(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoSuggestionSnapshotResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_suggestion {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportSuggestion;
+        impl $crate::SuggestionProvider for $object {
+        fn snapshot(&self, context: __LensoNativeSupportSuggestion::InvocationContext, request: $crate::SnapshotRequest) -> __LensoNativeSupportSuggestion::NativeRequestFuture<$crate::Suggestion> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::SuggestionProvider>::snapshot(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct SuggestionRequestEndpoint { provider: Rc<dyn SuggestionProvider> }
 
@@ -289,6 +339,13 @@ impl SuggestionClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotResponse, SuggestionInvocationError> {
         self.snapshot.invoke(SNAPSHOT_OPERATION, request).await
             .map_err(SuggestionInvocationError::Runtime)?
@@ -315,6 +372,14 @@ impl CapabilityClient for SuggestionClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -339,6 +404,14 @@ impl CapabilityClientMany for SuggestionClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -372,6 +445,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SuggestionJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[SNAPSHOT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

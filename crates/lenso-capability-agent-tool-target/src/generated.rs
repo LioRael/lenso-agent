@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.tool-target@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:d87a903191badc4351c054b686b55e5723ee2e0df2dc65438811c368ab67ba92";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const TOOL_TARGET_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const TOOL_TARGET_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const TOOL_TARGET_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const TOOL_TARGET_CONTRACT: CapabilityReference<ToolTargetClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_tool_target { () => { "{\"capability_id\":\"lenso.
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_tool_target_client { () => { "{\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_tool_target_client {
+    () => { "{\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_tool_target_client { () => { "{\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_tool_target_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_tool_target_client {
+    () => { "{\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.tool-target@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const EXECUTE_OPERATION: &str = "execute";
@@ -379,6 +394,56 @@ macro_rules! __lenso_native_lower_tool_target {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_tool_target {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportToolTarget;
+        impl $crate::ToolTargetProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportToolTarget::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportToolTarget::NativeRequestFuture<$crate::ToolTargetCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::catalog(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoToolTargetCatalogResult::__lenso_into_result(result)
+            })
+        }
+        fn execute(&self, context: __LensoNativeSupportToolTarget::InvocationContext, request: $crate::ExecuteRequest) -> __LensoNativeSupportToolTarget::NativeRequestFuture<$crate::ToolTargetExecute> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::execute(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoToolTargetExecuteResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_tool_target {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportToolTarget;
+        impl $crate::ToolTargetProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportToolTarget::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportToolTarget::NativeRequestFuture<$crate::ToolTargetCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ToolTargetProvider>::catalog(plugin.as_ref(), context, request).await
+            })
+        }
+        fn execute(&self, context: __LensoNativeSupportToolTarget::InvocationContext, request: $crate::ExecuteRequest) -> __LensoNativeSupportToolTarget::NativeRequestFuture<$crate::ToolTargetExecute> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ToolTargetProvider>::execute(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ToolTargetRequestEndpoint { provider: Rc<dyn ToolTargetProvider> }
 
@@ -473,6 +538,13 @@ impl ToolTargetClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn catalog(&self, request: CatalogRequest) -> Result<CatalogResponse, ToolTargetCatalogInvocationError> {
         self.catalog.invoke(CATALOG_OPERATION, request).await
             .map_err(ToolTargetCatalogInvocationError::Runtime)?
@@ -512,6 +584,14 @@ impl CapabilityClient for ToolTargetClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -537,6 +617,14 @@ impl CapabilityClientMany for ToolTargetClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -579,6 +667,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ToolTargetJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[CATALOG_OPERATION, EXECUTE_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

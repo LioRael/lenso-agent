@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.plugin-selection-authority@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:d8f209ae8e6a25529be23d7be7c0d51eefba00247364b19a9c922aaf89e6ed87";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PLUGIN_SELECTION_AUTHORITY_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const PLUGIN_SELECTION_AUTHORITY_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const PLUGIN_SELECTION_AUTHORITY_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const PLUGIN_SELECTION_AUTHORITY_CONTRACT: CapabilityReference<PluginSelectionAuthorityClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_plugin_selection_authority { () => { "{\"capabilit
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_plugin_selection_authority_client { () => { "{\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_plugin_selection_authority_client {
+    () => { "{\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_plugin_selection_authority_client { () => { "{\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_plugin_selection_authority_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_plugin_selection_authority_client {
+    () => { "{\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.plugin-selection-authority@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const SET_ENABLED_OPERATION: &str = "set_enabled";
 
@@ -227,6 +242,41 @@ macro_rules! __lenso_native_lower_plugin_selection_authority {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_plugin_selection_authority {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportPluginSelectionAuthority;
+        impl $crate::PluginSelectionAuthorityProvider for $object {
+        fn set_enabled(&self, context: __LensoNativeSupportPluginSelectionAuthority::InvocationContext, request: $crate::SetEnabledRequest) -> __LensoNativeSupportPluginSelectionAuthority::NativeRequestFuture<$crate::PluginSelectionAuthority> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::set_enabled(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginSelectionAuthoritySetEnabledResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_plugin_selection_authority {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportPluginSelectionAuthority;
+        impl $crate::PluginSelectionAuthorityProvider for $object {
+        fn set_enabled(&self, context: __LensoNativeSupportPluginSelectionAuthority::InvocationContext, request: $crate::SetEnabledRequest) -> __LensoNativeSupportPluginSelectionAuthority::NativeRequestFuture<$crate::PluginSelectionAuthority> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginSelectionAuthorityProvider>::set_enabled(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct PluginSelectionAuthorityRequestEndpoint { provider: Rc<dyn PluginSelectionAuthorityProvider> }
 
@@ -310,6 +360,13 @@ impl PluginSelectionAuthorityClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn set_enabled(&self, request: SetEnabledRequest) -> Result<SetEnabledResponse, PluginSelectionAuthorityInvocationError> {
         self.set_enabled.invoke(SET_ENABLED_OPERATION, request).await
             .map_err(PluginSelectionAuthorityInvocationError::Runtime)?
@@ -336,6 +393,14 @@ impl CapabilityClient for PluginSelectionAuthorityClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -360,6 +425,14 @@ impl CapabilityClientMany for PluginSelectionAuthorityClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -393,6 +466,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginSelectionAuthorityJsonCo
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[SET_ENABLED_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

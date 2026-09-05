@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.workspace-read@1";
 pub const DESCRIPTOR_VERSION: &str = "1.0.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:3aca6f730af0eac845d2f209fbae6dc92972fa4762045682dfa25cdc596e17bb";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const WORKSPACE_READ_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const WORKSPACE_READ_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const WORKSPACE_READ_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const WORKSPACE_READ_CONTRACT: CapabilityReference<WorkspaceReadClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_workspace_read { () => { "{\"capability_id\":\"len
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_workspace_read_client { () => { "{\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_workspace_read_client {
+    () => { "{\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_workspace_read_client { () => { "{\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_workspace_read_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_workspace_read_client {
+    () => { "{\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.workspace-read@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const READ_TEXT_OPERATION: &str = "read_text";
 
@@ -216,6 +231,41 @@ macro_rules! __lenso_native_lower_workspace_read {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_workspace_read {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportWorkspaceRead;
+        impl $crate::WorkspaceReadProvider for $object {
+        fn read_text(&self, context: __LensoNativeSupportWorkspaceRead::InvocationContext, request: $crate::ReadTextRequest) -> __LensoNativeSupportWorkspaceRead::NativeRequestFuture<$crate::WorkspaceRead> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::read_text(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoWorkspaceReadReadTextResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_workspace_read {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportWorkspaceRead;
+        impl $crate::WorkspaceReadProvider for $object {
+        fn read_text(&self, context: __LensoNativeSupportWorkspaceRead::InvocationContext, request: $crate::ReadTextRequest) -> __LensoNativeSupportWorkspaceRead::NativeRequestFuture<$crate::WorkspaceRead> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::WorkspaceReadProvider>::read_text(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct WorkspaceReadRequestEndpoint { provider: Rc<dyn WorkspaceReadProvider> }
 
@@ -299,6 +349,13 @@ impl WorkspaceReadClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn read_text(&self, request: ReadTextRequest) -> Result<ReadTextResponse, WorkspaceReadInvocationError> {
         self.read_text.invoke(READ_TEXT_OPERATION, request).await
             .map_err(WorkspaceReadInvocationError::Runtime)?
@@ -325,6 +382,14 @@ impl CapabilityClient for WorkspaceReadClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -349,6 +414,14 @@ impl CapabilityClientMany for WorkspaceReadClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -382,6 +455,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for WorkspaceReadJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[READ_TEXT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, PluginDependencies, RequestCapability, RuntimeFailure};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.context-source@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:3d7e1ce9df7fa0457d0abf8ac80ab5cc0f3656047fea593b3ec6402553790ad4";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const CONTEXT_SOURCE_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const CONTEXT_SOURCE_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const CONTEXT_SOURCE_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const CONTEXT_SOURCE_CONTRACT: CapabilityReference<ContextSourceClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_context_source { () => { "{\"capability_id\":\"len
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_context_source_client { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_context_source_client {
+    () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_context_source_client { () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_context_source_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_context_source_client {
+    () => { "{\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-source@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const READ_RESOURCE_OPERATION: &str = "read_resource";
 pub const RENDER_PROMPT_OPERATION: &str = "render_prompt";
@@ -558,6 +573,71 @@ macro_rules! __lenso_native_lower_context_source {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_context_source {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportContextSource;
+        impl $crate::ContextSourceProvider for $object {
+        fn read_resource(&self, context: __LensoNativeSupportContextSource::InvocationContext, request: $crate::ReadResourceRequest) -> __LensoNativeSupportContextSource::NativeRequestFuture<$crate::ContextSourceReadResource> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::read_resource(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoContextSourceReadResourceResult::__lenso_into_result(result)
+            })
+        }
+        fn render_prompt(&self, context: __LensoNativeSupportContextSource::InvocationContext, request: $crate::RenderPromptRequest) -> __LensoNativeSupportContextSource::NativeRequestFuture<$crate::ContextSourceRenderPrompt> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::render_prompt(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoContextSourceRenderPromptResult::__lenso_into_result(result)
+            })
+        }
+        fn snapshot(&self, context: __LensoNativeSupportContextSource::InvocationContext, request: $crate::SnapshotRequest) -> __LensoNativeSupportContextSource::NativeRequestFuture<$crate::ContextSourceSnapshot> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::snapshot(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoContextSourceSnapshotResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_context_source {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportContextSource;
+        impl $crate::ContextSourceProvider for $object {
+        fn read_resource(&self, context: __LensoNativeSupportContextSource::InvocationContext, request: $crate::ReadResourceRequest) -> __LensoNativeSupportContextSource::NativeRequestFuture<$crate::ContextSourceReadResource> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ContextSourceProvider>::read_resource(plugin.as_ref(), context, request).await
+            })
+        }
+        fn render_prompt(&self, context: __LensoNativeSupportContextSource::InvocationContext, request: $crate::RenderPromptRequest) -> __LensoNativeSupportContextSource::NativeRequestFuture<$crate::ContextSourceRenderPrompt> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ContextSourceProvider>::render_prompt(plugin.as_ref(), context, request).await
+            })
+        }
+        fn snapshot(&self, context: __LensoNativeSupportContextSource::InvocationContext, request: $crate::SnapshotRequest) -> __LensoNativeSupportContextSource::NativeRequestFuture<$crate::ContextSourceSnapshot> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ContextSourceProvider>::snapshot(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ContextSourceRequestEndpoint { provider: Rc<dyn ContextSourceProvider> }
 
@@ -667,6 +747,13 @@ impl ContextSourceClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn read_resource(&self, request: ReadResourceRequest) -> Result<ReadResourceResponse, ContextSourceReadResourceInvocationError> {
         self.read_resource.invoke(READ_RESOURCE_OPERATION, request).await
             .map_err(ContextSourceReadResourceInvocationError::Runtime)?
@@ -719,6 +806,14 @@ impl CapabilityClient for ContextSourceClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -745,6 +840,14 @@ impl CapabilityClientMany for ContextSourceClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
@@ -796,6 +899,8 @@ impl lenso_runtime_codec::JsonCapabilityCodec for ContextSourceJsonCodec {
     fn capability_id(&self) -> &'static str { CAPABILITY_ID }
 
     fn descriptor_version(&self) -> &'static str { DESCRIPTOR_VERSION }
+
+    fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
     fn request_operations(&self) -> &'static [&'static str] { &[READ_RESOURCE_OPERATION, RENDER_PROMPT_OPERATION, SNAPSHOT_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }

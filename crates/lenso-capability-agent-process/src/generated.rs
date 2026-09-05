@@ -3,13 +3,16 @@ use std::{fmt, rc::Rc};
 use futures::future::LocalBoxFuture;
 use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture, NativeRequestHandle, NativeStream, NativeStreamEndpoint, NativeStreamHandle, NativeStreamSession, PluginDependencies, RequestCapability, RuntimeFailure, StreamCapability, StreamEvent};
 
-use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany};
+use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.process@1";
 pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:e77f34d164b913d2d2e48efa48c78f1a40fc50e831d9bbeee791524bc8cc5faf";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PROCESS_CAPABILITY_ID: &str = CAPABILITY_ID;
 pub const PROCESS_DESCRIPTOR_VERSION: &str = DESCRIPTOR_VERSION;
+pub const PROCESS_DESCRIPTOR_DIGEST: &str = DESCRIPTOR_DIGEST;
+pub const PROCESS_CONTRACT: CapabilityReference<ProcessClient> = CapabilityReference::new(CAPABILITY_ID, DESCRIPTOR_VERSION, DESCRIPTOR_DIGEST);
 
 #[doc(hidden)]
 #[macro_export]
@@ -17,11 +20,23 @@ macro_rules! __lenso_provided_process { () => { "{\"capability_id\":\"lenso.agen
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_process_client { () => { "{\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" }; }
+macro_rules! __lenso_required_process_client {
+    () => { "{\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}") };
+}
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_required_many_process_client { () => { "{\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" }; }
+macro_rules! __lenso_required_optional_process_client {
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"optional\"}") };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_required_many_process_client {
+    () => { "{\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.process@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}") };
+}
 
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const RUN_OPERATION: &str = "run";
@@ -519,6 +534,71 @@ macro_rules! __lenso_native_lower_process {
     };
 }
 
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_object_process {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportProcess;
+        impl $crate::ProcessProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportProcess::NativeRequestFuture<$crate::ProcessCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::catalog(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoProcessCatalogResult::__lenso_into_result(result)
+            })
+        }
+        fn run(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::RunRequest) -> __LensoNativeSupportProcess::NativeRequestFuture<$crate::ProcessRun> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::run(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoProcessRunResult::__lenso_into_result(result)
+            })
+        }
+        fn run_stream(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::RunStreamRequest) -> __LensoNativeSupportProcess::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportProcess::NativeStreamSession>, $crate::ProcessRunStreamInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::ProcessRunStreamInvocationError::Runtime)?;
+                let result = <$plugin>::run_stream(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoProcessRunStreamStreamResult::__lenso_into_result(result)
+            })
+        }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __lenso_native_lower_trait_object_process {
+    ($object:ty, $plugin:ty, $support:path) => {
+        use $support as __LensoNativeSupportProcess;
+        impl $crate::ProcessProvider for $object {
+        fn catalog(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::CatalogRequest) -> __LensoNativeSupportProcess::NativeRequestFuture<$crate::ProcessCatalog> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ProcessProvider>::catalog(plugin.as_ref(), context, request).await
+            })
+        }
+        fn run(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::RunRequest) -> __LensoNativeSupportProcess::NativeRequestFuture<$crate::ProcessRun> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::ProcessProvider>::run(plugin.as_ref(), context, request).await
+            })
+        }
+        fn run_stream(&self, context: __LensoNativeSupportProcess::InvocationContext, request: $crate::RunStreamRequest) -> __LensoNativeSupportProcess::LocalBoxFuture<'static, Result<Box<dyn __LensoNativeSupportProcess::NativeStreamSession>, $crate::ProcessRunStreamInvocationError>> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get().map_err($crate::ProcessRunStreamInvocationError::Runtime)?;
+                <$plugin as $crate::ProcessProvider>::run_stream(plugin.as_ref(), context, request).await
+            })
+        }
+        }
+    };
+}
+
 #[derive(Debug)]
 struct ProcessRequestEndpoint { provider: Rc<dyn ProcessProvider> }
 
@@ -640,6 +720,13 @@ impl ProcessClient {
         <Self as CapabilityClient>::from_dependencies(dependencies)
     }
 
+    pub fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        <Self as CapabilityClient>::from_requirement(dependencies, requirement_id)
+    }
+
     pub async fn catalog(&self, request: CatalogRequest) -> Result<CatalogResponse, ProcessCatalogInvocationError> {
         self.catalog.invoke(CATALOG_OPERATION, request).await
             .map_err(ProcessCatalogInvocationError::Runtime)?
@@ -692,6 +779,14 @@ impl CapabilityClient for ProcessClient {
         })
     }
 
+    fn from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Self, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::from_dependencies(&dependencies)
+    }
+
     fn already_connected() -> RuntimeFailure {
         RuntimeFailure::PluginFailure {
             detail: format!("Capability Port {CAPABILITY_ID} was connected more than once"),
@@ -718,6 +813,14 @@ impl CapabilityClientMany for ProcessClient {
                 ))
             })
             .collect()
+    }
+
+    fn many_from_requirement(
+        dependencies: &PluginDependencies,
+        requirement_id: &str,
+    ) -> Result<Vec<BoundCapabilityClient<Self>>, RuntimeFailure> {
+        let dependencies = dependencies.requirement(requirement_id)?;
+        Self::many_from_dependencies(&dependencies)
     }
 }
 
