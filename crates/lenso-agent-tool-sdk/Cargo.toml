@@ -1,6 +1,6 @@
 [package]
 name = "lenso-agent-tool-sdk"
-version = "0.3.0"
+version = "0.3.1"
 description = "Typed Tool Provider authoring for Lenso Agent."
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,7 @@ plugin-id = "lenso.agent.tool-sdk.fixture"
 root-slot = "tool-providers"
 
 [dependencies]
-lenso-agent-tool-sdk-macros = { version = "0.3.0", path = "../lenso-agent-tool-sdk-macros" }
+lenso-agent-tool-sdk-macros = { version = "0.3.1", path = "../lenso-agent-tool-sdk-macros" }
 lenso-capability-agent-tool-provider = { version = "0.2.0", path = "../lenso-capability-agent-tool-provider" }
 schemars.workspace = true
 serde_json.workspace = true
