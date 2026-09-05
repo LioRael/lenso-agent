@@ -12,7 +12,7 @@ use syn::{
 ///
 /// Each method marked with
 /// `#[tool(name = "...", description = "...", execution = "parallel_safe|exclusive")]` accepts exactly one typed
-/// argument (optionally after `&self`) and returns the Tool Provider contract's
+/// argument (optionally after `&self`) and may accept `lenso::Ctx` last. It returns the Tool Provider contract's
 /// `Result<ExecuteResponse, ExecuteError>` shape. Both synchronous and asynchronous Tools are
 /// supported.
 #[proc_macro_attribute]
@@ -35,6 +35,7 @@ struct ToolMethod {
     method: syn::Ident,
     argument_type: syn::Type,
     takes_self: bool,
+    takes_context: bool,
     is_async: bool,
     name: LitStr,
     description: LitStr,
@@ -75,12 +76,13 @@ fn expand_native(implementation: &mut ItemImpl, tools: &[ToolMethod]) -> proc_ma
 
             async fn execute(
                 &self,
-                _context: ::lenso::Ctx,
+                context: ::lenso::Ctx,
                 request: ::lenso_agent_tool_sdk::__private::contract::ExecuteRequest,
             ) -> ::lenso::PluginResult<
                 ::lenso_agent_tool_sdk::__private::contract::ExecuteResponse,
                 ::lenso_agent_tool_sdk::__private::contract::ExecuteError,
             > {
+                let _ = &context;
                 match request.name.as_str() {
                     #(#dispatch_arms,)*
                     _ => Err(::lenso::PluginError::domain(
@@ -92,6 +94,7 @@ fn expand_native(implementation: &mut ItemImpl, tools: &[ToolMethod]) -> proc_ma
     }
 }
 
+#[allow(clippy::too_many_lines)] // Keep the generated dispatcher contract visible in one quote.
 fn expand_portable(
     implementation: &ItemImpl,
     tools: &[ToolMethod],
@@ -105,7 +108,8 @@ fn expand_portable(
 
     let self_type = &implementation.self_ty;
     let catalog_entries = tools.iter().map(catalog_entry);
-    let dispatch_arms = tools.iter().map(portable_dispatch_arm);
+    let dispatch_arms = tools.iter().map(|tool| portable_dispatch_arm(tool, false));
+    let contextual_dispatch_arms = tools.iter().map(|tool| portable_dispatch_arm(tool, true));
 
     Ok(quote! {
         #implementation
@@ -160,6 +164,44 @@ fn expand_portable(
                             ),
                         }
                     }
+                    _ => ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("not_found"),
+                    ),
+                }
+            }
+
+            fn invoke_with_context(
+                &self,
+                context: ::lenso::Ctx,
+                capability: &str,
+                operation: &str,
+                request: ::lenso::__private::serde_json::Value,
+            ) -> ::lenso::InvocationOutcome {
+                use ::lenso_agent_tool_sdk::__private::contract;
+
+                if capability != contract::CAPABILITY_ID {
+                    return ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("not_found"),
+                    );
+                }
+                if operation == contract::CATALOG_OPERATION {
+                    return self.invoke(capability, operation, request);
+                }
+                if operation != contract::EXECUTE_OPERATION {
+                    return ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("not_found"),
+                    );
+                }
+                let request = match ::lenso::__private::serde_json::from_value::<
+                    contract::ExecuteRequest,
+                >(request) {
+                    Ok(request) => request,
+                    Err(_) => return ::lenso::InvocationOutcome::DomainError(
+                        ::lenso::__private::serde_json::json!("invalid_arguments"),
+                    ),
+                };
+                match request.name.as_str() {
+                    #(#contextual_dispatch_arms,)*
                     _ => ::lenso::InvocationOutcome::DomainError(
                         ::lenso::__private::serde_json::json!("not_found"),
                     ),
@@ -252,21 +294,37 @@ fn parse_tool_method(method: &mut ImplItemFn) -> syn::Result<Option<ToolMethod>>
         )
     })?;
     let (takes_self, argument) = tool_argument(first, &mut inputs, method)?;
+    let context = inputs.next();
+    let takes_context = match context {
+        None => false,
+        Some(FnArg::Typed(argument)) if is_context_type(&argument.ty) => true,
+        Some(argument) => {
+            return Err(syn::Error::new(
+                argument.span(),
+                "Tool methods may only accept lenso::Ctx after the typed argument",
+            ));
+        }
+    };
     if inputs.next().is_some() {
         return Err(syn::Error::new(
             method.sig.inputs.span(),
-            "Tool methods accept exactly one typed argument",
+            "Tool methods accept one typed argument and an optional lenso::Ctx",
         ));
     }
     Ok(Some(ToolMethod {
         method: method.sig.ident.clone(),
         argument_type: (*argument.ty).clone(),
         takes_self,
+        takes_context,
         is_async: method.sig.asyncness.is_some(),
         name,
         description,
         execution,
     }))
+}
+
+fn is_context_type(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "Ctx"))
 }
 
 fn tool_argument<'a>(
@@ -326,14 +384,15 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
     let method = &tool.method;
     let argument_type = &tool.argument_type;
     let name = &tool.name;
-    let invoke = if tool.takes_self && tool.is_async {
-        quote!(self.#method(arguments).await)
-    } else if tool.takes_self {
-        quote!(self.#method(arguments))
-    } else if tool.is_async {
-        quote!(Self::#method(arguments).await)
-    } else {
-        quote!(Self::#method(arguments))
+    let invoke = match (tool.takes_self, tool.is_async, tool.takes_context) {
+        (true, true, true) => quote!(self.#method(arguments, context).await),
+        (true, false, true) => quote!(self.#method(arguments, context)),
+        (false, true, true) => quote!(Self::#method(arguments, context).await),
+        (false, false, true) => quote!(Self::#method(arguments, context)),
+        (true, true, false) => quote!(self.#method(arguments).await),
+        (true, false, false) => quote!(self.#method(arguments)),
+        (false, true, false) => quote!(Self::#method(arguments).await),
+        (false, false, false) => quote!(Self::#method(arguments)),
     };
     quote! {
         #name => {
@@ -349,14 +408,22 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
     }
 }
 
-fn portable_dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
+fn portable_dispatch_arm(tool: &ToolMethod, has_context: bool) -> proc_macro2::TokenStream {
     let method = &tool.method;
     let argument_type = &tool.argument_type;
     let name = &tool.name;
-    let invoke = if tool.takes_self {
-        quote!(self.#method(arguments))
-    } else {
-        quote!(Self::#method(arguments))
+    let invoke = match (tool.takes_self, tool.takes_context, has_context) {
+        (true, true, true) => quote!(self.#method(arguments, context)),
+        (false, true, true) => quote!(Self::#method(arguments, context)),
+        (true, false, _) => quote!(self.#method(arguments)),
+        (false, false, _) => quote!(Self::#method(arguments)),
+        (_, true, false) => {
+            return quote! {
+                #name => ::lenso::InvocationOutcome::Failure(
+                    "Tool requires invocation context".to_owned(),
+                )
+            };
+        }
     };
     quote! {
         #name => {
