@@ -699,7 +699,7 @@ macro_rules! __lenso_native_provide_user_interaction {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct UserInteractionClient {
     answer: NativeRequestHandle<UserInteractionAnswer>,
     ask: NativeRequestHandle<UserInteractionAsk>,

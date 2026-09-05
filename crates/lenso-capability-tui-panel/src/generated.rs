@@ -306,7 +306,7 @@ macro_rules! __lenso_native_provide_panel {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PanelClient {
     snapshot: NativeRequestHandle<Panel>,
 }

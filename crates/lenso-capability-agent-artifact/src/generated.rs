@@ -504,7 +504,7 @@ macro_rules! __lenso_native_provide_artifact {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ArtifactClient {
     put: NativeRequestHandle<ArtifactPut>,
     read: NativeRequestHandle<ArtifactRead>,

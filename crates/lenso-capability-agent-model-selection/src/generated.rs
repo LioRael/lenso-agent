@@ -326,7 +326,7 @@ macro_rules! __lenso_native_provide_model_selection {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ModelSelectionClient {
     select: NativeRequestHandle<ModelSelection>,
 }

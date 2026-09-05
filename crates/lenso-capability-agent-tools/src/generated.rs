@@ -857,7 +857,7 @@ macro_rules! __lenso_native_provide_tools {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ToolsClient {
     catalog: NativeRequestHandle<ToolsCatalog>,
     execute: NativeRequestHandle<ToolsExecute>,

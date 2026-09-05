@@ -357,7 +357,7 @@ macro_rules! __lenso_native_provide_agent {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AgentClient {
     run_turn: NativeStreamHandle<Agent>,
 }

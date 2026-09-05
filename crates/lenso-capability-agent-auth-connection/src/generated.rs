@@ -1041,7 +1041,7 @@ macro_rules! __lenso_native_provide_auth_connection {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AuthConnectionClient {
     begin: NativeRequestHandle<AuthConnectionBegin>,
     cancel: NativeRequestHandle<AuthConnectionCancel>,

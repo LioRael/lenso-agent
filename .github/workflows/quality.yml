@@ -86,6 +86,6 @@ jobs:
           toolchain: nightly-2026-07-10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install the contract generator
-        run: cargo install lenso-contract-codegen --version 0.8.1 --locked
+        run: cargo install lenso-contract-codegen --version 0.8.2 --locked
       - name: Check generated contracts
         run: lenso-contract-codegen workspace check --manifest-path Cargo.toml

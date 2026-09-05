@@ -329,7 +329,7 @@ macro_rules! __lenso_native_provide_worktree {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WorktreeClient {
     allocate: NativeRequestHandle<Worktree>,
 }

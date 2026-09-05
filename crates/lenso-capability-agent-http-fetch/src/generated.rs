@@ -342,7 +342,7 @@ macro_rules! __lenso_native_provide_http_fetch {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct HttpFetchClient {
     get: NativeRequestHandle<HttpFetch>,
 }

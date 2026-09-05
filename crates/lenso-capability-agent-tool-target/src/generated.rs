@@ -528,7 +528,7 @@ macro_rules! __lenso_native_provide_tool_target {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ToolTargetClient {
     catalog: NativeRequestHandle<ToolTargetCatalog>,
     execute: NativeRequestHandle<ToolTargetExecute>,

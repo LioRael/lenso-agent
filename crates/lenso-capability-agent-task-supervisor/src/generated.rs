@@ -394,7 +394,7 @@ macro_rules! __lenso_native_provide_task_supervisor {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TaskSupervisorClient {
     snapshot: NativeRequestHandle<TaskSupervisor>,
 }

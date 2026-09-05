@@ -307,7 +307,7 @@ macro_rules! __lenso_native_provide_turn_input {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TurnInputClient {
     submit: NativeRequestHandle<TurnInput>,
 }

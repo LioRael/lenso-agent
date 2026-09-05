@@ -313,7 +313,7 @@ macro_rules! __lenso_native_provide_openai_codex {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OpenaiCodexClient {
     access: NativeRequestHandle<OpenaiCodex>,
 }

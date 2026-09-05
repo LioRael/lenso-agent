@@ -1196,7 +1196,7 @@ macro_rules! __lenso_native_provide_session {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SessionClient {
     append: NativeRequestHandle<SessionAppend>,
     list: NativeRequestHandle<SessionList>,

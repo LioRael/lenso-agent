@@ -799,7 +799,7 @@ macro_rules! __lenso_native_provide_plugin_configuration_authority {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PluginConfigurationAuthorityClient {
     inspect: NativeRequestHandle<PluginConfigurationAuthorityInspect>,
     propose: NativeRequestHandle<PluginConfigurationAuthorityPropose>,

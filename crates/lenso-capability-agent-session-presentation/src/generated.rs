@@ -318,7 +318,7 @@ macro_rules! __lenso_native_provide_session_presentation {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SessionPresentationClient {
     project: NativeRequestHandle<SessionPresentation>,
 }
