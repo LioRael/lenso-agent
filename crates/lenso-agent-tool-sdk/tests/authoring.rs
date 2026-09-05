@@ -39,6 +39,27 @@ impl FixtureTools {
     async fn async_echo(message: Message) -> Result<ExecuteResponse, ExecuteError> {
         std::future::ready(Ok(response(message.value))).await
     }
+
+    #[tool(
+        name = "context_echo",
+        description = "Echo through an inherited invocation context.",
+        execution = "exclusive"
+    )]
+    #[allow(
+        clippy::needless_pass_by_value,
+        clippy::trivially_copy_pass_by_ref,
+        clippy::unnecessary_wraps,
+        clippy::unused_self,
+        reason = "the fixture exercises stateful context-aware Tool dispatch"
+    )]
+    fn context_echo(
+        &self,
+        message: Message,
+        context: Ctx,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        assert!(!context.is_cancelled());
+        Ok(response(message.value))
+    }
 }
 
 fn response(content: String) -> ExecuteResponse {
@@ -65,7 +86,7 @@ fn one_provider_derives_and_dispatches_multiple_typed_tools() {
             .iter()
             .map(|tool| tool.name.as_str())
             .collect::<Vec<_>>(),
-        ["sync_echo", "async_echo"]
+        ["sync_echo", "async_echo", "context_echo"]
     );
     assert_eq!(
         catalog
@@ -75,11 +96,12 @@ fn one_provider_derives_and_dispatches_multiple_typed_tools() {
             .collect::<Vec<_>>(),
         [
             ToolExecutionClass::Exclusive,
-            ToolExecutionClass::ParallelSafe
+            ToolExecutionClass::ParallelSafe,
+            ToolExecutionClass::Exclusive
         ]
     );
 
-    for name in ["sync_echo", "async_echo"] {
+    for name in ["sync_echo", "async_echo", "context_echo"] {
         let result = futures::executor::block_on(provider.execute(
             context(),
             ExecuteRequest {
