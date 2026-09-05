@@ -171,6 +171,7 @@ fn expand_portable(
             #self_type {
                 capability_id: "lenso.agent.tool-provider@2",
                 descriptor_version: "2.1.0",
+                descriptor_digest: "sha256:8bfc7951a77a853b22d6a1a03d31d36a11844ba5d3526fec0934bf95977ad80d",
                 requests: ["catalog", "execute"],
             }
         }
