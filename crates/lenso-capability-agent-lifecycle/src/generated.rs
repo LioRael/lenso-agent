@@ -327,7 +327,7 @@ macro_rules! __lenso_native_provide_lifecycle {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LifecycleClient {
     observe: NativeRequestHandle<Lifecycle>,
 }

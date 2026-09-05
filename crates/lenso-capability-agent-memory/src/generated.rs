@@ -846,7 +846,7 @@ macro_rules! __lenso_native_provide_memory {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MemoryClient {
     forget: NativeRequestHandle<MemoryForget>,
     observe: NativeRequestHandle<MemoryObserve>,

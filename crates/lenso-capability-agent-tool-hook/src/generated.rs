@@ -513,7 +513,7 @@ macro_rules! __lenso_native_provide_tool_hook {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ToolHookClient {
     after_execute: NativeRequestHandle<ToolHookAfterExecute>,
     before_execute: NativeRequestHandle<ToolHookBeforeExecute>,

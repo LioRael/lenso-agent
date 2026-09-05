@@ -602,7 +602,7 @@ macro_rules! __lenso_native_provide_tool_provider {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ToolProviderClient {
     catalog: NativeRequestHandle<ToolProviderCatalog>,
     execute: NativeRequestHandle<ToolProviderExecute>,

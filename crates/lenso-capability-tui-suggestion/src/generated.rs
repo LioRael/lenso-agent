@@ -326,7 +326,7 @@ macro_rules! __lenso_native_provide_suggestion {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SuggestionClient {
     snapshot: NativeRequestHandle<Suggestion>,
 }

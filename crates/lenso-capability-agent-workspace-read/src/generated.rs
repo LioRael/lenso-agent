@@ -336,7 +336,7 @@ macro_rules! __lenso_native_provide_workspace_read {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct WorkspaceReadClient {
     read_text: NativeRequestHandle<WorkspaceRead>,
 }

@@ -709,7 +709,7 @@ macro_rules! __lenso_native_provide_process {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ProcessClient {
     catalog: NativeRequestHandle<ProcessCatalog>,
     run: NativeRequestHandle<ProcessRun>,

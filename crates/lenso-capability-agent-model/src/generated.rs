@@ -816,7 +816,7 @@ macro_rules! __lenso_native_provide_model {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ModelClient {
     catalog: NativeRequestHandle<ModelCatalog>,
     complete: NativeStreamHandle<ModelComplete>,

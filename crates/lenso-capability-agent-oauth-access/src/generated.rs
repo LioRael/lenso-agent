@@ -492,7 +492,7 @@ macro_rules! __lenso_native_provide_oauth_access {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct OauthAccessClient {
     access: NativeRequestHandle<OauthAccessAccess>,
     invalidate: NativeRequestHandle<OauthAccessInvalidate>,

@@ -310,7 +310,7 @@ macro_rules! __lenso_native_provide_session_control {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SessionControlClient {
     compact_session: NativeRequestHandle<SessionControl>,
 }

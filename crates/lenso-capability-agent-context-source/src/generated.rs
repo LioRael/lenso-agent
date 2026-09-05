@@ -736,7 +736,7 @@ macro_rules! __lenso_native_provide_context_source {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ContextSourceClient {
     read_resource: NativeRequestHandle<ContextSourceReadResource>,
     render_prompt: NativeRequestHandle<ContextSourceRenderPrompt>,

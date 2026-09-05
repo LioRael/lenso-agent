@@ -317,7 +317,7 @@ macro_rules! __lenso_native_provide_prompt_provider {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PromptProviderClient {
     contribute: NativeRequestHandle<PromptProvider>,
 }

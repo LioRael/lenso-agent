@@ -347,7 +347,7 @@ macro_rules! __lenso_native_provide_plugin_selection_authority {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PluginSelectionAuthorityClient {
     set_enabled: NativeRequestHandle<PluginSelectionAuthority>,
 }

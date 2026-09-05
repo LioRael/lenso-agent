@@ -535,7 +535,7 @@ macro_rules! __lenso_native_provide_tool_progress {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ToolProgressClient {
     execute_progress: NativeStreamHandle<ToolProgressExecuteProgress>,
     progress_catalog: NativeRequestHandle<ToolProgressProgressCatalog>,

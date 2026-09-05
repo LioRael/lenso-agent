@@ -2898,7 +2898,7 @@ macro_rules! __lenso_native_provide_plugin_management_target {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct PluginManagementTargetClient {
     catalog: NativeRequestHandle<PluginManagementTargetCatalog>,
     history: NativeRequestHandle<PluginManagementTargetHistory>,
