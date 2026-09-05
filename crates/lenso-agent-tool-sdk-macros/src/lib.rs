@@ -170,7 +170,7 @@ fn expand_portable(
         ::lenso::__export_json_request_handler! {
             #self_type {
                 capability_id: "lenso.agent.tool-provider@2",
-                descriptor_version: "2.0.0",
+                descriptor_version: "2.1.0",
                 requests: ["catalog", "execute"],
             }
         }
