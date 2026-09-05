@@ -1,0 +1,71 @@
+name: Release Agent Tool TypeScript SDK
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/release-agent-tool-sdk-npm.yml"
+      - "packages/lenso-agent-tool-sdk/**"
+  push:
+    tags:
+      - "lenso-agent-tool-sdk-ts-v*"
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify @lenso/agent-tool-sdk
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.2.21
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Install package dependencies
+        working-directory: packages/lenso-agent-tool-sdk
+        run: npm install --ignore-scripts --no-package-lock
+      - name: Verify package
+        working-directory: packages/lenso-agent-tool-sdk
+        run: |
+          bun run build
+          bun run test
+          npm pack --dry-run
+
+  publish:
+    name: Publish @lenso/agent-tool-sdk
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.2.21
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Verify release tag
+        working-directory: packages/lenso-agent-tool-sdk
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "lenso-agent-tool-sdk-ts-v${package_version}"
+      - name: Install package dependencies
+        working-directory: packages/lenso-agent-tool-sdk
+        run: npm install --ignore-scripts --no-package-lock
+      - name: Build package
+        working-directory: packages/lenso-agent-tool-sdk
+        run: bun run build
+      - name: Publish package
+        working-directory: packages/lenso-agent-tool-sdk
+        run: npm publish --access public --provenance
