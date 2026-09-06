@@ -20,7 +20,9 @@ mod runtime_state;
 mod test_support;
 mod tool_target;
 
-pub use directories::{AGENT_HOME_ENV, AgentDirectories};
+pub use directories::{
+    AGENT_HOME_ENV, AgentDirectories, ensure_unmanaged_plugin_root, protect_managed_plugin_root,
+};
 pub use host::{
     AcpSurface, AgentHost, AgentHostBuilder, AgentSurface, AgentSurfaceKind, ChannelSurface,
     ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,

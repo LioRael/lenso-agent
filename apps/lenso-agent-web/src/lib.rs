@@ -300,6 +300,7 @@ struct WebRuntime {
     policy: Arc<RwLock<ToolPolicyDocument>>,
     policy_path: Option<PathBuf>,
     profile: Option<String>,
+    profile_selection_allowed: bool,
     plugin_control: Option<PluginControl>,
     plugin_mutations: PluginMutationCoordinator,
 }
@@ -380,6 +381,7 @@ struct WebRuntimeConfig {
     policy: ToolPolicyDocument,
     policy_path: Option<PathBuf>,
     profile: Option<String>,
+    profile_selection_allowed: bool,
     remote_configuration: Option<Arc<RemotePluginConfigurationAuthority>>,
 }
 
@@ -891,6 +893,9 @@ impl AgentWebSurface {
             remote,
             selection: plugin_selection_authority,
         } = authorities;
+        if !authority_is_builtin_local {
+            lenso_agent_host::protect_managed_plugin_root(directories.home())?;
+        }
         let plugin_control = PluginControl::resolve(
             plugin_control,
             managed_app_root.as_deref(),
@@ -930,6 +935,7 @@ impl AgentWebSurface {
                 policy,
                 policy_path: tool_policy,
                 profile,
+                profile_selection_allowed: authority_is_builtin_local,
                 remote_configuration: remote,
             },
         );
@@ -1406,7 +1412,7 @@ async fn bootstrap(
             ("terminalCommands", true),
             ("turnModelSelection", true),
             ("turnToolSelection", true),
-            ("profileSelection", runtime.control.is_enabled()),
+            ("profileSelection", runtime.profile_selection_enabled()),
         ]
         .into_iter()
         .collect(),
@@ -1443,6 +1449,11 @@ async fn select_profile(
     Json(request): Json<SelectProfileRequest>,
 ) -> Result<Json<SelectedProfileResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
+    if !runtime.profile_selection_enabled() {
+        return Err(ApiProblem::conflict(
+            "Profile selection requires the built-in local configuration authority",
+        ));
+    }
     if request
         .profile
         .as_deref()
@@ -1920,6 +1931,7 @@ impl WebRuntime {
             policy,
             policy_path,
             profile,
+            profile_selection_allowed,
             remote_configuration,
         } = config;
         let (commands, receiver) = mpsc::channel(16);
@@ -1945,9 +1957,14 @@ impl WebRuntime {
             policy,
             policy_path,
             profile,
+            profile_selection_allowed,
             plugin_control,
             plugin_mutations: PluginMutationCoordinator::default(),
         }
+    }
+
+    fn profile_selection_enabled(&self) -> bool {
+        self.control.is_enabled() && self.profile_selection_allowed
     }
 
     fn authorize_control(&self, headers: &HeaderMap) -> Result<(), ApiProblem> {
@@ -3400,6 +3417,7 @@ mod tests {
             })),
             policy_path: None,
             profile: None,
+            profile_selection_allowed: true,
             plugin_control: None,
             plugin_mutations: PluginMutationCoordinator::default(),
         }
@@ -4172,6 +4190,18 @@ mod tests {
         local
             .run_until(async {
                 let surface = AgentWebSurface::start(config).await.unwrap();
+                assert!(!surface.runtime.profile_selection_enabled());
+                assert!(root.path().join(".lenso/managed-configuration").exists());
+                let rejected = select_profile(
+                    State(surface.runtime.clone()),
+                    HeaderMap::new(),
+                    Json(SelectProfileRequest {
+                        profile: Some("code".to_owned()),
+                    }),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(rejected.status, StatusCode::CONFLICT);
                 let inventory = plugin_control::plugin_inventory(
                     State(surface.runtime.clone()),
                     axum::extract::Query(plugin_control::PluginInventoryQuery::default()),

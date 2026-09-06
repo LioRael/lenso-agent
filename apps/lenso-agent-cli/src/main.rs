@@ -724,6 +724,7 @@ fn run_profile(command: &ProfileCommand) -> Result<(), String> {
 }
 
 fn install_coding_profiles(home: &Path) -> Result<(), String> {
+    lenso_agent_host::ensure_unmanaged_plugin_root(home)?;
     lenso_agent_host::migrate_legacy_official_files(home)?;
     let files = coding_profile_files();
     for (relative, content) in &files {
@@ -1044,6 +1045,26 @@ fn open_browser(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod profile_tests {
     use super::*;
+
+    #[test]
+    fn coding_install_preserves_custom_managed_plugin_root() {
+        let home = tempfile::tempdir().unwrap();
+        lenso_agent_host::protect_managed_plugin_root(home.path()).unwrap();
+        let error = install_coding_profiles(home.path()).unwrap_err();
+        assert!(error.contains("managed configuration authority"));
+        assert!(!home.path().join("plugins").exists());
+        assert!(!home.path().join("profiles").exists());
+    }
+
+    #[test]
+    fn coding_install_preserves_managed_plugin_root() {
+        let home = tempfile::tempdir().unwrap();
+        fs::write(home.path().join("plugin-configuration.sqlite3"), b"managed").unwrap();
+        let error = install_coding_profiles(home.path()).unwrap_err();
+        assert!(error.contains("managed configuration authority"));
+        assert!(!home.path().join("plugins").exists());
+        assert!(!home.path().join("profiles").exists());
+    }
 
     #[test]
     fn coding_profile_install_is_idempotent_and_creates_all_modes() {

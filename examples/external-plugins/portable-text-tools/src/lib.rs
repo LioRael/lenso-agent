@@ -32,6 +32,7 @@ impl TextTools {
         Ok(ExecuteResponse {
             content,
             content_type: ContentType::Text,
+            content_blocks: None,
             metadata_json: r#"{"operation":"uppercase"}"#
                 .try_into()
                 .expect("static Tool metadata must be valid JSON"),
