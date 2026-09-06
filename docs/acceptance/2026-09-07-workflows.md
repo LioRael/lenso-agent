@@ -89,3 +89,26 @@ must be released through their repository workflows, then the Agent dependency
 cohort must be updated and retested against registry artifacts. The Console
 change includes a Changeset. Local passing evidence does not mean the current
 published installers or default managed Home support live Profile import.
+
+## Registry-backed follow-up
+
+Runtime fix PR #139 merged at
+`0193b07a3bacb025d5e5a417afc2766e9a947ca6`; release PR #140 merged at
+`549cc037998d14a57cedf6578d96e173c1b9844a`. Trusted Publishing run
+`34063011379` succeeded. The crates.io sparse index confirms these non-yanked
+versions: `lenso-wasm-component-adapter 0.2.12`,
+`lenso-plugin-control-plane 0.4.17`, `lenso-host-distribution 0.1.16`, and
+`lenso 0.5.18`.
+
+Agent v0.1.3 uses registry Adapter 0.2.12 with checksum
+`5473e3c0ca9927a3fc9885f01588cd5973f3b53024108c2ad5aad01ff7541e06`.
+With no Cargo path overrides, all 110 Host tests passed and session
+`7fe3ae79-5b68-489d-ab9c-501b3d346ca8` invoked the installed portable Bundle and
+returned `LENSO PLUGIN`. This proves the published dependency; final Agent
+binary installation and CLI registry release verification remain separate gates.
+
+Console fix PR #295 merged at
+`2b8766b6aae71dc0213923a8cbe8656c182d3f26`; version PR #294 passed CI and merged
+at `fea8d94dbbd2a61e3d26ce2214d38d6c4d51a7ae`, setting the source application
+version to 1.2.0. Its former OCI pipeline was retired; the release documentation
+now reflects source distribution and does not claim an image or npm publication.
