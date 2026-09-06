@@ -1453,7 +1453,15 @@ async fn bootstrap(
         .into_iter()
         .collect(),
         mode: "console",
-        profile: runtime.profile.unwrap_or_else(|| "default".to_owned()),
+        profile: if runtime.sqlite_profiles.is_some() {
+            runtime
+                .plugin_control
+                .as_ref()
+                .and_then(PluginControl::snapshot_profile)
+        } else {
+            runtime.profile
+        }
+        .unwrap_or_else(|| "default".to_owned()),
         tools: BootstrapTools {
             allowed: policy.allowed,
             available: runtime.available_tools,

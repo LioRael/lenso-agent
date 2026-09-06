@@ -451,7 +451,7 @@ impl PluginControl {
         }
     }
 
-    fn snapshot_profile(&self) -> Option<String> {
+    pub(super) fn snapshot_profile(&self) -> Option<String> {
         self.managed_profile.as_ref().map_or_else(
             || self.profile.clone(),
             |selected| {

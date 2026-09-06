@@ -29,6 +29,7 @@ async fn request(
 fn config(root: &FsPath) -> AgentWebConfig {
     let mut config = AgentWebConfig::new(lenso_agent_default_plugins::link);
     config.agent_home = Some(root.to_path_buf());
+    config.access = AgentWebAccess::HostAuthorized;
     config.control = AgentWebControl::HostAuthorized;
     config.plugin_control = true;
     config.plugin_configuration_store = Some(PluginConfigurationStoreConfig::new(
@@ -57,6 +58,7 @@ async fn sqlite_profiles_import_and_switch_online_then_restart() {
         let (status, selected) = request(&surface, "POST", "control/profile", serde_json::json!({"profile":"plan"})).await;
         assert_eq!(status, StatusCode::OK, "{selected}");
         assert_eq!(selected["profile"], "plan");
+        assert_eq!(request(&surface, "GET", "bootstrap", serde_json::Value::Null).await.1["profile"], "plan");
         let repeated = serde_json::json!({"expectedRevision": imported["revision"], "expectedStreamId": inventory["streamId"]});
         let (imported_again, selected_again) = tokio::time::timeout(std::time::Duration::from_secs(20), async {
             tokio::join!(
@@ -96,6 +98,7 @@ async fn sqlite_profiles_import_and_switch_online_then_restart() {
         assert!(error.to_string().contains("lenso-nonexistent-profile-test-program"), "{error}");
         let (_, after) = request(&surface, "GET", "plugins", serde_json::Value::Null).await;
         assert_eq!(before["active"]["planDigest"], after["active"]["planDigest"]);
+        assert_eq!(request(&surface, "GET", "bootstrap", serde_json::Value::Null).await.1["profile"], "plan");
         surface.shutdown().await.unwrap();
         let mut restarted = config(root.path());
         restarted.profile = Some("plan".to_owned());
