@@ -150,7 +150,7 @@ lenso-capability-terminal-command = "0.1.1"
 lenso-terminal-command-plugin = "0.1.1"
 lenso-terminal-cli-plugin = "0.1.1"
 lenso-terminal-cli-surface = "0.1.1"
-lenso-wasm-component-adapter = "0.2.11"
+lenso-wasm-component-adapter = "0.2.12"
 mlua = { version = "0.11", features = ["async", "lua54", "serialize", "vendored"] }
 nix = { version = "0.31", features = ["process", "signal"] }
 notify = "8.2"
