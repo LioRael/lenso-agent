@@ -118,6 +118,38 @@ impl AgentDirectories {
     }
 }
 
+/// Records that direct file installers must not mutate this managed Plugin Root.
+/// The marker is conservative and remains after the owning Host stops.
+pub fn protect_managed_plugin_root(home: &Path) -> Result<(), String> {
+    let directory = home.join(".lenso");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("failed to protect managed Plugin Root: {error}"))?;
+    let marker = directory.join("managed-configuration");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(marker)
+        .map_err(|error| format!("failed to protect managed Plugin Root: {error}"))?;
+    Ok(())
+}
+
+/// Rejects offline installation into a Root owned by a managed authority.
+/// The default database check also protects Homes created by older releases.
+pub fn ensure_unmanaged_plugin_root(home: &Path) -> Result<(), String> {
+    for path in [
+        home.join(".lenso/managed-configuration"),
+        home.join("plugin-configuration.sqlite3"),
+    ] {
+        match std::fs::symlink_metadata(&path) {
+            Ok(_) => return Err("coding Profile installation cannot modify a Plugin Root owned by a managed configuration authority; install into a fresh Agent Home before starting the Host, or publish changes through the owning authority".to_owned()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(error) => return Err(format!("failed to inspect managed configuration authority: {error}")),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

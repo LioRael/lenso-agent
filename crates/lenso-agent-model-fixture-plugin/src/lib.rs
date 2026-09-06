@@ -234,6 +234,9 @@ impl FixtureModel {
             .iter()
             .filter(|message| message.role == CompleteMessageRole::Tool)
             .collect::<Vec<_>>();
+        if current_user == "Read README.md twice with parallel approval." {
+            return parallel_approval_response(&tool_results);
+        }
         if current_user == "Use a Skill to review Rust." {
             return skill_response(request, &tool_results);
         }
@@ -306,6 +309,29 @@ impl FixtureModel {
             return subagent_child_response(request, &tool_results);
         }
         default_fixture_response(request, current_user, &tool_results)
+    }
+}
+
+fn parallel_approval_response(
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
+    match tool_results {
+        [] => {
+            let mut calls =
+                named_tool_request("parallel-read-a", "read", r#"{"path":"README.md"}"#);
+            calls.extend(named_tool_request(
+                "parallel-read-b",
+                "read",
+                r#"{"path":"README.md"}"#,
+            ));
+            Ok(calls)
+        }
+        [first, second] if first.content == second.content => {
+            Ok(previous_response("Both parallel reads completed."))
+        }
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 

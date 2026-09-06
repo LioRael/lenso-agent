@@ -3081,6 +3081,16 @@ fn host_catalog_bindings(
         )
         .with_admission(tool_admission),
     ];
+    // Parallel Tools share approval providers. Queue Hook calls rather than
+    // rejecting siblings while one call waits for a human answer.
+    for consumer in [root_tools.clone(), restricted_tools.clone()] {
+        if available.contains(consumer.plugin_id()) {
+            bindings.push(
+                HostBinding::new(consumer, "lenso.agent.tool-hook@1", "tool-hooks")
+                    .with_admission(RequestAdmissionPlan::new(32, 1)),
+            );
+        }
+    }
     if available.contains("lenso.agent.console-plugin-tools") {
         bindings.push(
             HostBinding::to_instance(
@@ -3229,11 +3239,14 @@ fn host_catalog_bindings(
             )
             .with_admission(RequestAdmissionPlan::new(8, 4)),
         );
-        bindings.push(HostBinding::to_instance(
-            worker_tools,
-            "lenso.agent.tool-hook@1",
-            PluginInstanceId::new("lenso.agent.interactive-approval-hook", "default"),
-        ));
+        bindings.push(
+            HostBinding::to_instance(
+                worker_tools,
+                "lenso.agent.tool-hook@1",
+                PluginInstanceId::new("lenso.agent.interactive-approval-hook", "default"),
+            )
+            .with_admission(RequestAdmissionPlan::new(32, 1)),
+        );
     }
     if available.contains("lenso.agent.process-tools") {
         bindings.push(
@@ -4003,6 +4016,39 @@ mod tests {
                     && binding.capability_id() == "lenso.agent.task-supervisor@2"
                     && binding.provider_slot() == Some("tool-providers")
             }));
+        }
+    }
+
+    #[test]
+    fn parallel_tool_consumers_have_bounded_serial_hook_admission() {
+        let available = [
+            "lenso.agent.tools",
+            "lenso.agent.workspace-read-tools",
+            "lenso.agent.worktree-provider",
+            "lenso.agent.subagent-tools",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+        let bindings = host_catalog_bindings(
+            &PluginInstanceId::new("lenso.agent.loop", "agent"),
+            &available,
+        );
+        for consumer in [
+            "lenso.agent.tools/tools",
+            "lenso.agent.workspace-read-tools/restricted-read-tools",
+            "lenso.agent.tools/worker-tools",
+        ] {
+            let binding = bindings
+                .iter()
+                .find(|binding| {
+                    binding.consumer().to_string() == consumer
+                        && binding.capability_id() == "lenso.agent.tool-hook@1"
+                })
+                .expect("each Tool runtime must bind its Hooks explicitly");
+            let value = serde_json::to_value(binding).unwrap();
+            assert_eq!(value["admission"]["queue_capacity"], 32);
+            assert_eq!(value["admission"]["max_concurrency"], 1);
         }
     }
 

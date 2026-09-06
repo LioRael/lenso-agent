@@ -120,3 +120,5 @@ reasons on their own.
 - [0095 — Freeze Model catalog freshness provenance](0095-freeze-model-catalog-freshness-provenance.md)
 - [0096 — Reconcile periodic Model catalog refresh](0096-reconcile-periodic-model-catalog-refresh.md)
 - [0097 — Keep Model continuation an optional affinity hint](0097-keep-model-continuation-an-optional-affinity-hint.md)
+
+- [0098 — Protect managed Plugin Roots from offline installers](0098-protect-managed-plugin-roots-from-offline-installers.md)

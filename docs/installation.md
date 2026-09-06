@@ -50,6 +50,14 @@ lenso-agent-cli doctor
 lenso-agent --profile code
 ```
 
+Install coding Profiles before attaching the Agent Home to SQLite or a remote
+configuration authority. The offline installer refuses Homes carrying the
+managed-configuration guard (and legacy default SQLite stores) before changing
+files. Stopping the Host does not relinquish its durable authority. Use a fresh
+Home for local coding Profiles or the owning authority's supported publication
+operations; live managed Profile import is not supported.
+
+
 `doctor --json` exposes the same non-secret checks for support automation. It
 reports release version, platform, Agent Home, authentication presence,
 installed entrypoints, and coding dependencies. It never prints credentials.
