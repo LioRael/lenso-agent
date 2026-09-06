@@ -589,6 +589,25 @@ impl PluginConfigurationAuthority for RemotePluginConfigurationAuthority {
             .remove(proposal.digest());
         Ok(local)
     }
+
+    fn propose_changes(
+        &self,
+        _expected_revision: &PluginRootRevision,
+        _changes: lenso_app_authoring::PluginRootChangeSet,
+    ) -> anyhow::Result<lenso_app_authoring::PluginRootChangeProposal> {
+        bail!(
+            "remote Plugin configuration service does not support coordinated Plugin Root changes"
+        )
+    }
+
+    fn publish_changes(
+        &self,
+        _proposal: &lenso_app_authoring::PluginRootChangeProposal,
+    ) -> anyhow::Result<lenso_app_authoring::PluginRootChangePublication> {
+        bail!(
+            "remote Plugin configuration service does not support coordinated Plugin Root changes"
+        )
+    }
 }
 
 impl PluginConfigurationHistoryAuthority for RemotePluginConfigurationAuthority {

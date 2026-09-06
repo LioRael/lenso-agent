@@ -3217,7 +3217,7 @@ pub struct PluginManagementTargetGuestClient<'a, H: lenso_guest_sdk::HostImports
 impl<'a, H: lenso_guest_sdk::HostImports> PluginManagementTargetGuestClient<'a, H> {
     pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
         context
-            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION], &[])
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION], &[], &[])
             .map(|capability| Self { capability })
     }
 
@@ -3282,6 +3282,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
 
     fn request_operations(&self) -> &'static [&'static str] { &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }
+    fn event_operations(&self) -> &'static [&'static str] { &[] }
 
     fn encode_request(&self, operation: &str, request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         match operation {
@@ -3434,6 +3435,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
     }
 
     fn decode_stream_domain_error(&self, operation: &str, _value: serde_json::Value) -> Result<Box<dyn std::any::Any>, RuntimeFailure> {
+        Err(runtime_codec_unknown_operation(operation))
+    }
+
+    fn encode_event(&self, operation: &str, _event: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         Err(runtime_codec_unknown_operation(operation))
     }
 
@@ -3624,6 +3629,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
     }
 
     fn open_host_stream(&self, _dependency: lenso_kernel::PluginStreamDependencyHandle, operation: String, _request: serde_json::Value, _context: InvocationContext) -> lenso_runtime_codec::JsonHostStreamOpenFuture {
+        Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
+    }
+
+    fn publish_host_event(&self, _dependency: lenso_kernel::PluginEventDependencyHandle, operation: String, _event: serde_json::Value, _context: InvocationContext) -> futures::future::LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
         Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
     }
 }

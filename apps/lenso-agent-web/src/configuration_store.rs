@@ -10,8 +10,8 @@ use fs2::FileExt;
 use lenso_app_authoring::{
     LocalPluginRootAuthority, PluginConfigurationAuthority, PluginConfigurationAuthoritySource,
     PluginConfigurationProposal, PluginConfigurationProposalStatus, PluginConfigurationPublication,
-    PluginRootAuthoringState, PluginRootRevision, PluginSelectionAuthority,
-    PluginSelectionPublication,
+    PluginRootAuthoringState, PluginRootChangeProposal, PluginRootChangePublication,
+    PluginRootChangeSet, PluginRootRevision, PluginSelectionAuthority, PluginSelectionPublication,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
@@ -600,6 +600,35 @@ impl PluginConfigurationAuthority for SqlitePluginConfigurationAuthority {
                 }
             };
             self.finish_publication(connection, &publication)?;
+            Ok(publication)
+        })
+    }
+
+    fn propose_changes(
+        &self,
+        expected_revision: &PluginRootRevision,
+        changes: PluginRootChangeSet,
+    ) -> anyhow::Result<PluginRootChangeProposal> {
+        self.with_operation(|connection| {
+            self.reconcile(connection)?;
+            self.local.propose_changes(expected_revision, changes)
+        })
+    }
+
+    fn publish_changes(
+        &self,
+        proposal: &PluginRootChangeProposal,
+    ) -> anyhow::Result<PluginRootChangePublication> {
+        self.with_operation(|connection| {
+            self.reconcile(connection)?;
+            let publication = self.local.publish_changes(proposal)?;
+            let changed = connection.execute(
+                "UPDATE authority_state SET desired_revision = ?1 WHERE singleton = 1 AND desired_revision = ?2",
+                params![publication.revision().as_str(), publication.base_revision().as_str()],
+            )?;
+            if changed != 1 {
+                bail!("Plugin configuration store lost coordinated mutation authority");
+            }
             Ok(publication)
         })
     }

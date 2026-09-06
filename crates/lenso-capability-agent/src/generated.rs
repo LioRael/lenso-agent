@@ -460,7 +460,7 @@ pub struct AgentGuestClient<'a, H: lenso_guest_sdk::HostImports> {
 impl<'a, H: lenso_guest_sdk::HostImports> AgentGuestClient<'a, H> {
     pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
         context
-            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[], &[RUN_TURN_OPERATION])
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[], &[RUN_TURN_OPERATION], &[])
             .map(|capability| Self { capability })
     }
 
@@ -481,6 +481,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for AgentJsonCodec {
 
     fn request_operations(&self) -> &'static [&'static str] { &[] }
     fn stream_operations(&self) -> &'static [&'static str] { &[RUN_TURN_OPERATION] }
+    fn event_operations(&self) -> &'static [&'static str] { &[] }
 
     fn encode_request(&self, operation: &str, _request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         Err(runtime_codec_unknown_operation(operation))
@@ -532,6 +533,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for AgentJsonCodec {
         }
     }
 
+    fn encode_event(&self, operation: &str, _event: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
+        Err(runtime_codec_unknown_operation(operation))
+    }
+
     fn invoke_host_request(&self, _dependency: lenso_kernel::PluginDependencyHandle, operation: String, _request: serde_json::Value, _context: InvocationContext) -> lenso_runtime_codec::JsonHostRequestFuture {
         Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
     }
@@ -558,6 +563,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for AgentJsonCodec {
             },
             _ => Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation)))),
         }
+    }
+
+    fn publish_host_event(&self, _dependency: lenso_kernel::PluginEventDependencyHandle, operation: String, _event: serde_json::Value, _context: InvocationContext) -> futures::future::LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
+        Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
     }
 }
 

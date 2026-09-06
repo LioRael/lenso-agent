@@ -1375,7 +1375,7 @@ pub struct SessionGuestClient<'a, H: lenso_guest_sdk::HostImports> {
 impl<'a, H: lenso_guest_sdk::HostImports> SessionGuestClient<'a, H> {
     pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
         context
-            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[APPEND_OPERATION, LIST_OPERATION, OPEN_OPERATION, READ_OPERATION, RENAME_OPERATION], &[])
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[APPEND_OPERATION, LIST_OPERATION, OPEN_OPERATION, READ_OPERATION, RENAME_OPERATION], &[], &[])
             .map(|capability| Self { capability })
     }
 
@@ -1412,6 +1412,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
 
     fn request_operations(&self) -> &'static [&'static str] { &[APPEND_OPERATION, LIST_OPERATION, OPEN_OPERATION, READ_OPERATION, RENAME_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }
+    fn event_operations(&self) -> &'static [&'static str] { &[] }
 
     fn encode_request(&self, operation: &str, request: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
         match operation {
@@ -1497,6 +1498,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
         Err(runtime_codec_unknown_operation(operation))
     }
 
+    fn encode_event(&self, operation: &str, _event: &dyn std::any::Any) -> Result<serde_json::Value, RuntimeFailure> {
+        Err(runtime_codec_unknown_operation(operation))
+    }
+
     fn invoke_host_request(&self, dependency: lenso_kernel::PluginDependencyHandle, operation: String, request: serde_json::Value, context: InvocationContext) -> lenso_runtime_codec::JsonHostRequestFuture {
         match operation.as_str() {
             APPEND_OPERATION => {
@@ -1579,6 +1584,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for SessionJsonCodec {
     }
 
     fn open_host_stream(&self, _dependency: lenso_kernel::PluginStreamDependencyHandle, operation: String, _request: serde_json::Value, _context: InvocationContext) -> lenso_runtime_codec::JsonHostStreamOpenFuture {
+        Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
+    }
+
+    fn publish_host_event(&self, _dependency: lenso_kernel::PluginEventDependencyHandle, operation: String, _event: serde_json::Value, _context: InvocationContext) -> futures::future::LocalBoxFuture<'static, Result<(), RuntimeFailure>> {
         Box::pin(std::future::ready(Err(runtime_codec_unknown_operation(&operation))))
     }
 }
