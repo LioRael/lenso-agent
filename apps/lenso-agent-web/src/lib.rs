@@ -3369,6 +3369,21 @@ mod tests {
         ) -> anyhow::Result<lenso_app_authoring::PluginConfigurationPublication> {
             self.local.publish(proposal)
         }
+
+        fn propose_changes(
+            &self,
+            expected_revision: &PluginRootRevision,
+            changes: lenso_app_authoring::PluginRootChangeSet,
+        ) -> anyhow::Result<lenso_app_authoring::PluginRootChangeProposal> {
+            self.local.propose_changes(expected_revision, changes)
+        }
+
+        fn publish_changes(
+            &self,
+            proposal: &lenso_app_authoring::PluginRootChangeProposal,
+        ) -> anyhow::Result<lenso_app_authoring::PluginRootChangePublication> {
+            self.local.publish_changes(proposal)
+        }
     }
 
     fn runtime_with_access(access: AgentWebAccess) -> WebRuntime {

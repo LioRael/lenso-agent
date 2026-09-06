@@ -518,10 +518,8 @@ impl PluginControl {
                 response.with_selection_authority(self.selection_authority_response())
             });
         }
-        let _authoring = self
-            .configuration_authority_is_builtin_local
-            .then(|| lock_plugin_root_authoring(&self.app_root))
-            .transpose()?;
+        // Every configuration authority owns the lock that makes its inspection
+        // atomic. The local authority takes a shared root lock internally.
         let state = self
             .configuration_authority
             .inspect()
@@ -3604,6 +3602,21 @@ mod tests {
                 .map_err(|error| anyhow::anyhow!("publication was not released: {error}"))?;
             Ok(publication)
         }
+
+        fn propose_changes(
+            &self,
+            expected_revision: &PluginRootRevision,
+            changes: lenso_app_authoring::PluginRootChangeSet,
+        ) -> anyhow::Result<lenso_app_authoring::PluginRootChangeProposal> {
+            self.local.propose_changes(expected_revision, changes)
+        }
+
+        fn publish_changes(
+            &self,
+            proposal: &lenso_app_authoring::PluginRootChangeProposal,
+        ) -> anyhow::Result<lenso_app_authoring::PluginRootChangePublication> {
+            self.local.publish_changes(proposal)
+        }
     }
 
     impl PluginConfigurationAuthority for WrappedLocalConfigurationAuthority {
@@ -3632,6 +3645,21 @@ mod tests {
         ) -> anyhow::Result<lenso_app_authoring::PluginConfigurationPublication> {
             self.published.store(true, Ordering::SeqCst);
             self.local.publish(proposal)
+        }
+
+        fn propose_changes(
+            &self,
+            expected_revision: &PluginRootRevision,
+            changes: lenso_app_authoring::PluginRootChangeSet,
+        ) -> anyhow::Result<lenso_app_authoring::PluginRootChangeProposal> {
+            self.local.propose_changes(expected_revision, changes)
+        }
+
+        fn publish_changes(
+            &self,
+            proposal: &lenso_app_authoring::PluginRootChangeProposal,
+        ) -> anyhow::Result<lenso_app_authoring::PluginRootChangePublication> {
+            self.local.publish_changes(proposal)
         }
     }
 
