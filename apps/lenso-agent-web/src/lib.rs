@@ -301,6 +301,7 @@ struct WebRuntime {
     policy_path: Option<PathBuf>,
     profile: Option<String>,
     profile_selection_allowed: bool,
+    sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
     plugin_control: Option<PluginControl>,
     plugin_mutations: PluginMutationCoordinator,
 }
@@ -382,6 +383,7 @@ struct WebRuntimeConfig {
     policy_path: Option<PathBuf>,
     profile: Option<String>,
     profile_selection_allowed: bool,
+    sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
     remote_configuration: Option<Arc<RemotePluginConfigurationAuthority>>,
 }
 
@@ -889,6 +891,7 @@ impl AgentWebSurface {
         let ResolvedConfigurationAuthorities {
             authority: plugin_configuration_authority,
             authority_is_builtin_local,
+            sqlite_profiles,
             history: plugin_configuration_history,
             remote,
             selection: plugin_selection_authority,
@@ -896,11 +899,20 @@ impl AgentWebSurface {
         if !authority_is_builtin_local {
             lenso_agent_host::protect_managed_plugin_root(directories.home())?;
         }
+        if let Some(authority) = &sqlite_profiles {
+            authority
+                .validate_managed_profile(profile.as_deref())
+                .map_err(|error| error.to_string())?;
+        }
         let plugin_control = PluginControl::resolve(
             plugin_control,
             managed_app_root.as_deref(),
             directories.home(),
-            profile.clone(),
+            if sqlite_profiles.is_some() {
+                None
+            } else {
+                profile.clone()
+            },
             trusted_plugin_bundles,
             PluginControlAuthorities {
                 configuration: Arc::clone(&plugin_configuration_authority),
@@ -909,6 +921,13 @@ impl AgentWebSurface {
                 selection: plugin_selection_authority.clone(),
             },
         )?;
+        let plugin_control = plugin_control.map(|control| {
+            if sqlite_profiles.is_some() {
+                control.with_managed_profile(profile.clone())
+            } else {
+                control
+            }
+        });
         let management_target: Arc<dyn PluginManagementTarget> = Arc::new(
             RoutedPluginManagementTarget::new(plugin_control.clone(), plugin_management_target),
         );
@@ -935,7 +954,8 @@ impl AgentWebSurface {
                 policy,
                 policy_path: tool_policy,
                 profile,
-                profile_selection_allowed: authority_is_builtin_local,
+                profile_selection_allowed: authority_is_builtin_local || sqlite_profiles.is_some(),
+                sqlite_profiles,
                 remote_configuration: remote,
             },
         );
@@ -1047,6 +1067,7 @@ fn plugin_configuration_authority_selection(
 struct ResolvedConfigurationAuthorities {
     authority: Arc<dyn PluginConfigurationAuthority>,
     authority_is_builtin_local: bool,
+    sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
     history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     remote: Option<Arc<RemotePluginConfigurationAuthority>>,
     selection: Option<Arc<dyn PluginSelectionAuthority>>,
@@ -1069,6 +1090,7 @@ fn resolve_configuration_authorities(
             Ok(ResolvedConfigurationAuthorities {
                 authority: Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>,
                 authority_is_builtin_local: false,
+                sqlite_profiles: Some(Arc::clone(&authority)),
                 history: Some(
                     Arc::clone(&authority) as Arc<dyn PluginConfigurationHistoryAuthority>
                 ),
@@ -1084,6 +1106,7 @@ fn resolve_configuration_authorities(
             Ok(ResolvedConfigurationAuthorities {
                 authority: Arc::clone(&authority) as Arc<dyn PluginConfigurationAuthority>,
                 authority_is_builtin_local: false,
+                sqlite_profiles: None,
                 history: Some(
                     Arc::clone(&authority) as Arc<dyn PluginConfigurationHistoryAuthority>
                 ),
@@ -1106,6 +1129,7 @@ fn resolve_configuration_authorities(
             Ok(ResolvedConfigurationAuthorities {
                 authority,
                 authority_is_builtin_local,
+                sqlite_profiles: None,
                 history: injected_history,
                 remote: None,
                 selection,
@@ -1131,7 +1155,14 @@ fn validate_plugin_control_configuration(
     if enabled && has_exact_plan {
         return Err("Plugin Root control cannot mutate an exact diagnostic Plan".to_owned());
     }
-    if enabled && has_named_profile && authority != PluginConfigurationAuthoritySelection::Local {
+    if enabled
+        && has_named_profile
+        && !matches!(
+            authority,
+            PluginConfigurationAuthoritySelection::Local
+                | PluginConfigurationAuthoritySelection::Store
+        )
+    {
         return Err(
             "named Profile Plugin control requires the built-in local configuration authority"
                 .to_owned(),
@@ -1204,6 +1235,10 @@ fn router(runtime: WebRuntime) -> Router {
         .route(
             "/api/console/v1/agent/control/profile",
             post(select_profile),
+        )
+        .route(
+            "/api/console/v1/agent/control/profiles/import",
+            post(import_profiles),
         )
         .merge(plugin_control::routes())
         .route(
@@ -1413,6 +1448,7 @@ async fn bootstrap(
             ("turnModelSelection", true),
             ("turnToolSelection", true),
             ("profileSelection", runtime.profile_selection_enabled()),
+            ("profileImport", runtime.sqlite_profiles.is_some()),
         ]
         .into_iter()
         .collect(),
@@ -1443,6 +1479,37 @@ async fn update_tool_policy(
     runtime.update_tool_policy(request).map(Json)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImportProfilesRequest {
+    expected_revision: String,
+    expected_stream_id: String,
+}
+
+async fn import_profiles(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<ImportProfilesRequest>,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let authority = runtime.sqlite_profiles.clone().ok_or_else(|| {
+        ApiProblem::conflict("Profile import requires SQLite configuration authority")
+    })?;
+    // The process stream fences stale clients after a restart.
+    runtime
+        .validate_plugin_stream(&request.expected_stream_id)
+        .await?;
+    let revision = tokio::task::spawn_blocking(move || {
+        authority.import_coding_profiles(&request.expected_revision)
+    })
+    .await
+    .map_err(|_| ApiProblem::unavailable("Profile import worker stopped"))?
+    .map_err(|error| ApiProblem::conflict(error.to_string()))?;
+    Ok(Json(
+        serde_json::json!({"revision": revision, "profiles": ["plan", "code", "code-sandbox"]}),
+    ))
+}
+
 async fn select_profile(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
@@ -1451,8 +1518,15 @@ async fn select_profile(
     runtime.authorize_control(&headers)?;
     if !runtime.profile_selection_enabled() {
         return Err(ApiProblem::conflict(
-            "Profile selection requires the built-in local configuration authority",
+            "Profile selection requires a supported local or SQLite configuration authority",
         ));
+    }
+    if let Some(authority) = runtime.sqlite_profiles.clone() {
+        let profile = request.profile.clone();
+        tokio::task::spawn_blocking(move || authority.validate_managed_profile(profile.as_deref()))
+            .await
+            .map_err(|_| ApiProblem::unavailable("Profile validation worker stopped"))?
+            .map_err(|error| ApiProblem::conflict(error.to_string()))?;
     }
     if request
         .profile
@@ -1932,6 +2006,7 @@ impl WebRuntime {
             policy_path,
             profile,
             profile_selection_allowed,
+            sqlite_profiles,
             remote_configuration,
         } = config;
         let (commands, receiver) = mpsc::channel(16);
@@ -1947,6 +2022,7 @@ impl WebRuntime {
             commands.clone(),
             Arc::clone(&policy),
             configuration_authority,
+            plugin_control.clone(),
             remote_sync,
         ));
         Self {
@@ -1958,6 +2034,7 @@ impl WebRuntime {
             policy_path,
             profile,
             profile_selection_allowed,
+            sqlite_profiles,
             plugin_control,
             plugin_mutations: PluginMutationCoordinator::default(),
         }
@@ -2062,6 +2139,7 @@ async fn runtime_actor(
     command_sender: mpsc::Sender<RuntimeCommand>,
     policy: Arc<RwLock<ToolPolicyDocument>>,
     configuration_authority: Option<plugin_control_api::PluginConfigurationAuthorityResponse>,
+    plugin_control: Option<PluginControl>,
     mut remote_sync: Option<RemoteConfigurationSyncRuntime>,
 ) {
     let mut pending = VecDeque::new();
@@ -2252,12 +2330,13 @@ async fn runtime_actor(
                     .await;
             }
             RuntimeCommand::SelectProfile { profile, reply } => {
-                let result = app
-                    .select_profile(profile)
-                    .await
-                    .map(|()| SelectedProfileResponse {
-                        profile: app.selected_profile(),
-                    });
+                let result = app.select_profile(profile).await.map(|()| {
+                    let profile = app.selected_profile();
+                    if let Some(control) = &plugin_control {
+                        control.update_managed_profile(profile.clone());
+                    }
+                    SelectedProfileResponse { profile }
+                });
                 let _ = reply.send(result);
             }
             RuntimeCommand::ReadTrajectory { reply, session_id } => {
@@ -3418,6 +3497,7 @@ mod tests {
             policy_path: None,
             profile: None,
             profile_selection_allowed: true,
+            sqlite_profiles: None,
             plugin_control: None,
             plugin_mutations: PluginMutationCoordinator::default(),
         }
@@ -4396,3 +4476,6 @@ mod tests {
         assert!(!valid_session_id(""));
     }
 }
+
+#[cfg(test)]
+mod profile_import_tests;

@@ -52,6 +52,7 @@ pub(super) struct PluginControl {
     configuration_authority_is_builtin_local: bool,
     mutation: Arc<Mutex<()>>,
     profile: Option<String>,
+    managed_profile: Option<Arc<Mutex<Option<String>>>>,
     trusted_bundles: BTreeMap<String, PathBuf>,
 }
 
@@ -186,7 +187,7 @@ impl PluginControl {
         let desired = lenso_agent_host::snapshot_desired_plugin_root_for_home(
             &staged.home,
             &self.authority_home,
-            self.profile.as_deref(),
+            self.snapshot_profile().as_deref(),
         )?;
         let source_digest = digest_file(bundle)?;
         let proposal_digest = lifecycle_proposal_digest(
@@ -291,7 +292,7 @@ impl PluginControl {
         let desired = lenso_agent_host::snapshot_desired_plugin_root_for_home(
             &staged.home,
             &self.authority_home,
-            self.profile.as_deref(),
+            self.snapshot_profile().as_deref(),
         )?;
         let proposal_digest = lifecycle_proposal_digest(
             "remove",
@@ -431,9 +432,35 @@ impl PluginControl {
             configuration_history: history,
             configuration_authority_is_builtin_local: configuration_is_builtin_local,
             mutation: Arc::new(Mutex::new(())),
+            managed_profile: None,
             profile,
             trusted_bundles,
         }
+    }
+
+    pub(super) fn with_managed_profile(mut self, profile: Option<String>) -> Self {
+        self.managed_profile = Some(Arc::new(Mutex::new(profile)));
+        self
+    }
+
+    pub(super) fn update_managed_profile(&self, profile: Option<String>) {
+        if let Some(selected) = &self.managed_profile {
+            *selected
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = profile;
+        }
+    }
+
+    fn snapshot_profile(&self) -> Option<String> {
+        self.managed_profile.as_ref().map_or_else(
+            || self.profile.clone(),
+            |selected| {
+                selected
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            },
+        )
     }
 
     pub(super) fn configuration_source(&self) -> PluginConfigurationAuthoritySource {
@@ -979,7 +1006,7 @@ impl PluginControl {
         lenso_agent_host::snapshot_desired_plugin_root_for_home(
             &staged.home,
             &self.authority_home,
-            self.profile.as_deref(),
+            self.snapshot_profile().as_deref(),
         )
     }
 
@@ -1124,7 +1151,7 @@ impl PluginControl {
     fn validate_staged(&self, staged: &StagedHome) -> Result<(), String> {
         lenso_agent_host::validate_desired_plugin_root_for_home(
             &staged.home,
-            self.profile.as_deref(),
+            self.snapshot_profile().as_deref(),
         )
     }
 
@@ -1132,7 +1159,7 @@ impl PluginControl {
         lenso_agent_host::snapshot_desired_plugin_root_for_home(
             &self.app_root,
             &self.authority_home,
-            self.profile.as_deref(),
+            self.snapshot_profile().as_deref(),
         )
     }
 
@@ -1586,13 +1613,13 @@ struct CommittedPluginMutation {
 }
 
 #[derive(Debug)]
-struct PluginMutationLinearization {
+pub(crate) struct PluginMutationLinearization {
     _authoring: fs::File,
     _generation: lenso_agent_host::PluginRootMutationFence,
 }
 
 impl PluginMutationLinearization {
-    fn acquire(app_root: &Path, authority_home: &Path) -> Result<Self, String> {
+    pub(crate) fn acquire(app_root: &Path, authority_home: &Path) -> Result<Self, String> {
         let authoring = lock_plugin_root_authoring(app_root)?;
         let generation = lenso_agent_host::fence_plugin_root_mutation_for_home(authority_home)?;
         Ok(Self {
@@ -1609,13 +1636,13 @@ struct ProfileConfigurationCandidate {
 }
 
 #[derive(Debug)]
-struct StagedHome {
+pub(crate) struct StagedHome {
     root: PathBuf,
-    home: PathBuf,
+    pub(crate) home: PathBuf,
 }
 
 impl StagedHome {
-    fn new(source: &Path) -> Result<Self, String> {
+    pub(crate) fn new(source: &Path) -> Result<Self, String> {
         let root = source
             .join(".lenso/plugin-control-staging")
             .join(uuid::Uuid::new_v4().to_string());
@@ -1765,7 +1792,7 @@ fn plugin_disabled_path(plugin_id: &str, instance: &str) -> PathBuf {
         .join(format!("{instance}.disabled"))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "Plugin file has no parent".to_owned())?;
@@ -3331,7 +3358,10 @@ impl WebRuntime {
         })
     }
 
-    async fn validate_plugin_stream(&self, expected_stream_id: &str) -> Result<(), ApiProblem> {
+    pub(super) async fn validate_plugin_stream(
+        &self,
+        expected_stream_id: &str,
+    ) -> Result<(), ApiProblem> {
         let (reply, response) = oneshot::channel();
         self.commands
             .send(RuntimeCommand::Plugin(

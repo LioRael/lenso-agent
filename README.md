@@ -195,6 +195,25 @@ The store path must be absolute. Omitting it preserves direct local Plugin Root
 authority. This SQLite adapter is a single-Host persistence boundary, not a
 remote configuration service or distributed rollout coordinator.
 
+A running SQLite-managed Agent can import the official coding Profiles without
+restarting or writing behind the authority's back. Use the same control token as
+the running Web Host (the URL includes the Agent API prefix):
+
+```sh
+lenso-agent-cli profiles import coding \
+  --url http://127.0.0.1:8788/api/console/v1/agent
+```
+
+The command reads `LENSO_AGENT_CONTROL_TOKEN`, obtains the current revision and
+process identity, and imports `plan`, `code`, and `code-sandbox`. Customized files
+are preserved by rejecting the import; repeating an unchanged import is safe.
+Existing enabled Plugins remain enabled. Import makes Profiles available; select
+Plan or Auto in Console, or use the authorized `POST /control/profile` endpoint,
+to activate one through the Ready Gate. Failed activation preserves the previous
+mode. Imported Profiles survive restart and support `--profile plan` or
+`--profile code`. Remote/injected authorities do not support this import, and
+`profiles install coding` remains blocked in managed Homes.
+
 Package installation uses a separate Host-owned trust boundary. Register each
 reviewed Bundle under an opaque catalog entry ID; Console Agent can list that
 ID and request a reviewed install, but cannot supply a path, URL, or package

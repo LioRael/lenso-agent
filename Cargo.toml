@@ -129,7 +129,7 @@ proc-macro2 = "1"
 quote = "1"
 rusqlite = { version = "0.39", features = ["bundled"] }
 lenso-capability-secrets = "0.1.4"
-lenso-app-authoring = { package = "lenso-cli", version = "0.5.1", default-features = false }
+lenso-app-authoring = { package = "lenso-cli", version = "0.5.2", default-features = false }
 lenso-app-plan = "0.4.1"
 lenso-bun-adapter = "0.1.10"
 lenso = "0.5.17"

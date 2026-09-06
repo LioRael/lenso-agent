@@ -122,3 +122,5 @@ reasons on their own.
 - [0097 — Keep Model continuation an optional affinity hint](0097-keep-model-continuation-an-optional-affinity-hint.md)
 
 - [0098 — Protect managed Plugin Roots from offline installers](0098-protect-managed-plugin-roots-from-offline-installers.md)
+
+- [0099 — Import coding Profiles through SQLite authority](0099-import-coding-profiles-through-sqlite-authority.md)
