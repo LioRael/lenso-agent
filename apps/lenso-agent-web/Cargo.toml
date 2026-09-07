@@ -74,5 +74,6 @@ lenso-terminal-web-plugin = { path = "../../crates/lenso-terminal-web-plugin" }
 workspace = true
 
 [dev-dependencies]
+tokio-tungstenite.workspace = true
 lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
 tempfile.workspace = true

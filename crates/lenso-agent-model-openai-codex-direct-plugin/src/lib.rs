@@ -1275,6 +1275,17 @@ fn provider_failure(
     })
 }
 
+fn provider_stream_failure(reason_code: &str, message: &str) -> NativeStreamItem {
+    NativeStreamItem::Terminal(Err(Box::new(CompleteError::ProviderFailure {
+        payload: ProviderFailurePayload {
+            reason_code: reason_code.to_owned(),
+            message: message.to_owned(),
+            // This stream has already been opened; acceptance is not a safe retry boundary.
+            retryable: false,
+        },
+    })))
+}
+
 fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
     RuntimeFailure::InvalidResolvedPlan {
         detail: detail.into(),

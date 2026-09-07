@@ -1,10 +1,54 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "oneOf": [
-    { "const": "invalid_session" },
-    { "const": "concurrent_turn" },
-    { "const": "context_limit_exceeded" },
-    { "const": "step_limit_exceeded" },
-    { "const": "tool_call_limit_exceeded" }
+    {
+      "const": "invalid_session"
+    },
+    {
+      "const": "concurrent_turn"
+    },
+    {
+      "const": "context_limit_exceeded"
+    },
+    {
+      "const": "step_limit_exceeded"
+    },
+    {
+      "const": "tool_call_limit_exceeded"
+    },
+    {
+      "type": "object",
+      "required": [
+        "code",
+        "payload"
+      ],
+      "properties": {
+        "code": {
+          "const": "model_failure"
+        },
+        "payload": {
+          "type": "object",
+          "title": "ModelFailurePayload",
+          "required": [
+            "reason_code",
+            "message"
+          ],
+          "properties": {
+            "reason_code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
   ]
 }

@@ -168,7 +168,10 @@ async fn a_second_cache_miss_is_terminal_not_an_unbounded_retry() {
         .open(&config, &credential(), &continued_request("turn-a"))
         .await
         .unwrap();
-    assert!(second.receive().await.is_err());
+    assert!(matches!(
+        second.receive().await.unwrap(),
+        NativeStreamItem::Terminal(Err(_))
+    ));
     assert!(pool.0.borrow().idle.is_empty());
     tokio::time::timeout(Duration::from_secs(2), server)
         .await
