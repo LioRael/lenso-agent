@@ -2299,7 +2299,24 @@ async fn execute_tool_wave(
                     context.request_id(),
                 )
                 .await?;
-                if first_error.is_none() {
+                if matches!(
+                    error,
+                    ToolsExecuteStreamInvocationError::Domain(
+                        tools_capability::ExecuteStreamError::InvalidArguments
+                    )
+                ) {
+                    // Invalid model-authored arguments are feedback for the next
+                    // model step, not a failure of the running Generation.
+                    messages.push(assistant_tool_message(&tool_call));
+                    messages.push(CompleteMessageInput {
+                        role: CompleteMessageRole::Tool,
+                        content: "Tool failed: InvalidArguments. Correct the arguments before trying again."
+                            .to_owned(),
+                        tool_call_id: Some(tool_call.tool_call_id),
+                        tool_name: None,
+                        arguments_json: None,
+                    });
+                } else if first_error.is_none() {
                     first_error = Some(map_tools_stream_error(error));
                 }
             }
