@@ -2294,30 +2294,30 @@ async fn execute_tool_wave(
                         session_id,
                         *sequence,
                         duration_ms,
-                        error_detail,
+                        error_detail.clone(),
                     ),
                     context.request_id(),
                 )
                 .await?;
-                if matches!(
-                    error,
-                    ToolsExecuteStreamInvocationError::Domain(
-                        tools_capability::ExecuteStreamError::InvalidArguments
-                    )
-                ) {
-                    // Invalid model-authored arguments are feedback for the next
-                    // model step, not a failure of the running Generation.
-                    messages.push(assistant_tool_message(&tool_call));
-                    messages.push(CompleteMessageInput {
-                        role: CompleteMessageRole::Tool,
-                        content: "Tool failed: InvalidArguments. Correct the arguments before trying again."
-                            .to_owned(),
-                        tool_call_id: Some(tool_call.tool_call_id),
-                        tool_name: None,
-                        arguments_json: None,
-                    });
-                } else if first_error.is_none() {
-                    first_error = Some(map_tools_stream_error(error));
+                match error {
+                    ToolsExecuteStreamInvocationError::Domain(_) => {
+                        // Provider-declared failures (including denied access and
+                        // non-zero Git exits) are Tool results, not fatal Plugin
+                        // failures. Preserve the Generation and let the model
+                        // respond within the existing step and Tool limits.
+                        messages.push(assistant_tool_message(&tool_call));
+                        messages.push(CompleteMessageInput {
+                            role: CompleteMessageRole::Tool,
+                            content: format!("Tool failed: {error_detail}"),
+                            tool_call_id: Some(tool_call.tool_call_id),
+                            tool_name: None,
+                            arguments_json: None,
+                        });
+                    }
+                    ToolsExecuteStreamInvocationError::Runtime(error) if first_error.is_none() => {
+                        first_error = Some(PluginError::runtime(error));
+                    }
+                    ToolsExecuteStreamInvocationError::Runtime(_) => {}
                 }
             }
         }
@@ -4503,17 +4503,6 @@ fn map_model_domain_error(error: CompleteError) -> TurnFailure {
             message,
         },
     })
-}
-
-fn map_tools_stream_error(error: ToolsExecuteStreamInvocationError) -> TurnFailure {
-    match error {
-        ToolsExecuteStreamInvocationError::Domain(error) => {
-            PluginError::runtime(RuntimeFailure::PluginFailure {
-                detail: format!("Tool execution failed: {error:?}"),
-            })
-        }
-        ToolsExecuteStreamInvocationError::Runtime(error) => PluginError::runtime(error),
-    }
 }
 
 fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
