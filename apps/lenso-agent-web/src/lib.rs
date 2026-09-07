@@ -294,7 +294,7 @@ pub struct AgentWebSurface {
 #[derive(Clone, Debug)]
 struct WebRuntime {
     access: AgentWebAccessPolicy,
-    available_tools: Vec<BootstrapTool>,
+    available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
     commands: mpsc::Sender<RuntimeCommand>,
     control: AgentWebControlPolicy,
     policy: Arc<RwLock<ToolPolicyDocument>>,
@@ -1464,7 +1464,7 @@ async fn bootstrap(
         .unwrap_or_else(|| "default".to_owned()),
         tools: BootstrapTools {
             allowed: policy.allowed,
-            available: runtime.available_tools,
+            available: policy.available,
         },
         trajectory: Trajectory::SCHEMA,
     }))
@@ -2017,6 +2017,7 @@ impl WebRuntime {
             sqlite_profiles,
             remote_configuration,
         } = config;
+        let available_tools = Arc::new(RwLock::new(available_tools));
         let (commands, receiver) = mpsc::channel(16);
         let policy = Arc::new(RwLock::new(policy));
         let remote_sync = remote_configuration
@@ -2030,7 +2031,10 @@ impl WebRuntime {
             commands.clone(),
             Arc::clone(&policy),
             configuration_authority,
-            plugin_control.clone(),
+            RuntimeProfileState {
+                control: plugin_control.clone(),
+                available_tools: Arc::clone(&available_tools),
+            },
             remote_sync,
         ));
         Self {
@@ -2077,7 +2081,11 @@ impl WebRuntime {
             .policy
             .read()
             .map_err(|_| ApiProblem::unavailable("Agent Tool policy lock is poisoned"))?;
-        Ok(policy_response(&policy, &self.available_tools))
+        let available = self
+            .available_tools
+            .read()
+            .map_err(|_| ApiProblem::unavailable("Tool catalog lock is unavailable"))?;
+        Ok(policy_response(&policy, &available))
     }
 
     fn update_tool_policy(
@@ -2088,10 +2096,14 @@ impl WebRuntime {
             .policy
             .write()
             .map_err(|_| ApiProblem::unavailable("Agent Tool policy lock is poisoned"))?;
+        let available = self
+            .available_tools
+            .read()
+            .map_err(|_| ApiProblem::unavailable("Tool catalog lock is unavailable"))?;
         update_policy(
             &mut policy,
             self.policy_path.as_deref(),
-            &self.available_tools,
+            &available,
             request,
         )
         .map_err(ApiProblem::conflict)
@@ -2137,6 +2149,11 @@ fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
         == 0
 }
 
+struct RuntimeProfileState {
+    control: Option<PluginControl>,
+    available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the actor keeps every serialized runtime command in one auditable dispatch loop"
@@ -2147,7 +2164,7 @@ async fn runtime_actor(
     command_sender: mpsc::Sender<RuntimeCommand>,
     policy: Arc<RwLock<ToolPolicyDocument>>,
     configuration_authority: Option<plugin_control_api::PluginConfigurationAuthorityResponse>,
-    plugin_control: Option<PluginControl>,
+    profile_state: RuntimeProfileState,
     mut remote_sync: Option<RemoteConfigurationSyncRuntime>,
 ) {
     let mut pending = VecDeque::new();
@@ -2338,13 +2355,28 @@ async fn runtime_actor(
                     .await;
             }
             RuntimeCommand::SelectProfile { profile, reply } => {
-                let result = app.select_profile(profile).await.map(|()| {
-                    let profile = app.selected_profile();
-                    if let Some(control) = &plugin_control {
-                        control.update_managed_profile(profile.clone());
+                let result = match app.select_profile(profile).await {
+                    Err(error) => Err(error),
+                    Ok(()) => {
+                        let profile = app.selected_profile();
+                        if let Some(control) = &profile_state.control {
+                            control.update_managed_profile(profile.clone());
+                        }
+                        let catalog = resolve_tool_policy(&app, &[]).await;
+                        *profile_state
+                            .available_tools
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            catalog.as_ref().cloned().unwrap_or_default();
+                        catalog
+                            .map(|_| SelectedProfileResponse { profile })
+                            .map_err(|error| {
+                                format!(
+                                    "Profile activated but its Tool catalog is unavailable: {error}"
+                                )
+                            })
                     }
-                    SelectedProfileResponse { profile }
-                });
+                };
                 let _ = reply.send(result);
             }
             RuntimeCommand::ReadTrajectory { reply, session_id } => {
@@ -3494,7 +3526,7 @@ mod tests {
         let (commands, _receiver) = mpsc::channel(1);
         WebRuntime {
             access: access.into(),
-            available_tools: Vec::new(),
+            available_tools: Arc::new(RwLock::new(Vec::new())),
             commands,
             control: AgentWebControl::Disabled.into(),
             policy: Arc::new(RwLock::new(ToolPolicyDocument {
@@ -4066,9 +4098,8 @@ mod tests {
                             .any(|plugin| plugin["instanceKey"] == instance)
                     );
                 }
-                let available = surface
-                    .runtime
-                    .available_tools
+                let available_tools = surface.runtime.available_tools.read().unwrap().clone();
+                let available = available_tools
                     .iter()
                     .map(|tool| tool.name.as_str())
                     .collect::<BTreeSet<_>>();
@@ -4184,9 +4215,8 @@ mod tests {
                 let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
                 config.agent_home = Some(root.path().to_path_buf());
                 let surface = AgentWebSurface::start(config).await.unwrap();
-                let available = surface
-                    .runtime
-                    .available_tools
+                let available_tools = surface.runtime.available_tools.read().unwrap().clone();
+                let available = available_tools
                     .iter()
                     .map(|tool| tool.name.as_str())
                     .collect::<BTreeSet<_>>();

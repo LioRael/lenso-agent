@@ -32,6 +32,7 @@ fn config(root: &FsPath) -> AgentWebConfig {
     config.access = AgentWebAccess::HostAuthorized;
     config.control = AgentWebControl::HostAuthorized;
     config.plugin_control = true;
+    config.tool_policy = Some(root.join("tool-policy.json"));
     config.plugin_configuration_store = Some(PluginConfigurationStoreConfig::new(
         root.join("config.sqlite3"),
         "test/app",
@@ -77,6 +78,19 @@ async fn sqlite_profiles_import_and_switch_online_then_restart() {
 
         let (status, _) = request(&surface, "POST", "control/profile", serde_json::json!({"profile":"unknown"})).await;
         assert_eq!(status, StatusCode::CONFLICT);
+        let (status, selected) = request(&surface, "POST", "control/profile", serde_json::json!({"profile":"code"})).await;
+        assert_eq!(status, StatusCode::OK, "{selected}");
+        let (_, bootstrap) = request(&surface, "GET", "bootstrap", serde_json::Value::Null).await;
+        assert!(bootstrap["tools"]["available"].as_array().unwrap().iter().any(|tool| tool["name"] == "edit"));
+        assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!([]));
+        let (status, policy) = request(&surface, "PUT", "control/tool-policy", serde_json::json!({"expectedRevision":0,"allowed":["edit"]})).await;
+        assert_eq!(status, StatusCode::OK, "{policy}");
+        let (status, selected) = request(&surface, "POST", "control/profile", serde_json::json!({"profile":"plan"})).await;
+        assert_eq!(status, StatusCode::OK, "{selected}");
+        let (_, bootstrap) = request(&surface, "GET", "bootstrap", serde_json::Value::Null).await;
+        assert!(!bootstrap["tools"]["available"].as_array().unwrap().iter().any(|tool| tool["name"] == "edit"));
+        assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!(["edit"]));
+        assert_eq!(request(&surface, "PUT", "control/tool-policy", serde_json::json!({"expectedRevision":1,"allowed":[]})).await.0, StatusCode::OK);
         let authority = surface.runtime.sqlite_profiles.as_ref().unwrap();
         let revision = authority.inspect().unwrap().revision().clone();
         let edited = "working_directory = \".\"\nmax_file_bytes = 131072\n";

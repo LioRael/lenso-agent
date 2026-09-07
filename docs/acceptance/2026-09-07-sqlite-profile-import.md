@@ -24,6 +24,9 @@ the compiled official preset, not arbitrary Profile or package upload.
 - Configuration publication while Plan is selected returns that Profile's
   actual desired Plan digest. The authoring dependency is pinned to the released
   minimum `lenso-cli 0.5.2`, which preserves candidate configuration identity.
+- Profile switches refresh the available Tool catalog and the Bootstrap mode.
+  Newly available Tools can be explicitly authorized through the existing Tool
+  policy endpoint; switching alone preserves the existing grants.
 - Offline `profiles install coding` remains rejected in managed Homes.
 
 ## Validation
