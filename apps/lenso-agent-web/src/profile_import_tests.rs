@@ -26,6 +26,34 @@ async fn request(
     (status, serde_json::from_slice(&bytes).unwrap())
 }
 
+async fn turn_events(surface: &AgentWebSurface, id: &str, allowed: Option<Vec<&str>>) -> String {
+    let mut body = serde_json::json!({"request_id": id, "input": "What did you summarize?"});
+    if let Some(allowed) = allowed {
+        body["allowed_tools"] = serde_json::json!(allowed);
+    }
+    let response = surface
+        .router()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/api/console/v1/agent/turns")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        axum::body::to_bytes(response.into_body(), 1024 * 1024),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    String::from_utf8(bytes.to_vec()).unwrap()
+}
+
 fn config(root: &FsPath) -> AgentWebConfig {
     let mut config = AgentWebConfig::new(lenso_agent_default_plugins::link);
     config.agent_home = Some(root.to_path_buf());
@@ -83,13 +111,31 @@ async fn sqlite_profiles_import_and_switch_online_then_restart() {
         let (_, bootstrap) = request(&surface, "GET", "bootstrap", serde_json::Value::Null).await;
         assert!(bootstrap["tools"]["available"].as_array().unwrap().iter().any(|tool| tool["name"] == "edit"));
         assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!([]));
-        let (status, policy) = request(&surface, "PUT", "control/tool-policy", serde_json::json!({"expectedRevision":0,"allowed":["edit"]})).await;
+        let (status, policy) = request(&surface, "PUT", "control/tool-policy", serde_json::json!({"expectedRevision":0,"allowed":["edit","read"]})).await;
         assert_eq!(status, StatusCode::OK, "{policy}");
         let (status, selected) = request(&surface, "POST", "control/profile", serde_json::json!({"profile":"plan"})).await;
         assert_eq!(status, StatusCode::OK, "{selected}");
         let (_, bootstrap) = request(&surface, "GET", "bootstrap", serde_json::Value::Null).await;
         assert!(!bootstrap["tools"]["available"].as_array().unwrap().iter().any(|tool| tool["name"] == "edit"));
-        assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!(["edit"]));
+        assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!(["edit", "read"]));
+        let events = turn_events(&surface, "plan-default-tools", None).await;
+        assert!(events.contains("turn.completed"), "{events}");
+        let events = turn_events(&surface, "plan-stale-edit", Some(vec!["edit"])).await;
+        assert!(events.contains("Turn Tool selection exceeds"), "{events}");
+        let events = turn_events(&surface, "plan-after-rejected-edit", Some(vec!["read"])).await;
+        assert!(events.contains("turn.completed"), "{events}");
+        assert_eq!(request(&surface, "GET", "models", serde_json::Value::Null).await.0, StatusCode::OK);
+        surface.shutdown().await.unwrap();
+        let mut restarted = config(root.path());
+        restarted.profile = Some("plan".to_owned());
+        let surface = AgentWebSurface::start(restarted).await.unwrap();
+        let (_, bootstrap) = request(&surface, "GET", "bootstrap", serde_json::Value::Null).await;
+        assert_eq!(bootstrap["tools"]["allowed"], serde_json::json!(["edit", "read"]));
+        let events = turn_events(&surface, "plan-after-restart", None).await;
+        assert!(events.contains("turn.completed"), "{events}");
+        let (_, inventory) = request(&surface, "GET", "plugins", serde_json::Value::Null).await;
+
+
         assert_eq!(request(&surface, "PUT", "control/tool-policy", serde_json::json!({"expectedRevision":1,"allowed":[]})).await.0, StatusCode::OK);
         let authority = surface.runtime.sqlite_profiles.as_ref().unwrap();
         let revision = authority.inspect().unwrap().revision().clone();
