@@ -293,6 +293,7 @@ pub struct AgentWebSurface {
 
 #[derive(Clone, Debug)]
 struct WebRuntime {
+    workspace: Option<WebWorkspace>,
     access: AgentWebAccessPolicy,
     available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
     commands: mpsc::Sender<RuntimeCommand>,
@@ -633,11 +634,19 @@ impl From<InteractionOption> for WebInteractionOption {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BootstrapResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<WebWorkspace>,
     capabilities: BTreeMap<&'static str, bool>,
     mode: &'static str,
     profile: String,
     tools: BootstrapTools,
     trajectory: &'static str,
+}
+
+/// Host process working directory; presentation context, not a Tool grant.
+#[derive(Clone, Debug, Serialize)]
+struct WebWorkspace {
+    path: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -1435,6 +1444,7 @@ async fn bootstrap(
     let policy = runtime.read_tool_policy()?;
     let coding_profiles = runtime.coding_profile_import_enabled().await?;
     Ok(Json(BootstrapResponse {
+        workspace: runtime.workspace.clone(),
         capabilities: [
             ("cancel", true),
             ("edit", true),
@@ -2043,6 +2053,10 @@ impl WebRuntime {
             remote_sync,
         ));
         Self {
+            workspace: std::env::current_dir()
+                .ok()
+                .and_then(|path| path.to_str().map(str::to_owned))
+                .map(|path| WebWorkspace { path }),
             access: access.into(),
             available_tools,
             commands,
@@ -3569,6 +3583,7 @@ mod tests {
     fn runtime_with_access(access: AgentWebAccess) -> WebRuntime {
         let (commands, _receiver) = mpsc::channel(1);
         WebRuntime {
+            workspace: None,
             access: access.into(),
             available_tools: Arc::new(RwLock::new(Vec::new())),
             commands,

@@ -59,6 +59,10 @@ async fn streams_lists_and_branches_a_durable_session() {
             .iter()
             .any(|tool| tool["name"] == "read")
     );
+    assert_eq!(
+        bootstrap["workspace"]["path"],
+        fs::canonicalize(root.path()).unwrap().to_str().unwrap()
+    );
     assert_eq!(bootstrap["trajectory"], "lenso.agent.trajectory@1");
     assert_eq!(bootstrap["capabilities"]["taskSnapshot"], true);
     let models = client
