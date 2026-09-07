@@ -125,3 +125,5 @@ reasons on their own.
 
 - [0099 — Import coding Profiles through SQLite authority](0099-import-coding-profiles-through-sqlite-authority.md)
 - [0100 — Keep model failures within the Turn](0100-keep-model-failures-within-the-turn.md)
+
+- [0101 — Version Session instructions on Profile selection](0101-version-session-instructions-on-profile-selection.md)

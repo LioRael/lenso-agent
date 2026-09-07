@@ -34,7 +34,9 @@ running graph.
 2. The surface leases that Generation and opens `lenso.agent@3/run_turn`.
 3. Agent opens or resumes a Session, restores or refreshes its bounded context
    projection, and records `turn_started`.
-4. Agent obtains the installed System Instruction and derived Tool catalog.
+4. Agent obtains the Session instruction version for the leased Profile and derived Tool catalog.
+   Explicit Profile changes append an instruction revision; same-Profile resumes keep recorded bytes
+   ([ADR-0101](../adr/0101-version-session-instructions-on-profile-selection.md)).
 5. Model output streams to the surface; complete Tool calls are recorded before
    execution.
 6. Tool Runtime validates and dispatches to the Plan-bound Provider Plugin.

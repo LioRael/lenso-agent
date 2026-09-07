@@ -222,6 +222,17 @@ impl TypedExtension for ResolvedTurnProfile {
     const KEY: &'static str = RESOLVED_TURN_PROFILE_EXTENSION;
 }
 
+/// Authoring Profile selected by the Host for this immutable Turn lease.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionProfile {
+    pub name: Option<String>,
+}
+
+impl TypedExtension for SessionProfile {
+    const KEY: &'static str = "lenso.agent.session-profile@1";
+}
+
 /// One dynamic policy request plus the exact model profiles it may select.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -302,6 +313,16 @@ struct InstalledSystemInstruction {
     digest: String,
     contributions: Vec<prompt_capability::AssembleResponseContributionsItem>,
     generation_spec_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile: Option<SessionProfile>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct SystemInstructionRevision {
+    previous_digest: String,
+    reason: String,
+    instruction: InstalledSystemInstruction,
 }
 
 /// One validated Turn-to-Generation provenance reference.
@@ -900,20 +921,30 @@ async fn run_turn(
         .map_err(map_session_open_error)?;
     let session_id = opened.session_id;
     register_active_session(&clients.active, &session_id)?;
-    let (system_instruction, install_system_instruction) = if opened.created {
-        (
-            assemble_system_instruction(clients, context, generation_spec_digest).await?,
-            true,
-        )
-    } else if let Some(installed) =
-        read_installed_system_instruction(clients, context, &session_id, &opened.revision).await?
-    {
-        (installed, false)
+    let current_profile = context
+        .typed_extension::<SessionProfile>()
+        .map_err(|error| invalid_system_instruction(format!("invalid Session Profile: {error}")))?;
+    let installed = if opened.created {
+        None
     } else {
-        (
+        read_installed_system_instruction(clients, context, &session_id, &opened.revision).await?
+    };
+    let install_system_instruction = installed.is_none();
+    let (system_instruction, instruction_revision) = match installed {
+        Some(installed) => {
+            select_session_instruction(
+                clients,
+                context,
+                generation_spec_digest,
+                installed,
+                current_profile,
+            )
+            .await?
+        }
+        None => (
             assemble_system_instruction(clients, context, generation_spec_digest).await?,
-            true,
-        )
+            None,
+        ),
     };
     let history = if opened.created {
         Vec::new()
@@ -955,6 +986,7 @@ async fn run_turn(
             revision: compacted_revision,
             history: &history,
             install_system_instruction,
+            instruction_revision: instruction_revision.as_ref(),
             system_instruction: &system_instruction,
             generation_spec_digest,
             agent_behavior_digest: agent_behavior.as_ref().map(|value| value.digest.as_str()),
@@ -1019,6 +1051,7 @@ struct TurnStart<'a> {
     revision: String,
     history: &'a [ReadSessionResponseEventsItem],
     install_system_instruction: bool,
+    instruction_revision: Option<&'a SystemInstructionRevision>,
     system_instruction: &'a InstalledSystemInstruction,
     generation_spec_digest: &'a str,
     agent_behavior_digest: Option<&'a str>,
@@ -1051,6 +1084,14 @@ async fn start_turn(
                     detail: format!("failed to encode installed System Instruction: {error}"),
                 })
             })?,
+        )?);
+    }
+    if let Some(revision) = start.instruction_revision {
+        initialization_events.push(session_event(
+            AppendSessionRequestEventsItemKind::SystemInstructionRevised,
+            None,
+            &serde_json::to_value(revision)
+                .map_err(|error| invalid_system_instruction(error.to_string()))?,
         )?);
     }
     if !initialization_events.is_empty() {
@@ -3093,9 +3134,108 @@ async fn assemble_system_instruction(
         content: prompt.content,
         contributions: prompt.contributions,
         generation_spec_digest: generation_spec_digest.to_owned(),
+        profile: context
+            .typed_extension::<SessionProfile>()
+            .map_err(|error| invalid_system_instruction(error.to_string()))?,
     };
     validate_system_instruction(&instruction)?;
     Ok(instruction)
+}
+
+fn legacy_official_profile(instruction: &InstalledSystemInstruction) -> Option<SessionProfile> {
+    let has = |id: &str| instruction.contributions.iter().any(|item| item.id == id);
+    let name = if has("harness.plan") && !has("harness.coding") {
+        "plan"
+    } else if has("harness.coding") && !has("harness.plan") && has("harness.execution.sandbox") {
+        "code-sandbox"
+    } else if has("harness.coding") && !has("harness.plan") {
+        "code"
+    } else {
+        return None;
+    };
+    Some(SessionProfile {
+        name: Some(name.to_owned()),
+    })
+}
+
+async fn select_session_instruction(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    generation: &str,
+    installed: InstalledSystemInstruction,
+    current: Option<SessionProfile>,
+) -> Result<
+    (
+        InstalledSystemInstruction,
+        Option<SystemInstructionRevision>,
+    ),
+    TurnFailure,
+> {
+    let Some(current) = current else {
+        return Ok((installed, None));
+    };
+    let previous = installed
+        .profile
+        .clone()
+        .or_else(|| legacy_official_profile(&installed));
+    let changed = previous
+        .as_ref()
+        .is_some_and(|previous| previous != &current);
+    if !changed && installed.profile.is_some() {
+        return Ok((installed, None));
+    }
+    let mut next = if changed {
+        assemble_system_instruction(clients, context, generation).await?
+    } else {
+        installed.clone()
+    };
+    next.profile = Some(current);
+    let revision = SystemInstructionRevision {
+        previous_digest: installed.digest,
+        reason: if changed {
+            "profile_changed"
+        } else {
+            "legacy_profile_bound"
+        }
+        .to_owned(),
+        instruction: next.clone(),
+    };
+    Ok((next, Some(revision)))
+}
+
+fn apply_instruction_revision(
+    installed: Option<InstalledSystemInstruction>,
+    revision: SystemInstructionRevision,
+) -> Result<InstalledSystemInstruction, TurnFailure> {
+    let previous = installed
+        .ok_or_else(|| invalid_system_instruction("instruction revision precedes installation"))?;
+    validate_system_instruction(&revision.instruction)?;
+    if revision.previous_digest != previous.digest || revision.instruction.profile.is_none() {
+        return Err(invalid_system_instruction(
+            "broken instruction revision chain",
+        ));
+    }
+    let valid = match revision.reason.as_str() {
+        "profile_changed" => previous
+            .profile
+            .clone()
+            .or_else(|| legacy_official_profile(&previous))
+            .as_ref()
+            .is_some_and(|profile| Some(profile) != revision.instruction.profile.as_ref()),
+        "legacy_profile_bound" => {
+            previous.profile.is_none()
+                && previous.content == revision.instruction.content
+                && previous.contributions == revision.instruction.contributions
+                && previous.generation_spec_digest == revision.instruction.generation_spec_digest
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(invalid_system_instruction(
+            "invalid instruction revision reason",
+        ));
+    }
+    Ok(revision.instruction)
 }
 
 async fn read_installed_system_instruction(
@@ -3159,6 +3299,10 @@ async fn read_installed_system_instruction(
                         })?;
                 validate_system_instruction(&instruction)?;
                 installed = Some(instruction);
+            } else if event.kind == ReadSessionResponseEventsItemKind::SystemInstructionRevised {
+                let revision: SystemInstructionRevision = serde_json::from_str(&event.payload_json)
+                    .map_err(|error| invalid_system_instruction(error.to_string()))?;
+                installed = Some(apply_instruction_revision(installed, revision)?);
             }
         }
     }
@@ -3168,6 +3312,22 @@ async fn read_installed_system_instruction(
 fn validate_system_instruction(
     instruction: &InstalledSystemInstruction,
 ) -> Result<(), TurnFailure> {
+    if instruction
+        .profile
+        .as_ref()
+        .and_then(|profile| profile.name.as_deref())
+        .is_some_and(|name| {
+            name.is_empty()
+                || name.len() > 128
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+    {
+        return Err(invalid_system_instruction(
+            "invalid Session Profile identity",
+        ));
+    }
     if instruction.content.trim().is_empty() || instruction.content.len() > 262_144 {
         return Err(invalid_system_instruction(
             "installed System Instruction content is empty or too large",
@@ -4347,6 +4507,81 @@ fn invalid_plan(detail: impl Into<String>) -> RuntimeFailure {
 
 #[cfg(test)]
 mod tests {
+
+    fn instruction_for_profile(name: Option<&str>) -> InstalledSystemInstruction {
+        InstalledSystemInstruction {
+            content: "Recorded instruction".to_owned(),
+            digest: system_instruction_digest("Recorded instruction"),
+            contributions: vec![],
+            generation_spec_digest: format!("sha256:{}", "a".repeat(64)),
+            profile: name.map(|name| SessionProfile {
+                name: Some(name.to_owned()),
+            }),
+        }
+    }
+
+    #[test]
+    fn instruction_revisions_require_a_valid_chain_and_profile_transition() {
+        let previous = instruction_for_profile(Some("plan"));
+        let revision = SystemInstructionRevision {
+            previous_digest: previous.digest.clone(),
+            reason: "profile_changed".to_owned(),
+            instruction: instruction_for_profile(Some("code")),
+        };
+        assert!(apply_instruction_revision(Some(previous.clone()), revision.clone()).is_ok());
+        assert!(apply_instruction_revision(None, revision.clone()).is_err());
+        let mut broken = revision.clone();
+        broken.previous_digest = "wrong".to_owned();
+        assert!(apply_instruction_revision(Some(previous.clone()), broken).is_err());
+        let mut unchanged = revision;
+        unchanged.instruction.profile = previous.profile.clone();
+        assert!(apply_instruction_revision(Some(previous), unchanged).is_err());
+    }
+
+    #[test]
+    fn legacy_official_plan_can_transition_to_code_without_rewriting_installation() {
+        let mut legacy = instruction_for_profile(None);
+        legacy
+            .contributions
+            .push(prompt_capability::AssembleResponseContributionsItem {
+                id: "harness.plan".to_owned(),
+                version: "1.0.0".to_owned(),
+                kind: prompt_capability::AssembleResponseContributionsItemKind::Instruction,
+                digest: "a".repeat(64),
+            });
+        let serialized = serde_json::to_value(&legacy).unwrap();
+        assert!(serialized.get("profile").is_none());
+        let legacy: InstalledSystemInstruction = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            legacy_official_profile(&legacy).unwrap().name.as_deref(),
+            Some("plan")
+        );
+        let revised = apply_instruction_revision(
+            Some(legacy.clone()),
+            SystemInstructionRevision {
+                previous_digest: legacy.digest.clone(),
+                reason: "profile_changed".to_owned(),
+                instruction: instruction_for_profile(Some("code")),
+            },
+        )
+        .unwrap();
+        assert_eq!(revised.profile.unwrap().name.as_deref(), Some("code"));
+        assert!(legacy.profile.is_none());
+    }
+
+    #[test]
+    fn legacy_binding_preserves_instruction_and_generation_bytes() {
+        let previous = instruction_for_profile(None);
+        let mut revision = SystemInstructionRevision {
+            previous_digest: previous.digest.clone(),
+            reason: "legacy_profile_bound".to_owned(),
+            instruction: instruction_for_profile(Some("code")),
+        };
+        assert!(apply_instruction_revision(Some(previous.clone()), revision.clone()).is_ok());
+        revision.instruction.content = "Replacement".to_owned();
+        revision.instruction.digest = system_instruction_digest("Replacement");
+        assert!(apply_instruction_revision(Some(previous), revision).is_err());
+    }
     use super::*;
     use lenso_kernel::{CancellationToken, NativeStreamSession};
     use std::{

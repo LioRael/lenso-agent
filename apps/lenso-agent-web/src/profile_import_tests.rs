@@ -192,3 +192,52 @@ async fn sqlite_profile_import_requires_host_authorization() {
         })
         .await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn sqlite_profile_switch_refreshes_existing_session_prompt() {
+    let root = tempfile::tempdir().unwrap();
+    configure_test_fixture_model(root.path());
+    tokio::task::LocalSet::new().run_until(async {
+        let mut surface = AgentWebSurface::start(config(root.path())).await.unwrap();
+        let (_, inventory) = request(&surface, "GET", "plugins", serde_json::Value::Null).await;
+        let (_, management) = request(&surface, "GET", "control/plugins", serde_json::Value::Null).await;
+        let (status, imported) = request(&surface, "POST", "control/profiles/import", serde_json::json!({
+            "expectedRevision": management["revision"], "expectedStreamId": inventory["streamId"]
+        })).await;
+        assert_eq!(status, StatusCode::OK, "{imported}");
+        let mut session_id: Option<String> = None;
+        for (index, (profile, expected, excluded)) in [("plan", "harness.plan", "harness.coding"), ("code", "harness.coding", "harness.plan"), ("code", "harness.coding", "harness.plan"), ("plan", "harness.plan", "harness.coding")].into_iter().enumerate() {
+            if index == 2 {
+                surface.shutdown().await.unwrap();
+                let mut restarted = config(root.path());
+                restarted.profile = Some("code".to_owned());
+                surface = AgentWebSurface::start(restarted).await.unwrap();
+            }
+            let (status, selected) = request(&surface, "POST", "control/profile", serde_json::json!({"profile": profile})).await;
+            assert_eq!(status, StatusCode::OK, "{selected}");
+            let response = surface.router().oneshot(axum::http::Request::builder()
+                .method("POST").uri("/api/console/v1/agent/turns")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(serde_json::json!({
+                    "request_id": format!("prompt-{profile}-{index}"), "session_id": session_id,
+                    "input": "What did you summarize?", "allowed_tools": []
+                }).to_string())).unwrap()).await.unwrap();
+            let body = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            let events = String::from_utf8(body.to_vec()).unwrap();
+            assert!(events.contains("turn.completed"), "{events}");
+            let (_, sessions) = request(&surface, "GET", "sessions", serde_json::Value::Null).await;
+            session_id = Some(sessions["sessions"][0]["sessionId"].as_str().unwrap().to_owned());
+            let (_, session) = request(&surface, "GET", &format!("sessions/{}", session_id.as_ref().unwrap()), serde_json::Value::Null).await;
+            let records = session["events"].as_array().unwrap();
+            assert_eq!(records.iter().filter(|event| event["kind"] == "system_instruction_installed").count(), 1);
+            assert_eq!(records.iter().filter(|event| event["kind"] == "system_instruction_revised").count(), [0, 1, 1, 2][index]);
+            let event = session["events"].as_array().unwrap().iter().rev()
+                .find(|event| event["kind"] == "model_requested").unwrap();
+            let payload: serde_json::Value = serde_json::from_str(event["payload_json"].as_str().unwrap()).unwrap();
+            let contributions = payload["prompt_contributions"].as_array().unwrap();
+            assert!(contributions.iter().any(|item| item["id"] == expected), "{profile}: {payload}");
+            assert!(!contributions.iter().any(|item| item["id"] == excluded), "{profile}: {payload}");
+        }
+        surface.shutdown().await.unwrap();
+    }).await;
+}

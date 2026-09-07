@@ -766,6 +766,7 @@ fn event_kind(kind: &session_contract::AppendSessionRequestEventsItemKind) -> &'
     match kind {
         K::SessionCreated => "session_created",
         K::SystemInstructionInstalled => "system_instruction_installed",
+        K::SystemInstructionRevised => "system_instruction_revised",
         K::ContextCompactionStarted => "context_compaction_started",
         K::ContextCompactionCommitted => "context_compaction_committed",
         K::ContextCompactionFailed => "context_compaction_failed",
@@ -789,6 +790,7 @@ fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
     Some(match kind {
         "session_created" => K::SessionCreated,
         "system_instruction_installed" => K::SystemInstructionInstalled,
+        "system_instruction_revised" => K::SystemInstructionRevised,
         "context_compaction_started" => K::ContextCompactionStarted,
         "context_compaction_committed" => K::ContextCompactionCommitted,
         "context_compaction_failed" => K::ContextCompactionFailed,

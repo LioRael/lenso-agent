@@ -4,6 +4,9 @@
 
 Accepted.
 
+Explicit Profile changes follow [ADR-0101](0101-version-session-instructions-on-profile-selection.md).
+Same-Profile resumes retain the behavior defined here.
+
 ## Context
 
 ADR 0056 installed the complete official coding and planning Prompt bytes as

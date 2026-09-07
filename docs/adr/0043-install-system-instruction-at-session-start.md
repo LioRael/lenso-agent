@@ -2,6 +2,9 @@
 
 Status: Accepted
 
+Profile identity changes now follow [ADR-0101](0101-version-session-instructions-on-profile-selection.md).
+Same-Profile resumes retain the instruction behavior defined here.
+
 ## Context
 
 ADR-0003 treated the Prompt aggregate as optional, allowed an empty result,

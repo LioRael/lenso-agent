@@ -1433,6 +1433,7 @@ async fn bootstrap(
     State(runtime): State<WebRuntime>,
 ) -> Result<Json<BootstrapResponse>, ApiProblem> {
     let policy = runtime.read_tool_policy()?;
+    let coding_profiles = runtime.coding_profile_import_enabled().await?;
     Ok(Json(BootstrapResponse {
         capabilities: [
             ("cancel", true),
@@ -1447,8 +1448,12 @@ async fn bootstrap(
             ("terminalCommands", true),
             ("turnModelSelection", true),
             ("turnToolSelection", true),
-            ("profileSelection", runtime.profile_selection_enabled()),
-            ("profileImport", runtime.sqlite_profiles.is_some()),
+            (
+                "profileSelection",
+                runtime.profile_selection_enabled()
+                    && (runtime.sqlite_profiles.is_none() || coding_profiles),
+            ),
+            ("profileImport", coding_profiles),
         ]
         .into_iter()
         .collect(),
@@ -2050,6 +2055,20 @@ impl WebRuntime {
             plugin_control,
             plugin_mutations: PluginMutationCoordinator::default(),
         }
+    }
+
+    async fn coding_profile_import_enabled(&self) -> Result<bool, ApiProblem> {
+        let Some(authority) = self
+            .sqlite_profiles
+            .clone()
+            .filter(|_| self.control.is_enabled())
+        else {
+            return Ok(false);
+        };
+        tokio::task::spawn_blocking(move || authority.supports_coding_profiles())
+            .await
+            .map_err(|_| ApiProblem::unavailable("Profile inventory worker stopped"))?
+            .map_err(|error| ApiProblem::conflict(error.to_string()))
     }
 
     fn profile_selection_enabled(&self) -> bool {
@@ -3012,6 +3031,7 @@ fn session_event_kind_name(kind: &ReadSessionResponseEventsItemKind) -> &'static
         ReadSessionResponseEventsItemKind::SystemInstructionInstalled => {
             "system_instruction_installed"
         }
+        ReadSessionResponseEventsItemKind::SystemInstructionRevised => "system_instruction_revised",
         ReadSessionResponseEventsItemKind::ContextCompactionStarted => "context_compaction_started",
         ReadSessionResponseEventsItemKind::ContextCompactionCommitted => {
             "context_compaction_committed"
