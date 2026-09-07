@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_VERSION="0.1.5"
+DEFAULT_VERSION="0.1.6"
 REPOSITORY="LioRael/lenso-agent"
 
 usage() {
