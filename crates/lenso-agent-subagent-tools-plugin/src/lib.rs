@@ -1517,6 +1517,7 @@ fn map_agent_error(
         RunTurnError::InvalidSession => "invalid_child_session",
         RunTurnError::StepLimitExceeded => "step_limit_exceeded",
         RunTurnError::ToolCallLimitExceeded => "tool_call_limit_exceeded",
+        RunTurnError::ModelFailure { .. } => "model_failure",
         RunTurnError::Unknown(unknown) => {
             return execution_failed(
                 &unknown.code,

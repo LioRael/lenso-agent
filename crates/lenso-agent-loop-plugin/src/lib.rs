@@ -3995,11 +3995,8 @@ async fn record_turn_failure(
     } else {
         AppendSessionRequestEventsItemKind::TurnFailed
     };
-    let Ok(event) = session_event(
-        kind,
-        Some(turn_id),
-        &serde_json::json!({"error": turn_error_code(error, cancelled)}),
-    ) else {
+    let Ok(event) = session_event(kind, Some(turn_id), &turn_failure_payload(error, cancelled))
+    else {
         return;
     };
     let request = AppendSessionRequest {
@@ -4024,10 +4021,18 @@ async fn record_turn_failure(
             session_id,
             Some(turn_id),
             generation_spec_digest,
-            &serde_json::json!({"error": turn_error_code(error, cancelled)}),
+            &turn_failure_payload(error, cancelled),
         )
         .await;
     }
+}
+
+fn turn_failure_payload(error: &TurnFailure, cancelled: bool) -> serde_json::Value {
+    let mut result = serde_json::json!({"error": turn_error_code(error, cancelled)});
+    if !cancelled && let PluginError::Domain(RunTurnError::ModelFailure { payload }) = error {
+        result["reason_code"] = serde_json::json!(payload.reason_code);
+    }
+    result
 }
 
 fn turn_error_code(error: &TurnFailure, cancelled: bool) -> &'static str {
@@ -4040,6 +4045,7 @@ fn turn_error_code(error: &TurnFailure, cancelled: bool) -> &'static str {
         PluginError::Domain(RunTurnError::InvalidSession) => "invalid_session",
         PluginError::Domain(RunTurnError::StepLimitExceeded) => "step_limit_exceeded",
         PluginError::Domain(RunTurnError::ToolCallLimitExceeded) => "tool_call_limit_exceeded",
+        PluginError::Domain(RunTurnError::ModelFailure { .. }) => "model_failure",
         PluginError::Domain(RunTurnError::Unknown(_)) => "unknown_domain_error",
         PluginError::Runtime(_) => "runtime_failure",
     }
@@ -4296,11 +4302,30 @@ fn map_model_domain_error(error: CompleteError) -> TurnFailure {
     if error == CompleteError::ContextOverflow {
         return PluginError::domain(RunTurnError::ContextLimitExceeded);
     }
-    let detail = match error {
-        CompleteError::ProviderFailure { payload } => payload.message,
-        error => format!("Model completion failed: {error:?}"),
+    let (reason_code, message) = match error {
+        CompleteError::ProviderFailure { payload } => (payload.reason_code, payload.message),
+        CompleteError::InvalidRequest => (
+            "invalid_request".into(),
+            "Model rejected the request".into(),
+        ),
+        CompleteError::UnsupportedModel => {
+            ("unsupported_model".into(), "Model is unavailable".into())
+        }
+        CompleteError::ContentRejected => (
+            "content_rejected".into(),
+            "Model rejected the content".into(),
+        ),
+        CompleteError::RateLimited => ("rate_limited".into(), "Model rate limit reached".into()),
+        CompleteError::Overloaded => ("overloaded".into(), "Model provider is overloaded".into()),
+        CompleteError::ContextOverflow => unreachable!("handled above"),
+        CompleteError::Unknown(_) => ("unknown_model_error".into(), "Model request failed".into()),
     };
-    PluginError::runtime(RuntimeFailure::PluginFailure { detail })
+    PluginError::domain(RunTurnError::ModelFailure {
+        payload: agent_capability::ModelFailurePayload {
+            reason_code,
+            message,
+        },
+    })
 }
 
 fn map_tools_stream_error(error: ToolsExecuteStreamInvocationError) -> TurnFailure {
@@ -4797,6 +4822,30 @@ mod tests {
         assert_eq!(
             complete_reasoning_selection(&budget),
             (None, None, Some("4096".to_owned()))
+        );
+    }
+
+    #[test]
+    fn model_provider_failure_does_not_become_a_runtime_fault() {
+        let error = CompleteError::ProviderFailure {
+            payload: model_capability::ProviderFailurePayload {
+                reason_code: "websocket_connect_failed".into(),
+                message: "direct Codex WebSocket request failed".into(),
+                retryable: true,
+            },
+        };
+        let mapped = map_model_domain_error(error);
+        assert!(
+            matches!(&mapped, PluginError::Domain(RunTurnError::ModelFailure { payload })
+            if payload.reason_code == "websocket_connect_failed")
+        );
+        assert_eq!(
+            turn_failure_payload(&mapped, false)["reason_code"],
+            "websocket_connect_failed"
+        );
+        assert_eq!(
+            turn_failure_payload(&mapped, true),
+            serde_json::json!({"error":"cancelled"})
         );
     }
 

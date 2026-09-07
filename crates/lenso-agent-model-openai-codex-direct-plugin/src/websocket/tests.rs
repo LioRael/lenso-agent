@@ -178,7 +178,14 @@ async fn truncated_stream_is_not_recycled_or_replayed() {
         stream.receive().await.unwrap(),
         NativeStreamItem::Message(_)
     ));
-    assert!(stream.receive().await.is_err());
+    let NativeStreamItem::Terminal(Err(error)) = stream.receive().await.unwrap() else {
+        panic!("interrupted provider response must terminate with a domain error");
+    };
+    assert!(matches!(
+        *error.downcast::<CompleteError>().unwrap(),
+        CompleteError::ProviderFailure { payload }
+            if !payload.retryable && payload.reason_code == "websocket_stream_failed"
+    ));
     assert_eq!(pool.0.borrow().active, 0);
     assert!(pool.0.borrow().idle.is_empty());
     server.await.unwrap();
@@ -232,7 +239,10 @@ async fn oversized_message_fails_without_returning_socket_to_pool() {
         .open(&config, &credential(), &request("large"))
         .await
         .unwrap();
-    assert!(stream.receive().await.is_err());
+    assert!(matches!(
+        stream.receive().await.unwrap(),
+        NativeStreamItem::Terminal(Err(_))
+    ));
     assert!(pool.0.borrow().idle.is_empty());
     server.await.unwrap();
 }

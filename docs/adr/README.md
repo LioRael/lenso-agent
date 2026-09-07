@@ -124,3 +124,4 @@ reasons on their own.
 - [0098 — Protect managed Plugin Roots from offline installers](0098-protect-managed-plugin-roots-from-offline-installers.md)
 
 - [0099 — Import coding Profiles through SQLite authority](0099-import-coding-profiles-through-sqlite-authority.md)
+- [0100 — Keep model failures within the Turn](0100-keep-model-failures-within-the-turn.md)

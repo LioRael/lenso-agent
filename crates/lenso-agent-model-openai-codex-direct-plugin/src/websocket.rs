@@ -29,6 +29,7 @@ use tokio_tungstenite::{
 use super::{
     CAPABILITY_ID, CompleteError, DirectModelConfig, ModelCompleteInvocationError,
     ResponsesDecoder, ResponsesRequest, map_status, protocol_failure, provider_failure,
+    provider_stream_failure,
 };
 
 const MAX_CONNECTIONS: usize = 4;
@@ -337,7 +338,7 @@ async fn connect(
 fn open_failure(code: &str, retryable: bool) -> OpenError {
     OpenError::Model(provider_failure(
         code,
-        "direct Codex WebSocket request failed",
+        &format!("direct Codex WebSocket request failed ({code})"),
         retryable,
     ))
 }
@@ -451,8 +452,9 @@ impl NativeStreamSession for ResponseStream {
                         };
                         if !matches!(sent, Ok(Ok(()))) {
                             lease.take();
-                            return Err(protocol_failure(
-                                "direct Codex continuation recovery send failed",
+                            return Ok(provider_stream_failure(
+                                "websocket_recovery_send_failed",
+                                "direct Codex continuation recovery send failed; acceptance is unknown",
                             ));
                         }
                         continue;
@@ -474,9 +476,12 @@ impl NativeStreamSession for ResponseStream {
                     Ok(Err(error)) => Err(error),
                     Err(_) => Err(protocol_failure("direct Codex WebSocket stream timed out")),
                 };
-                if let Err(error) = result {
+                if let Err(_error) = result {
                     lease.take();
-                    return Err(error);
+                    return Ok(provider_stream_failure(
+                        "websocket_stream_failed",
+                        "direct Codex WebSocket response interrupted or invalid; request was not replayed",
+                    ));
                 }
                 if decoder.borrow().terminal
                     && let Some(mut completed) = lease.take()

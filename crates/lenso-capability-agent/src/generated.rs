@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeStream, NativeStreamEndpoint, Native
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent@3";
-pub const DESCRIPTOR_VERSION: &str = "3.0.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:dd1e20113ff7b688e1533bfea0410a7f1078261e066764719765d2ddaabe6d35";
+pub const DESCRIPTOR_VERSION: &str = "3.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:736eaa559d48985955210353d3843d82ee146be960cd8a7c34775efff34bcc00";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AGENT_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const AGENT_CONTRACT: CapabilityReference<AgentClient> = CapabilityReference
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_agent_client {
-    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_agent_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_agent_client {
-    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.0.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const RUN_TURN_OPERATION: &str = "run_turn";
@@ -122,11 +122,22 @@ pub enum RunTurnResponseProgressChannel {
     Stderr,
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelFailurePayload {
+    #[serde(rename = "message")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub message: String,
+    #[serde(rename = "reason_code")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub reason_code: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum RunTurnError {
     ConcurrentTurn,
     ContextLimitExceeded,
     InvalidSession,
+    ModelFailure { payload: ModelFailurePayload },
     StepLimitExceeded,
     ToolCallLimitExceeded,
     Unknown(UnknownDomainError),
@@ -153,6 +164,12 @@ impl serde::Serialize for RunTurnError {
             Self::ConcurrentTurn => serializer.serialize_str("concurrent_turn"),
             Self::ContextLimitExceeded => serializer.serialize_str("context_limit_exceeded"),
             Self::InvalidSession => serializer.serialize_str("invalid_session"),
+            Self::ModelFailure { payload } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("code", "model_failure")?;
+                map.serialize_entry("payload", payload)?;
+                map.end()
+            },
             Self::StepLimitExceeded => serializer.serialize_str("step_limit_exceeded"),
             Self::ToolCallLimitExceeded => serializer.serialize_str("tool_call_limit_exceeded"),
             Self::Unknown(value) => {
@@ -189,9 +206,18 @@ impl<'de> serde::Deserialize<'de> for RunTurnError {
                 let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
                     return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
                 };
-                let payload = object.remove("payload");
-                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
-                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+                match code.as_str() {
+                    "model_failure" => {
+                        let payload = object.remove("payload").ok_or_else(|| serde::de::Error::custom("structured Domain Error is missing a payload"))?;
+                        let payload = serde_json::from_value(payload).map_err(serde::de::Error::custom)?;
+                        Ok(Self::ModelFailure { payload })
+                    },
+                    _ => {
+                        let payload = object.remove("payload");
+                        let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                        Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+                    }
+                }
             }
             other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
         }

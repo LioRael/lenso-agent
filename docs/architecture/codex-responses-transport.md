@@ -103,3 +103,17 @@ not durable Session storage. Cross-Turn continuation, public API multiplexing,
 and steering are not assumed. See [ADR-0097](../adr/0097-keep-model-continuation-an-optional-affinity-hint.md).
 
 Protocol reference: [OpenAI Responses WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode).
+
+## Failure isolation
+
+Model open domain errors remain Turn domain errors (`model_failure`, Agent
+Descriptor 3.1), with the sanitized provider reason code retained. WebSocket
+receive failures terminate the Model stream with a non-retryable provider error,
+discard its connection and checkpoint, and leave the Generation available for a
+later explicit Turn. Cancellation and local protocol misuse retain their runtime
+classification. No ambiguous request or partial output is replayed.
+
+The Web Host regression injects two failed handshakes, then a partial response
+disconnect, then a successful response in the same Session. It checks exact
+upstream request counts, available model discovery, and durable Session ownership.
+See [ADR-0100](../adr/0100-keep-model-failures-within-the-turn.md).

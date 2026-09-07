@@ -1,3 +1,6 @@
+#[path = "web_surface/model_failures.rs"]
+mod model_failures;
+
 use std::{
     fs,
     io::{Read, Write},
@@ -2066,6 +2069,16 @@ fn write_direct_catalog_fixture(root: &Path) -> CatalogServerGuard {
         }
     });
 
+    write_direct_configuration(root, address);
+
+    CatalogServerGuard {
+        address,
+        stopped,
+        thread: Some(thread),
+    }
+}
+
+fn write_direct_configuration(root: &Path, address: SocketAddr) {
     let credential = root.join("direct-catalog-credential.json");
     fs::write(
         &credential,
@@ -2098,12 +2111,6 @@ fn write_direct_catalog_fixture(root: &Path) -> CatalogServerGuard {
         ),
     )
     .unwrap();
-
-    CatalogServerGuard {
-        address,
-        stopped,
-        thread: Some(thread),
-    }
 }
 
 fn direct_model_configuration(address: SocketAddr, max_event_bytes: usize) -> String {
