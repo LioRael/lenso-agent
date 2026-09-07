@@ -355,52 +355,7 @@ fn scripted_sse_provider(
                 let mut request_body = vec![0; length];
                 tcp.read_exact(&mut request_body).unwrap();
                 let index = requests.fetch_add(1, Ordering::SeqCst);
-                let mut body = String::from(
-                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n",
-                );
-                if tool_domain_failure {
-                    if index == 0 {
-                        for (id, name, arguments) in [
-                            ("listed", "list", r#"{"path":"."}"#),
-                            ("git-failed", "git_status", "{}"),
-                        ] {
-                            body.push_str(&format!("data: {}\n\n", serde_json::json!({
-                                "type":"response.output_item.done", "item": {
-                                    "type":"function_call", "call_id":id, "name":name, "arguments":arguments
-                                }
-                            })));
-                        }
-                    } else if index == 1 {
-                        let request = String::from_utf8(request_body).unwrap();
-                        assert!(
-                            request.contains("git_failed"),
-                            "Missing Tool error feedback"
-                        );
-                        assert!(
-                            request.contains("not a git repository"),
-                            "Missing Git failure detail"
-                        );
-                    }
-                    body.push_str("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n");
-                } else {
-                    if index == 1 {
-                        body.push_str("data: {invalid json}\n\n");
-                    }
-                    if index == 3 {
-                        body.push_str(r#"data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"invalid-read","name":"read","arguments":"{}"}}"#);
-                        body.push_str("\n\n");
-                    }
-                    if index == 4 {
-                        assert!(
-                            String::from_utf8(request_body)
-                                .unwrap()
-                                .contains("InvalidArguments")
-                        );
-                    }
-                    if index >= 3 {
-                        body.push_str("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n");
-                    }
-                }
+                let body = scripted_sse_body(index, tool_domain_failure, request_body);
                 // A short HTTP body reproduces a transport interruption after output.
                 let length = body.len()
                     + if !tool_domain_failure && index == 0 {
@@ -418,6 +373,65 @@ fn scripted_sse_provider(
         })),
     };
     (provider, creates)
+}
+
+fn scripted_sse_body(index: usize, tool_domain_failure: bool, request_body: Vec<u8>) -> String {
+    use std::fmt::Write as _;
+    let mut body =
+        String::from("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n");
+    if tool_domain_failure {
+        if index == 0 {
+            for (id, name, arguments) in [
+                ("listed", "list", r#"{"path":"."}"#),
+                ("git-failed", "git_status", "{}"),
+            ] {
+                write!(
+                    body,
+                    "data: {}\n\n",
+                    serde_json::json!({
+                        "type":"response.output_item.done", "item": {
+                            "type":"function_call", "call_id":id, "name":name, "arguments":arguments
+                        }
+                    })
+                )
+                .unwrap();
+            }
+        } else if index == 1 {
+            let request = String::from_utf8(request_body).unwrap();
+            assert!(
+                request.contains("git_failed"),
+                "Missing Tool error feedback"
+            );
+            assert!(
+                request.contains("not a git repository"),
+                "Missing Git failure detail"
+            );
+        }
+        body.push_str(
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n",
+        );
+    } else {
+        if index == 1 {
+            body.push_str("data: {invalid json}\n\n");
+        }
+        if index == 3 {
+            body.push_str(r#"data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"invalid-read","name":"read","arguments":"{}"}}"#);
+            body.push_str("\n\n");
+        }
+        if index == 4 {
+            assert!(
+                String::from_utf8(request_body)
+                    .unwrap()
+                    .contains("InvalidArguments")
+            );
+        }
+        if index >= 3 {
+            body.push_str(
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n",
+            );
+        }
+    }
+    body
 }
 
 #[tokio::test(flavor = "current_thread")]
