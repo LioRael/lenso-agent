@@ -1358,9 +1358,26 @@ impl NativeStreamSession for DirectCodexStream {
                 }
                 let chunk = chunks.lock().await.next().await;
                 let output = match chunk {
-                    Some(Ok(bytes)) => decoder.borrow_mut().push(&bytes)?,
-                    Some(Err(_)) => return Err(protocol_failure("direct Codex stream failed")),
-                    None => decoder.borrow_mut().finish()?,
+                    Some(Ok(bytes)) => decoder.borrow_mut().push(&bytes).map_err(|_| {
+                        (
+                            "sse_protocol_error",
+                            "direct Codex returned an invalid SSE response",
+                        )
+                    }),
+                    Some(Err(_)) => Err(("sse_stream_failed", "direct Codex stream failed")),
+                    None => decoder.borrow_mut().finish().map_err(|_| {
+                        (
+                            "sse_incomplete_response",
+                            "direct Codex stream ended before completion",
+                        )
+                    }),
+                };
+                let output = match output {
+                    Ok(output) => output,
+                    Err((reason_code, message)) => {
+                        decoder.borrow_mut().terminal = true;
+                        return Ok(provider_stream_failure(reason_code, message));
+                    }
                 };
                 events.borrow_mut().extend(output);
             }

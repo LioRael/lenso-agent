@@ -110,10 +110,19 @@ Model open domain errors remain Turn domain errors (`model_failure`, Agent
 Descriptor 3.1), with the sanitized provider reason code retained. WebSocket
 receive failures terminate the Model stream with a non-retryable provider error,
 discard its connection and checkpoint, and leave the Generation available for a
-later explicit Turn. Cancellation and local protocol misuse retain their runtime
+later explicit Turn. SSE body failures, malformed frames, and premature EOF also
+terminate only the Model stream with a non-retryable provider error
+(`sse_stream_failed`, `sse_protocol_error`, or `sse_incomplete_response`).
+Cancellation and local protocol misuse retain their runtime
 classification. No ambiguous request or partial output is replayed.
 
 The Web Host regression injects two failed handshakes, then a partial response
 disconnect, then a successful response in the same Session. It checks exact
 upstream request counts, available model discovery, and durable Session ownership.
+The SSE regression repeats these isolation checks after a truncated HTTP body,
+a malformed frame, and a clean EOF without response completion.
 See [ADR-0100](../adr/0100-keep-model-failures-within-the-turn.md).
+
+Invalid Tool arguments are returned to the model as failed Tool feedback so it
+can correct a call within the existing Turn limits. They do not retire the
+Generation. Runtime Tool failures retain their existing classification.
