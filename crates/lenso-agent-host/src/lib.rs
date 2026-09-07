@@ -275,3 +275,6 @@ fn derived_plan_bytes_in(
     let plan = generation::resolve_host_plan_in(directories, &snapshot)?;
     serde_json::to_vec(&plan).map_err(|error| format!("failed to encode the derived App: {error}"))
 }
+
+mod coding_profiles;
+pub use coding_profiles::{coding_profile_files, previous_official_profile};

@@ -1,3 +1,5 @@
+mod profile_import;
+
 use std::{
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
@@ -80,6 +82,7 @@ impl PluginConfigurationStoreConfig {
 #[derive(Debug)]
 pub struct SqlitePluginConfigurationAuthority {
     database: PathBuf,
+    root: PathBuf,
     local: LocalPluginRootAuthority,
     operation_lock: PathBuf,
     source: PluginConfigurationAuthoritySource,
@@ -97,7 +100,9 @@ impl SqlitePluginConfigurationAuthority {
             config.reference,
         )?;
         let operation_lock = config.database.with_extension("sqlite3.lock");
+        let root = root.into();
         let authority = Self {
+            root: root.clone(),
             database: config.database,
             local: LocalPluginRootAuthority::new(root),
             operation_lock,
@@ -130,6 +135,7 @@ impl SqlitePluginConfigurationAuthority {
     }
 
     fn reconcile(&self, connection: &mut Connection) -> anyhow::Result<PluginRootAuthoringState> {
+        self.recover_profile_imports(connection)?;
         let materialized = self.local.inspect()?;
         let materialized_revision = materialized.revision().as_str();
         let transaction = connection
@@ -772,6 +778,7 @@ fn open_database(path: &Path) -> anyhow::Result<Connection> {
 }
 
 fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result<()> {
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS profile_imports (id TEXT PRIMARY KEY, base_revision TEXT NOT NULL, candidate_revision TEXT NOT NULL, files TEXT NOT NULL, phase TEXT NOT NULL)")?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS authority_state (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

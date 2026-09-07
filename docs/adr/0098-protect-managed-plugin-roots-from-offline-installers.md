@@ -32,3 +32,6 @@ A stale guard can conservatively reject an offline installer; it never grants
 write authority. The file is Host metadata outside the Plugin Root. This does
 not make arbitrary external filesystem edits safe or serialize an offline
 installer with a concurrently starting Host.
+
+ADR-0099 extends this boundary with an online coding Profile import owned by the
+built-in SQLite authority. The offline guard remains in force.

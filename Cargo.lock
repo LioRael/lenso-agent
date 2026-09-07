@@ -3033,6 +3033,7 @@ dependencies = [
  "lenso-terminal-cli-plugin",
  "lenso-terminal-cli-surface",
  "lenso-terminal-command-plugin",
+ "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
@@ -4698,9 +4699,9 @@ dependencies = [
 
 [[package]]
 name = "lenso-cli"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "480f4bbefcd3cf0b8df020ac446ebe0ff69f2ac6d8f5401a973546fa5377e00b"
+checksum = "74e35db74171a80c45d81ef3fea55500c9d8a35dae2fca72b61a8b773e90e799"
 dependencies = [
  "anyhow",
  "jsonschema 0.47.0",

@@ -29,6 +29,7 @@ lenso-capability-agent = { path = "../../crates/lenso-capability-agent" }
 lenso-capability-agent-context-source = { path = "../../crates/lenso-capability-agent-context-source" }
 lenso-capability-terminal-command.workspace = true
 lenso-kernel.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
