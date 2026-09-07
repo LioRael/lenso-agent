@@ -296,6 +296,7 @@ pub(crate) struct HostBuildIdentity {
 
 #[derive(Clone, Debug)]
 struct DesiredGeneration {
+    profile_name: Option<String>,
     plugin_root_revision: String,
     resolution_authority_digest: String,
     desired_state_digest: String,
@@ -312,6 +313,7 @@ impl DesiredGeneration {
             self.plan_digest.clone(),
             self.generation.plan.clone(),
         )
+        .with_profile(self.profile_name.clone())
     }
 }
 
@@ -541,6 +543,7 @@ impl AgentApp {
         }
         let client = host.controller();
         let reconcile_events = Rc::new(RefCell::new(OnlineGenerationEventLog::default()));
+        initial.profile_name = profile_name.clone();
         let online_generation = Rc::new(RefCell::new(OnlineGenerationTracker::new(
             initial.selection(),
         )));
@@ -600,6 +603,16 @@ impl AgentApp {
             resolve_host_plan_in(&directories, root.root())?
         };
         Ok((plan, root))
+    }
+
+    fn retained_session_profile(
+        &self,
+        digest: &str,
+    ) -> Result<lenso_agent_loop_plugin::SessionProfile, String> {
+        self.online_generation
+            .borrow()
+            .retained_profile(digest)
+            .ok_or_else(|| "leased Generation has no retained Profile authority".to_owned())
     }
 
     fn retained_generation_plan(
@@ -982,6 +995,7 @@ impl AgentApp {
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
         let route = self.host.route().await.map_err(control_error)?;
+        let session_profile = self.retained_session_profile(route.generation_spec_digest())?;
         let consumer_instance = surface_consumer_instance(consumer_instance)?;
         let handle = Rc::new(
             route
@@ -1071,6 +1085,7 @@ impl AgentApp {
             session_control,
             has_model_selection,
             behavior_digest,
+            session_profile,
             resolved_turn_profile,
             model_catalog,
         })
@@ -1525,6 +1540,7 @@ pub struct TurnGeneration {
     session_control: Option<Rc<NativeRequestHandle<SessionControl>>>,
     has_model_selection: bool,
     behavior_digest: String,
+    session_profile: lenso_agent_loop_plugin::SessionProfile,
     resolved_turn_profile: crate::ResolvedTurnProfile,
     model_catalog: crate::ProviderModelCatalog,
 }
@@ -1777,6 +1793,8 @@ impl TurnGeneration {
             .map_err(|error| format!("failed to attach Workspace scope: {error}"))?
             .with_typed_extension(&AgentBehaviorProvenance::new(self.behavior_digest.clone())?)
             .map_err(|error| format!("failed to attach Agent behavior provenance: {error}"))?
+            .with_typed_extension(&self.session_profile)
+            .map_err(|error| format!("failed to attach Session Profile: {error}"))?
             .with_typed_extension(profile)
             .map_err(|error| format!("failed to attach resolved Turn profile: {error}"))?;
         if self.interactive {
@@ -2070,6 +2088,9 @@ fn append_event_kind(
         ReadSessionResponseEventsItemKind::SystemInstructionInstalled => {
             AppendSessionRequestEventsItemKind::SystemInstructionInstalled
         }
+        ReadSessionResponseEventsItemKind::SystemInstructionRevised => {
+            AppendSessionRequestEventsItemKind::SystemInstructionRevised
+        }
         ReadSessionResponseEventsItemKind::ContextCompactionStarted => {
             AppendSessionRequestEventsItemKind::ContextCompactionStarted
         }
@@ -2270,6 +2291,7 @@ fn desired_generation(
         &generation.resources,
     )?;
     Ok(DesiredGeneration {
+        profile_name: None,
         plugin_root_revision,
         resolution_authority_digest,
         desired_state_digest,
@@ -3081,6 +3103,18 @@ fn host_catalog_bindings(
         )
         .with_admission(tool_admission),
     ];
+    // A parallel wave can call the same asynchronous provider more than once.
+    // The default single permit with no queue rejects valid sibling calls.
+    if available.contains("lenso.agent.tools") {
+        bindings.push(
+            HostBinding::new(
+                root_tools.clone(),
+                "lenso.agent.tool-provider@2",
+                "tool-providers",
+            )
+            .with_admission(RequestAdmissionPlan::new(8, 4)),
+        );
+    }
     // Parallel Tools share approval providers. Queue Hook calls rather than
     // rejecting siblings while one call waits for a human answer.
     for consumer in [root_tools.clone(), restricted_tools.clone()] {

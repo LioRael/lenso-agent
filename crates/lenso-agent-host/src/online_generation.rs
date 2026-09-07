@@ -184,6 +184,7 @@ impl OnlineGenerationEventLog {
 /// One Plan selected at a distinct point in the online Generation lifecycle.
 #[derive(Clone, Debug)]
 pub struct OnlineGenerationSelection {
+    profile_name: Option<String>,
     plugin_root_revision: String,
     desired_state_digest: String,
     generation_spec_digest: String,
@@ -192,6 +193,11 @@ pub struct OnlineGenerationSelection {
 }
 
 impl OnlineGenerationSelection {
+    pub(crate) fn with_profile(mut self, profile_name: Option<String>) -> Self {
+        self.profile_name = profile_name;
+        self
+    }
+
     pub(crate) fn new(
         plugin_root_revision: String,
         desired_state_digest: String,
@@ -205,6 +211,7 @@ impl OnlineGenerationSelection {
             generation_spec_digest,
             plan_digest,
             plan: Rc::new(plan),
+            profile_name: None,
         }
     }
 
@@ -479,6 +486,17 @@ impl OnlineGenerationTracker {
         self.snapshot.desired_epoch = self.snapshot.desired_epoch.saturating_add(1);
     }
 
+    pub(crate) fn retained_profile(
+        &self,
+        digest: &str,
+    ) -> Option<lenso_agent_loop_plugin::SessionProfile> {
+        self.retained
+            .get(digest)
+            .map(|selection| lenso_agent_loop_plugin::SessionProfile {
+                name: selection.profile_name.clone(),
+            })
+    }
+
     pub(crate) fn retained_plan(
         &self,
         generation_spec_digest: &str,
@@ -732,19 +750,37 @@ mod tests {
             "sha256:generation-one".to_owned(),
             "sha256:plan-one".to_owned(),
             plan.clone(),
-        );
+        )
+        .with_profile(Some("plan".to_owned()));
         let second = OnlineGenerationSelection::new(
             "sha256:root-two".to_owned(),
             "sha256:desired-two".to_owned(),
             "sha256:generation-two".to_owned(),
             "sha256:plan-two".to_owned(),
             plan,
-        );
+        )
+        .with_profile(Some("code".to_owned()));
         let mut tracker = OnlineGenerationTracker::new(first);
         tracker.preparing(second);
         tracker.switched("sha256:generation-two");
 
         assert!(tracker.retained_plan("sha256:generation-one").is_some());
         assert!(tracker.retained_plan("sha256:generation-two").is_some());
+        assert_eq!(
+            tracker
+                .retained_profile("sha256:generation-one")
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("plan")
+        );
+        assert_eq!(
+            tracker
+                .retained_profile("sha256:generation-two")
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("code")
+        );
     }
 }

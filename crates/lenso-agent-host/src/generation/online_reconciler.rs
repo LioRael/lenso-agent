@@ -1098,6 +1098,7 @@ fn resolve_desired_generation(
         resolve_generation_from_plan(&plan, &authority, host_build, plugin_root, resources)
             .map_err(rejected)?;
     Ok(Some(DesiredGeneration {
+        profile_name: profile_name.map(str::to_owned),
         plugin_root_revision,
         resolution_authority_digest: authority.resolution_authority_digest,
         desired_state_digest,

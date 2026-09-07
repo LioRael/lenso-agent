@@ -159,6 +159,18 @@ impl Projection {
         match event.kind.as_str() {
             "session_created" => {}
             "system_instruction_installed" => self.system(event, &payload),
+            "system_instruction_revised" => {
+                let instruction = payload
+                    .get("instruction")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| "invalid system instruction revision".to_owned())?;
+                self.system(event, instruction);
+                if let Some(record) = self.records.last_mut() {
+                    "System instruction revised".clone_into(&mut record.label);
+                    "System instruction version selected for this Session."
+                        .clone_into(&mut record.detail.summary);
+                }
+            }
             "turn_started" => self.turn_started(event, &payload, turn),
             "model_requested" => self.model_requested(event, &payload, turn),
             "model_output" => self.model_output(event, &payload, turn),

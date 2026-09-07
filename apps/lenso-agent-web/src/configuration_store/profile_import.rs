@@ -14,9 +14,19 @@ struct ImportedFile {
 }
 
 impl SqlitePluginConfigurationAuthority {
+    pub(crate) fn supports_coding_profiles(&self) -> anyhow::Result<bool> {
+        self.with_operation(|connection| {
+            let state = self.reconcile(connection)?;
+            Ok(has_coding_inventory(&state))
+        })
+    }
+
     pub(crate) fn import_coding_profiles(&self, expected: &str) -> anyhow::Result<String> {
         self.with_operation(|connection| {
             let current = self.reconcile(connection)?;
+            if !has_coding_inventory(&current) {
+                bail!("This Host does not provide the Plugin inventory required by the coding Profiles");
+            }
             if current.revision().as_str() != expected {
                 bail!("Profile import revision conflict");
             }
@@ -181,6 +191,21 @@ fn undo_files(root: &Path, files: &[ImportedFile]) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn has_coding_inventory(state: &super::PluginRootAuthoringState) -> bool {
+    coding_profile_files()
+        .iter()
+        .filter_map(|(path, _)| {
+            path.strip_prefix("plugins/")
+                .and_then(|path| path.split('/').next())
+        })
+        .all(|required| {
+            state
+                .plugins()
+                .iter()
+                .any(|plugin| plugin.plugin_id() == required)
+        })
 }
 
 #[cfg(test)]

@@ -234,8 +234,8 @@ impl FixtureModel {
             .iter()
             .filter(|message| message.role == CompleteMessageRole::Tool)
             .collect::<Vec<_>>();
-        if current_user == "Read README.md twice with parallel approval." {
-            return parallel_approval_response(&tool_results);
+        if let Some(response) = parallel_fixture_response(current_user, &tool_results) {
+            return response;
         }
         if current_user == "Use a Skill to review Rust." {
             return skill_response(request, &tool_results);
@@ -309,6 +309,44 @@ impl FixtureModel {
             return subagent_child_response(request, &tool_results);
         }
         default_fixture_response(request, current_user, &tool_results)
+    }
+}
+
+fn parallel_fixture_response(
+    input: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Option<Result<Vec<CompleteMessage>, ModelCompleteInvocationError>> {
+    match input {
+        "Inspect Git and README.md with parallel approval." => {
+            Some(mixed_parallel_response(tool_results))
+        }
+        "Read README.md twice with parallel approval." => {
+            Some(parallel_approval_response(tool_results))
+        }
+        _ => None,
+    }
+}
+
+fn mixed_parallel_response(
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
+    match tool_results {
+        [] => {
+            let mut calls = named_tool_request("parallel-status", "git_status", "{}");
+            calls.extend(named_tool_request("parallel-diff", "git_diff", "{}"));
+            calls.extend(named_tool_request(
+                "parallel-read",
+                "read",
+                r#"{"path":"README.md"}"#,
+            ));
+            Ok(calls)
+        }
+        [_, _, _] => Ok(previous_response(
+            "All three parallel inspections completed.",
+        )),
+        _ => Err(ModelCompleteInvocationError::Domain(
+            CompleteError::InvalidRequest,
+        )),
     }
 }
 

@@ -435,6 +435,108 @@ async fn queues_two_parallel_tool_approvals_and_completes_both_calls() {
     assert!(!body.contains("ResourceExhausted"), "{body}");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn mixed_parallel_git_and_read_survive_approval_and_session_polling() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    initialize_git_workspace(root.path());
+    write_web_fixture(root.path());
+    for (plugin, config) in [
+        (
+            "process.native",
+            "root = \".\"\nallowed_programs = [\"git\"]\nmax_timeout_ms = 120000\nmax_output_bytes = 262144\nmax_argument_bytes = 131072\n",
+        ),
+        (
+            "git-tools",
+            "default_timeout_ms = 30000\nmax_log_entries = 50\nmax_commit_message_bytes = 4096\n",
+        ),
+    ] {
+        let directory = root.path().join(format!("plugins/lenso.agent.{plugin}"));
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("default.toml"), config).unwrap();
+    }
+    fs::write(root.path().join("README.md"), "parallel approval fixture").unwrap();
+    let loop_path = root.path().join("plugins/lenso.agent.loop/web.toml");
+    let configuration = fs::read_to_string(&loop_path)
+        .unwrap()
+        .replace("max_parallel_tool_calls = 1", "max_parallel_tool_calls = 3")
+        .replace("max_tool_calls = 2", "max_tool_calls = 3");
+    fs::write(loop_path, configuration).unwrap();
+    let hook = root
+        .path()
+        .join("plugins/lenso.agent.interactive-approval-hook/default.toml");
+    fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    fs::write(hook, "default_decision = \"ask\"\nallow_tools = [\"git_status\", \"git_diff\"]\nask_tools = []\ndeny_tools = []\nmax_preview_bytes = 16384\n").unwrap();
+    let profile_path = root.path().join("profiles/web.toml");
+    let profile = fs::read_to_string(&profile_path).unwrap().replace(
+        "instances = [",
+        "instances = [\"lenso.agent.git-tools/default\", \"lenso.agent.process.native/default\", \"lenso.agent.interactive-approval-hook/default\", ",
+    );
+    fs::write(profile_path, profile).unwrap();
+    let address = available_address();
+    let mut server = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args([
+                "--listen",
+                &address.to_string(),
+                "--profile",
+                "web",
+                "--allow-tool",
+                "read",
+                "--allow-tool",
+                "git_status",
+                "--allow-tool",
+                "git_diff",
+            ])
+            .current_dir(root.path())
+            .env("LENSO_AGENT_HOME", root.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+    let response = client.post(format!("http://{address}/api/console/v1/agent/turns"))
+        .json(&serde_json::json!({"input":"Inspect Git and README.md with parallel approval.","request_id":"parallel-approval"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let mut stream = tokio::spawn(async move { response.text().await.unwrap() });
+    let interaction = tokio::select! {
+        interaction = wait_for_interaction(&client, address, "parallel-approval", Duration::from_secs(5)) => interaction,
+        result = &mut stream => panic!("Turn ended before approval: {}", result.unwrap()),
+    };
+    // Session reads are deferred until the active Turn settles. Keep polling
+    // concurrent with approval so it cannot delay the user's answer.
+    let polling_client = client.clone();
+    let polling = tokio::spawn(async move {
+        polling_client
+            .get(format!("http://{address}/api/console/v1/agent/sessions"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+    });
+    assert_eq!(interaction["questions"][0]["questionId"], "approval");
+    client.post(format!("http://{address}/api/console/v1/agent/turns/parallel-approval/interactions/{}/answer", interaction["interactionId"].as_str().unwrap()))
+        .json(&serde_json::json!({"answers":[{"questionId":"approval","selectedOptionIds":["approve"],"other":null}]}))
+        .send().await.unwrap().error_for_status().unwrap();
+    tokio::time::timeout(Duration::from_secs(5), polling)
+        .await
+        .unwrap()
+        .unwrap();
+    let body = tokio::time::timeout(Duration::from_secs(5), stream)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        body.contains("All three parallel inspections completed."),
+        "{body}"
+    );
+    assert!(body.contains("turn_completed"), "{body}");
+    assert!(!body.contains("ResourceExhausted"), "{body}");
+}
+
 async fn assert_tasks_readable_while_turn_runs(client: &reqwest::Client, address: SocketAddr) {
     let response = tokio::time::timeout(
         Duration::from_secs(1),

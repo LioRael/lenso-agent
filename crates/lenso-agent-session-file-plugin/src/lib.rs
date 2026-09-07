@@ -822,6 +822,7 @@ fn event_kind(
     match kind {
         Kind::SessionCreated => "session_created",
         Kind::SystemInstructionInstalled => "system_instruction_installed",
+        Kind::SystemInstructionRevised => "system_instruction_revised",
         Kind::ContextCompactionStarted => "context_compaction_started",
         Kind::ContextCompactionCommitted => "context_compaction_committed",
         Kind::ContextCompactionFailed => "context_compaction_failed",
@@ -846,6 +847,7 @@ fn read_event_kind(kind: &str) -> Option<ReadSessionResponseEventsItemKind> {
         "system_instruction_installed" => {
             ReadSessionResponseEventsItemKind::SystemInstructionInstalled
         }
+        "system_instruction_revised" => ReadSessionResponseEventsItemKind::SystemInstructionRevised,
         "context_compaction_started" => ReadSessionResponseEventsItemKind::ContextCompactionStarted,
         "context_compaction_committed" => {
             ReadSessionResponseEventsItemKind::ContextCompactionCommitted
