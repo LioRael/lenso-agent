@@ -943,7 +943,7 @@ impl AgentWebSurface {
         if tool_policy.is_some() && matches!(control, AgentWebControl::Disabled) {
             return Err(format!("a Tool policy requires {CONTROL_TOKEN_ENV}"));
         }
-        let policy = load_tool_policy(tool_policy.as_deref(), configured_tools, &available_tools)?;
+        let policy = load_tool_policy(tool_policy.as_deref(), configured_tools)?;
         let runtime = WebRuntime::start(
             app,
             WebRuntimeConfig {
@@ -2779,7 +2779,6 @@ async fn handle_rename_command(
 fn load_tool_policy(
     path: Option<&std::path::Path>,
     configured_tools: Vec<String>,
-    available_tools: &[BootstrapTool],
 ) -> Result<ToolPolicyDocument, String> {
     let Some(path) = path else {
         return Ok(ToolPolicyDocument {
@@ -2796,7 +2795,10 @@ fn load_tool_policy(
         if document.schema != TOOL_POLICY_SCHEMA {
             return Err("Agent Tool policy schema is unsupported".to_owned());
         }
-        document.allowed = validate_policy_tools(document.allowed, available_tools)?;
+        // Saved grants may belong to another Profile. Turn admission intersects
+        // them with the leased catalog; loading must not revoke them or prevent
+        // restarting in Normal/Plan after authorizing Code Tools.
+        document.allowed = normalize_allowed_tools(document.allowed)?;
         return Ok(document);
     }
     let document = ToolPolicyDocument {
@@ -3201,7 +3203,8 @@ async fn invoke_turn(
     cancellation: CancellationToken,
     allowed_tools: &[String],
 ) -> Result<(), String> {
-    let requested_tools = resolve_turn_tools(request.allowed_tools.as_deref(), allowed_tools)?;
+    let requested_tools =
+        scoped_turn_tools(turn, request.allowed_tools.as_deref(), allowed_tools).await?;
     let context = RunScope::new(requested_tools)?.attach(turn_invocation_context(
         turn,
         &request,
@@ -3295,6 +3298,27 @@ async fn invoke_turn(
             }
         }
     }
+}
+
+async fn scoped_turn_tools(
+    turn: &lenso_agent_host::generation::TurnGeneration,
+    requested: Option<&[String]>,
+    allowed_tools: &[String],
+) -> Result<Vec<String>, String> {
+    // Persisted grants survive Profile switches, but a Turn may only use Tools
+    // exposed by its exact leased Generation. Reject stale explicit selections
+    // before invoking Agent Loop so bad client input cannot fail the Plugin.
+    let catalog = turn.tool_catalog().await?;
+    let available = catalog
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let effective_policy = allowed_tools
+        .iter()
+        .filter(|name| available.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    resolve_turn_tools(requested, &effective_policy)
 }
 
 fn resolve_turn_tools(
