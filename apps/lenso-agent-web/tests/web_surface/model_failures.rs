@@ -213,7 +213,7 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
     .enumerate()
     {
         let body = client.post(format!("{base}/turns"))
-            .json(&serde_json::json!({"request_id":format!("attempt-{index}"),"session_id":session_id,"input":"Reply OK","allowed_tools":["read"]}))
+            .json(&serde_json::json!({"request_id":format!("attempt-{index}"),"session_id":session_id,"input":if index == 0 { "Remember target Agent app and Plugin lenso.agent.artifact.file" } else { "Continue" },"allowed_tools":["read"]}))
             .send().await.unwrap().error_for_status().unwrap().text().await.unwrap();
         if let Some(reason) = reason {
             assert!(body.contains("turn.failed"), "{body}");
@@ -253,6 +253,22 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
             creates.load(Ordering::SeqCst),
             index + 1 + usize::from(reason.is_none())
         );
+        if index == 0 {
+            server.0.kill().unwrap();
+            server.0.wait().unwrap();
+            server = ChildGuard(
+                Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+                    .args(["--listen", &address.to_string(), "--allow-tool", "read"])
+                    .current_dir(root.path())
+                    .env("LENSO_AGENT_HOME", root.path())
+                    .env_remove("LENSO_AGENT_PROFILE")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap(),
+            );
+            wait_until_ready(&client, address, &mut server.0).await;
+        }
     }
     let session: serde_json::Value = client
         .get(format!("{base}/sessions/{}", session_id.unwrap()))
@@ -376,6 +392,19 @@ fn scripted_sse_provider(
 }
 
 fn scripted_sse_body(index: usize, tool_domain_failure: bool, request_body: Vec<u8>) -> String {
+    if !tool_domain_failure && index > 0 {
+        let request: serde_json::Value = serde_json::from_slice(&request_body).unwrap();
+        let context = request["input"].to_string();
+        assert!(
+            context.contains("Remember target Agent app and Plugin lenso.agent.artifact.file"),
+            "The actual model request lost the failed Turn's user input: {context}"
+        );
+        assert!(
+            context.contains("did not complete"),
+            "Incomplete work must be identified: {context}"
+        );
+    }
+
     use std::fmt::Write as _;
     let mut body =
         String::from("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n");

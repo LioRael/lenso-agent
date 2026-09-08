@@ -4078,7 +4078,13 @@ fn reconstruct_history(
         let Some(turn) = turns.remove(&turn_id) else {
             continue;
         };
-        if let (Some(mut input), Some(output)) = (turn.input, turn.output) {
+        if let Some(mut input) = turn.input {
+            // User intent remains durable even when a Tool failure, cancellation,
+            // or process exit prevents the Turn from producing a final answer.
+            // Never project partial model output as a completed action.
+            let output = turn.output.unwrap_or_else(|| {
+                "[This previous turn did not complete. Its user request remains context; do not assume pending operations succeeded. Inspect current state before retrying any mutation.]".to_owned()
+            });
             for additional_input in turn.additional_inputs {
                 input.push_str(ADDITIONAL_INPUT_SEPARATOR);
                 input.push_str(&additional_input);
@@ -4724,6 +4730,65 @@ mod tests {
         assert_eq!(messages[0].content, "hello");
         assert_eq!(messages[1].role, CompleteMessageRole::Assistant);
         assert_eq!(messages[1].content, "world");
+    }
+
+    #[test]
+    fn incomplete_turns_preserve_user_context_before_followup() {
+        for terminal in [
+            None,
+            Some(ReadSessionResponseEventsItemKind::TurnFailed),
+            Some(ReadSessionResponseEventsItemKind::TurnCancelled),
+        ] {
+            let mut events = vec![
+                history_event(
+                    "1",
+                    ReadSessionResponseEventsItemKind::TurnStarted,
+                    r#"{"input":"Target Agent: app; Plugin: lenso.agent.artifact.file"}"#,
+                ),
+                history_event(
+                    "2",
+                    ReadSessionResponseEventsItemKind::ModelRequested,
+                    r#"{"additional_inputs":["Only inspect; do not publish."]}"#,
+                ),
+                history_event(
+                    "3",
+                    ReadSessionResponseEventsItemKind::ModelOutput,
+                    r#"{"text":"I will inspect the Plugin."}"#,
+                ),
+            ];
+            if let Some(kind) = terminal {
+                events.push(history_event("4", kind, r#"{"detail":"interrupted"}"#));
+            }
+            for (revision, kind, payload) in [
+                (
+                    "5",
+                    ReadSessionResponseEventsItemKind::TurnStarted,
+                    r#"{"input":"Continue"}"#,
+                ),
+                (
+                    "6",
+                    ReadSessionResponseEventsItemKind::TurnCompleted,
+                    r#"{"output":"Which Agent?"}"#,
+                ),
+            ] {
+                let mut event = history_event(revision, kind, payload);
+                event.turn_id = Some("turn-2".to_owned());
+                events.push(event);
+            }
+            let messages = reconstruct_context_messages(&events).unwrap();
+            assert_eq!(messages.len(), 4);
+            assert_eq!(messages[0].role, ContextMessageRole::User);
+            assert!(messages[0].content.contains("Target Agent: app"));
+            assert!(
+                messages[0]
+                    .content
+                    .contains("Only inspect; do not publish.")
+            );
+            assert!(messages[1].content.contains("did not complete"));
+            assert!(!messages[1].content.contains("I will inspect"));
+            assert_eq!(messages[2].content, "Continue");
+            assert_eq!(messages[3].content, "Which Agent?");
+        }
     }
 
     #[test]
