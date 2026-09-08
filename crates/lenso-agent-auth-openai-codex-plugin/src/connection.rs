@@ -9,7 +9,7 @@ use super::{
     complete_device_login, direct_logout, now_millis, plugin_failure,
 };
 
-const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
+const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Default)]
 pub(super) struct ConnectionManager {
@@ -94,7 +94,7 @@ impl ConnectionManager {
                     attempt_id: uuid::Uuid::new_v4().to_string(),
                     authorization_url: pending.authorization_url.clone(),
                     user_code: String::new(),
-                    expires_at_millis: now_millis().saturating_add(300_000).to_string(),
+                    expires_at_millis: now_millis().saturating_add(600_000).to_string(),
                 };
                 let task = tokio::spawn(async move {
                     matches!(
@@ -120,7 +120,7 @@ impl ConnectionManager {
                     attempt_id: uuid::Uuid::new_v4().to_string(),
                     authorization_url: pending.verification_url.clone(),
                     user_code: pending.user_code.clone(),
-                    expires_at_millis: now_millis().saturating_add(300_000).to_string(),
+                    expires_at_millis: now_millis().saturating_add(600_000).to_string(),
                 };
                 let task = tokio::spawn(async move {
                     matches!(
