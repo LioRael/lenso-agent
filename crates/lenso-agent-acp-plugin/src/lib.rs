@@ -27,7 +27,7 @@ mod tests {
             serde_json::json!([
                 {
                     "capability_id": "lenso.agent@3",
-                    "descriptor_version": "3.1.0",
+                    "descriptor_version": "3.2.0",
                     "cardinality": "one"
                 },
                 {
