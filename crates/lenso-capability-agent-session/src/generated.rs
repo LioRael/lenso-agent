@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
-pub const DESCRIPTOR_VERSION: &str = "1.7.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:76c4fd483cb65cfbacd696bf02d6df65b1a630d794ea8d0c23f55b0c535e8d17";
+pub const DESCRIPTOR_VERSION: &str = "1.8.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:be84f412ce56324088c6154fc89b60af8dc4c67ccd11019c432dd1787d2692cb";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const SESSION_CONTRACT: CapabilityReference<SessionClient> = CapabilityRefer
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.7.0\",\"operations\":[\"append\",\"list\",\"open\",\"read\",\"rename\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"operations\":[\"append\",\"list\",\"open\",\"read\",\"rename\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_session_client {
-    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.7.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.7.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_session_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.7.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_session_client {
-    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.7.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.7.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const APPEND_OPERATION: &str = "append";
@@ -186,6 +186,9 @@ pub enum ListError {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct OpenSessionRequest {
+    #[serde(rename = "create_session_id")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub create_session_id: Option<String>,
     #[serde(rename = "session_id")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,

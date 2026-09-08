@@ -1984,12 +1984,81 @@ impl TurnGeneration {
             .invoke_with_context(
                 OPEN_OPERATION,
                 self.invocation_context()?,
-                OpenSessionRequest { session_id: None },
+                OpenSessionRequest {
+                    create_session_id: None,
+                    session_id: None,
+                },
             )
             .await
             .map_err(|error| format!("Session open failed: {error:?}"))?
             .map(|response| response.session_id)
             .map_err(|error| format!("Session open was rejected: {error:?}"))
+    }
+
+    /// Copy a completed prefix without executing it. The operation ID owns the
+    /// destination ID so retrying after a lost HTTP response is safe.
+    pub async fn fork_session_after_turn(
+        &self,
+        source_session_id: String,
+        turn_id: String,
+        operation_id: String,
+    ) -> Result<String, String> {
+        let branch_session_id = format!("fork-{operation_id}");
+        let events = self
+            .read_all_session_events(source_session_id.clone())
+            .await?;
+        let prefix =
+            completed_turn_branch_events(events, &source_session_id, &turn_id, &branch_session_id)?;
+        self.route
+            .target()
+            .handle::<SessionOpen>(&self.consumer_instance)
+            .map_err(|error| format!("Session route unavailable: {error:?}"))?
+            .invoke_with_context(
+                OPEN_OPERATION,
+                self.invocation_context()?,
+                OpenSessionRequest {
+                    create_session_id: Some(branch_session_id.clone()),
+                    session_id: None,
+                },
+            )
+            .await
+            .map_err(|error| format!("Session branch open failed: {error:?}"))?
+            .map_err(|error| format!("Session branch open rejected: {error:?}"))?;
+        let provenance = serde_json::json!({"session_id": source_session_id, "turn_id": turn_id});
+        let existing = self
+            .read_all_session_events(branch_session_id.clone())
+            .await?;
+        if !existing.is_empty() {
+            let matches = existing
+                .iter()
+                .find(|event| event.kind == ReadSessionResponseEventsItemKind::SessionCreated)
+                .and_then(|event| {
+                    serde_json::from_str::<serde_json::Value>(&event.payload_json).ok()
+                })
+                .is_some_and(|payload| payload.get("fork_source") == Some(&provenance));
+            return if matches {
+                Ok(branch_session_id)
+            } else {
+                Err("Fork operation ID belongs to another branch".to_owned())
+            };
+        }
+        self.route
+            .target()
+            .handle::<SessionAppend>(&self.consumer_instance)
+            .map_err(|error| format!("Session route unavailable: {error:?}"))?
+            .invoke_with_context(
+                APPEND_OPERATION,
+                self.invocation_context()?,
+                AppendSessionRequest {
+                    session_id: branch_session_id.clone(),
+                    expected_revision: "0".to_owned(),
+                    events: prefix,
+                },
+            )
+            .await
+            .map_err(|error| format!("Session branch append failed: {error:?}"))?
+            .map_err(|error| format!("Session branch append rejected: {error:?}"))?;
+        Ok(branch_session_id)
     }
 
     /// Creates an immutable branch containing all events before one selected Turn.
@@ -2123,6 +2192,55 @@ fn agent_behavior_digest(plan: &ResolvedAppPlan, agent: &str) -> Result<String, 
     serde_json::to_vec(&(agent, instances, bindings))
         .map(|bytes| sha256_digest(&bytes))
         .map_err(|error| format!("failed to identify Agent behavior: {error}"))
+}
+
+fn completed_turn_branch_events(
+    events: Vec<lenso_capability_agent_session::ReadSessionResponseEventsItem>,
+    source_session_id: &str,
+    turn_id: &str,
+    branch_session_id: &str,
+) -> Result<Vec<AppendSessionRequestEventsItem>, String> {
+    let target = events
+        .iter()
+        .position(|event| {
+            event.turn_id.as_deref() == Some(turn_id)
+                && event.kind == ReadSessionResponseEventsItemKind::TurnCompleted
+        })
+        .ok_or_else(|| "Only a completed Turn can be branched".to_owned())?;
+    let has_identity = events[..=target]
+        .iter()
+        .any(|event| event.kind == ReadSessionResponseEventsItemKind::SessionCreated);
+    let occurred_at = events[0].occurred_at.clone();
+    let mut prefix = events
+        .into_iter()
+        .take(target + 1)
+        .map(|event| {
+            let payload_json = if event.kind == ReadSessionResponseEventsItemKind::SessionCreated {
+                serde_json::to_string(&serde_json::json!({"session_id": branch_session_id,
+                "fork_source": {"session_id": source_session_id, "turn_id": turn_id}}))
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .map_err(|_| "Branch identity is too large".to_owned())?
+            } else {
+                event.payload_json
+            };
+            Ok(AppendSessionRequestEventsItem {
+                event_id: event.event_id,
+                kind: append_event_kind(&event.kind),
+                occurred_at: event.occurred_at,
+                payload_json,
+                turn_id: event.turn_id,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if !has_identity {
+        prefix.insert(0, AppendSessionRequestEventsItem {
+            event_id: format!("{branch_session_id}-identity"), kind: AppendSessionRequestEventsItemKind::SessionCreated,
+            turn_id: None, occurred_at,
+            payload_json: serde_json::json!({"session_id":branch_session_id,"fork_source":{"session_id":source_session_id,"turn_id":turn_id}}).to_string().try_into().map_err(|_| "Branch identity is too large".to_owned())?,
+        });
+    }
+    Ok(prefix)
 }
 
 fn append_event_kind(
@@ -3507,6 +3625,75 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_branch_is_inclusive_preserves_context_and_excludes_future() {
+        use lenso_capability_agent_session::ReadSessionResponseEventsItem;
+        let make = |id: &str,
+                    kind: &str,
+                    turn: Option<&str>,
+                    payload: serde_json::Value|
+         -> ReadSessionResponseEventsItem {
+            serde_json::from_value(serde_json::json!({"event_id": id,"kind":kind,"turn_id":turn,
+                "occurred_at":"2026-09-09T00:00:00Z","revision":id,"payload_json":payload.to_string()})).unwrap()
+        };
+        let source = vec![
+            make(
+                "1",
+                "session_created",
+                None,
+                serde_json::json!({"session_id":"source"}),
+            ),
+            make(
+                "2",
+                "turn_started",
+                Some("first"),
+                serde_json::json!({"input":"hello","attachments":[{"artifact_id":"image"}]}),
+            ),
+            make(
+                "3",
+                "tool_result",
+                Some("first"),
+                serde_json::json!({"content":"actual output"}),
+            ),
+            make(
+                "4",
+                "context_compaction_committed",
+                None,
+                serde_json::json!({"summary":"earlier context"}),
+            ),
+            make(
+                "5",
+                "turn_completed",
+                Some("first"),
+                serde_json::json!({"output":"done"}),
+            ),
+            make(
+                "6",
+                "turn_started",
+                Some("future"),
+                serde_json::json!({"input":"later"}),
+            ),
+        ];
+        let branch =
+            completed_turn_branch_events(source.clone(), "source", "first", "branch").unwrap();
+        assert_eq!(branch.len(), 5);
+        for index in 1..5 {
+            assert_eq!(branch[index].payload_json, source[index].payload_json);
+        }
+        let identity: serde_json::Value = serde_json::from_str(&branch[0].payload_json).unwrap();
+        assert_eq!(identity["fork_source"]["turn_id"], "first");
+        assert_eq!(source.len(), 6);
+        let legacy =
+            completed_turn_branch_events(source[1..].to_vec(), "source", "first", "branch")
+                .unwrap();
+        assert_eq!(legacy.len(), 5);
+        assert_eq!(
+            legacy[0].kind,
+            AppendSessionRequestEventsItemKind::SessionCreated
+        );
+        assert!(completed_turn_branch_events(source, "source", "future", "branch").is_err());
+    }
 
     #[test]
     fn host_build_identity_streams_the_exact_executable_digest() {

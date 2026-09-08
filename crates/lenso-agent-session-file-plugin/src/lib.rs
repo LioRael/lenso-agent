@@ -387,6 +387,21 @@ impl FileSessionProvider {
         request: OpenSessionRequest,
     ) -> Result<OpenSessionResponse, OperationFailure<OpenError>> {
         let _operation = self.operation_lock.borrow_mut();
+        if request.create_session_id.is_some() && request.session_id.is_some() {
+            return Err(OpenError::InvalidSessionId.into());
+        }
+        if let Some(session_id) = request.create_session_id.as_ref() {
+            if !valid_session_id(session_id) {
+                return Err(OpenError::InvalidSessionId.into());
+            }
+            if let Some(session) = self.load(session_id).map_err(OperationFailure::Runtime)? {
+                return Ok(OpenSessionResponse {
+                    created: false,
+                    revision: session.revision.to_string(),
+                    session_id: session_id.clone(),
+                });
+            }
+        }
         if let Some(session_id) = request.session_id {
             if !valid_session_id(&session_id) {
                 return Err(OpenError::InvalidSessionId.into());
@@ -400,7 +415,9 @@ impl FileSessionProvider {
                 session_id,
             });
         }
-        let session_id = uuid::Uuid::new_v4().to_string();
+        let session_id = request
+            .create_session_id
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let session = StoredSession {
             manual_title: None,
             schema_version: 1,
@@ -921,6 +938,41 @@ fn native_result<T, D>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn caller_selected_session_creation_is_idempotent_and_unambiguous() {
+        let temporary = tempfile::tempdir().unwrap();
+        let provider = FileSessionProvider {
+            directory: temporary.path().join("sessions"),
+            operation_lock: Rc::new(RefCell::new(())),
+        };
+        provider.prepare_store().unwrap();
+        let request = || OpenSessionRequest {
+            create_session_id: Some("fork-stable".to_owned()),
+            session_id: None,
+        };
+        let first = provider.open_now(request()).unwrap();
+        assert!(first.created);
+        let second = provider.open_now(request()).unwrap();
+        assert!(!second.created);
+        assert_eq!(first.session_id, second.session_id);
+        assert!(
+            provider
+                .open_now(OpenSessionRequest {
+                    create_session_id: Some("fork-stable".to_owned()),
+                    session_id: Some("other".to_owned())
+                })
+                .is_err()
+        );
+        assert!(
+            provider
+                .open_now(OpenSessionRequest {
+                    create_session_id: Some("../escape".to_owned()),
+                    session_id: None
+                })
+                .is_err()
+        );
+    }
     use super::*;
     use lenso_agent_session_inspection::inspect_turn_started;
     use lenso_capability_agent_session::AppendSessionRequestEventsItemKind;
@@ -972,7 +1024,10 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         provider
             .append_now(AppendSessionRequest {
@@ -1006,7 +1061,10 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         provider
             .append_now(AppendSessionRequest {
@@ -1086,7 +1144,10 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         let appended = provider
             .append_now(AppendSessionRequest {
@@ -1103,6 +1164,7 @@ mod tests {
         };
         let reopened = fresh_generation
             .open_now(OpenSessionRequest {
+                create_session_id: None,
                 session_id: Some(opened.session_id.clone()),
             })
             .unwrap();
@@ -1139,7 +1201,10 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         let request = AppendSessionRequest {
             session_id: opened.session_id.clone(),
@@ -1160,7 +1225,10 @@ mod tests {
             OperationFailure::Domain(AppendError::RevisionConflict { .. })
         ));
         let duplicate_batch = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         let error = provider
             .append_now(AppendSessionRequest {
@@ -1176,6 +1244,7 @@ mod tests {
         assert_eq!(
             provider
                 .open_now(OpenSessionRequest {
+                    create_session_id: None,
                     session_id: Some(duplicate_batch.session_id)
                 })
                 .unwrap()
@@ -1194,7 +1263,10 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         fs::remove_dir_all(&directory).unwrap();
         fs::write(&directory, b"not a directory").unwrap();
@@ -1218,7 +1290,10 @@ mod tests {
         };
         provider.prepare_store().unwrap();
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         provider
             .append_now(AppendSessionRequest {
@@ -1255,7 +1330,10 @@ mod tests {
         provider.prepare_store().unwrap();
         for _ in 0..2 {
             let opened = provider
-                .open_now(OpenSessionRequest { session_id: None })
+                .open_now(OpenSessionRequest {
+                    create_session_id: None,
+                    session_id: None,
+                })
                 .unwrap();
             provider
                 .append_now(AppendSessionRequest {

@@ -341,6 +341,29 @@ impl SqliteSessionProvider {
     ) -> Result<OpenSessionResponse, OperationFailure<OpenError>> {
         let _operation = self.operation_lock.borrow_mut();
         let connection = self.connect().map_err(OperationFailure::Runtime)?;
+        if let Some(session_id) = request.create_session_id {
+            if request.session_id.is_some() || !valid_session_id(&session_id) {
+                return Err(OpenError::InvalidSessionId.into());
+            }
+            let inserted = connection
+                .execute(
+                    "INSERT OR IGNORE INTO sessions(session_id, revision) VALUES (?1, 0)",
+                    [&session_id],
+                )
+                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+            let revision: i64 = connection
+                .query_row(
+                    "SELECT revision FROM sessions WHERE session_id = ?1",
+                    [&session_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+            return Ok(OpenSessionResponse {
+                created: inserted == 1,
+                revision: revision.to_string(),
+                session_id,
+            });
+        }
         if let Some(session_id) = request.session_id {
             if !valid_session_id(&session_id) {
                 return Err(OpenError::InvalidSessionId.into());
@@ -1201,6 +1224,37 @@ fn native_result<T, D>(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn caller_selected_session_creation_is_idempotent_and_unambiguous() {
+        let temporary = tempfile::tempdir().unwrap();
+        let provider = provider(temporary.path().join("sessions.sqlite3"));
+        let request = || OpenSessionRequest {
+            create_session_id: Some("fork-stable".to_owned()),
+            session_id: None,
+        };
+        let first = provider.open_now(request()).unwrap();
+        assert!(first.created);
+        let second = provider.open_now(request()).unwrap();
+        assert!(!second.created);
+        assert_eq!(first.session_id, second.session_id);
+        assert!(
+            provider
+                .open_now(OpenSessionRequest {
+                    create_session_id: Some("fork-stable".to_owned()),
+                    session_id: Some("other".to_owned())
+                })
+                .is_err()
+        );
+        assert!(
+            provider
+                .open_now(OpenSessionRequest {
+                    create_session_id: Some("../escape".to_owned()),
+                    session_id: None
+                })
+                .is_err()
+        );
+    }
     use super::*;
     use lenso_agent_session_inspection::inspect_turn_started;
     use session_contract::AppendSessionRequestEventsItemKind;
@@ -1223,7 +1277,10 @@ mod tests {
         blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
 
         let operation = runtime.invoke(|reply| SqliteSessionCommand::Open {
-            request: OpenSessionRequest { session_id: None },
+            request: OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            },
             reply,
         });
         tokio::pin!(operation);
@@ -1252,7 +1309,10 @@ mod tests {
 
         let error = first_runtime
             .invoke(|reply| SqliteSessionCommand::Open {
-                request: OpenSessionRequest { session_id: None },
+                request: OpenSessionRequest {
+                    create_session_id: None,
+                    session_id: None,
+                },
                 reply,
             })
             .await
@@ -1262,7 +1322,10 @@ mod tests {
         let (second_runtime, second_worker) = SqliteSessionWorker::start(database).await.unwrap();
         let opened = second_runtime
             .invoke(|reply| SqliteSessionCommand::Open {
-                request: OpenSessionRequest { session_id: None },
+                request: OpenSessionRequest {
+                    create_session_id: None,
+                    session_id: None,
+                },
                 reply,
             })
             .await
@@ -1309,7 +1372,10 @@ mod tests {
 
         {
             let operation = runtime.invoke(|reply| SqliteSessionCommand::Open {
-                request: OpenSessionRequest { session_id: None },
+                request: OpenSessionRequest {
+                    create_session_id: None,
+                    session_id: None,
+                },
                 reply,
             });
             tokio::pin!(operation);
@@ -1367,7 +1433,10 @@ mod tests {
         let unavailable = SessionProvider::open(
             &plugin,
             InvocationContext::new(1, None, lenso_kernel::CancellationToken::new()),
-            OpenSessionRequest { session_id: None },
+            OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            },
         )
         .await
         .unwrap_err();
@@ -1387,7 +1456,10 @@ mod tests {
         let opened = SessionProvider::open(
             &fresh_generation,
             InvocationContext::new(2, None, lenso_kernel::CancellationToken::new()),
-            OpenSessionRequest { session_id: None },
+            OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            },
         )
         .await
         .unwrap()
@@ -1441,7 +1513,10 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let provider = provider(temporary.path().join("sessions.sqlite3"));
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         provider
             .append_now(AppendSessionRequest {
@@ -1499,7 +1574,10 @@ mod tests {
         let database = temporary.path().join("sessions.sqlite3");
         let first = provider(database.clone());
         let opened = first
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         first
             .append_now(AppendSessionRequest {
@@ -1569,7 +1647,10 @@ mod tests {
         let database = temporary.path().join("sessions.sqlite3");
         let first = provider(database.clone());
         let opened = first
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         let appended = first
             .append_now(AppendSessionRequest {
@@ -1583,6 +1664,7 @@ mod tests {
         let reopened = provider(database);
         let resumed = reopened
             .open_now(OpenSessionRequest {
+                create_session_id: None,
                 session_id: Some(opened.session_id.clone()),
             })
             .unwrap();
@@ -1615,7 +1697,10 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let provider = provider(temporary.path().join("sessions.sqlite3"));
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         let request = AppendSessionRequest {
             session_id: opened.session_id.clone(),
@@ -1646,7 +1731,10 @@ mod tests {
         assert_eq!(read.events.len(), 1);
 
         let duplicate_batch = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         let error = provider
             .append_now(AppendSessionRequest {
@@ -1662,6 +1750,7 @@ mod tests {
         assert_eq!(
             provider
                 .open_now(OpenSessionRequest {
+                    create_session_id: None,
                     session_id: Some(duplicate_batch.session_id)
                 })
                 .unwrap()
@@ -1676,7 +1765,10 @@ mod tests {
         let database = temporary.path().join("sessions.sqlite3");
         let provider = provider(database.clone());
         let opened = provider
-            .open_now(OpenSessionRequest { session_id: None })
+            .open_now(OpenSessionRequest {
+                create_session_id: None,
+                session_id: None,
+            })
             .unwrap();
         provider
             .append_now(AppendSessionRequest {
@@ -1708,12 +1800,14 @@ mod tests {
         let provider = provider(temporary.path().join("sessions.sqlite3"));
         assert!(matches!(
             provider.open_now(OpenSessionRequest {
+                create_session_id: None,
                 session_id: Some("missing".to_owned())
             }),
             Err(OperationFailure::Domain(OpenError::NotFound))
         ));
         assert!(matches!(
             provider.open_now(OpenSessionRequest {
+                create_session_id: None,
                 session_id: Some("bad/id".to_owned())
             }),
             Err(OperationFailure::Domain(OpenError::InvalidSessionId))

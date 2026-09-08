@@ -737,6 +737,7 @@ impl AgentLoop {
             .open_with_context(
                 context.clone(),
                 OpenSessionRequest {
+                    create_session_id: None,
                     session_id: Some(request.session_id.clone()),
                 },
             )
@@ -941,6 +942,7 @@ async fn run_turn(
         .open_with_context(
             context.clone(),
             OpenSessionRequest {
+                create_session_id: None,
                 session_id: request.session_id,
             },
         )

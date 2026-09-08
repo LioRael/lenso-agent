@@ -393,6 +393,11 @@ struct WebRuntimeConfig {
 
 #[derive(Debug)]
 enum RuntimeCommand {
+    ForkSession {
+        session_id: String,
+        request: ForkSessionRequest,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     AuthConnections {
         reply: oneshot::Sender<
             Result<lenso_agent_host::generation::auth_connections::ConnectionCatalog, String>,
@@ -690,6 +695,13 @@ struct WebSessionSummary {
     title: String,
     title_revision: String,
     updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ForkSessionRequest {
+    turn_id: String,
+    operation_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1256,6 +1268,10 @@ fn router(runtime: WebRuntime) -> Router {
             get(read_trajectory),
         )
         .route(
+            "/api/console/v1/agent/sessions/{session_id}/fork",
+            post(fork_session),
+        )
+        .route(
             "/api/console/v1/agent/sessions/{session_id}/compact",
             post(compact_session),
         )
@@ -1809,6 +1825,35 @@ async fn read_trajectory(
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
         .map(Json)
         .map_err(ApiProblem::unavailable)
+}
+
+async fn fork_session(
+    State(runtime): State<WebRuntime>,
+    Path(session_id): Path<String>,
+    Json(request): Json<ForkSessionRequest>,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    if !valid_session_id(&session_id)
+        || request.turn_id.is_empty()
+        || request.turn_id.len() > 128
+        || uuid::Uuid::parse_str(&request.operation_id).is_err()
+    {
+        return Err(ApiProblem::bad_request("Invalid branch identity"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ForkSession {
+            session_id,
+            request,
+            reply,
+        })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    let session_id = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(ApiProblem::conflict)?;
+    Ok(Json(serde_json::json!({"sessionId": session_id})))
 }
 
 async fn compact_session(
@@ -2490,6 +2535,24 @@ async fn runtime_actor(
             } => {
                 let _ = reply.send(read_attachment_from_app(&app, session_id, digest).await);
             }
+            RuntimeCommand::ForkSession {
+                session_id,
+                request,
+                reply,
+            } => {
+                let result = match app.lease_web_turn().await {
+                    Ok(turn) => {
+                        turn.fork_session_after_turn(
+                            session_id,
+                            request.turn_id,
+                            request.operation_id,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
             RuntimeCommand::ReadSession { reply, session_id } => {
                 handle_read_command(&app, session_id, reply).await;
             }
@@ -2700,6 +2763,9 @@ async fn runtime_actor(
                                     RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
                                         app.report_plugin_watch_degraded(detail);
                                     }
+                                    RuntimeCommand::ForkSession { session_id, request, reply } => {
+                                        let _ = reply.send(turn.fork_session_after_turn(session_id, request.turn_id, request.operation_id).await);
+                                    }
                                     RuntimeCommand::TaskSnapshot { reply } => {
                                         let _ = reply.send(turn.task_snapshot().await);
                                     }
@@ -2808,6 +2874,9 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
             let _ = reply.send(Err(detail.to_owned()));
         }
         RuntimeCommand::ReadAttachment { reply, .. } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
+        RuntimeCommand::ForkSession { reply, .. } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
         RuntimeCommand::ReadSession { reply, .. } => {
