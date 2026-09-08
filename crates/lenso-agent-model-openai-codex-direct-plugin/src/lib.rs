@@ -394,6 +394,19 @@ impl ModelProvider for DirectModel {
 }
 
 impl DirectModel {
+    async fn initial_catalog(
+        &self,
+        access_token: &str,
+        account_id: &str,
+    ) -> Result<(AcquiredCatalog, bool), RuntimeFailure> {
+        if let Some(catalog) = restore_catalog(&self.config, account_id, unix_now()?) {
+            return Ok((catalog, true));
+        }
+        self.acquire_catalog(access_token, account_id)
+            .await
+            .map(|catalog| (catalog, false))
+    }
+
     async fn acquire_catalog(
         &self,
         access_token: &str,
@@ -555,8 +568,8 @@ impl Lifecycle for DirectModel {
                 detail: format!("direct Codex model catalog authentication failed: {error:?}"),
             }
         })?;
-        let acquired = self
-            .acquire_catalog(&credential.access_token, &credential.account_id)
+        let (acquired, revalidate_immediately) = self
+            .initial_catalog(&credential.access_token, &credential.account_id)
             .await?;
         let publisher = self
             .config
@@ -582,7 +595,9 @@ impl Lifecycle for DirectModel {
                     .spawn_local(async move {
                         let mut ticks = tokio::time::interval(interval);
                         ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                        ticks.tick().await;
+                        if !revalidate_immediately {
+                            ticks.tick().await;
+                        }
                         loop {
                             tokio::select! {
                                 () = cancellation.cancelled() => break,
@@ -813,6 +828,23 @@ fn transient_catalog_status(status: StatusCode) -> bool {
         status,
         StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
     ) || status.is_server_error()
+}
+
+// Readiness may restore bounded Provider acquisition state only when a managed
+// refresh task will immediately revalidate it. Never extend the cache timestamp.
+fn restore_catalog(
+    config: &DirectModelConfig,
+    account_id: &str,
+    now: u64,
+) -> Option<AcquiredCatalog> {
+    if config.catalog_refresh_seconds == 0 || config.catalog_snapshot_path.is_none() {
+        return None;
+    }
+    let source_key = cache_source_key(&config.base_url, account_id);
+    let cached = read_cache(config.catalog_cache_path.as_deref()?, &source_key, now).ok()??;
+    let catalog = stale_catalog(config, Some(cached.clone()), now, "restoring readiness").ok()?;
+    let snapshot = snapshot_from_catalog(&source_key, &catalog, Some(&cached)).ok()?;
+    Some(AcquiredCatalog { catalog, snapshot })
 }
 
 fn stale_catalog(
@@ -2002,6 +2034,23 @@ mod tests {
             Some(cached.clone())
         );
         assert!(read_cache(&path, "sha256:other", 160).is_err());
+        let mut refreshing = config.clone();
+        refreshing.catalog_refresh_seconds = 60;
+        refreshing.catalog_snapshot_path = Some(directory.path().join("effective.json"));
+        let restored = restore_catalog(&refreshing, "account-a", 160).unwrap();
+        assert_eq!(restored.catalog.provenance.source, CatalogSource::Cache);
+        assert_eq!(
+            restored.catalog.provenance.freshness,
+            CatalogFreshness::Stale
+        );
+        assert_eq!(restored.snapshot.fetched_at_unix_seconds, 100);
+        assert!(restore_catalog(&refreshing, "account-b", 160).is_none());
+        assert!(restore_catalog(&refreshing, "account-a", 161).is_none());
+        assert!(restore_catalog(&refreshing, "account-a", 99).is_none());
+        assert!(restore_catalog(&config, "account-a", 160).is_none());
+        refreshing.catalog_max_stale_seconds = 0;
+        assert!(restore_catalog(&refreshing, "account-a", 100).is_none());
+
         let stale = stale_catalog(&config, Some(cached.clone()), 160, "request failed").unwrap();
         assert_eq!(stale.provenance.source, CatalogSource::Cache);
         assert_eq!(stale.provenance.freshness, CatalogFreshness::Stale);
