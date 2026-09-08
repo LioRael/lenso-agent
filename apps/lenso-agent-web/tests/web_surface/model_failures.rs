@@ -179,23 +179,27 @@ fn failing_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>, Arc<A
     (provider, upgrades, creates)
 }
 
+fn spawn_history_agent(root: &Path, address: std::net::SocketAddr) -> ChildGuard {
+    ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args(["--listen", &address.to_string(), "--allow-tool", "read"])
+            .current_dir(root)
+            .env("LENSO_AGENT_HOME", root)
+            .env_remove("LENSO_AGENT_PROFILE")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    )
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn sse_failures_preserve_generation_and_session_without_replaying() {
     let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     let (provider, creates) = failing_sse_provider(root.path());
     let address = available_address();
-    let mut server = ChildGuard(
-        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
-            .args(["--listen", &address.to_string(), "--allow-tool", "read"])
-            .current_dir(root.path())
-            .env("LENSO_AGENT_HOME", root.path())
-            .env_remove("LENSO_AGENT_PROFILE")
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-    );
+    let mut server = spawn_history_agent(root.path(), address);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -213,7 +217,7 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
     .enumerate()
     {
         let body = client.post(format!("{base}/turns"))
-            .json(&serde_json::json!({"request_id":format!("attempt-{index}"),"session_id":session_id,"input":"Reply OK","allowed_tools":["read"]}))
+            .json(&serde_json::json!({"request_id":format!("attempt-{index}"),"session_id":session_id,"input":if index == 0 { "Remember target Agent app and Plugin lenso.agent.artifact.file" } else { "Continue" },"allowed_tools":["read"]}))
             .send().await.unwrap().error_for_status().unwrap().text().await.unwrap();
         if let Some(reason) = reason {
             assert!(body.contains("turn.failed"), "{body}");
@@ -253,6 +257,12 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
             creates.load(Ordering::SeqCst),
             index + 1 + usize::from(reason.is_none())
         );
+        if index == 0 {
+            server.0.kill().unwrap();
+            server.0.wait().unwrap();
+            server = spawn_history_agent(root.path(), address);
+            wait_until_ready(&client, address, &mut server.0).await;
+        }
     }
     let session: serde_json::Value = client
         .get(format!("{base}/sessions/{}", session_id.unwrap()))
@@ -278,6 +288,26 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
     assert!(!session.to_string().contains("catalog-fixture-access"));
     drop(server);
     drop(provider);
+}
+
+#[test]
+fn scripted_sse_accepts_fragmented_request_headers() {
+    let root = tempfile::tempdir().unwrap();
+    let (provider, requests) = scripted_sse_provider(root.path(), true);
+    let mut tcp = std::net::TcpStream::connect(provider.address).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    tcp.write_all(b"POST /codex/responses HTTP/1.1\r\n")
+        .unwrap();
+    // TCP is a byte stream: a request header need not arrive in one packet.
+    thread::sleep(Duration::from_millis(100));
+    tcp.write_all(b"Host: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    thread::sleep(Duration::from_millis(100));
+    tcp.write_all(b"{}").unwrap();
+    let mut response = String::new();
+    tcp.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
 }
 
 fn failing_sse_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>) {
@@ -321,6 +351,9 @@ fn scripted_sse_provider(
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
+                // macOS can inherit the listener's nonblocking mode. Header/body
+                // reads below must wait for later TCP fragments, not drop them.
+                tcp.set_nonblocking(false).unwrap();
                 tcp.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
                 let mut header = Vec::new();
                 while !header.ends_with(b"\r\n\r\n") {
@@ -377,6 +410,19 @@ fn scripted_sse_provider(
 
 fn scripted_sse_body(index: usize, tool_domain_failure: bool, request_body: Vec<u8>) -> String {
     use std::fmt::Write as _;
+    if !tool_domain_failure && index > 0 {
+        let request: serde_json::Value = serde_json::from_slice(&request_body).unwrap();
+        let context = request["input"].to_string();
+        assert!(
+            context.contains("Remember target Agent app and Plugin lenso.agent.artifact.file"),
+            "The actual model request lost the failed Turn's user input: {context}"
+        );
+        assert!(
+            context.contains("did not complete"),
+            "Incomplete work must be identified: {context}"
+        );
+    }
+
     let mut body =
         String::from("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n");
     if tool_domain_failure {

@@ -956,6 +956,7 @@ fn map_selection_error(
             match error {
                 target_contract::SetEnabledError::InvalidRequest => invalid_request(),
                 target_contract::SetEnabledError::TargetNotFound => target_not_found(),
+                target_contract::SetEnabledError::TargetUnavailable => target_unavailable(),
                 target_contract::SetEnabledError::Unsupported => target_unsupported(),
                 target_contract::SetEnabledError::PluginNotFound => not_found(),
                 target_contract::SetEnabledError::Conflict => conflict(),
@@ -989,6 +990,13 @@ fn unknown_rejection() -> ExecuteError {
     execution_failed(
         "configuration_authority_rejected",
         "The selected Plugin configuration authority rejected the operation.",
+    )
+}
+
+fn target_unavailable() -> ExecuteError {
+    execution_failed(
+        "target_unavailable",
+        "The target Agent request failed or returned an invalid response. A mutation may already have been applied; inspect the target state before attempting it again.",
     )
 }
 
@@ -1033,6 +1041,7 @@ macro_rules! lifecycle_error_mapper {
                     let kind = match error {
                         target_contract::$domain::InvalidRequest => "invalid_request",
                         target_contract::$domain::TargetNotFound => "target_not_found",
+                        target_contract::$domain::TargetUnavailable => return target_unavailable(),
                         target_contract::$domain::Unsupported => "unsupported",
                         target_contract::$domain::PluginNotFound => "plugin_not_found",
                         target_contract::$domain::Conflict => "conflict",
@@ -1088,6 +1097,7 @@ fn map_inspect_error(
         {
             target_contract::InspectError::InvalidRequest => invalid_request(),
             target_contract::InspectError::TargetNotFound => target_not_found(),
+            target_contract::InspectError::TargetUnavailable => target_unavailable(),
             target_contract::InspectError::Unsupported => target_unsupported(),
             target_contract::InspectError::PluginNotFound => not_found(),
             target_contract::InspectError::Conflict => conflict(),
@@ -1112,6 +1122,7 @@ fn map_propose_error(
         {
             target_contract::ProposeError::InvalidRequest => invalid_request(),
             target_contract::ProposeError::TargetNotFound => target_not_found(),
+            target_contract::ProposeError::TargetUnavailable => target_unavailable(),
             target_contract::ProposeError::Unsupported => target_unsupported(),
             target_contract::ProposeError::PluginNotFound => not_found(),
             target_contract::ProposeError::Conflict => conflict(),
@@ -1136,6 +1147,7 @@ fn map_publish_error(
         {
             target_contract::PublishError::InvalidRequest => invalid_request(),
             target_contract::PublishError::TargetNotFound => target_not_found(),
+            target_contract::PublishError::TargetUnavailable => target_unavailable(),
             target_contract::PublishError::Unsupported => target_unsupported(),
             target_contract::PublishError::PluginNotFound => not_found(),
             target_contract::PublishError::Conflict => conflict(),
@@ -1160,6 +1172,7 @@ fn map_history_error(
         {
             target_contract::HistoryError::InvalidRequest => invalid_request(),
             target_contract::HistoryError::TargetNotFound => target_not_found(),
+            target_contract::HistoryError::TargetUnavailable => target_unavailable(),
             target_contract::HistoryError::Unsupported => target_unsupported(),
             target_contract::HistoryError::PluginNotFound => not_found(),
             target_contract::HistoryError::Conflict => conflict(),
@@ -1184,6 +1197,7 @@ fn map_propose_rollback_error(
             match error {
                 target_contract::ProposeRollbackError::InvalidRequest => invalid_request(),
                 target_contract::ProposeRollbackError::TargetNotFound => target_not_found(),
+                target_contract::ProposeRollbackError::TargetUnavailable => target_unavailable(),
                 target_contract::ProposeRollbackError::Unsupported => target_unsupported(),
                 target_contract::ProposeRollbackError::PluginNotFound => not_found(),
                 target_contract::ProposeRollbackError::Conflict => conflict(),
@@ -1211,6 +1225,7 @@ fn map_publish_rollback_error(
             match error {
                 target_contract::PublishRollbackError::InvalidRequest => invalid_request(),
                 target_contract::PublishRollbackError::TargetNotFound => target_not_found(),
+                target_contract::PublishRollbackError::TargetUnavailable => target_unavailable(),
                 target_contract::PublishRollbackError::Unsupported => target_unsupported(),
                 target_contract::PublishRollbackError::PluginNotFound => not_found(),
                 target_contract::PublishRollbackError::Conflict => conflict(),

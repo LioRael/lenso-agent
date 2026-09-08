@@ -349,6 +349,25 @@ impl fmt::Debug for AppAgentPluginManagementTarget {
     }
 }
 
+// A remote request failure says nothing about this Plugin's local health.
+// Bound the entire exchange (including response bodies), and never retry mutations:
+// a lost publication response may mean the target already committed the change.
+fn isolate_target_request<T, E>(
+    unavailable: E,
+    request: impl std::future::Future<Output = Result<Result<T, E>, RuntimeFailure>> + Send + 'static,
+) -> futures::future::BoxFuture<'static, Result<Result<T, E>, RuntimeFailure>>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+{
+    Box::pin(async move {
+        match tokio::time::timeout(REQUEST_TIMEOUT, request).await {
+            Ok(Ok(result)) => Ok(result),
+            Ok(Err(_)) | Err(_) => Ok(Err(unavailable)),
+        }
+    })
+}
+
 impl PluginManagementTarget for AppAgentPluginManagementTarget {
     fn history(
         &self,
@@ -359,7 +378,7 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::HistoryError::TargetNotFound,
             contract::HistoryError::Unsupported,
         );
-        Box::pin(async move {
+        isolate_target_request(contract::HistoryError::TargetUnavailable, async move {
             let agent = match target {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error)),
@@ -406,7 +425,7 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::InspectError::TargetNotFound,
             contract::InspectError::Unsupported,
         );
-        Box::pin(async move {
+        isolate_target_request(contract::InspectError::TargetUnavailable, async move {
             let agent = match target {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error)),
@@ -473,7 +492,7 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::ProposeError::TargetNotFound,
             contract::ProposeError::Unsupported,
         );
-        Box::pin(async move {
+        isolate_target_request(contract::ProposeError::TargetUnavailable, async move {
             let agent = match target {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error)),
@@ -530,35 +549,38 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::ProposeRollbackError::TargetNotFound,
             contract::ProposeRollbackError::Unsupported,
         );
-        Box::pin(async move {
-            let agent = match target {
-                Ok(agent) => agent,
-                Err(error) => return Ok(Err(error)),
-            };
-            let fence = match configuration_fence(
-                &agent,
-                &request.plugin_id,
-                &request.instance,
-                &request.expected_revision,
-            )
-            .await?
-            {
-                Ok(fence) => fence,
-                Err(error) => return Ok(Err(map_propose_rollback_fence(error))),
-            };
-            if !fence.rollback_proposals {
-                return Ok(Err(contract::ProposeRollbackError::Unsupported));
-            }
-            let rollback = match request_rollback_proposal(&agent, &request, &fence).await {
-                Ok(value) => value,
-                Err(TargetRequestError::Domain(status)) => {
-                    return Ok(Err(map_propose_rollback_status(status)));
+        isolate_target_request(
+            contract::ProposeRollbackError::TargetUnavailable,
+            async move {
+                let agent = match target {
+                    Ok(agent) => agent,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let fence = match configuration_fence(
+                    &agent,
+                    &request.plugin_id,
+                    &request.instance,
+                    &request.expected_revision,
+                )
+                .await?
+                {
+                    Ok(fence) => fence,
+                    Err(error) => return Ok(Err(map_propose_rollback_fence(error))),
+                };
+                if !fence.rollback_proposals {
+                    return Ok(Err(contract::ProposeRollbackError::Unsupported));
                 }
-                Err(TargetRequestError::Runtime(error)) => return Err(error),
-            };
-            validate_rollback_proposal(&rollback, &request, &fence)?;
-            Ok(Ok(rollback.into_contract(request.agent_id)))
-        })
+                let rollback = match request_rollback_proposal(&agent, &request, &fence).await {
+                    Ok(value) => value,
+                    Err(TargetRequestError::Domain(status)) => {
+                        return Ok(Err(map_propose_rollback_status(status)));
+                    }
+                    Err(TargetRequestError::Runtime(error)) => return Err(error),
+                };
+                validate_rollback_proposal(&rollback, &request, &fence)?;
+                Ok(Ok(rollback.into_contract(request.agent_id)))
+            },
+        )
     }
 
     fn publish(
@@ -570,7 +592,7 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::PublishError::TargetNotFound,
             contract::PublishError::Unsupported,
         );
-        Box::pin(async move {
+        isolate_target_request(contract::PublishError::TargetUnavailable, async move {
             let agent = match target {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error)),
@@ -635,87 +657,91 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::PublishRollbackError::TargetNotFound,
             contract::PublishRollbackError::Unsupported,
         );
-        Box::pin(async move {
-            let agent = match target {
-                Ok(agent) => agent,
-                Err(error) => return Ok(Err(error)),
-            };
-            let fence = match configuration_fence(
-                &agent,
-                &request.plugin_id,
-                &request.instance,
-                &request.expected_revision,
-            )
-            .await?
-            {
-                Ok(fence) => fence,
-                Err(error) => return Ok(Err(map_publish_rollback_fence(error))),
-            };
-            if !fence.rollback_proposals {
-                return Ok(Err(contract::PublishRollbackError::Unsupported));
-            }
-            let proposal_request = contract::ProposeRollbackRequest {
-                agent_id: request.agent_id.clone(),
-                expected_revision: request.expected_revision.clone(),
-                instance: request.instance.clone(),
-                plugin_id: request.plugin_id.clone(),
-                publication_proposal_digest: request.publication_proposal_digest.clone(),
-            };
-            let rollback = match request_rollback_proposal(&agent, &proposal_request, &fence).await
-            {
-                Ok(value) => value,
-                Err(TargetRequestError::Domain(status)) => {
-                    return Ok(Err(map_publish_rollback_status(status)));
-                }
-                Err(TargetRequestError::Runtime(error)) => return Err(error),
-            };
-            validate_rollback_proposal(&rollback, &proposal_request, &fence)?;
-            if rollback.proposal.proposal_digest != request.proposal_digest {
-                return Ok(Err(contract::PublishRollbackError::ProposalMismatch));
-            }
-            if rollback.proposal.status != "ready" || rollback.proposal.application == "blocked" {
-                return Ok(Err(contract::PublishRollbackError::ProposalNotReady));
-            }
-            let publication: PublicationResponse = match send_json(
-                &agent,
-                Method::PUT,
-                &[
-                    "control",
-                    "plugins",
+        isolate_target_request(
+            contract::PublishRollbackError::TargetUnavailable,
+            async move {
+                let agent = match target {
+                    Ok(agent) => agent,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let fence = match configuration_fence(
+                    &agent,
                     &request.plugin_id,
                     &request.instance,
-                    "configuration",
-                ],
-                serde_json::json!({
-                    "expectedRevision": request.expected_revision,
-                    "expectedSourceDigest": fence.source_digest,
-                    "expectedStreamId": fence.stream_id,
-                    "proposalDigest": request.proposal_digest,
-                    "rollbackOfProposalDigest": request.publication_proposal_digest,
-                    "toml": rollback.configuration_toml,
-                }),
-                "publish rollback",
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(TargetRequestError::Domain(status)) => {
-                    return Ok(Err(map_publish_rollback_status(status)));
+                    &request.expected_revision,
+                )
+                .await?
+                {
+                    Ok(fence) => fence,
+                    Err(error) => return Ok(Err(map_publish_rollback_fence(error))),
+                };
+                if !fence.rollback_proposals {
+                    return Ok(Err(contract::PublishRollbackError::Unsupported));
                 }
-                Err(TargetRequestError::Runtime(error)) => return Err(error),
-            };
-            validate_rollback_publication(&publication, &request, &fence)?;
-            Ok(Ok(contract::PublishRollbackResponse {
-                agent_id: request.agent_id,
-                authority: publication.configuration_authority.into(),
-                base_revision: publication.base_revision,
-                base_source_digest: publication.base_source_digest,
-                proposal_digest: publication.proposal_digest,
-                revision: publication.revision,
-                rollback_of_proposal_digest: request.publication_proposal_digest,
-                schema: publication.publication_schema,
-            }))
-        })
+                let proposal_request = contract::ProposeRollbackRequest {
+                    agent_id: request.agent_id.clone(),
+                    expected_revision: request.expected_revision.clone(),
+                    instance: request.instance.clone(),
+                    plugin_id: request.plugin_id.clone(),
+                    publication_proposal_digest: request.publication_proposal_digest.clone(),
+                };
+                let rollback =
+                    match request_rollback_proposal(&agent, &proposal_request, &fence).await {
+                        Ok(value) => value,
+                        Err(TargetRequestError::Domain(status)) => {
+                            return Ok(Err(map_publish_rollback_status(status)));
+                        }
+                        Err(TargetRequestError::Runtime(error)) => return Err(error),
+                    };
+                validate_rollback_proposal(&rollback, &proposal_request, &fence)?;
+                if rollback.proposal.proposal_digest != request.proposal_digest {
+                    return Ok(Err(contract::PublishRollbackError::ProposalMismatch));
+                }
+                if rollback.proposal.status != "ready" || rollback.proposal.application == "blocked"
+                {
+                    return Ok(Err(contract::PublishRollbackError::ProposalNotReady));
+                }
+                let publication: PublicationResponse = match send_json(
+                    &agent,
+                    Method::PUT,
+                    &[
+                        "control",
+                        "plugins",
+                        &request.plugin_id,
+                        &request.instance,
+                        "configuration",
+                    ],
+                    serde_json::json!({
+                        "expectedRevision": request.expected_revision,
+                        "expectedSourceDigest": fence.source_digest,
+                        "expectedStreamId": fence.stream_id,
+                        "proposalDigest": request.proposal_digest,
+                        "rollbackOfProposalDigest": request.publication_proposal_digest,
+                        "toml": rollback.configuration_toml,
+                    }),
+                    "publish rollback",
+                )
+                .await
+                {
+                    Ok(value) => value,
+                    Err(TargetRequestError::Domain(status)) => {
+                        return Ok(Err(map_publish_rollback_status(status)));
+                    }
+                    Err(TargetRequestError::Runtime(error)) => return Err(error),
+                };
+                validate_rollback_publication(&publication, &request, &fence)?;
+                Ok(Ok(contract::PublishRollbackResponse {
+                    agent_id: request.agent_id,
+                    authority: publication.configuration_authority.into(),
+                    base_revision: publication.base_revision,
+                    base_source_digest: publication.base_source_digest,
+                    proposal_digest: publication.proposal_digest,
+                    revision: publication.revision,
+                    rollback_of_proposal_digest: request.publication_proposal_digest,
+                    schema: publication.publication_schema,
+                }))
+            },
+        )
     }
 
     fn set_enabled(
@@ -727,7 +753,7 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::SetEnabledError::TargetNotFound,
             contract::SetEnabledError::Unsupported,
         );
-        Box::pin(async move {
+        isolate_target_request(contract::SetEnabledError::TargetUnavailable, async move {
             let agent = match target {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error)),
@@ -818,7 +844,7 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::CatalogError::TargetNotFound,
             contract::CatalogError::Unsupported,
         );
-        Box::pin(async move {
+        isolate_target_request(contract::CatalogError::TargetUnavailable, async move {
             let agent = match target {
                 Ok(agent) => agent,
                 Err(error) => return Ok(Err(error)),
@@ -877,19 +903,22 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::ProposeInstallError::TargetNotFound,
             contract::ProposeInstallError::Unsupported,
         );
-        Box::pin(async move {
-            let agent = match target {
-                Ok(agent) => agent,
-                Err(error) => return Ok(Err(error)),
-            };
-            let response: InstallProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-installations", "proposals"], serde_json::json!({"catalogEntryId": request.catalog_entry_id, "expectedRevision": request.expected_revision}), "propose install").await {
+        isolate_target_request(
+            contract::ProposeInstallError::TargetUnavailable,
+            async move {
+                let agent = match target {
+                    Ok(agent) => agent,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let response: InstallProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-installations", "proposals"], serde_json::json!({"catalogEntryId": request.catalog_entry_id, "expectedRevision": request.expected_revision}), "propose install").await {
                 Ok(value) => value,
                 Err(TargetRequestError::Domain(status)) => return Ok(Err(map_propose_install_status(status))),
                 Err(TargetRequestError::Runtime(error)) => return Err(error),
             };
-            validate_install_proposal(&response, &request)?;
-            Ok(Ok(response.into_contract(request.agent_id)))
-        })
+                validate_install_proposal(&response, &request)?;
+                Ok(Ok(response.into_contract(request.agent_id)))
+            },
+        )
     }
 
     fn publish_install(
@@ -901,27 +930,30 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::PublishInstallError::TargetNotFound,
             contract::PublishInstallError::Unsupported,
         );
-        Box::pin(async move {
-            let agent = match target {
-                Ok(agent) => agent,
-                Err(error) => return Ok(Err(error)),
-            };
-            let checked: InstallProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-installations", "proposals"], serde_json::json!({"catalogEntryId": request.catalog_entry_id, "expectedRevision": request.expected_revision}), "recheck install").await {
+        isolate_target_request(
+            contract::PublishInstallError::TargetUnavailable,
+            async move {
+                let agent = match target {
+                    Ok(agent) => agent,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let checked: InstallProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-installations", "proposals"], serde_json::json!({"catalogEntryId": request.catalog_entry_id, "expectedRevision": request.expected_revision}), "recheck install").await {
                 Ok(value) => value,
                 Err(TargetRequestError::Domain(status)) => return Ok(Err(map_publish_install_status(status))),
                 Err(TargetRequestError::Runtime(error)) => return Err(error),
             };
-            if checked.proposal_digest != request.proposal_digest {
-                return Ok(Err(contract::PublishInstallError::ProposalMismatch));
-            }
-            let response: InstallPublicationResponse = match send_json(&agent, Method::POST, &["control", "plugin-installations", "publications"], serde_json::json!({"catalogEntryId": request.catalog_entry_id, "expectedRevision": request.expected_revision, "proposalDigest": request.proposal_digest}), "publish install").await {
+                if checked.proposal_digest != request.proposal_digest {
+                    return Ok(Err(contract::PublishInstallError::ProposalMismatch));
+                }
+                let response: InstallPublicationResponse = match send_json(&agent, Method::POST, &["control", "plugin-installations", "publications"], serde_json::json!({"catalogEntryId": request.catalog_entry_id, "expectedRevision": request.expected_revision, "proposalDigest": request.proposal_digest}), "publish install").await {
                 Ok(value) => value,
                 Err(TargetRequestError::Domain(status)) => return Ok(Err(map_publish_install_status(status))),
                 Err(TargetRequestError::Runtime(error)) => return Err(error),
             };
-            validate_install_publication(&response, &request)?;
-            Ok(Ok(response.into_contract(request.agent_id)))
-        })
+                validate_install_publication(&response, &request)?;
+                Ok(Ok(response.into_contract(request.agent_id)))
+            },
+        )
     }
 
     fn propose_removal(
@@ -933,19 +965,22 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::ProposeRemovalError::TargetNotFound,
             contract::ProposeRemovalError::Unsupported,
         );
-        Box::pin(async move {
-            let agent = match target {
-                Ok(agent) => agent,
-                Err(error) => return Ok(Err(error)),
-            };
-            let response: RemovalProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-removals", "proposals"], serde_json::json!({"expectedRevision": request.expected_revision, "pluginId": request.plugin_id}), "propose removal").await {
+        isolate_target_request(
+            contract::ProposeRemovalError::TargetUnavailable,
+            async move {
+                let agent = match target {
+                    Ok(agent) => agent,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let response: RemovalProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-removals", "proposals"], serde_json::json!({"expectedRevision": request.expected_revision, "pluginId": request.plugin_id}), "propose removal").await {
                 Ok(value) => value,
                 Err(TargetRequestError::Domain(status)) => return Ok(Err(map_propose_removal_status(status))),
                 Err(TargetRequestError::Runtime(error)) => return Err(error),
             };
-            validate_removal_proposal(&response, &request)?;
-            Ok(Ok(response.into_contract(request.agent_id)))
-        })
+                validate_removal_proposal(&response, &request)?;
+                Ok(Ok(response.into_contract(request.agent_id)))
+            },
+        )
     }
 
     fn publish_removal(
@@ -957,27 +992,30 @@ impl PluginManagementTarget for AppAgentPluginManagementTarget {
             contract::PublishRemovalError::TargetNotFound,
             contract::PublishRemovalError::Unsupported,
         );
-        Box::pin(async move {
-            let agent = match target {
-                Ok(agent) => agent,
-                Err(error) => return Ok(Err(error)),
-            };
-            let checked: RemovalProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-removals", "proposals"], serde_json::json!({"expectedRevision": request.expected_revision, "pluginId": request.plugin_id}), "recheck removal").await {
+        isolate_target_request(
+            contract::PublishRemovalError::TargetUnavailable,
+            async move {
+                let agent = match target {
+                    Ok(agent) => agent,
+                    Err(error) => return Ok(Err(error)),
+                };
+                let checked: RemovalProposalResponse = match send_json(&agent, Method::POST, &["control", "plugin-removals", "proposals"], serde_json::json!({"expectedRevision": request.expected_revision, "pluginId": request.plugin_id}), "recheck removal").await {
                 Ok(value) => value,
                 Err(TargetRequestError::Domain(status)) => return Ok(Err(map_publish_removal_status(status))),
                 Err(TargetRequestError::Runtime(error)) => return Err(error),
             };
-            if checked.proposal_digest != request.proposal_digest {
-                return Ok(Err(contract::PublishRemovalError::ProposalMismatch));
-            }
-            let response: RemovalPublicationResponse = match send_json(&agent, Method::POST, &["control", "plugin-removals", "publications"], serde_json::json!({"expectedRevision": request.expected_revision, "pluginId": request.plugin_id, "proposalDigest": request.proposal_digest}), "publish removal").await {
+                if checked.proposal_digest != request.proposal_digest {
+                    return Ok(Err(contract::PublishRemovalError::ProposalMismatch));
+                }
+                let response: RemovalPublicationResponse = match send_json(&agent, Method::POST, &["control", "plugin-removals", "publications"], serde_json::json!({"expectedRevision": request.expected_revision, "pluginId": request.plugin_id, "proposalDigest": request.proposal_digest}), "publish removal").await {
                 Ok(value) => value,
                 Err(TargetRequestError::Domain(status)) => return Ok(Err(map_publish_removal_status(status))),
                 Err(TargetRequestError::Runtime(error)) => return Err(error),
             };
-            validate_removal_publication(&response, &request)?;
-            Ok(Ok(response.into_contract(request.agent_id)))
-        })
+                validate_removal_publication(&response, &request)?;
+                Ok(Ok(response.into_contract(request.agent_id)))
+            },
+        )
     }
 }
 
@@ -1931,6 +1969,100 @@ mod tests {
         adapter.plugin_configuration = plugin_configuration;
         adapter.plugin_lifecycle = plugin_lifecycle;
         adapter
+    }
+
+    #[test]
+    fn console_consumes_the_host_serialization_fixture() {
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/plugin-control-contract.json"
+        ))
+        .unwrap();
+        let management: ManagementResponse =
+            serde_json::from_value(fixture["management"].clone()).unwrap();
+        validate_management(&management).unwrap();
+        assert_eq!(management.binding_count, 1);
+    }
+
+    #[tokio::test]
+    async fn remote_inspection_failures_are_domain_errors_and_recovery_works() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mode = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_mode = mode.clone();
+        let server_calls = calls.clone();
+        let router = axum::Router::new().route(
+            "/api/console/v1/agent/control/plugins",
+            axum::routing::get(move || {
+                let mode = server_mode.clone();
+                let calls = server_calls.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let mut body = serde_json::json!({
+                        "schema": "lenso.agent.plugin-management.v1",
+                        "revision": "revision", "bindingCount": 7,
+                        "configurationAuthority": { "kind": "sqlite_configuration_store", "reference": "agent" },
+                        "plugins": []
+                    });
+                    match mode.load(Ordering::SeqCst) {
+                        0 => { body.as_object_mut().unwrap().remove("bindingCount"); }
+                        1 => return (StatusCode::OK, "invalid json".to_owned()),
+                        2 => return (StatusCode::SERVICE_UNAVAILABLE, String::new()),
+                        3 => body["schema"] = "wrong.schema".into(),
+                        4 => tokio::time::sleep(Duration::from_millis(100)).await,
+                        _ => {}
+                    }
+                    (StatusCode::OK, body.to_string())
+                }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let mut adapter = AppAgentAdapter::parse(&format!("app=http://{address}")).unwrap();
+        adapter.client = reqwest::Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap();
+        let target = AppAgentPluginManagementTarget::new(vec![adapter]);
+        for failure in 0..5 {
+            mode.store(failure, Ordering::SeqCst);
+            let request = || contract::InspectRequest {
+                agent_id: "app".to_owned(),
+            };
+            let (first, second) =
+                tokio::join!(target.inspect(request()), target.inspect(request()));
+            for result in [first, second] {
+                assert!(
+                    matches!(result, Ok(Err(contract::InspectError::TargetUnavailable))),
+                    "remote failure must not escape as a fatal Plugin error: {result:?}"
+                );
+            }
+            mode.store(5, Ordering::SeqCst);
+            assert_eq!(
+                target
+                    .inspect(request())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .binding_count,
+                7
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            15,
+            "no automatic request retries"
+        );
+        server.abort();
+        let result = target
+            .inspect(contract::InspectRequest {
+                agent_id: "app".to_owned(),
+            })
+            .await;
+        assert!(matches!(
+            result,
+            Ok(Err(contract::InspectError::TargetUnavailable))
+        ));
     }
 
     #[test]

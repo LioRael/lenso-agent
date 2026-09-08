@@ -1949,6 +1949,7 @@ fn copy_file(source: &Path, destination: &Path) -> Result<(), String> {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct PluginManagementResponse {
+    binding_count: usize,
     configuration_authority: PluginConfigurationAuthorityResponse,
     plugins: Vec<ManagedPlugin>,
     revision: String,
@@ -2096,6 +2097,7 @@ struct ManagedPluginInstance {
 
 #[derive(Debug)]
 struct ProfileManagementAuthority {
+    binding_count: usize,
     app_root: PathBuf,
     disabled: BTreeSet<String>,
     enabled: BTreeSet<String>,
@@ -2196,6 +2198,7 @@ impl ProfileManagementAuthority {
         }
         Ok(Self {
             app_root: app_root.to_path_buf(),
+            binding_count: desired.plan().capability_bindings().len(),
             disabled,
             enabled,
             host_defaults,
@@ -2221,6 +2224,7 @@ impl ProfileManagementAuthority {
             instances.entry(plugin_id).or_default().push(instance);
         }
         Ok(PluginManagementResponse {
+            binding_count: self.binding_count,
             configuration_authority,
             plugins: self
                 .releases
@@ -2302,6 +2306,7 @@ fn split_plugin_instance_id(id: &str) -> (&str, &str) {
 impl From<&PluginRootAuthoringState> for PluginManagementResponse {
     fn from(state: &PluginRootAuthoringState) -> Self {
         Self {
+            binding_count: state.resolved().plan().capability_bindings().len(),
             configuration_authority: PluginConfigurationAuthoritySource::new(
                 "local_plugin_root",
                 "app",
@@ -3433,6 +3438,7 @@ mod tests {
             rollback_proposals: true,
         };
         let management = PluginManagementResponse {
+            binding_count: 1,
             configuration_authority: authority.clone(),
             plugins: vec![ManagedPlugin {
                 configuration_defaults: serde_json::json!({ "enabled": false }),
@@ -3465,6 +3471,12 @@ mod tests {
                 reference: "agent".to_owned(),
             }),
         };
+        assert!(
+            serde_json::to_value(&management).unwrap()["bindingCount"]
+                .as_u64()
+                .is_some(),
+            "Console inspect requires bindingCount"
+        );
         let proposal = PluginConfigurationProposalResponse {
             application: "app_generation",
             base_revision: "sha256:root-active".to_owned(),

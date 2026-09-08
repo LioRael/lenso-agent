@@ -68,3 +68,18 @@ each candidate carries the revision used to derive it.
 Provider code, configuration, permission, resource, and Plugin Root changes
 still cross the Generation Ready Gate. Catalog refresh does not add timers or
 mutable graph behavior to the Kernel.
+
+## Readiness latency
+
+When periodic refresh is enabled, the direct Codex Provider restores an
+account- and endpoint-matching validated cache within `catalog_max_stale_seconds`
+without awaiting the network at every Generation activation. Restored facts are
+explicitly marked `cache` / `stale`; restoration never advances the retained
+fetch timestamp. The managed refresh task revalidates immediately in the
+background, then follows the configured interval. Each Turn still freezes its
+admitted facts.
+
+Missing, invalid, future-dated, mismatched, expired, or disabled caches follow
+the authenticated acquisition path before Ready. Disabling periodic refresh
+also keeps acquisition synchronous. This changes readiness scheduling, not the
+configured maximum cache age or the authority of remote model execution.
