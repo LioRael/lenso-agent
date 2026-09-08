@@ -12,7 +12,7 @@ mod official_prompts;
 mod online_generation;
 mod plugin_configuration_authority;
 mod plugin_root;
-mod profile;
+pub mod profile;
 pub mod provenance;
 mod provider_catalog;
 mod runtime_state;

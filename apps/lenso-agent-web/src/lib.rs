@@ -305,6 +305,7 @@ struct WebRuntime {
     sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
     plugin_control: Option<PluginControl>,
     plugin_mutations: PluginMutationCoordinator,
+    profile_revision: Arc<RwLock<Option<String>>>,
 }
 
 #[derive(Clone)]
@@ -474,6 +475,7 @@ enum RuntimeCommand {
         title: String,
     },
     SelectProfile {
+        expected_revision: Option<String>,
         profile: Option<String>,
         reply: oneshot::Sender<Result<SelectedProfileResponse, String>>,
     },
@@ -533,6 +535,8 @@ struct WebTerminalRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SelectProfileRequest {
+    #[serde(default)]
+    expected_revision: Option<String>,
     profile: Option<String>,
 }
 
@@ -1253,6 +1257,10 @@ fn router(runtime: WebRuntime) -> Router {
             post(select_profile),
         )
         .route(
+            "/api/console/v1/agent/control/profiles",
+            get(list_editable_profiles).post(save_editable_profile),
+        )
+        .route(
             "/api/console/v1/agent/control/profiles/import",
             post(import_profiles),
         )
@@ -1475,6 +1483,7 @@ async fn bootstrap(
                     && (runtime.sqlite_profiles.is_none() || coding_profiles),
             ),
             ("profileImport", coding_profiles),
+            ("profileEditing", runtime.sqlite_profiles.is_some()),
         ]
         .into_iter()
         .collect(),
@@ -1544,6 +1553,40 @@ async fn import_profiles(
     ))
 }
 
+async fn list_editable_profiles(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let authority = runtime
+        .sqlite_profiles
+        .clone()
+        .ok_or_else(|| ApiProblem::conflict("Profile editing requires SQLite management"))?;
+    let profiles = tokio::task::spawn_blocking(move || authority.profiles())
+        .await
+        .map_err(|_| ApiProblem::unavailable("Profile worker stopped"))?
+        .map_err(|error| ApiProblem::conflict(error.to_string()))?;
+    Ok(Json(
+        serde_json::json!({"profiles": profiles, "activeProfile": runtime.plugin_control.as_ref().and_then(PluginControl::snapshot_profile), "activeRevision": *runtime.profile_revision.read().unwrap_or_else(std::sync::PoisonError::into_inner)}),
+    ))
+}
+async fn save_editable_profile(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<configuration_store::profiles::SaveProfile>,
+) -> Result<Json<configuration_store::profiles::EditableProfile>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let authority = runtime
+        .sqlite_profiles
+        .clone()
+        .ok_or_else(|| ApiProblem::conflict("Profile editing requires SQLite management"))?;
+    tokio::task::spawn_blocking(move || authority.save_profile(request))
+        .await
+        .map_err(|_| ApiProblem::unavailable("Profile worker stopped"))?
+        .map(Json)
+        .map_err(|error| ApiProblem::conflict(error.to_string()))
+}
+
 async fn select_profile(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
@@ -1554,13 +1597,6 @@ async fn select_profile(
         return Err(ApiProblem::conflict(
             "Profile selection requires a supported local or SQLite configuration authority",
         ));
-    }
-    if let Some(authority) = runtime.sqlite_profiles.clone() {
-        let profile = request.profile.clone();
-        tokio::task::spawn_blocking(move || authority.validate_managed_profile(profile.as_deref()))
-            .await
-            .map_err(|_| ApiProblem::unavailable("Profile validation worker stopped"))?
-            .map_err(|error| ApiProblem::conflict(error.to_string()))?;
     }
     if request
         .profile
@@ -1574,6 +1610,7 @@ async fn select_profile(
         .commands
         .send(RuntimeCommand::SelectProfile {
             profile: request.profile,
+            expected_revision: request.expected_revision,
             reply,
         })
         .await
@@ -2078,6 +2115,14 @@ impl WebRuntime {
         let configuration_authority = plugin_control
             .as_ref()
             .map(PluginControl::configuration_authority_response);
+        let profile_revision = Arc::new(RwLock::new(sqlite_profiles.as_ref().and_then(
+            |authority| {
+                authority
+                    .profile_revision(profile.as_deref())
+                    .ok()
+                    .flatten()
+            },
+        )));
         tokio::task::spawn_local(runtime_actor(
             app,
             receiver,
@@ -2085,6 +2130,8 @@ impl WebRuntime {
             Arc::clone(&policy),
             configuration_authority,
             RuntimeProfileState {
+                sqlite_profiles: sqlite_profiles.clone(),
+                profile_revision: profile_revision.clone(),
                 control: plugin_control.clone(),
                 available_tools: Arc::clone(&available_tools),
             },
@@ -2095,6 +2142,7 @@ impl WebRuntime {
                 .ok()
                 .and_then(|path| path.to_str().map(str::to_owned))
                 .map(|path| WebWorkspace { path }),
+            profile_revision,
             access: access.into(),
             available_tools,
             commands,
@@ -2221,6 +2269,8 @@ fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
 }
 
 struct RuntimeProfileState {
+    sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
+    profile_revision: Arc<RwLock<Option<String>>>,
     control: Option<PluginControl>,
     available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
 }
@@ -2432,11 +2482,41 @@ async fn runtime_actor(
                 handle_rename_command(&app, session_id, title, expected_title_revision, reply)
                     .await;
             }
-            RuntimeCommand::SelectProfile { profile, reply } => {
+            RuntimeCommand::SelectProfile {
+                profile,
+                expected_revision,
+                reply,
+            } => {
+                if let Some(authority) = &profile_state.sqlite_profiles {
+                    let authority = Arc::clone(authority);
+                    let selected = profile.clone();
+                    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        if let Some(name) = selected.as_deref() {
+                            authority.materialize_profile(name, expected_revision.as_deref())?;
+                        }
+                        authority.validate_managed_profile(selected.as_deref())
+                    })
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .and_then(std::convert::identity);
+                    if let Err(error) = result {
+                        let _ = reply.send(Err(error.to_string()));
+                        continue;
+                    }
+                }
                 let result = match app.select_profile(profile).await {
                     Err(error) => Err(error),
                     Ok(()) => {
                         let profile = app.selected_profile();
+                        if let Some(authority) = &profile_state.sqlite_profiles {
+                            *profile_state
+                                .profile_revision
+                                .write()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) = authority
+                                .profile_revision(profile.as_deref())
+                                .ok()
+                                .flatten();
+                        }
                         if let Some(control) = &profile_state.control {
                             control.update_managed_profile(profile.clone());
                         }
@@ -3666,6 +3746,7 @@ mod tests {
         let (commands, _receiver) = mpsc::channel(1);
         WebRuntime {
             workspace: None,
+            profile_revision: Arc::new(RwLock::new(None)),
             access: access.into(),
             available_tools: Arc::new(RwLock::new(Vec::new())),
             commands,
@@ -4461,6 +4542,7 @@ mod tests {
                     State(surface.runtime.clone()),
                     HeaderMap::new(),
                     Json(SelectProfileRequest {
+                        expected_revision: None,
                         profile: Some("code".to_owned()),
                     }),
                 )

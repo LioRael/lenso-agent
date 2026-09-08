@@ -23,7 +23,15 @@ async fn request(
     let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
         .unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!(
+                "{path}: {status}: {}: {error}",
+                String::from_utf8_lossy(&bytes)
+            )
+        }),
+    )
 }
 
 async fn turn_events(surface: &AgentWebSurface, id: &str, allowed: Option<Vec<&str>>) -> String {
@@ -281,4 +289,73 @@ async fn text_attachment_survives_restart_and_is_session_scoped() {
         assert_ne!(request(&surface,"GET",&format!("sessions/other/attachments/{digest}"),serde_json::Value::Null).await.0, StatusCode::OK);
         surface.shutdown().await.unwrap();
     })).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn sqlite_profile_editor_separates_drafts_from_active_generations() {
+    let root = tempfile::tempdir().unwrap();
+    configure_test_fixture_model(root.path());
+    Box::pin(tokio::task::LocalSet::new().run_until(async {
+        let surface = AgentWebSurface::start(config(root.path())).await.unwrap();
+        let (status, catalog) = request(&surface, "GET", "control/profiles", serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{catalog}");
+        let mut document = catalog["profiles"].as_array().unwrap().iter().find(|p| p["name"] == "default").unwrap()["document"].clone();
+        document["allowed_tools"] = serde_json::json!([]);
+        document["instructions"] = serde_json::json!("Always explain your assumptions.");
+        let payload = serde_json::json!({"name":"review", "expectedRevision":null,"document":document});
+        let (status, saved) = request(&surface, "POST", "control/profiles", payload.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{saved}");
+        assert!(!root.path().join("profiles/review.toml").exists(), "Saving must not materialize a live Profile");
+        assert_eq!(request(&surface, "POST", "control/profiles", payload).await.0, StatusCode::CONFLICT);
+        let (status, applied) = request(&surface,"POST","control/profile",serde_json::json!({"profile":"review", "expectedRevision":saved["revision"]})).await;
+        assert_eq!(status, StatusCode::OK, "{applied}");
+        let active_file = std::fs::read_to_string(root.path().join("profiles/review.toml")).unwrap();
+        assert!(active_file.contains("Always explain"));
+        let events = turn_events(&surface, "profile-editor-turn", Some(vec![])).await;
+        assert!(!events.contains("tool_call_started"), "{events}");
+        let (_, policy) = request(&surface, "GET", "control/tool-policy", serde_json::Value::Null).await;
+        assert_eq!(request(&surface, "PUT", "control/tool-policy", serde_json::json!({"expectedRevision": policy["revision"], "allowed": ["read"]})).await.0, StatusCode::OK);
+        let response = surface.router().oneshot(axum::http::Request::builder().method("POST")
+            .uri("/api/console/v1/agent/turns").header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::json!({"request_id":"profile-ceiling", "input":"Read README.md twice with parallel approval.", "allowed_tools":["read"]}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1048576).await.unwrap();
+        let denied = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(denied.contains("outside the immutable Run Scope"), "A Profile must narrow even an explicit caller grant: {denied}");
+        assert!(denied.contains("tool_not_allowed"), "{denied}");
+        let resumed = turn_events(&surface, "profile-after-denied-tool", Some(vec![])).await;
+        assert!(resumed.contains("turn.completed"), "A rejected Tool must not retire the Agent: {resumed}");
+
+        document["instructions"] = serde_json::json!("Keep replies concise.");
+        let (status, next) = request(&surface,"POST","control/profiles",serde_json::json!({"name":"review","expectedRevision":saved["revision"],"document":document})).await;
+        assert_eq!(status, StatusCode::OK,"{next}");
+        assert_eq!(std::fs::read_to_string(root.path().join("profiles/review.toml")).unwrap(), active_file);
+        let (_, catalog) = request(&surface,"GET","control/profiles",serde_json::Value::Null).await;
+        assert_eq!(catalog["activeRevision"], saved["revision"]);
+        assert_eq!(request(&surface,"POST","control/profile",serde_json::json!({"profile":"review","expectedRevision":saved["revision"]})).await.0, StatusCode::CONFLICT);
+        assert_eq!(request(&surface,"POST","control/profile",serde_json::json!({"profile":"review","expectedRevision":next["revision"]})).await.0, StatusCode::OK);
+        document["instances"] = serde_json::json!(["missing.plugin/unknown"]);
+        let invalid = request(&surface,"POST","control/profiles",serde_json::json!({"name":"review","expectedRevision":next["revision"],"document":document})).await;
+        assert_eq!(invalid.0, StatusCode::CONFLICT,"{}",invalid.1);
+    })).await;
+    Box::pin(tokio::task::LocalSet::new().run_until(async {
+        let mut restart = config(root.path());
+        restart.profile = Some("review".to_owned());
+        let restarted = AgentWebSurface::start(restart).await.unwrap();
+        let (_, catalog) = request(
+            &restarted,
+            "GET",
+            "control/profiles",
+            serde_json::Value::Null,
+        )
+        .await;
+        assert_eq!(catalog["activeProfile"], "review");
+        assert!(
+            catalog["activeRevision"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+    }))
+    .await;
 }
