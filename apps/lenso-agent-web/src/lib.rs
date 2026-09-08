@@ -1969,10 +1969,8 @@ async fn resolve_tool_policy(
     app: &AgentApp,
     allowed_tools: &[String],
 ) -> Result<Vec<BootstrapTool>, String> {
-    let turn = app.lease_web_turn().await?;
-    let mut available_tools = turn
-        .tool_catalog()
-        .await?
+    let (_, available) = app.settings_tool_catalog().await?;
+    let mut available_tools = available
         .into_iter()
         .map(|tool| BootstrapTool {
             description: tool.description,
@@ -2009,11 +2007,8 @@ async fn agent_tool_catalog_on_app(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    let turn = app.lease_web_turn().await?;
-    let generation = turn.generation_spec_digest().to_owned();
-    let mut tools = turn
-        .tool_catalog()
-        .await?
+    let (generation, available) = app.settings_tool_catalog().await?;
+    let mut tools = available
         .into_iter()
         .filter(|tool| allowed.contains(&tool.name))
         .collect::<Vec<_>>();

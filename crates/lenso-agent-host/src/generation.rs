@@ -624,6 +624,26 @@ impl AgentApp {
             .retained_plan(generation_spec_digest)
     }
 
+    /// Reads tools for Settings/bootstrap without requiring an inference-ready model.
+    pub async fn settings_tool_catalog(
+        &self,
+    ) -> Result<(String, Vec<CatalogResponseToolsItem>), String> {
+        let route = self.host.route().await.map_err(control_error)?;
+        let plan = self
+            .retained_generation_plan(route.generation_spec_digest())
+            .ok_or_else(|| "active Generation has no retained Plan".to_owned())?;
+        let agent = selected_surface_agent_provider(&plan)?;
+        let response = route
+            .target()
+            .handle::<ToolsCatalog>(&agent)
+            .map_err(|error| format!("Tool catalog route is unavailable: {error:?}"))?
+            .invoke(CATALOG_OPERATION, CatalogRequest {})
+            .await
+            .map_err(|error| format!("Tool catalog snapshot failed: {error:?}"))?
+            .map_err(|error| format!("Tool catalog snapshot was rejected: {error:?}"))?;
+        Ok((route.generation_spec_digest().to_owned(), response.tools))
+    }
+
     /// Projects the linked Model Providers and the exact selection in this App.
     pub async fn provider_model_catalog(&self) -> Result<crate::ProviderModelCatalog, String> {
         let route = self.host.route().await.map_err(control_error)?;
