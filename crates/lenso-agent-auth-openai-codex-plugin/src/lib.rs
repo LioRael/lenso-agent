@@ -238,7 +238,10 @@ impl CodexAuth {
         Ok(Ok(connection_contract::StatusResponse {
             label: format!("ChatGPT ({})", self.config.profile),
             connected: status.authenticated,
-            methods: vec![connection_contract::LoginMethod::DeviceCode],
+            methods: vec![
+                connection_contract::LoginMethod::BrowserLoopback,
+                connection_contract::LoginMethod::DeviceCode,
+            ],
         }))
     }
 

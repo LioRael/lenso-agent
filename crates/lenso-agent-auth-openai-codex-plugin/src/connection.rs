@@ -5,8 +5,8 @@ use lenso_kernel::RuntimeFailure;
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use super::{
-    DirectAuthOptions, begin_device_login, complete_device_login, direct_logout, now_millis,
-    plugin_failure,
+    DirectAuthOptions, begin_browser_login, begin_device_login, complete_browser_login,
+    complete_device_login, direct_logout, now_millis, plugin_failure,
 };
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -76,9 +76,6 @@ impl ConnectionManager {
         options: DirectAuthOptions,
         request: contract::BeginRequest,
     ) -> Result<Result<contract::BeginResponse, contract::BeginError>, RuntimeFailure> {
-        if !matches!(request.method, contract::LoginMethod::DeviceCode) {
-            return Ok(Err(contract::BeginError::UnsupportedMethod));
-        }
         let mut slot = self.attempt.lock().await;
         if let Some(attempt) = slot.as_mut() {
             attempt.settle().await;
@@ -89,24 +86,55 @@ impl ConnectionManager {
                 return Ok(Err(contract::BeginError::AttemptInProgress));
             }
         }
-        let pending =
-            tokio::time::timeout(Duration::from_secs(30), begin_device_login(options.clone()))
+        let (response, task) = match request.method {
+            contract::LoginMethod::BrowserLoopback => {
+                let pending = begin_browser_login(options.clone()).await
+                    .map_err(|_| plugin_failure("browser sign-in could not start; use device code if the callback port is occupied"))?;
+                let response = contract::BeginResponse {
+                    attempt_id: uuid::Uuid::new_v4().to_string(),
+                    authorization_url: pending.authorization_url.clone(),
+                    user_code: String::new(),
+                    expires_at_millis: now_millis().saturating_add(300_000).to_string(),
+                };
+                let task = tokio::spawn(async move {
+                    matches!(
+                        tokio::time::timeout(
+                            ATTEMPT_TIMEOUT,
+                            complete_browser_login(options, pending)
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    )
+                });
+                (response, task)
+            }
+            contract::LoginMethod::DeviceCode => {
+                let pending = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    begin_device_login(options.clone()),
+                )
                 .await
                 .map_err(|_| plugin_failure("authentication start timed out"))?
                 .map_err(|_| plugin_failure("authentication could not be started"))?;
-        let response = contract::BeginResponse {
-            attempt_id: uuid::Uuid::new_v4().to_string(),
-            authorization_url: pending.verification_url.clone(),
-            user_code: pending.user_code.clone(),
-            expires_at_millis: now_millis().saturating_add(300_000).to_string(),
+                let response = contract::BeginResponse {
+                    attempt_id: uuid::Uuid::new_v4().to_string(),
+                    authorization_url: pending.verification_url.clone(),
+                    user_code: pending.user_code.clone(),
+                    expires_at_millis: now_millis().saturating_add(300_000).to_string(),
+                };
+                let task = tokio::spawn(async move {
+                    matches!(
+                        tokio::time::timeout(
+                            ATTEMPT_TIMEOUT,
+                            complete_device_login(options, pending)
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    )
+                });
+                (response, task)
+            }
         };
-        let task = tokio::spawn(async move {
-            matches!(
-                tokio::time::timeout(ATTEMPT_TIMEOUT, complete_device_login(options, pending))
-                    .await,
-                Ok(Ok(_))
-            )
-        });
         *slot = Some(Attempt {
             id: response.attempt_id.clone(),
             presentation: Some(response.clone()),
@@ -169,6 +197,57 @@ impl ConnectionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn browser_attempt_cancellation_releases_callback_listener() {
+        let directory = tempfile::tempdir().unwrap();
+        let manager = ConnectionManager::default();
+        let options = DirectAuthOptions {
+            credential_file: Some(directory.path().join("auth.json")),
+            callback_port: 0,
+            ..DirectAuthOptions::default()
+        };
+        let request = || contract::BeginRequest {
+            method: contract::LoginMethod::BrowserLoopback,
+        };
+        let response = manager
+            .begin(options.clone(), request())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(response.user_code.is_empty());
+        let url = reqwest::Url::parse(&response.authorization_url).unwrap();
+        let redirect = url
+            .query_pairs()
+            .find(|(key, _)| key == "redirect_uri")
+            .unwrap()
+            .1
+            .into_owned();
+        let port = reqwest::Url::parse(&redirect).unwrap().port().unwrap();
+        assert!(
+            tokio::net::TcpListener::bind(("127.0.0.1", port))
+                .await
+                .is_err()
+        );
+        let duplicate = manager
+            .begin(options.clone(), request())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(duplicate.attempt_id, response.attempt_id);
+        let result = manager
+            .cancel(contract::AttemptRequest {
+                attempt_id: response.attempt_id,
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.cancelled);
+        let _listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            .await
+            .unwrap();
+        assert!(!options.credential_file.unwrap().exists());
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn cancellation_joins_the_attempt_and_rejects_stale_handles() {
@@ -242,20 +321,13 @@ mod tests {
                 .unwrap()
                 .unwrap();
         assert!(!status.connected);
-        assert_eq!(status.methods, [contract::LoginMethod::DeviceCode]);
-        let rejected = AuthConnectionProvider::begin(
-            &provider,
-            context(),
-            contract::BeginRequest {
-                method: contract::LoginMethod::BrowserLoopback,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(matches!(
-            rejected,
-            Err(contract::BeginError::UnsupportedMethod)
-        ));
+        assert_eq!(
+            status.methods,
+            [
+                contract::LoginMethod::BrowserLoopback,
+                contract::LoginMethod::DeviceCode
+            ]
+        );
         let disconnected = AuthConnectionProvider::disconnect(
             &provider,
             context(),
