@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.context-compaction@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:3c865046f458b5bede7b437050bd065e382794f536dbe6667972aa1a60359b60";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:92b37a10888742f58e3feb6f247333fc094e6b46b63cec46e4e8b32c84d3b2ff";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const CONTEXT_COMPACTION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,31 +16,31 @@ pub const CONTEXT_COMPACTION_CONTRACT: CapabilityReference<ContextCompactionClie
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_context_compaction { () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"compact\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_context_compaction { () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"compact\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_context_compaction_client {
-    () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_context_compaction_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_context_compaction_client {
-    () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.context-compaction@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const COMPACT_OPERATION: &str = "compact";
 
-pub use lenso_contract_runtime::{OptionalValue, UnknownDomainError};
+pub use lenso_contract_runtime::{OptionalValue, Uint64, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -63,12 +63,34 @@ pub struct CompactRequest {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ContextMessage {
+    #[serde(rename = "attachments")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<ContextAttachment>>,
     #[serde(rename = "content")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content: String,
     #[serde(rename = "role")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub role: ContextMessageRole,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ContextAttachment {
+    #[serde(rename = "digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub digest: String,
+    #[serde(rename = "handle")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub handle: String,
+    #[serde(rename = "media_type")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub media_type: String,
+    #[serde(rename = "name")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub name: String,
+    #[serde(rename = "size")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub size: Uint64,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

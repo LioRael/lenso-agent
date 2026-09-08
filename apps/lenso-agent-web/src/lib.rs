@@ -110,7 +110,7 @@ use plugin_control::{
 };
 use plugin_control_api::{PluginRuntimeCommand, PluginRuntimeState};
 
-const MAX_REQUEST_BYTES: usize = 65_536;
+const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_DEFERRED_RUNTIME_COMMANDS: usize = 16;
 const SESSION_READ_PAGE_LIMIT: i64 = 1000;
 const REMOTE_CONFIGURATION_WATCH_WAIT: Duration = Duration::from_secs(5);
@@ -454,6 +454,11 @@ enum RuntimeCommand {
         reply: oneshot::Sender<Result<Vec<PendingInteraction>, RuntimeInteractionError>>,
         request_id: String,
     },
+    ReadAttachment {
+        session_id: String,
+        digest: String,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     ReadSession {
         reply: oneshot::Sender<Result<ReadSessionResponse, String>>,
         session_id: String,
@@ -496,6 +501,8 @@ enum RuntimeInteractionError {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
+    #[serde(default)]
+    attachments: Option<Vec<lenso_capability_agent::RunTurnRequestAttachmentsItem>>,
     #[serde(default)]
     allowed_tools: Option<Vec<String>>,
     #[serde(default)]
@@ -1258,6 +1265,10 @@ fn router(runtime: WebRuntime) -> Router {
             "/api/console/v1/agent/auth/connections/actions",
             post(auth_connection_action),
         )
+        .route(
+            "/api/console/v1/agent/sessions/{session_id}/attachments/{digest}",
+            get(read_attachment),
+        )
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(runtime)
 }
@@ -1671,6 +1682,33 @@ fn interaction_problem(error: RuntimeInteractionError) -> ApiProblem {
     }
 }
 
+async fn read_attachment(
+    State(runtime): State<WebRuntime>,
+    Path((session_id, digest)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    if !valid_session_id(&session_id)
+        || digest.len() != 64
+        || !digest.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(ApiProblem::bad_request("Invalid attachment reference"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ReadAttachment {
+            session_id,
+            digest,
+            reply,
+        })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime unavailable"))?;
+    let data = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped"))?
+        .map_err(ApiProblem::unavailable)?;
+    Ok(Json(serde_json::json!({ "data_base64": data })))
+}
+
 async fn read_session(
     State(runtime): State<WebRuntime>,
     Path(session_id): Path<String>,
@@ -1823,7 +1861,7 @@ fn validate_turn_request(request: &WebTurnRequest) -> Result<(), ApiProblem> {
     if reasoning_selections > 1 {
         return Err(ApiProblem::bad_request("Select only one reasoning control"));
     }
-    if request.input.trim().is_empty() {
+    if request.input.trim().is_empty() && request.attachments.as_ref().is_none_or(Vec::is_empty) {
         return Err(ApiProblem::bad_request("Agent input must not be empty"));
     }
     if request.input.len() > MAX_PROMPT_BYTES {
@@ -2375,6 +2413,13 @@ async fn runtime_actor(
             RuntimeCommand::TaskSnapshot { reply } => {
                 let _ = reply.send(app.web_task_snapshot().await);
             }
+            RuntimeCommand::ReadAttachment {
+                reply,
+                session_id,
+                digest,
+            } => {
+                let _ = reply.send(read_attachment_from_app(&app, session_id, digest).await);
+            }
             RuntimeCommand::ReadSession { reply, session_id } => {
                 handle_read_command(&app, session_id, reply).await;
             }
@@ -2661,6 +2706,9 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         RuntimeCommand::ListSessions { reply } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
+        RuntimeCommand::ReadAttachment { reply, .. } => {
+            let _ = reply.send(Err(detail.to_owned()));
+        }
         RuntimeCommand::ReadSession { reply, .. } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
@@ -2788,6 +2836,39 @@ async fn stop_remote_configuration_sync(
         .task
         .await
         .map_err(|error| format!("remote configuration synchronizer failed: {error}"))
+}
+
+async fn read_attachment_from_app(
+    app: &AgentApp,
+    session_id: String,
+    digest: String,
+) -> Result<String, String> {
+    let turn = app.lease_web_turn().await?;
+    let session = collect_session_pages(&session_id, |after| {
+        turn.read_session(session_id.clone(), after, SESSION_READ_PAGE_LIMIT)
+    })
+    .await?;
+    let expected = format!("sha256:{digest}");
+    let handle = session
+        .events
+        .iter()
+        .filter(|e| e.kind == ReadSessionResponseEventsItemKind::TurnStarted)
+        .find_map(|event| {
+            let payload: serde_json::Value =
+                serde_json::from_str(event.payload_json.as_str()).ok()?;
+            payload
+                .get("attachments")?
+                .as_array()?
+                .iter()
+                .find(|a| {
+                    a.get("digest").and_then(serde_json::Value::as_str) == Some(expected.as_str())
+                })?
+                .get("handle")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| "Attachment does not belong to this Session".to_owned())?;
+    turn.read_attachment(handle).await
 }
 
 async fn handle_read_command(
@@ -3258,6 +3339,7 @@ async fn invoke_turn(
             RUN_TURN_OPERATION,
             context,
             RunTurnRequest {
+                attachments: request.attachments,
                 input: request.input,
                 session_id: Some(requested_session_id.clone()),
             },
@@ -3832,6 +3914,7 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
                         input: "queued".to_owned(),
@@ -3853,6 +3936,7 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
                     input: "overflow".to_owned(),
@@ -3879,6 +3963,7 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
                         input: "queued".to_owned(),
@@ -3901,6 +3986,7 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
                     input: "overflow".to_owned(),
@@ -3929,6 +4015,7 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
                         input: "queued".to_owned(),
@@ -3962,6 +4049,7 @@ mod tests {
             pending.push_back(RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
                     input: "queued".to_owned(),
@@ -4503,6 +4591,7 @@ mod tests {
     fn rejects_empty_and_oversized_turns() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
                 input: "  ".to_owned(),
@@ -4518,6 +4607,7 @@ mod tests {
         );
         assert!(
             validate_turn_request(&WebTurnRequest {
+                attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
                 input: "x".repeat(MAX_PROMPT_BYTES + 1),
@@ -4551,6 +4641,7 @@ mod tests {
     fn rejects_ambiguous_reasoning_controls() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
                 input: "Summarize this".to_owned(),

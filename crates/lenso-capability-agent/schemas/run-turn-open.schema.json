@@ -1,7 +1,9 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["input"],
+  "required": [
+    "input"
+  ],
   "properties": {
     "session_id": {
       "type": "string",
@@ -10,8 +12,42 @@
     },
     "input": {
       "type": "string",
-      "minLength": 1,
+      "minLength": 0,
       "maxLength": 262144
+    },
+    "attachments": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "media_type",
+          "data_base64"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "media_type": {
+            "type": "string",
+            "enum": [
+              "image/png",
+              "image/jpeg",
+              "image/webp",
+              "text/plain"
+            ]
+          },
+          "data_base64": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2796204
+          }
+        },
+        "additionalProperties": false
+      }
     }
   },
   "additionalProperties": false

@@ -71,6 +71,7 @@ pub(super) async fn submit(
             RUN_TURN_OPERATION,
             context,
             RunTurnRequest {
+                attachments: None,
                 input: model_input,
                 session_id: state.session_id.clone(),
             },

@@ -1,5 +1,7 @@
 //! Agent Loop Plugin.
 
+mod attachments;
+
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -360,6 +362,8 @@ pub fn inspect_turn_generation_provenance(
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
     struct TurnStartedPayload {
+        #[serde(default, rename = "attachments")]
+        _attachments: Option<serde_json::Value>,
         generation_spec_digest: String,
         #[serde(default)]
         agent_behavior_digest: Option<String>,
@@ -611,7 +615,8 @@ impl AgentLoop {
         context: Ctx,
         request: RunTurnRequest,
     ) -> PluginResult<ProviderStream<agent_capability::Agent>, RunTurnError> {
-        if request.input.trim().is_empty() {
+        if request.input.trim().is_empty() && request.attachments.as_ref().is_none_or(Vec::is_empty)
+        {
             return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
         }
         let active_id = uuid::Uuid::new_v4();
@@ -903,7 +908,11 @@ async fn run_turn(
     request: RunTurnRequest,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
-    let turn_input = request.input;
+    let turn_input = if request.input.trim().is_empty() {
+        "Please review the attached files.".to_owned()
+    } else {
+        request.input
+    };
     let generation_spec_digest = generation_spec_digest(context)?;
     let agent_behavior = agent_behavior_provenance(context)?;
     let base_turn_profile = resolved_turn_profile(context)?;
@@ -961,6 +970,13 @@ async fn run_turn(
         model_selection,
     )
     .await?;
+    let attached = attachments::store(
+        clients,
+        context,
+        &session_id,
+        request.attachments.unwrap_or_default(),
+    )
+    .await?;
     let current_title = current_session_title(&history);
     let (mut messages, compacted_revision) = prepare_model_context(
         clients,
@@ -976,6 +992,28 @@ async fn run_turn(
         },
     )
     .await?;
+    let mut user = user_message(turn_input.clone());
+    attachments::hydrate(clients, context, &mut user, &attached).await?;
+    if (user
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+        || messages.iter().any(|message| {
+            message
+                .images
+                .as_ref()
+                .is_some_and(|images| !images.is_empty())
+        }))
+        && !resolved_turn_profile
+            .capabilities
+            .input_modalities
+            .contains(&ModelInputModality::Image)
+    {
+        return Err(attachments::failure(
+            "The selected model does not support image attachments",
+        ));
+    }
+
     let mut revision = start_turn(
         clients,
         context,
@@ -993,6 +1031,7 @@ async fn run_turn(
             resolved_turn_profile: &resolved_turn_profile,
             model_selection: selection_evidence.as_ref(),
             input: &turn_input,
+            attachments: &attached,
             run_scope: run_scope.as_ref(),
         },
     )
@@ -1010,7 +1049,7 @@ async fn run_turn(
     if let Some(memory) = recalled_memory_message(&recalled) {
         messages.insert(0, memory);
     }
-    messages.push(user_message(turn_input.clone()));
+    messages.push(user);
 
     let result = execute_steps(
         clients,
@@ -1058,6 +1097,7 @@ struct TurnStart<'a> {
     resolved_turn_profile: &'a ResolvedTurnProfile,
     model_selection: Option<&'a ModelSelectionEvidence>,
     input: &'a str,
+    attachments: &'a [lenso_capability_agent_context_compaction::ContextAttachment],
     run_scope: Option<&'a RunScope>,
 }
 
@@ -1146,6 +1186,7 @@ async fn start_turn(
             "resolved_turn_profile": start.resolved_turn_profile,
             "model_selection": start.model_selection,
             "input": start.input,
+            "attachments": start.attachments,
             "run_scope": start.run_scope
         }),
     )?);
@@ -1386,6 +1427,7 @@ fn recalled_memory_message(items: &[MemoryItem]) -> Option<CompleteMessageInput>
         );
     }
     Some(CompleteMessageInput {
+        images: None,
         role: CompleteMessageRole::Assistant,
         content,
         tool_call_id: None,
@@ -1562,10 +1604,13 @@ async fn execute_steps(
     generation_spec_digest: &str,
     channel: &mut ProviderStreamChannel<agent_capability::Agent>,
 ) -> Result<(), TurnFailure> {
-    let mut effective_turn_input = turn_input.to_owned();
+    let mut effective_turn_input = messages
+        .last()
+        .map_or_else(|| turn_input.to_owned(), |message| message.content.clone());
     messages.insert(
         0,
         CompleteMessageInput {
+            images: None,
             role: CompleteMessageRole::System,
             content: system_instruction.content.clone(),
             tool_call_id: None,
@@ -1813,6 +1858,7 @@ async fn execute_steps(
             .await?;
             if !completion.text.is_empty() {
                 messages.push(CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Assistant,
                     content: completion.text.clone(),
                     tool_call_id: None,
@@ -1847,6 +1893,7 @@ async fn execute_steps(
                 )
                 .await?;
                 messages.push(CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Assistant,
                     content: completion.text.clone(),
                     tool_call_id: None,
@@ -1933,6 +1980,7 @@ async fn execute_steps(
         .await?;
         if !completion.text.is_empty() {
             messages.push(CompleteMessageInput {
+                images: None,
                 role: CompleteMessageRole::Assistant,
                 content: completion.text.clone(),
                 tool_call_id: None,
@@ -2259,6 +2307,7 @@ async fn execute_tool_wave(
                 .await?;
                 messages.push(assistant_tool_message(&tool_call));
                 messages.push(CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Tool,
                     content: model_tool_result_content(&tool_result),
                     tool_call_id: Some(tool_call.tool_call_id),
@@ -2307,6 +2356,7 @@ async fn execute_tool_wave(
                         // respond within the existing step and Tool limits.
                         messages.push(assistant_tool_message(&tool_call));
                         messages.push(CompleteMessageInput {
+                            images: None,
                             role: CompleteMessageRole::Tool,
                             content: format!("Tool failed: {error_detail}"),
                             tool_call_id: Some(tool_call.tool_call_id),
@@ -3461,6 +3511,17 @@ fn estimate_projection_tokens(
         estimate = estimate
             .saturating_add(8)
             .saturating_add(estimate_text_tokens(&message.content));
+        for attachment in message.attachments.iter().flatten() {
+            estimate = estimate.saturating_add(if attachment.media_type == "text/plain" {
+                attachment
+                    .size
+                    .parse::<u64>()
+                    .unwrap_or(131_072)
+                    .div_ceil(3)
+            } else {
+                2048
+            });
+        }
     }
     estimate
 }
@@ -3527,7 +3588,7 @@ async fn prepare_model_context(
     let event_triggered = token_threshold.is_none() && events_since_checkpoint >= history_limit;
     if (!token_triggered && !event_triggered) || projection.messages.is_empty() {
         return Ok((
-            projection_model_messages(&projection),
+            attachments::project(clients, context, &projection).await?,
             current_revision.to_owned(),
         ));
     }
@@ -3547,7 +3608,10 @@ async fn prepare_model_context(
         },
     )
     .await?;
-    Ok((projection_model_messages(&projection), revision))
+    Ok((
+        attachments::project(clients, context, &projection).await?,
+        revision,
+    ))
 }
 
 async fn compact_after_provider_overflow(
@@ -3589,13 +3653,14 @@ async fn compact_after_provider_overflow(
     *revision = compacted_revision;
     let mut messages = Vec::new();
     messages.push(CompleteMessageInput {
+        images: None,
         role: CompleteMessageRole::System,
         content: system_instruction.content.clone(),
         tool_call_id: None,
         tool_name: None,
         arguments_json: None,
     });
-    messages.extend(projection_model_messages(&projection));
+    messages.extend(attachments::project(clients, context, &projection).await?);
     messages.extend_from_slice(active_tail);
     Ok(Some(messages))
 }
@@ -3837,22 +3902,7 @@ fn context_projection(
 fn reconstruct_context_messages(
     events: &[ReadSessionResponseEventsItem],
 ) -> Result<Vec<ContextMessage>, TurnFailure> {
-    reconstruct_history(events).map(|messages| {
-        messages
-            .into_iter()
-            .filter_map(|message| match message.role {
-                CompleteMessageRole::User => Some(ContextMessage {
-                    role: ContextMessageRole::User,
-                    content: message.content,
-                }),
-                CompleteMessageRole::Assistant => Some(ContextMessage {
-                    role: ContextMessageRole::Assistant,
-                    content: message.content,
-                }),
-                _ => None,
-            })
-            .collect()
-    })
+    reconstruct_history_context(events)
 }
 
 fn projection_model_messages(projection: &ContextProjection) -> Vec<CompleteMessageInput> {
@@ -3860,6 +3910,7 @@ fn projection_model_messages(projection: &ContextProjection) -> Vec<CompleteMess
         Vec::with_capacity(projection.messages.len() + usize::from(projection.summary.is_some()));
     if let Some(summary) = projection.summary.as_deref() {
         messages.push(CompleteMessageInput {
+            images: None,
             role: CompleteMessageRole::Assistant,
             content: format!("[Compacted conversation context]\n{summary}"),
             tool_call_id: None,
@@ -3872,6 +3923,7 @@ fn projection_model_messages(projection: &ContextProjection) -> Vec<CompleteMess
             .messages
             .iter()
             .map(|message| CompleteMessageInput {
+                images: None,
                 role: match message.role {
                     ContextMessageRole::User => CompleteMessageRole::User,
                     ContextMessageRole::Assistant => CompleteMessageRole::Assistant,
@@ -4036,14 +4088,15 @@ fn interrupted_turn_events(
 
 #[derive(Default)]
 struct HistoricalTurn {
+    attachments: Option<Vec<lenso_capability_agent_context_compaction::ContextAttachment>>,
     input: Option<String>,
     additional_inputs: Vec<String>,
     output: Option<String>,
 }
 
-fn reconstruct_history(
+fn reconstruct_history_context(
     events: &[ReadSessionResponseEventsItem],
-) -> Result<Vec<CompleteMessageInput>, TurnFailure> {
+) -> Result<Vec<ContextMessage>, TurnFailure> {
     let mut turns = BTreeMap::<String, HistoricalTurn>::new();
     let mut turn_order = Vec::new();
     for event in events {
@@ -4057,6 +4110,15 @@ fn reconstruct_history(
                 }
                 turns.entry(turn_id.clone()).or_default().input =
                     Some(history_payload_text(event, "input")?);
+                let payload: serde_json::Value = serde_json::from_str(event.payload_json.as_str())
+                    .map_err(|_| attachments::failure("Invalid attachment history"))?;
+                turns.entry(turn_id.clone()).or_default().attachments = serde_json::from_value(
+                    payload
+                        .get("attachments")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .map_err(|_| attachments::failure("Invalid attachment history"))?;
             }
             ReadSessionResponseEventsItemKind::TurnCompleted => {
                 turns.entry(turn_id.clone()).or_default().output =
@@ -4089,17 +4151,41 @@ fn reconstruct_history(
                 input.push_str(ADDITIONAL_INPUT_SEPARATOR);
                 input.push_str(&additional_input);
             }
-            messages.push(user_message(input));
-            messages.push(CompleteMessageInput {
-                role: CompleteMessageRole::Assistant,
+            messages.push(ContextMessage {
+                role: ContextMessageRole::User,
+                content: input,
+                attachments: turn.attachments,
+            });
+            messages.push(ContextMessage {
+                attachments: None,
+                role: ContextMessageRole::Assistant,
                 content: output,
-                tool_call_id: None,
-                tool_name: None,
-                arguments_json: None,
             });
         }
     }
     Ok(messages)
+}
+
+#[cfg(test)]
+fn reconstruct_history(
+    events: &[ReadSessionResponseEventsItem],
+) -> Result<Vec<CompleteMessageInput>, TurnFailure> {
+    reconstruct_history_context(events).map(|messages| {
+        messages
+            .into_iter()
+            .map(|m| CompleteMessageInput {
+                images: None,
+                content: m.content,
+                role: match m.role {
+                    ContextMessageRole::User => CompleteMessageRole::User,
+                    ContextMessageRole::Assistant => CompleteMessageRole::Assistant,
+                },
+                tool_call_id: None,
+                tool_name: None,
+                arguments_json: None,
+            })
+            .collect()
+    })
 }
 
 fn history_payload_additional_inputs(
@@ -4145,6 +4231,7 @@ fn history_payload_text(
 
 fn user_message(content: String) -> CompleteMessageInput {
     CompleteMessageInput {
+        images: None,
         role: CompleteMessageRole::User,
         content,
         tool_call_id: None,
@@ -4155,6 +4242,7 @@ fn user_message(content: String) -> CompleteMessageInput {
 
 fn assistant_tool_message(tool_call: &CompleteMessage) -> CompleteMessageInput {
     CompleteMessageInput {
+        images: None,
         role: CompleteMessageRole::Assistant,
         content: String::new(),
         tool_call_id: Some(tool_call.tool_call_id.clone()),
@@ -4830,10 +4918,12 @@ mod tests {
             summary_digest: system_instruction_digest("The user selected SQLite."),
             retained_messages: vec![
                 ContextMessage {
+                    attachments: None,
                     role: ContextMessageRole::User,
                     content: "What next?".to_owned(),
                 },
                 ContextMessage {
+                    attachments: None,
                     role: ContextMessageRole::Assistant,
                     content: "Add compaction.".to_owned(),
                 },
@@ -4904,18 +4994,22 @@ mod tests {
         };
         let source = vec![
             ContextMessage {
+                attachments: None,
                 role: ContextMessageRole::User,
                 content: "one".to_owned(),
             },
             ContextMessage {
+                attachments: None,
                 role: ContextMessageRole::Assistant,
                 content: "two".to_owned(),
             },
             ContextMessage {
+                attachments: None,
                 role: ContextMessageRole::User,
                 content: "three".to_owned(),
             },
             ContextMessage {
+                attachments: None,
                 role: ContextMessageRole::Assistant,
                 content: "four".to_owned(),
             },
@@ -4924,10 +5018,12 @@ mod tests {
             summary: "bounded summary".to_owned(),
             retained_messages: vec![
                 ContextMessage {
+                    attachments: None,
                     role: ContextMessageRole::User,
                     content: "invented".to_owned(),
                 },
                 ContextMessage {
+                    attachments: None,
                     role: ContextMessageRole::Assistant,
                     content: "tail".to_owned(),
                 },
@@ -5228,6 +5324,7 @@ mod tests {
         let short = ContextProjection {
             summary: None,
             messages: vec![ContextMessage {
+                attachments: None,
                 role: ContextMessageRole::User,
                 content: "short".to_owned(),
             }],
@@ -5236,6 +5333,7 @@ mod tests {
         let long = ContextProjection {
             summary: Some("prior summary".repeat(10)),
             messages: vec![ContextMessage {
+                attachments: None,
                 role: ContextMessageRole::User,
                 content: "long context".repeat(100),
             }],

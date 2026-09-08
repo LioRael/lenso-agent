@@ -170,6 +170,7 @@ mod tests {
 
     fn message(role: ContextMessageRole, content: &str) -> ContextMessage {
         ContextMessage {
+            attachments: None,
             role,
             content: content.to_owned(),
         }

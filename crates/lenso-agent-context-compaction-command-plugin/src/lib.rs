@@ -77,10 +77,12 @@ printf '%s\n' '{"protocol":"lenso.agent.command-adapter@1","result":{"summary":"
                     previous_summary: Some(None),
                     messages: vec![
                         ContextMessage {
+                            attachments: None,
                             role: ContextMessageRole::User,
                             content: "old question".to_owned(),
                         },
                         ContextMessage {
+                            attachments: None,
                             role: ContextMessageRole::Assistant,
                             content: "old answer".to_owned(),
                         },

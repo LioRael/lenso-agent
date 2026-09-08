@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeStream, NativeStreamEndpoint, Native
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent@3";
-pub const DESCRIPTOR_VERSION: &str = "3.1.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:736eaa559d48985955210353d3843d82ee146be960cd8a7c34775efff34bcc00";
+pub const DESCRIPTOR_VERSION: &str = "3.2.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:52e2e6c7755246292f1d6c79f5e6d0706982df551f60b4279f72ef0d16510acd";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AGENT_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const AGENT_CONTRACT: CapabilityReference<AgentClient> = CapabilityReference
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_agent { () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.2.0\",\"operations\":[\"run_turn\"],\"operation_kinds\":{\"run_turn\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_agent_client {
-    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.2.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.2.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_agent_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.2.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_agent_client {
-    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.1.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.2.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent@3\",\"descriptor_version\":\"3.2.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const RUN_TURN_OPERATION: &str = "run_turn";
@@ -45,12 +45,40 @@ use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RunTurnRequest {
+    #[serde(rename = "attachments")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<RunTurnRequestAttachmentsItem>>,
     #[serde(rename = "input")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub input: String,
     #[serde(rename = "session_id")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct RunTurnRequestAttachmentsItem {
+    #[serde(rename = "data_base64")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub data_base64: String,
+    #[serde(rename = "media_type")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub media_type: RunTurnRequestAttachmentsItemMediaType,
+    #[serde(rename = "name")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum RunTurnRequestAttachmentsItemMediaType {
+    #[serde(rename = "image/png")]
+    ImagePng,
+    #[serde(rename = "image/jpeg")]
+    ImageJpeg,
+    #[serde(rename = "image/webp")]
+    ImageWebp,
+    #[serde(rename = "text/plain")]
+    TextPlain,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

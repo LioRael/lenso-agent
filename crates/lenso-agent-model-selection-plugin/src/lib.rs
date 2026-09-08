@@ -315,6 +315,7 @@ async fn classify(
                 service_tier: None,
                 messages: vec![
                     CompleteMessageInput {
+                        images: None,
                         role: CompleteMessageRole::System,
                         content: format!(
                             "{instruction}\n\nReturn exactly `default` or `strong` and nothing else."
@@ -324,6 +325,7 @@ async fn classify(
                         arguments_json: None,
                     },
                     CompleteMessageInput {
+                        images: None,
                         role: CompleteMessageRole::User,
                         content: input.to_owned(),
                         tool_call_id: None,

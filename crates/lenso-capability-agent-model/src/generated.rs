@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.model@4";
-pub const DESCRIPTOR_VERSION: &str = "4.1.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:114add54b20812e84ba4b1c3cd2d4dd829ca96dd15c3ad180d845b6533340eab";
+pub const DESCRIPTOR_VERSION: &str = "4.2.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:f08c75a6c12d952144e74281d0b3a8e517bd9e403912c1e5d3e778956e5845a8";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const MODEL_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const MODEL_CONTRACT: CapabilityReference<ModelClient> = CapabilityReference
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"operations\":[\"catalog\",\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_model { () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.2.0\",\"operations\":[\"catalog\",\"complete\"],\"operation_kinds\":{\"complete\":\"stream\"},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_model_client {
-    () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.2.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.2.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_model_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.2.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_model_client {
-    () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.1.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.2.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.model@4\",\"descriptor_version\":\"4.2.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const CATALOG_OPERATION: &str = "catalog";
@@ -310,6 +310,9 @@ pub struct CompleteMessageInput {
     #[serde(rename = "content")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub content: String,
+    #[serde(rename = "images")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<ModelImage>>,
     #[serde(rename = "role")]
     #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
     pub role: CompleteMessageRole,
@@ -319,6 +322,16 @@ pub struct CompleteMessageInput {
     #[serde(rename = "tool_name")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ModelImage {
+    #[serde(rename = "data_base64")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub data_base64: String,
+    #[serde(rename = "media_type")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub media_type: String,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]

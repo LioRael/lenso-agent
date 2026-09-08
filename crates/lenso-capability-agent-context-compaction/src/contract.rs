@@ -5,9 +5,27 @@ use lenso_contract_authoring as lenso;
 #[derive(Clone, lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
 pub struct ContextMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<ContextAttachment>", length(max = 4))]
+    pub attachments: Option<Vec<ContextAttachment>>,
     pub role: ContextMessageRole,
     #[schemars(length(min = 1, max = 262_144))]
     pub content: String,
+}
+
+#[derive(Clone, lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ContextAttachment {
+    #[schemars(length(min = 1, max = 256))]
+    pub name: String,
+    #[schemars(length(min = 1, max = 128))]
+    pub media_type: String,
+    #[schemars(length(min = 16, max = 160))]
+    pub handle: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub digest: String,
+    #[schemars(extend("format" = "uint64"))]
+    pub size: String,
 }
 
 #[derive(Clone, lenso::JsonSchema, serde::Deserialize)]
@@ -49,7 +67,7 @@ pub enum CompactError {
 #[lenso::capability(
     id = "lenso.agent.context-compaction",
     major = 1,
-    version = "1.0.0",
+    version = "1.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

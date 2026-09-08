@@ -37,10 +37,12 @@ mod tests {
             previous_summary: Some(None),
             messages: vec![
                 ContextMessage {
+                    attachments: None,
                     role: ContextMessageRole::User,
                     content: "hello".to_owned(),
                 },
                 ContextMessage {
+                    attachments: None,
                     role: ContextMessageRole::Assistant,
                     content: "world".to_owned(),
                 },

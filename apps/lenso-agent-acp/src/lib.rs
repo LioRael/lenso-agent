@@ -396,6 +396,7 @@ async fn invoke_turn(
             RUN_TURN_OPERATION,
             context,
             RunTurnRequest {
+                attachments: None,
                 input,
                 session_id: Some(session_id.to_owned()),
             },

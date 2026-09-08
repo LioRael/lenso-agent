@@ -1849,6 +1849,33 @@ impl TurnGeneration {
             .map_err(|error| format!("User Interaction answer was rejected: {error:?}"))
     }
 
+    /// Reads bounded Artifact bytes through the Web consumer's declared binding.
+    pub async fn read_attachment(&self, handle: String) -> Result<String, String> {
+        self.route
+            .target()
+            .handle::<lenso_capability_agent_artifact::ArtifactRead>(&self.consumer_instance)
+            .map_err(|e| format!("Artifact route unavailable: {e:?}"))?
+            .invoke_with_context(
+                lenso_capability_agent_artifact::READ_OPERATION,
+                self.invocation_context()?,
+                lenso_capability_agent_artifact::ReadRequest {
+                    handle,
+                    offset: "0".to_owned(),
+                    max_bytes: 2 * 1024 * 1024,
+                },
+            )
+            .await
+            .map_err(|e| format!("Artifact read failed: {e:?}"))?
+            .map_err(|e| format!("Attachment unavailable: {e:?}"))
+            .and_then(|r| {
+                if r.complete {
+                    Ok(r.data_base64)
+                } else {
+                    Err("Attachment exceeds read limit".to_owned())
+                }
+            })
+    }
+
     /// Reads durable Session events through the selected Session Plugin.
     pub async fn read_session(
         &self,

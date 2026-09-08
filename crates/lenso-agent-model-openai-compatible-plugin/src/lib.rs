@@ -286,6 +286,13 @@ fn chat_request(request: &CompleteOpen) -> Result<serde_json::Value, CompleteErr
 }
 
 fn chat_message(message: &CompleteMessageInput) -> Result<serde_json::Value, CompleteError> {
+    if message
+        .images
+        .as_ref()
+        .is_some_and(|images| !images.is_empty())
+    {
+        return Err(CompleteError::ContentRejected);
+    }
     match message.role {
         CompleteMessageRole::System | CompleteMessageRole::User => {
             if message.tool_call_id.is_some()
@@ -881,6 +888,7 @@ mod tests {
             service_tier: None,
             messages: vec![
                 CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Assistant,
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
@@ -888,6 +896,7 @@ mod tests {
                     arguments_json: Some(r#"{"path":"README.md"}"#.to_owned().try_into().unwrap()),
                 },
                 CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Tool,
                     content: "# Fixture".to_owned(),
                     tool_call_id: Some("call-1".to_owned()),
