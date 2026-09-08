@@ -592,6 +592,10 @@ impl DirectModel {
 }
 
 impl Lifecycle for DirectModel {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Activation keeps transport, authentication and catalog readiness in lifecycle order"
+    )]
     async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
         if self.config.transport != websocket::Transport::Sse {
             let pool = self.websocket.clone();

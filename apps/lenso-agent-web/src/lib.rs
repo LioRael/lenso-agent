@@ -392,6 +392,10 @@ struct WebRuntimeConfig {
 }
 
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "The bounded runtime channel owns each complete turn request"
+)]
 enum RuntimeCommand {
     ForkSession {
         session_id: String,
@@ -1621,7 +1625,7 @@ async fn save_editable_profile(
         .sqlite_profiles
         .clone()
         .ok_or_else(|| ApiProblem::conflict("Profile editing requires SQLite management"))?;
-    tokio::task::spawn_blocking(move || authority.save_profile(request))
+    tokio::task::spawn_blocking(move || authority.save_profile(&request))
         .await
         .map_err(|_| ApiProblem::unavailable("Profile worker stopped"))?
         .map(Json)
@@ -2873,10 +2877,8 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         RuntimeCommand::ListSessions { reply } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
-        RuntimeCommand::ReadAttachment { reply, .. } => {
-            let _ = reply.send(Err(detail.to_owned()));
-        }
-        RuntimeCommand::ForkSession { reply, .. } => {
+        RuntimeCommand::ReadAttachment { reply, .. }
+        | RuntimeCommand::ForkSession { reply, .. } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
         RuntimeCommand::ReadSession { reply, .. } => {
@@ -3515,6 +3517,10 @@ fn turn_invocation_context(
     )
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Preserve the ordered turn admission, context and execution sequence"
+)]
 async fn invoke_turn(
     turn: &lenso_agent_host::generation::TurnGeneration,
     request: WebTurnRequest,

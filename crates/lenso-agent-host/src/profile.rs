@@ -164,6 +164,39 @@ fn apply(
             instances.push(item);
         }
     }
+    apply_skill_and_approval_defaults(document, &mut instances, &disabled)?;
+    apply_instructions(document, &mut instances)?;
+    Ok(SelectedProfile {
+        agent,
+        root: PluginRootSnapshot::new(root.releases().iter().cloned(), instances, disabled),
+    })
+}
+
+fn apply_instructions(
+    document: &ProfileDocument,
+    instances: &mut Vec<PluginRootInstance>,
+) -> Result<(), String> {
+    if !document.instructions.trim().is_empty() {
+        if instances.iter().any(|instance| {
+            instance.id().to_string() == "lenso.agent.prompt.static/profile-instructions"
+        }) {
+            return Err(
+                "Profile instructions conflict with the reserved profile-instructions instance"
+                    .into(),
+            );
+        }
+        instances.push(PluginRootInstance::new("lenso.agent.prompt.static", "profile-instructions").with_configuration(serde_json::json!({
+            "contributions": [{"id":"profile.instructions", "version":"1", "kind":"instruction", "content":document.instructions}]
+        })));
+    }
+    Ok(())
+}
+
+fn apply_skill_and_approval_defaults(
+    document: &ProfileDocument,
+    instances: &mut Vec<PluginRootInstance>,
+    disabled: &[PluginInstanceId],
+) -> Result<(), String> {
     if let Some(value) = document.extra.get("allowed_skills") {
         let names = value
             .as_array()
@@ -216,23 +249,7 @@ fn apply(
             instances.push(item);
         }
     }
-    if !document.instructions.trim().is_empty() {
-        if instances.iter().any(|instance| {
-            instance.id().to_string() == "lenso.agent.prompt.static/profile-instructions"
-        }) {
-            return Err(
-                "Profile instructions conflict with the reserved profile-instructions instance"
-                    .into(),
-            );
-        }
-        instances.push(PluginRootInstance::new("lenso.agent.prompt.static", "profile-instructions").with_configuration(serde_json::json!({
-            "contributions": [{"id":"profile.instructions", "version":"1", "kind":"instruction", "content":document.instructions}]
-        })));
-    }
-    Ok(SelectedProfile {
-        agent,
-        root: PluginRootSnapshot::new(root.releases().iter().cloned(), instances, disabled),
-    })
+    Ok(())
 }
 
 fn parse_instance_id(value: &str, field: &str) -> Result<PluginInstanceId, String> {
@@ -376,7 +393,7 @@ mod tests {
                 allowed_tools: None,
                 instructions: String::new(),
                 model: None,
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
                 description: "Game agent".to_owned(),
                 agent: "example.game-loop/game".to_owned(),
                 include_enabled: true,
@@ -426,7 +443,7 @@ mod tests {
                 allowed_tools: None,
                 instructions: String::new(),
                 model: None,
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
                 description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
@@ -466,7 +483,7 @@ mod tests {
                 allowed_tools: None,
                 instructions: String::new(),
                 model: None,
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
                 description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
@@ -482,7 +499,7 @@ mod tests {
                 allowed_tools: None,
                 instructions: String::new(),
                 model: None,
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
                 description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
@@ -512,7 +529,7 @@ mod tests {
                 allowed_tools: None,
                 instructions: String::new(),
                 model: None,
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
                 description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
@@ -530,7 +547,7 @@ mod tests {
                 allowed_tools: None,
                 instructions: String::new(),
                 model: None,
-                extra: Default::default(),
+                extra: std::collections::BTreeMap::default(),
                 description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,

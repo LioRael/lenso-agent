@@ -319,7 +319,7 @@ async fn sqlite_profile_editor_separates_drafts_from_active_generations() {
             .uri("/api/console/v1/agent/turns").header("content-type", "application/json")
             .body(axum::body::Body::from(serde_json::json!({"request_id":"profile-ceiling", "input":"Read README.md twice with parallel approval.", "allowed_tools":["read"]}).to_string())).unwrap()).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(response.into_body(), 1048576).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_048_576).await.unwrap();
         let denied = String::from_utf8(bytes.to_vec()).unwrap();
         assert!(denied.contains("outside the immutable Run Scope"), "A Profile must narrow even an explicit caller grant: {denied}");
         assert!(denied.contains("tool_not_allowed"), "{denied}");

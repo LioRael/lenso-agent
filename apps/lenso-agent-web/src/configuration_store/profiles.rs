@@ -1,5 +1,8 @@
 //! Named Profile drafts are owned by the configured SQLite authority.
-use super::*;
+use super::{
+    Connection, Context, OptionalExtension, Path, SqlitePluginConfigurationAuthority, bail, fs,
+    params,
+};
 use crate::plugin_control::{PluginMutationLinearization, StagedHome, atomic_write};
 use lenso_agent_host::profile::{ProfileDocument, validate_profile_name};
 use sha2::{Digest, Sha256};
@@ -37,7 +40,7 @@ fn source_file(root: &Path, name: &str) -> anyhow::Result<Option<String>> {
         match fs::symlink_metadata(&part) {
             Ok(meta)
                 if meta.file_type().is_symlink()
-                    || (part == path && (!meta.is_file() || meta.len() > 262144)) =>
+                    || (part == path && (!meta.is_file() || meta.len() > 262_144)) =>
             {
                 bail!("Profile must be a regular file of at most 256 KiB")
             }
@@ -75,13 +78,13 @@ impl SqlitePluginConfigurationAuthority {
             Ok(profiles.into_values().collect())
         })
     }
-    pub(crate) fn save_profile(&self, request: SaveProfile) -> anyhow::Result<EditableProfile> {
+    pub(crate) fn save_profile(&self, request: &SaveProfile) -> anyhow::Result<EditableProfile> {
         validate_profile_name(&request.name).map_err(anyhow::Error::msg)?;
         if ["default", "plan", "code", "code-sandbox"].contains(&request.name.as_str()) {
             bail!("Built-in Profiles are read-only. Save a copy with a different name.");
         }
         let source = toml::to_string(&request.document)?;
-        if source.len() > 262144 {
+        if source.len() > 262_144 {
             bail!("Profile exceeds 256 KiB");
         }
         self.with_operation(|connection| {

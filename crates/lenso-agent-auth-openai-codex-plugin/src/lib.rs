@@ -494,12 +494,11 @@ async fn wait_for_browser_code(
         let mut request = Vec::new();
         loop {
             let mut buffer = [0_u8; 2048];
-            let read = match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer))
-                .await
-            {
-                Ok(Ok(read)) => read,
-                // Browser preconnects and abandoned sockets must not terminate login.
-                _ => break,
+            // Browser preconnects and abandoned sockets must not terminate login.
+            let Ok(Ok(read)) =
+                tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer)).await
+            else {
+                break;
             };
             if read == 0 || request.len().saturating_add(read) > 16 * 1024 {
                 break;
