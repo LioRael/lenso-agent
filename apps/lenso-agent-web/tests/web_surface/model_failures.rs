@@ -179,23 +179,27 @@ fn failing_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>, Arc<A
     (provider, upgrades, creates)
 }
 
+fn spawn_history_agent(root: &Path, address: std::net::SocketAddr) -> ChildGuard {
+    ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args(["--listen", &address.to_string(), "--allow-tool", "read"])
+            .current_dir(root)
+            .env("LENSO_AGENT_HOME", root)
+            .env_remove("LENSO_AGENT_PROFILE")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    )
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn sse_failures_preserve_generation_and_session_without_replaying() {
     let _server_test = WEB_SERVER_TEST.lock().await;
     let root = tempfile::tempdir().unwrap();
     let (provider, creates) = failing_sse_provider(root.path());
     let address = available_address();
-    let mut server = ChildGuard(
-        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
-            .args(["--listen", &address.to_string(), "--allow-tool", "read"])
-            .current_dir(root.path())
-            .env("LENSO_AGENT_HOME", root.path())
-            .env_remove("LENSO_AGENT_PROFILE")
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap(),
-    );
+    let mut server = spawn_history_agent(root.path(), address);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
@@ -256,17 +260,7 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
         if index == 0 {
             server.0.kill().unwrap();
             server.0.wait().unwrap();
-            server = ChildGuard(
-                Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
-                    .args(["--listen", &address.to_string(), "--allow-tool", "read"])
-                    .current_dir(root.path())
-                    .env("LENSO_AGENT_HOME", root.path())
-                    .env_remove("LENSO_AGENT_PROFILE")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .unwrap(),
-            );
+            server = spawn_history_agent(root.path(), address);
             wait_until_ready(&client, address, &mut server.0).await;
         }
     }
@@ -392,6 +386,7 @@ fn scripted_sse_provider(
 }
 
 fn scripted_sse_body(index: usize, tool_domain_failure: bool, request_body: Vec<u8>) -> String {
+    use std::fmt::Write as _;
     if !tool_domain_failure && index > 0 {
         let request: serde_json::Value = serde_json::from_slice(&request_body).unwrap();
         let context = request["input"].to_string();
@@ -405,7 +400,6 @@ fn scripted_sse_body(index: usize, tool_domain_failure: bool, request_body: Vec<
         );
     }
 
-    use std::fmt::Write as _;
     let mut body =
         String::from("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n");
     if tool_domain_failure {
