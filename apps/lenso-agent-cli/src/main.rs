@@ -264,6 +264,7 @@ async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), Str
             RUN_TURN_OPERATION,
             context,
             RunTurnRequest {
+                attachments: None,
                 input: args.prompt,
                 session_id: args.session,
             },

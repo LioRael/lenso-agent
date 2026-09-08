@@ -520,6 +520,19 @@ fn standalone_fixture_response(
     request: &CompleteOpen,
     current_user: &str,
 ) -> Option<Vec<CompleteMessage>> {
+    if current_user == "Echo previous attached text:" {
+        return request
+            .messages
+            .iter()
+            .find(|message| {
+                message.role == CompleteMessageRole::User
+                    && message.content.starts_with("Echo attached text:")
+            })
+            .map(|message| previous_response(&message.content));
+    }
+    if current_user.starts_with("Echo attached text:") {
+        return Some(previous_response(current_user));
+    }
     if let Some(response) = session_presentation_fixture_response(request, current_user) {
         Some(response)
     } else if current_user.starts_with("Answer directly:") {

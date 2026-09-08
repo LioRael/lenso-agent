@@ -241,3 +241,44 @@ async fn sqlite_profile_switch_refreshes_existing_session_prompt() {
         surface.shutdown().await.unwrap();
     }).await;
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn text_attachment_survives_restart_and_is_session_scoped() {
+    let root = tempfile::tempdir().unwrap();
+    configure_test_fixture_model(root.path());
+    Box::pin(tokio::task::LocalSet::new().run_until(async {
+        let surface = AgentWebSurface::start(config(root.path())).await.unwrap();
+        let response = surface.router().oneshot(axum::http::Request::builder().method("POST")
+            .uri("/api/console/v1/agent/turns").header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::json!({"request_id":"attachment-test","input":"Echo attached text:","attachments":[{"name":"notes.md","media_type":"text/plain","data_base64":"aGVsbG8="}]}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let events = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(events.contains("turn.completed"), "{events}");
+        assert!(events.contains("hello"), "{events}");
+        let (_, listed) = request(&surface,"GET","sessions",serde_json::Value::Null).await;
+        let session_id = listed["sessions"][0]["sessionId"].as_str().unwrap().to_owned();
+        let (_, session) = request(&surface,"GET",&format!("sessions/{session_id}"),serde_json::Value::Null).await;
+        let reference = session["events"].as_array().unwrap().iter().find_map(|event| {
+            let payload: serde_json::Value = serde_json::from_str(event["payload_json"].as_str()?).ok()?;
+            payload.get("attachments")?.as_array()?.first().cloned()
+        }).unwrap();
+        assert!(reference.get("data_base64").is_none());
+        let digest = reference["digest"].as_str().unwrap().strip_prefix("sha256:").unwrap();
+        let path = format!("sessions/{session_id}/attachments/{digest}");
+        let (status, content) = request(&surface,"GET",&path,serde_json::Value::Null).await;
+        assert_eq!(status, StatusCode::OK, "{content}");
+        assert_eq!(content["data_base64"], "aGVsbG8=");
+        surface.shutdown().await.unwrap();
+        let surface = AgentWebSurface::start(config(root.path())).await.unwrap();
+        assert_eq!(request(&surface,"GET",&path,serde_json::Value::Null).await.1["data_base64"], "aGVsbG8=");
+        let response = surface.router().oneshot(axum::http::Request::builder().method("POST")
+            .uri("/api/console/v1/agent/turns").header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::json!({"request_id":"attachment-resume","session_id":session_id,"input":"Echo previous attached text:"}).to_string())).unwrap()).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let events = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(events.contains("turn.completed") && events.contains("hello"), "{events}");
+        assert_ne!(request(&surface,"GET",&format!("sessions/other/attachments/{digest}"),serde_json::Value::Null).await.0, StatusCode::OK);
+        surface.shutdown().await.unwrap();
+    })).await;
+}

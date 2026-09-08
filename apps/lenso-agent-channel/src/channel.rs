@@ -112,6 +112,7 @@ pub(crate) async fn run_agent_turn(
             RUN_TURN_OPERATION,
             context,
             RunTurnRequest {
+                attachments: None,
                 input: prompt,
                 session_id: session_id.map(str::to_owned),
             },

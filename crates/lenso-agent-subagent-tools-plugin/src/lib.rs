@@ -1328,6 +1328,7 @@ async fn open_child_stream(
     let open = Box::pin(agent.run_turn_with_context(
         context,
         RunTurnRequest {
+            attachments: None,
             input: task,
             session_id: None,
         },

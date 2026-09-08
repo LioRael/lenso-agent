@@ -1012,7 +1012,15 @@ fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure
             max_input_tokens: optional_tokens(max_input_tokens)?,
             max_output_tokens: None,
         },
-        input_modalities: vec![CatalogInputModality::Text],
+        input_modalities: model
+            .input_modalities
+            .iter()
+            .filter_map(|modality| match modality.as_str() {
+                "text" => Some(CatalogInputModality::Text),
+                "image" => Some(CatalogInputModality::Image),
+                _ => None,
+            })
+            .collect(),
         text_output: true,
         tool_calls: true,
         parallel_tool_calls: model.supports_parallel_tool_calls,
@@ -1194,11 +1202,18 @@ fn responses_message(
     match message.role {
         CompleteMessageRole::User => {
             require_no_tool_fields(message)?;
-            Ok(serde_json::json!({
-                "type": "message",
-                "role": "user",
-                "content": [{ "type": "input_text", "text": message.content }]
-            }))
+            let mut content =
+                vec![serde_json::json!({"type": "input_text", "text": message.content})];
+            for image in message.images.iter().flatten() {
+                if !matches!(
+                    image.media_type.as_str(),
+                    "image/png" | "image/jpeg" | "image/webp"
+                ) {
+                    return Err(CompleteError::InvalidRequest);
+                }
+                content.push(serde_json::json!({"type": "input_image", "image_url": format!("data:{};base64,{}", image.media_type, image.data_base64)}));
+            }
+            Ok(serde_json::json!({"type": "message", "role": "user", "content": content}))
         }
         CompleteMessageRole::Assistant => match (
             message.tool_call_id.as_deref(),
@@ -1657,6 +1672,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn user_images_are_native_responses_content() {
+        let message = CompleteMessageInput {
+            images: Some(vec![lenso_capability_agent_model::ModelImage {
+                media_type: "image/png".into(),
+                data_base64: "AA==".into(),
+            }]),
+            role: CompleteMessageRole::User,
+            content: "Inspect".into(),
+            tool_call_id: None,
+            tool_name: None,
+            arguments_json: None,
+        };
+        let wire = responses_message(&message, &BTreeMap::new()).unwrap();
+        assert_eq!(wire["content"][1]["type"], "input_image");
+        assert_eq!(
+            wire["content"][1]["image_url"],
+            "data:image/png;base64,AA=="
+        );
+    }
+
+    #[test]
     fn catalog_request_uses_the_codex_compatibility_ceiling() {
         let config = DirectModelConfig {
             base_url: DEFAULT_BASE_URL.to_owned(),
@@ -1975,7 +2011,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["fast", "priority"]
         );
-        assert_eq!(model.input_modalities, [CatalogInputModality::Text]);
+        assert_eq!(
+            model.input_modalities,
+            [CatalogInputModality::Text, CatalogInputModality::Image]
+        );
 
         let duplicate = CatalogControlOption {
             id: "high".to_owned(),
@@ -2069,6 +2108,7 @@ mod tests {
             service_tier: None,
             messages: vec![
                 CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Assistant,
                     content: String::new(),
                     tool_call_id: Some("call-1".to_owned()),
@@ -2076,6 +2116,7 @@ mod tests {
                     arguments_json: Some(r#"{"path":"README.md"}"#.to_owned().try_into().unwrap()),
                 },
                 CompleteMessageInput {
+                    images: None,
                     role: CompleteMessageRole::Tool,
                     content: "fixture".to_owned(),
                     tool_call_id: Some("call-1".to_owned()),

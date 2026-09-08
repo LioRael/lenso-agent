@@ -47,6 +47,7 @@ async fn tui_turn_may_select_an_admitted_model_without_rebuilding_the_generation
                         .invocation_context_for_model("fixture/alternate-v1")
                         .unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Answer directly: selected model".to_owned(),
                         session_id: None,
                     },
@@ -111,6 +112,7 @@ async fn tui_turn_may_resolve_a_dynamic_model_policy_before_turn_start() {
                     RUN_TURN_OPERATION,
                     lease.invocation_context_for_model("auto").unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Answer directly: selected model".to_owned(),
                         session_id: None,
                     },
@@ -183,6 +185,7 @@ async fn tui_manual_compaction_uses_the_agent_session_control_transaction() {
                     RUN_TURN_OPERATION,
                     lease.invocation_context().unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Answer directly: preserve this context".to_owned(),
                         session_id: None,
                     },
@@ -257,6 +260,7 @@ async fn tui_answers_ask_user_through_the_same_generation() {
                     RUN_TURN_OPERATION,
                     lease.invocation_context().unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Ask me which mode to use.".to_owned(),
                         session_id: None,
                     },
@@ -358,6 +362,7 @@ async fn answered_interaction_renews_the_turn_execution_budget() {
                     RUN_TURN_OPERATION,
                     lease.invocation_context().unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Inspect before and after asking me which mode to use.".to_owned(),
                         session_id: None,
                     },
@@ -447,6 +452,7 @@ async fn answered_interaction_does_not_reset_the_total_tool_call_limit() {
                     RUN_TURN_OPERATION,
                     lease.invocation_context().unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Inspect before and after asking me which mode to use.".to_owned(),
                         session_id: None,
                     },
@@ -534,6 +540,7 @@ async fn explicit_zero_user_resume_limit_stops_after_the_answer() {
                     RUN_TURN_OPERATION,
                     lease.invocation_context().unwrap(),
                     RunTurnRequest {
+                        attachments: None,
                         input: "Ask me which mode to use.".to_owned(),
                         session_id: None,
                     },

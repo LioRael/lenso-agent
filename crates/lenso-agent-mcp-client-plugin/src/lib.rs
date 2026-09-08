@@ -867,6 +867,7 @@ fn sampling_messages(params: &Value) -> Result<Vec<CompleteMessageInput>, Runtim
 
 fn model_message(role: CompleteMessageRole, content: &str) -> CompleteMessageInput {
     CompleteMessageInput {
+        images: None,
         role,
         content: content.to_owned(),
         tool_call_id: None,

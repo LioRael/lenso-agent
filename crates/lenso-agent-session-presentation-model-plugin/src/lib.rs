@@ -115,6 +115,7 @@ fn model_request(config: &PresentationModelConfig, request: &ProjectRequest) -> 
         service_tier: None,
         messages: vec![
             CompleteMessageInput {
+                images: None,
                 role: CompleteMessageRole::System,
                 content: fixed_instruction,
                 tool_call_id: None,
@@ -122,6 +123,7 @@ fn model_request(config: &PresentationModelConfig, request: &ProjectRequest) -> 
                 arguments_json: None,
             },
             CompleteMessageInput {
+                images: None,
                 role: CompleteMessageRole::User,
                 content: input,
                 tool_call_id: None,

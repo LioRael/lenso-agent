@@ -196,6 +196,9 @@ pub struct CompleteOpen {
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
 pub struct CompleteMessageInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Vec<ModelImage>", length(max = 16))]
+    pub images: Option<Vec<ModelImage>>,
     pub role: CompleteMessageRole,
     #[schemars(length(max = 1_048_576))]
     pub content: String,
@@ -208,6 +211,15 @@ pub struct CompleteMessageInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String", length(max = 262_144))]
     pub arguments_json: Option<String>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ModelImage {
+    #[schemars(length(min = 1, max = 128))]
+    pub media_type: String,
+    #[schemars(length(min = 1, max = 2_796_204))]
+    pub data_base64: String,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -283,7 +295,7 @@ pub struct ProviderFailurePayload {
 #[lenso::capability(
     id = "lenso.agent.model",
     major = 4,
-    version = "4.1.0",
+    version = "4.2.0",
     portable = true,
     cross_lane_transfer = false
 )]
