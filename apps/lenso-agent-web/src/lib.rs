@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+use lenso::CtxExt;
+
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
@@ -503,6 +505,10 @@ enum RuntimeInteractionError {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
+    #[serde(skip)]
+    approval_user_request: Option<String>,
+    #[serde(default)]
+    approval_mode: Option<lenso_agent_interactive_approval_hook_plugin::ApprovalMode>,
     #[serde(default)]
     attachments: Option<Vec<lenso_capability_agent::RunTurnRequestAttachmentsItem>>,
     #[serde(default)]
@@ -2574,6 +2580,7 @@ async fn runtime_actor(
                 if pre_cancelled.remove(&request_id) {
                     cancellation.cancel();
                 }
+                request.approval_user_request = Some(request.input.clone());
                 request.input = match compose_web_context(&app, &request.input).await {
                     Ok(input) => input,
                     Err(error) => {
@@ -3400,6 +3407,14 @@ async fn invoke_turn(
         &request,
         cancellation.clone(),
     )?)?;
+    let context = context
+        .with_typed_extension(
+            &lenso_agent_interactive_approval_hook_plugin::ApprovalScope {
+                mode: request.approval_mode,
+                user_request: request.approval_user_request.clone().unwrap_or_default(),
+            },
+        )
+        .map_err(|error| format!("failed to capture approval scope: {error}"))?;
     let requested_session_id = match (request.session_id, request.edit_turn_id) {
         (Some(session_id), Some(turn_id)) => {
             turn.fork_session_before_turn(session_id, turn_id).await?
@@ -3990,6 +4005,8 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        approval_user_request: None,
+                        approval_mode: None,
                         attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
@@ -4012,6 +4029,8 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    approval_user_request: None,
+                    approval_mode: None,
                     attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
@@ -4039,6 +4058,8 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        approval_user_request: None,
+                        approval_mode: None,
                         attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
@@ -4062,6 +4083,8 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    approval_user_request: None,
+                    approval_mode: None,
                     attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
@@ -4091,6 +4114,8 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        approval_user_request: None,
+                        approval_mode: None,
                         attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
@@ -4125,6 +4150,8 @@ mod tests {
             pending.push_back(RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    approval_user_request: None,
+                    approval_mode: None,
                     attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
@@ -4668,6 +4695,8 @@ mod tests {
     fn rejects_empty_and_oversized_turns() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                approval_user_request: None,
+                approval_mode: None,
                 attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
@@ -4684,6 +4713,8 @@ mod tests {
         );
         assert!(
             validate_turn_request(&WebTurnRequest {
+                approval_user_request: None,
+                approval_mode: None,
                 attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
@@ -4718,6 +4749,8 @@ mod tests {
     fn rejects_ambiguous_reasoning_controls() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                approval_user_request: None,
+                approval_mode: None,
                 attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,

@@ -32,6 +32,8 @@ standalone = ["dep:lenso-agent-default-plugins"]
 console-standalone = ["dep:lenso-agent-console-plugins"]
 
 [dependencies]
+lenso.workspace = true
+lenso-agent-interactive-approval-hook-plugin = { path = "../../crates/lenso-agent-interactive-approval-hook-plugin" }
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true

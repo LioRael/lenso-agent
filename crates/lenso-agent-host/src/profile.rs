@@ -164,6 +164,29 @@ fn apply(
             instances.push(item);
         }
     }
+    if let Some(value) = document.extra.get("approval_mode") {
+        let mode = value
+            .as_str()
+            .filter(|mode| matches!(*mode, "request" | "assisted" | "full"))
+            .ok_or_else(|| "Profile approval_mode must be request, assisted or full".to_owned())?;
+        let hook = PluginInstanceId::new("lenso.agent.interactive-approval-hook", "default");
+        if disabled.contains(&hook) {
+            return Err("Approval mode requires the approval Hook".to_owned());
+        }
+        let existing = instances.iter().position(|instance| instance.id() == &hook);
+        let mut configuration = existing.map_or_else(
+            || serde_json::json!({}),
+            |index| instances[index].configuration().clone(),
+        );
+        configuration["approval_mode"] = serde_json::json!(mode);
+        let item = PluginRootInstance::new("lenso.agent.interactive-approval-hook", "default")
+            .with_configuration(configuration);
+        if let Some(index) = existing {
+            instances[index] = item;
+        } else {
+            instances.push(item);
+        }
+    }
     if !document.instructions.trim().is_empty() {
         if instances.iter().any(|instance| {
             instance.id().to_string() == "lenso.agent.prompt.static/profile-instructions"
@@ -228,6 +251,41 @@ mod tests {
 
     fn instance(plugin_id: &str, instance_key: &str) -> PluginRootInstance {
         PluginRootInstance::new(plugin_id, instance_key)
+    }
+
+    #[test]
+    fn approval_modes_materialize_and_reject_invalid_values() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                instance("lenso.agent.interactive-approval-hook", "default").with_configuration(
+                    serde_json::json!({"default_decision":"ask","max_preview_bytes":1024}),
+                ),
+            ],
+            [],
+        );
+        for mode in ["request", "assisted", "full"] {
+            let document: ProfileDocument = serde_json::from_value(
+                serde_json::json!({"approval_mode":mode,"instances":[],"include_enabled":true}),
+            )
+            .unwrap();
+            let selected = apply("test", &document, &root).unwrap();
+            let hook = selected
+                .root()
+                .instances()
+                .iter()
+                .find(|item| {
+                    item.id().to_string() == "lenso.agent.interactive-approval-hook/default"
+                })
+                .unwrap();
+            assert_eq!(hook.configuration()["approval_mode"], mode);
+            assert_eq!(hook.configuration()["default_decision"], "ask");
+        }
+        let document: ProfileDocument = serde_json::from_value(
+            serde_json::json!({"approval_mode":"unknown","instances":[],"include_enabled":true}),
+        )
+        .unwrap();
+        assert!(apply("test", &document, &root).is_err());
     }
 
     #[test]
