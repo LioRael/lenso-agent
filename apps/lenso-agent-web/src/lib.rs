@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+use lenso::CtxExt;
+
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, State},
@@ -305,6 +307,7 @@ struct WebRuntime {
     sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
     plugin_control: Option<PluginControl>,
     plugin_mutations: PluginMutationCoordinator,
+    profile_revision: Arc<RwLock<Option<String>>>,
 }
 
 #[derive(Clone)]
@@ -389,7 +392,16 @@ struct WebRuntimeConfig {
 }
 
 #[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "The bounded runtime channel owns each complete turn request"
+)]
 enum RuntimeCommand {
+    ForkSession {
+        session_id: String,
+        request: ForkSessionRequest,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
     AuthConnections {
         reply: oneshot::Sender<
             Result<lenso_agent_host::generation::auth_connections::ConnectionCatalog, String>,
@@ -474,6 +486,7 @@ enum RuntimeCommand {
         title: String,
     },
     SelectProfile {
+        expected_revision: Option<String>,
         profile: Option<String>,
         reply: oneshot::Sender<Result<SelectedProfileResponse, String>>,
     },
@@ -502,6 +515,12 @@ enum RuntimeInteractionError {
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
     #[serde(default)]
+    context_references: Vec<WebContextReference>,
+    #[serde(skip)]
+    approval_user_request: Option<String>,
+    #[serde(default)]
+    approval_mode: Option<lenso_agent_interactive_approval_hook_plugin::ApprovalMode>,
+    #[serde(default)]
     attachments: Option<Vec<lenso_capability_agent::RunTurnRequestAttachmentsItem>>,
     #[serde(default)]
     allowed_tools: Option<Vec<String>>,
@@ -524,6 +543,13 @@ struct WebTurnRequest {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WebContextReference {
+    Prompt { source: String, name: String },
+    Resource { source: String, uri: String },
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WebTerminalRequest {
     command_line: String,
@@ -533,6 +559,8 @@ struct WebTerminalRequest {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct SelectProfileRequest {
+    #[serde(default)]
+    expected_revision: Option<String>,
     profile: Option<String>,
 }
 
@@ -671,6 +699,13 @@ struct WebSessionSummary {
     title: String,
     title_revision: String,
     updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ForkSessionRequest {
+    turn_id: String,
+    operation_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1190,6 +1225,7 @@ fn validate_plugin_control_configuration(
 fn router(runtime: WebRuntime) -> Router {
     let data_plane = Router::new()
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
+        .route("/api/console/v1/agent/skills", get(available_skills))
         .route("/api/console/v1/agent/models", get(model_catalog))
         .route("/api/console/v1/agent/tools", get(agent_tool_catalog))
         .route(
@@ -1236,6 +1272,10 @@ fn router(runtime: WebRuntime) -> Router {
             get(read_trajectory),
         )
         .route(
+            "/api/console/v1/agent/sessions/{session_id}/fork",
+            post(fork_session),
+        )
+        .route(
             "/api/console/v1/agent/sessions/{session_id}/compact",
             post(compact_session),
         )
@@ -1251,6 +1291,10 @@ fn router(runtime: WebRuntime) -> Router {
         .route(
             "/api/console/v1/agent/control/profile",
             post(select_profile),
+        )
+        .route(
+            "/api/console/v1/agent/control/profiles",
+            get(list_editable_profiles).post(save_editable_profile),
         )
         .route(
             "/api/console/v1/agent/control/profiles/import",
@@ -1475,6 +1519,7 @@ async fn bootstrap(
                     && (runtime.sqlite_profiles.is_none() || coding_profiles),
             ),
             ("profileImport", coding_profiles),
+            ("profileEditing", runtime.sqlite_profiles.is_some()),
         ]
         .into_iter()
         .collect(),
@@ -1544,6 +1589,49 @@ async fn import_profiles(
     ))
 }
 
+async fn available_skills()
+-> Result<Json<Vec<lenso_agent_skills_filesystem_plugin::AvailableSkill>>, ApiProblem> {
+    tokio::task::spawn_blocking(lenso_agent_skills_filesystem_plugin::common_skill_catalog)
+        .await
+        .map_err(|error| ApiProblem::unavailable(error.to_string()))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
+}
+
+async fn list_editable_profiles(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let authority = runtime
+        .sqlite_profiles
+        .clone()
+        .ok_or_else(|| ApiProblem::conflict("Profile editing requires SQLite management"))?;
+    let profiles = tokio::task::spawn_blocking(move || authority.profiles())
+        .await
+        .map_err(|_| ApiProblem::unavailable("Profile worker stopped"))?
+        .map_err(|error| ApiProblem::conflict(error.to_string()))?;
+    Ok(Json(
+        serde_json::json!({"profiles": profiles, "activeProfile": runtime.plugin_control.as_ref().and_then(PluginControl::snapshot_profile), "activeRevision": *runtime.profile_revision.read().unwrap_or_else(std::sync::PoisonError::into_inner)}),
+    ))
+}
+async fn save_editable_profile(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(request): Json<configuration_store::profiles::SaveProfile>,
+) -> Result<Json<configuration_store::profiles::EditableProfile>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let authority = runtime
+        .sqlite_profiles
+        .clone()
+        .ok_or_else(|| ApiProblem::conflict("Profile editing requires SQLite management"))?;
+    tokio::task::spawn_blocking(move || authority.save_profile(&request))
+        .await
+        .map_err(|_| ApiProblem::unavailable("Profile worker stopped"))?
+        .map(Json)
+        .map_err(|error| ApiProblem::conflict(error.to_string()))
+}
+
 async fn select_profile(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
@@ -1554,13 +1642,6 @@ async fn select_profile(
         return Err(ApiProblem::conflict(
             "Profile selection requires a supported local or SQLite configuration authority",
         ));
-    }
-    if let Some(authority) = runtime.sqlite_profiles.clone() {
-        let profile = request.profile.clone();
-        tokio::task::spawn_blocking(move || authority.validate_managed_profile(profile.as_deref()))
-            .await
-            .map_err(|_| ApiProblem::unavailable("Profile validation worker stopped"))?
-            .map_err(|error| ApiProblem::conflict(error.to_string()))?;
     }
     if request
         .profile
@@ -1574,6 +1655,7 @@ async fn select_profile(
         .commands
         .send(RuntimeCommand::SelectProfile {
             profile: request.profile,
+            expected_revision: request.expected_revision,
             reply,
         })
         .await
@@ -1747,6 +1829,35 @@ async fn read_trajectory(
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
         .map(Json)
         .map_err(ApiProblem::unavailable)
+}
+
+async fn fork_session(
+    State(runtime): State<WebRuntime>,
+    Path(session_id): Path<String>,
+    Json(request): Json<ForkSessionRequest>,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    if !valid_session_id(&session_id)
+        || request.turn_id.is_empty()
+        || request.turn_id.len() > 128
+        || uuid::Uuid::parse_str(&request.operation_id).is_err()
+    {
+        return Err(ApiProblem::bad_request("Invalid branch identity"));
+    }
+    let (reply, response) = oneshot::channel();
+    runtime
+        .commands
+        .send(RuntimeCommand::ForkSession {
+            session_id,
+            request,
+            reply,
+        })
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+    let session_id = response
+        .await
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
+        .map_err(ApiProblem::conflict)?;
+    Ok(Json(serde_json::json!({"sessionId": session_id})))
 }
 
 async fn compact_session(
@@ -1932,10 +2043,8 @@ async fn resolve_tool_policy(
     app: &AgentApp,
     allowed_tools: &[String],
 ) -> Result<Vec<BootstrapTool>, String> {
-    let turn = app.lease_web_turn().await?;
-    let mut available_tools = turn
-        .tool_catalog()
-        .await?
+    let (_, available) = app.settings_tool_catalog().await?;
+    let mut available_tools = available
         .into_iter()
         .map(|tool| BootstrapTool {
             description: tool.description,
@@ -1972,11 +2081,8 @@ async fn agent_tool_catalog_on_app(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    let turn = app.lease_web_turn().await?;
-    let generation = turn.generation_spec_digest().to_owned();
-    let mut tools = turn
-        .tool_catalog()
-        .await?
+    let (generation, available) = app.settings_tool_catalog().await?;
+    let mut tools = available
         .into_iter()
         .filter(|tool| allowed.contains(&tool.name))
         .collect::<Vec<_>>();
@@ -2078,6 +2184,14 @@ impl WebRuntime {
         let configuration_authority = plugin_control
             .as_ref()
             .map(PluginControl::configuration_authority_response);
+        let profile_revision = Arc::new(RwLock::new(sqlite_profiles.as_ref().and_then(
+            |authority| {
+                authority
+                    .profile_revision(profile.as_deref())
+                    .ok()
+                    .flatten()
+            },
+        )));
         tokio::task::spawn_local(runtime_actor(
             app,
             receiver,
@@ -2085,6 +2199,8 @@ impl WebRuntime {
             Arc::clone(&policy),
             configuration_authority,
             RuntimeProfileState {
+                sqlite_profiles: sqlite_profiles.clone(),
+                profile_revision: profile_revision.clone(),
                 control: plugin_control.clone(),
                 available_tools: Arc::clone(&available_tools),
             },
@@ -2095,6 +2211,7 @@ impl WebRuntime {
                 .ok()
                 .and_then(|path| path.to_str().map(str::to_owned))
                 .map(|path| WebWorkspace { path }),
+            profile_revision,
             access: access.into(),
             available_tools,
             commands,
@@ -2221,6 +2338,8 @@ fn constant_time_digest_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
 }
 
 struct RuntimeProfileState {
+    sqlite_profiles: Option<Arc<SqlitePluginConfigurationAuthority>>,
+    profile_revision: Arc<RwLock<Option<String>>>,
     control: Option<PluginControl>,
     available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
 }
@@ -2420,6 +2539,24 @@ async fn runtime_actor(
             } => {
                 let _ = reply.send(read_attachment_from_app(&app, session_id, digest).await);
             }
+            RuntimeCommand::ForkSession {
+                session_id,
+                request,
+                reply,
+            } => {
+                let result = match app.lease_web_turn().await {
+                    Ok(turn) => {
+                        turn.fork_session_after_turn(
+                            session_id,
+                            request.turn_id,
+                            request.operation_id,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(result);
+            }
             RuntimeCommand::ReadSession { reply, session_id } => {
                 handle_read_command(&app, session_id, reply).await;
             }
@@ -2432,11 +2569,41 @@ async fn runtime_actor(
                 handle_rename_command(&app, session_id, title, expected_title_revision, reply)
                     .await;
             }
-            RuntimeCommand::SelectProfile { profile, reply } => {
+            RuntimeCommand::SelectProfile {
+                profile,
+                expected_revision,
+                reply,
+            } => {
+                if let Some(authority) = &profile_state.sqlite_profiles {
+                    let authority = Arc::clone(authority);
+                    let selected = profile.clone();
+                    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        if let Some(name) = selected.as_deref() {
+                            authority.materialize_profile(name, expected_revision.as_deref())?;
+                        }
+                        authority.validate_managed_profile(selected.as_deref())
+                    })
+                    .await
+                    .map_err(anyhow::Error::from)
+                    .and_then(std::convert::identity);
+                    if let Err(error) = result {
+                        let _ = reply.send(Err(error.to_string()));
+                        continue;
+                    }
+                }
                 let result = match app.select_profile(profile).await {
                     Err(error) => Err(error),
                     Ok(()) => {
                         let profile = app.selected_profile();
+                        if let Some(authority) = &profile_state.sqlite_profiles {
+                            *profile_state
+                                .profile_revision
+                                .write()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner) = authority
+                                .profile_revision(profile.as_deref())
+                                .ok()
+                                .flatten();
+                        }
                         if let Some(control) = &profile_state.control {
                             control.update_managed_profile(profile.clone());
                         }
@@ -2499,7 +2666,8 @@ async fn runtime_actor(
                 if pre_cancelled.remove(&request_id) {
                     cancellation.cancel();
                 }
-                request.input = match compose_web_context(&app, &request.input).await {
+                request.approval_user_request = Some(request.input.clone());
+                request.input = match compose_references(&app, &request).await {
                     Ok(input) => input,
                     Err(error) => {
                         send_stream_event(
@@ -2598,6 +2766,9 @@ async fn runtime_actor(
                                     }
                                     RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
                                         app.report_plugin_watch_degraded(detail);
+                                    }
+                                    RuntimeCommand::ForkSession { session_id, request, reply } => {
+                                        let _ = reply.send(turn.fork_session_after_turn(session_id, request.turn_id, request.operation_id).await);
                                     }
                                     RuntimeCommand::TaskSnapshot { reply } => {
                                         let _ = reply.send(turn.task_snapshot().await);
@@ -2706,7 +2877,8 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         RuntimeCommand::ListSessions { reply } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
-        RuntimeCommand::ReadAttachment { reply, .. } => {
+        RuntimeCommand::ReadAttachment { reply, .. }
+        | RuntimeCommand::ForkSession { reply, .. } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
         RuntimeCommand::ReadSession { reply, .. } => {
@@ -3183,6 +3355,40 @@ fn project_session_list(listed: ListSessionsResponse) -> WebSessionList {
     WebSessionList { sessions }
 }
 
+async fn compose_references(app: &AgentApp, request: &WebTurnRequest) -> Result<String, String> {
+    if request.context_references.len() > 8 {
+        return Err("Choose up to eight context references".to_owned());
+    }
+    let mut input = compose_web_context(app, &request.input).await?;
+    for reference in &request.context_references {
+        let command = match reference {
+            WebContextReference::Prompt { source, name } => {
+                if !source
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || "._-".contains(c))
+                    || !name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || "._-".contains(c))
+                {
+                    return Err("Invalid prompt reference".into());
+                }
+                format!("/mcp-prompt {source}/{name} {input}")
+            }
+            WebContextReference::Resource { source, uri } => {
+                if source.contains(['/', '=', ' ']) || uri.chars().any(char::is_whitespace) {
+                    return Err("Invalid resource reference".into());
+                }
+                format!("/mcp-resource {source}={uri} {input}")
+            }
+        };
+        input = compose_web_context(app, &command).await?;
+        if input.len() > 1_048_576 {
+            return Err("Selected context exceeds one MiB".into());
+        }
+    }
+    Ok(input)
+}
+
 async fn compose_web_context(app: &AgentApp, input: &str) -> Result<String, String> {
     if let Some((source, name, task)) = selected_context_prompt(input)? {
         let rendered = app
@@ -3311,6 +3517,10 @@ fn turn_invocation_context(
     )
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Preserve the ordered turn admission, context and execution sequence"
+)]
 async fn invoke_turn(
     turn: &lenso_agent_host::generation::TurnGeneration,
     request: WebTurnRequest,
@@ -3325,6 +3535,27 @@ async fn invoke_turn(
         &request,
         cancellation.clone(),
     )?)?;
+    let context = context
+        .with_typed_extension(
+            &lenso_agent_interactive_approval_hook_plugin::ApprovalScope {
+                mode: request.approval_mode,
+                user_request: request.approval_user_request.clone().unwrap_or_default(),
+            },
+        )
+        .map_err(|error| format!("failed to capture approval scope: {error}"))?;
+    let context = if request
+        .approval_user_request
+        .as_ref()
+        .is_some_and(|input| input != &request.input)
+    {
+        context
+            .with_typed_extension(&lenso_agent_loop_plugin::TurnInputPresentation {
+                input: request.approval_user_request.clone().unwrap_or_default(),
+            })
+            .map_err(|error| format!("failed to preserve user input: {error}"))?
+    } else {
+        context
+    };
     let requested_session_id = match (request.session_id, request.edit_turn_id) {
         (Some(session_id), Some(turn_id)) => {
             turn.fork_session_before_turn(session_id, turn_id).await?
@@ -3666,6 +3897,7 @@ mod tests {
         let (commands, _receiver) = mpsc::channel(1);
         WebRuntime {
             workspace: None,
+            profile_revision: Arc::new(RwLock::new(None)),
             access: access.into(),
             available_tools: Arc::new(RwLock::new(Vec::new())),
             commands,
@@ -3914,6 +4146,9 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        context_references: vec![],
+                        approval_user_request: None,
+                        approval_mode: None,
                         attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
@@ -3936,6 +4171,9 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    context_references: vec![],
+                    approval_user_request: None,
+                    approval_mode: None,
                     attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
@@ -3963,6 +4201,9 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        context_references: vec![],
+                        approval_user_request: None,
+                        approval_mode: None,
                         attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
@@ -3986,6 +4227,9 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    context_references: vec![],
+                    approval_user_request: None,
+                    approval_mode: None,
                     attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
@@ -4015,6 +4259,9 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        context_references: vec![],
+                        approval_user_request: None,
+                        approval_mode: None,
                         attachments: None,
                         allowed_tools: None,
                         edit_turn_id: None,
@@ -4049,6 +4296,9 @@ mod tests {
             pending.push_back(RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    context_references: vec![],
+                    approval_user_request: None,
+                    approval_mode: None,
                     attachments: None,
                     allowed_tools: None,
                     edit_turn_id: None,
@@ -4461,6 +4711,7 @@ mod tests {
                     State(surface.runtime.clone()),
                     HeaderMap::new(),
                     Json(SelectProfileRequest {
+                        expected_revision: None,
                         profile: Some("code".to_owned()),
                     }),
                 )
@@ -4591,6 +4842,9 @@ mod tests {
     fn rejects_empty_and_oversized_turns() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                context_references: vec![],
+                approval_user_request: None,
+                approval_mode: None,
                 attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
@@ -4607,6 +4861,9 @@ mod tests {
         );
         assert!(
             validate_turn_request(&WebTurnRequest {
+                context_references: vec![],
+                approval_user_request: None,
+                approval_mode: None,
                 attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,
@@ -4641,6 +4898,9 @@ mod tests {
     fn rejects_ambiguous_reasoning_controls() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                context_references: vec![],
+                approval_user_request: None,
+                approval_mode: None,
                 attachments: None,
                 allowed_tools: None,
                 edit_turn_id: None,

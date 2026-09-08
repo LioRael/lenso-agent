@@ -89,6 +89,7 @@ impl SqlitePluginConfigurationAuthority {
         self.with_operation(|connection| {
             self.reconcile(connection)?;
             let Some(profile) = profile else { return Ok(()); };
+            if self.validate_custom_profile(connection, profile)? { return Ok(()); }
             if !["plan", "code", "code-sandbox"].contains(&profile) {
                 bail!("SQLite Profile selection requires an imported coding Profile");
             }

@@ -15,6 +15,7 @@ root-slot = "tool-providers"
 [dependencies]
 directories.workspace = true
 lenso.workspace = true
+lenso-capability-agent-context-source = { path = "../lenso-capability-agent-context-source" }
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-capability-tui-suggestion = { path = "../lenso-capability-tui-suggestion" }

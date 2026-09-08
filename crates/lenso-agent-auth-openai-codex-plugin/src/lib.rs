@@ -30,7 +30,7 @@ const DEFAULT_ISSUER: &str = "https://auth.openai.com";
 const DEVICE_REDIRECT_URI: &str = "https://auth.openai.com/deviceauth/callback";
 const BROWSER_CALLBACK_PATH: &str = "/auth/callback";
 const DEFAULT_BROWSER_CALLBACK_PORT: u16 = 1455;
-const BROWSER_LOGIN_TIMEOUT: Duration = Duration::from_mins(5);
+const BROWSER_LOGIN_TIMEOUT: Duration = Duration::from_mins(10);
 const DEFAULT_REFRESH_MARGIN_SECONDS: u64 = 60;
 
 #[derive(Clone, Debug, serde::Deserialize)]
@@ -136,6 +136,7 @@ pub struct PendingBrowserLogin {
     /// Authorization URL to open in the user's browser.
     pub authorization_url: String,
     listener: TcpListener,
+    ipv6_listener: Option<TcpListener>,
     verifier: String,
     state: String,
     redirect_uri: String,
@@ -238,7 +239,10 @@ impl CodexAuth {
         Ok(Ok(connection_contract::StatusResponse {
             label: format!("ChatGPT ({})", self.config.profile),
             connected: status.authenticated,
-            methods: vec![connection_contract::LoginMethod::DeviceCode],
+            methods: vec![
+                connection_contract::LoginMethod::BrowserLoopback,
+                connection_contract::LoginMethod::DeviceCode,
+            ],
         }))
     }
 
@@ -379,6 +383,23 @@ pub async fn begin_browser_login(
         .local_addr()
         .map_err(|_| "failed to inspect the browser OAuth callback".to_owned())?
         .port();
+    let ipv6_listener = match TcpListener::bind(("::1", callback_port)).await {
+        Ok(listener) => Some(listener),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::AddrNotAvailable | io::ErrorKind::Unsupported
+            ) =>
+        {
+            None
+        }
+        Err(_) => {
+            return Err(
+                "browser OAuth IPv6 callback port is occupied; use device authentication"
+                    .to_owned(),
+            );
+        }
+    };
     let redirect_uri = format!("http://localhost:{callback_port}{BROWSER_CALLBACK_PATH}");
     let verifier = format!(
         "{}{}",
@@ -407,6 +428,7 @@ pub async fn begin_browser_login(
     Ok(PendingBrowserLogin {
         authorization_url: authorization_url.into(),
         listener,
+        ipv6_listener,
         verifier,
         state,
         redirect_uri,
@@ -423,7 +445,11 @@ pub async fn complete_browser_login(
         .map_err(|error| runtime_text(&error))?;
     let code = tokio::time::timeout(
         BROWSER_LOGIN_TIMEOUT,
-        wait_for_browser_code(&pending.listener, &pending.state),
+        wait_for_browser_code(
+            &pending.listener,
+            pending.ipv6_listener.as_ref(),
+            &pending.state,
+        ),
     )
     .await
     .map_err(|_| "browser OAuth callback timed out; run login again".to_owned())??;
@@ -450,20 +476,30 @@ pub async fn complete_browser_login(
 
 async fn wait_for_browser_code(
     listener: &TcpListener,
+    ipv6_listener: Option<&TcpListener>,
     expected_state: &str,
 ) -> Result<String, String> {
     loop {
-        let (mut stream, _) = listener
-            .accept()
-            .await
-            .map_err(|_| "failed to accept the browser OAuth callback".to_owned())?;
+        let accepted = if let Some(ipv6) = ipv6_listener {
+            tokio::select! {
+                result = listener.accept() => result,
+                result = ipv6.accept() => result,
+            }
+        } else {
+            listener.accept().await
+        };
+        let Ok((mut stream, _)) = accepted else {
+            continue;
+        };
         let mut request = Vec::new();
         loop {
             let mut buffer = [0_u8; 2048];
-            let read = stream
-                .read(&mut buffer)
-                .await
-                .map_err(|_| "failed to read the browser OAuth callback".to_owned())?;
+            // Browser preconnects and abandoned sockets must not terminate login.
+            let Ok(Ok(read)) =
+                tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buffer)).await
+            else {
+                break;
+            };
             if read == 0 || request.len().saturating_add(read) > 16 * 1024 {
                 break;
             }
@@ -963,6 +999,48 @@ mod tests {
             extract_account_id(&format!("header.{payload}.signature")).as_deref(),
             Some("acct-1")
         );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn callback_accepts_ipv6_after_an_abandoned_ipv4_connection() {
+        let options = DirectAuthOptions {
+            callback_port: 0,
+            ..DirectAuthOptions::default()
+        };
+        let pending = begin_browser_login(options).await.unwrap();
+        let port = pending.listener.local_addr().unwrap().port();
+        assert!(pending.ipv6_listener.is_some());
+        let client = async {
+            let abandoned = tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .unwrap();
+            drop(abandoned);
+            let url = format!(
+                "http://[::1]:{port}/auth/callback?code=test-only&state={}",
+                pending.state
+            );
+            reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+                .error_for_status()
+                .unwrap();
+        };
+        let receive = super::wait_for_browser_code(
+            &pending.listener,
+            pending.ipv6_listener.as_ref(),
+            &pending.state,
+        );
+        let (code, ()) = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            tokio::join!(receive, client)
+        })
+        .await
+        .unwrap();
+        assert_eq!(code.unwrap(), "test-only");
     }
 
     #[tokio::test(flavor = "current_thread")]

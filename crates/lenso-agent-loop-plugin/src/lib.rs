@@ -247,6 +247,17 @@ impl TypedExtension for TurnModelSelection {
     const KEY: &'static str = TURN_MODEL_SELECTION_EXTENSION;
 }
 
+/// Original surface text when the Host has added explicit context to model input.
+/// This affects history presentation only; replay continues to use the full input.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnInputPresentation {
+    pub input: String,
+}
+impl TypedExtension for TurnInputPresentation {
+    const KEY: &'static str = "lenso.agent.turn-input-presentation.v1";
+}
+
 /// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -364,6 +375,8 @@ pub fn inspect_turn_generation_provenance(
     struct TurnStartedPayload {
         #[serde(default, rename = "attachments")]
         _attachments: Option<serde_json::Value>,
+        #[serde(default, rename = "display_input")]
+        _display_input: Option<String>,
         generation_spec_digest: String,
         #[serde(default)]
         agent_behavior_digest: Option<String>,
@@ -414,6 +427,7 @@ fn canonical_sha256_digest(value: &str) -> bool {
 #[derive(Clone, Debug, serde::Deserialize, lenso::PluginConfig)]
 #[serde(deny_unknown_fields)]
 struct AgentConfig {
+    tool_allowlist: Option<Vec<String>>,
     model: String,
     max_steps: Option<u32>,
     max_tool_calls: Option<u32>,
@@ -552,6 +566,9 @@ struct AgentLoop {
 }
 
 fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
+    if let Some(tools) = &config.tool_allowlist {
+        RunScope::new(tools.clone()).map_err(|detail| RuntimeFailure::PluginFailure { detail })?;
+    }
     if config.model.is_empty()
         || config.max_steps.is_some_and(|max_steps| max_steps == 0)
         || config
@@ -720,6 +737,7 @@ impl AgentLoop {
             .open_with_context(
                 context.clone(),
                 OpenSessionRequest {
+                    create_session_id: None,
                     session_id: Some(request.session_id.clone()),
                 },
             )
@@ -918,11 +936,13 @@ async fn run_turn(
     let base_turn_profile = resolved_turn_profile(context)?;
     let model_selection = turn_model_selection(context, &base_turn_profile)?;
     let run_scope = run_scope(context)?;
+
     let opened = clients
         .session
         .open_with_context(
             context.clone(),
             OpenSessionRequest {
+                create_session_id: None,
                 session_id: request.session_id,
             },
         )
@@ -1176,6 +1196,9 @@ async fn start_turn(
         &serde_json::json!({"input": start.input, "run_scope": start.run_scope}),
     )
     .await?;
+    let presentation = context
+        .typed_extension::<TurnInputPresentation>()
+        .map_err(|error| invalid_system_instruction(error.to_string()))?;
     let mut turn_events = interrupted_turn_events(start.history)?;
     turn_events.push(session_event(
         AppendSessionRequestEventsItemKind::TurnStarted,
@@ -1186,6 +1209,7 @@ async fn start_turn(
             "resolved_turn_profile": start.resolved_turn_profile,
             "model_selection": start.model_selection,
             "input": start.input,
+            "display_input": presentation.map(|value| value.input),
             "attachments": start.attachments,
             "run_scope": start.run_scope
         }),
@@ -1649,6 +1673,23 @@ async fn execute_steps(
             detail: format!("Run Scope requests Tool `{unknown}` outside the Plan-bound catalog"),
         }));
     }
+    // A Profile can only narrow the caller's authority. Stale names in a Profile
+    // ceiling are harmless; explicit caller scopes still validate against the catalog.
+    let profile_scope = clients
+        .config
+        .tool_allowlist
+        .as_ref()
+        .map(|allowed| RunScope {
+            allowed_tools: allowed
+                .iter()
+                .filter(|name| {
+                    static_tools.contains_key(*name)
+                        && run_scope.is_none_or(|scope| scope.allowed_tools.contains(*name))
+                })
+                .cloned()
+                .collect(),
+        });
+    let run_scope = profile_scope.as_ref().or(run_scope);
     let deferred_tools = if run_scope.is_none()
         && static_tools
             .keys()
@@ -2018,11 +2059,14 @@ async fn execute_steps(
         budget.record_tool_calls(requested);
         for tool_call in &completion.tool_calls {
             if !admitted_tools.contains(tool_call.tool_name.as_str()) {
-                return Err(PluginError::runtime(RuntimeFailure::PluginFailure {
-                    detail: format!(
-                        "Model requested Tool `{}` outside the immutable Run Scope",
-                        tool_call.tool_name
-                    ),
+                return Err(PluginError::domain(RunTurnError::ModelFailure {
+                    payload: agent_capability::ModelFailurePayload {
+                        reason_code: "tool_not_allowed".to_owned(),
+                        message: format!(
+                            "Model requested Tool `{}` outside the immutable Run Scope",
+                            tool_call.tool_name
+                        ),
+                    },
                 }));
             }
         }
@@ -4972,6 +5016,7 @@ mod tests {
     #[test]
     fn third_party_compactor_may_summarize_but_not_fabricate_the_retained_tail() {
         let config = AgentConfig {
+            tool_allowlist: None,
             model: "fixture".to_owned(),
             max_steps: Some(1),
             max_tool_calls: Some(0),
@@ -5036,6 +5081,7 @@ mod tests {
     #[test]
     fn user_resume_renews_one_bounded_execution_segment() {
         let config = AgentConfig {
+            tool_allowlist: None,
             model: "fixture".to_owned(),
             max_steps: Some(8),
             max_tool_calls: Some(4),

@@ -11,6 +11,7 @@ use std::{
 
 use directories::BaseDirs;
 use lenso::prelude::*;
+use lenso_capability_agent_context_source as context_source;
 use lenso_capability_agent_prompt_provider as prompt_provider;
 use lenso_capability_agent_prompt_provider::{
     ContributeError, ContributeRequest, ContributeResponse, ContributeResponseContributionsItem,
@@ -45,6 +46,10 @@ const MAX_DESCRIPTION_BYTES: usize = 4_096;
 #[serde(deny_unknown_fields)]
 struct SkillsConfig {
     root: PathBuf,
+    #[serde(default)]
+    additional_roots: Vec<PathBuf>,
+    #[serde(default)]
+    allowed_skills: Option<Vec<String>>,
     max_skills: usize,
     max_file_bytes: usize,
     max_total_bytes: usize,
@@ -283,7 +288,8 @@ impl From<RuntimeFailure> for ProviderFailure {
 #[lenso::provides(
     tool_provider::ToolProvider,
     prompt_provider::PromptProvider,
-    tui_suggestion::Suggestion
+    tui_suggestion::Suggestion,
+    context_source::ContextSource
 )]
 impl FilesystemSkillsPlugin {
     #[allow(clippy::unused_self)]
@@ -369,20 +375,161 @@ impl FilesystemSkillsPlugin {
         std::future::ready(result)
     }
 
-    fn snapshot(
+    fn snapshot<R: SkillSnapshotRequest>(
         &self,
         _context: Ctx,
-        _request: SuggestionSnapshotRequest,
+        request: R,
+    ) -> impl std::future::Future<Output = PluginResult<R::Response, R::Error>> {
+        std::future::ready(request.project(&self.provider))
+    }
+    fn render_prompt(
+        &self,
+        _context: Ctx,
+        request: context_source::RenderPromptRequest,
     ) -> impl std::future::Future<
-        Output = PluginResult<SuggestionSnapshotResponse, SuggestionSnapshotError>,
+        Output = Result<context_source::RenderPromptResponse, context_source::RenderPromptError>,
     > {
-        let result = self
-            .provider
-            .suggestions_now()
-            .map(|suggestions| SuggestionSnapshotResponse { suggestions })
-            .map_err(PluginError::runtime);
+        let result = if request.source == "skills" {
+            self.provider
+                .state
+                .borrow()
+                .as_ref()
+                .and_then(|state| state.skills.get(&request.name))
+                .map(|skill| context_source::RenderPromptResponse {
+                    description: truncate_description(&skill.description),
+                    messages: vec![context_source::ContextMessage {
+                        role: context_source::ContextRole::User,
+                        text: skill.content.clone(),
+                    }],
+                })
+                .ok_or(context_source::RenderPromptError::NotFound)
+        } else {
+            Err(context_source::RenderPromptError::NotFound)
+        };
+        drop(request);
         std::future::ready(result)
     }
+    // Capability operations are instance methods, including unsupported resource reads.
+    #[allow(clippy::unused_self)]
+    fn read_resource(
+        &self,
+        _context: Ctx,
+        _request: context_source::ReadResourceRequest,
+    ) -> impl std::future::Future<
+        Output = Result<context_source::ReadResourceResponse, context_source::ReadResourceError>,
+    > {
+        std::future::ready(Err(context_source::ReadResourceError::NotFound))
+    }
+}
+trait SkillSnapshotRequest {
+    type Response;
+    type Error;
+    fn project(
+        self,
+        provider: &FilesystemSkillsProvider,
+    ) -> PluginResult<Self::Response, Self::Error>;
+}
+impl SkillSnapshotRequest for SuggestionSnapshotRequest {
+    type Response = SuggestionSnapshotResponse;
+    type Error = SuggestionSnapshotError;
+    fn project(
+        self,
+        provider: &FilesystemSkillsProvider,
+    ) -> PluginResult<Self::Response, Self::Error> {
+        provider
+            .suggestions_now()
+            .map(|suggestions| SuggestionSnapshotResponse { suggestions })
+            .map_err(PluginError::runtime)
+    }
+}
+impl SkillSnapshotRequest for context_source::SnapshotRequest {
+    type Response = context_source::SnapshotResponse;
+    type Error = context_source::SnapshotError;
+    fn project(
+        self,
+        provider: &FilesystemSkillsProvider,
+    ) -> PluginResult<Self::Response, Self::Error> {
+        provider
+            .state
+            .borrow()
+            .as_ref()
+            .map(|state| context_source::SnapshotResponse {
+                prompts: state
+                    .skills
+                    .values()
+                    .take(256)
+                    .map(|skill| context_source::PromptDefinition {
+                        source: "skills".to_owned(),
+                        name: skill.name.clone(),
+                        description: truncate_description(&skill.description),
+                        arguments_schema_json: "{}".to_owned().try_into().expect("valid JSON"),
+                    })
+                    .collect(),
+                resources: vec![],
+            })
+            .ok_or_else(|| {
+                PluginError::runtime(RuntimeFailure::Unavailable {
+                    capability: context_source::CAPABILITY_ID,
+                })
+            })
+    }
+}
+fn truncate_description(value: &str) -> String {
+    value.chars().take(240).collect()
+}
+
+/// Metadata only, for configuring common Skill directories before selecting a Profile.
+#[derive(Debug, serde::Serialize)]
+pub struct AvailableSkill {
+    pub name: String,
+    pub description: String,
+    pub directory: String,
+}
+
+pub fn common_skill_catalog() -> Result<Vec<AvailableSkill>, String> {
+    let mut catalog = BTreeMap::new();
+    for configured in [
+        "~/.agents/skills",
+        "~/.codex/skills",
+        "~/.claude/skills",
+        ".agents/skills",
+        ".claude/skills",
+    ] {
+        let root = expand_home(Path::new(configured)).map_err(|error| format!("{error:?}"))?;
+        if !root.exists() {
+            continue;
+        }
+        let root = fs::canonicalize(root).map_err(|error| error.to_string())?;
+        for (name, document) in
+            discover_skills(&root, 1024).map_err(|error| format!("{error:?}"))?
+        {
+            if catalog.contains_key(&name) {
+                continue;
+            }
+            let resolved = fs::canonicalize(&document).map_err(|error| error.to_string())?;
+            if !resolved.starts_with(&root) {
+                continue;
+            }
+            let metadata = fs::metadata(&document).map_err(|error| error.to_string())?;
+            if metadata.len() > 262_144 {
+                continue;
+            }
+            let content = fs::read_to_string(&document).map_err(|error| error.to_string())?;
+            let description = content
+                .lines()
+                .find_map(|line| line.strip_prefix("description:"))
+                .unwrap_or("")
+                .trim()
+                .trim_matches('"')
+                .to_owned();
+            catalog.entry(name.clone()).or_insert(AvailableSkill {
+                name,
+                description,
+                directory: root.display().to_string(),
+            });
+        }
+    }
+    Ok(catalog.into_values().collect())
 }
 
 fn validate_config(config: &SkillsConfig) -> Result<(), RuntimeFailure> {
@@ -397,6 +544,7 @@ fn validate_config(config: &SkillsConfig) -> Result<(), RuntimeFailure> {
         || !(1..=MAX_PROVIDER_OUTPUT_BYTES).contains(&config.max_resource_file_bytes)
         || !(1..=67_108_864).contains(&config.max_resource_total_bytes)
         || !(1..=MAX_PROVIDER_OUTPUT_BYTES).contains(&config.max_resource_manifest_bytes)
+        || config.additional_roots.len() > 16
         || config.max_file_bytes > config.max_total_bytes
         || config.max_resource_file_bytes > config.max_resource_total_bytes
     {
@@ -408,6 +556,53 @@ fn validate_config(config: &SkillsConfig) -> Result<(), RuntimeFailure> {
 }
 
 fn load_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure> {
+    validate_config(config)?;
+    let mut skills = BTreeMap::new();
+    for root in std::iter::once(&config.root).chain(&config.additional_roots) {
+        let mut local = config.clone();
+        local.root.clone_from(root);
+        local.additional_roots.clear();
+        let expanded = expand_home(root)?;
+        if expanded.exists() {
+            let canonical = canonical_root(root)?;
+            local.allowed_skills = Some(
+                discover_skills(&canonical, config.max_skills)?
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .filter(|name| {
+                        !skills.contains_key(name)
+                            && config
+                                .allowed_skills
+                                .as_ref()
+                                .is_none_or(|allowed| allowed.contains(name))
+                    })
+                    .collect(),
+            );
+        }
+        for (name, skill) in load_root_snapshot(&local)?.skills {
+            skills.entry(name).or_insert(skill);
+        }
+    }
+    if skills.len() > config.max_skills
+        || skills.values().map(|s| s.content.len()).sum::<usize>() > config.max_total_bytes
+    {
+        return Err(plugin_failure("Combined Skills exceed configured limits"));
+    }
+    if skills
+        .values()
+        .flat_map(|skill| skill.resources.values())
+        .map(|resource| resource.content.len())
+        .sum::<usize>()
+        > config.max_resource_total_bytes
+    {
+        return Err(plugin_failure(
+            "Combined Skill resources exceed configured limits",
+        ));
+    }
+    finish_snapshot(skills, config)
+}
+
+fn load_root_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure> {
     validate_config(config)?;
     let expanded = expand_home(&config.root)?;
     match fs::symlink_metadata(&expanded) {
@@ -428,6 +623,13 @@ fn load_snapshot(config: &SkillsConfig) -> Result<SkillsSnapshot, RuntimeFailure
     let mut resource_budget = ResourceBudget::default();
     let mut skills = BTreeMap::new();
     for (directory_name, document) in candidates {
+        if config
+            .allowed_skills
+            .as_ref()
+            .is_some_and(|names| !names.contains(&directory_name))
+        {
+            continue;
+        }
         let (skill, file_bytes) = load_skill(
             &root,
             &directory_name,
@@ -988,6 +1190,8 @@ mod tests {
     fn config(root: &Path) -> SkillsConfig {
         SkillsConfig {
             root: root.to_path_buf(),
+            additional_roots: vec![],
+            allowed_skills: None,
             max_skills: 8,
             max_file_bytes: 8_192,
             max_total_bytes: 32_768,
@@ -1002,18 +1206,55 @@ mod tests {
     }
 
     #[test]
+    fn selection_filters_every_skill_projection_and_merges_roots() {
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        write_skill(first.path(), "one", "First", "first");
+        write_skill(second.path(), "two", "Second", "second");
+        let mut config = config(first.path());
+        config.additional_roots.push(second.path().to_path_buf());
+        assert_eq!(load_snapshot(&config).unwrap().skills.len(), 2);
+        config.allowed_skills = Some(vec!["two".to_owned()]);
+        let selected = load_snapshot(&config).unwrap();
+        assert_eq!(selected.skills.len(), 1);
+        assert!(selected.skills.contains_key("two"));
+        assert!(!selected.catalog_json.contains("one"));
+        assert!(!selected.catalog_contribution.content.contains("First"));
+        let provider = FilesystemSkillsProvider {
+            state: Rc::new(RefCell::new(Some(selected))),
+        };
+        let context = context_source::SnapshotRequest {}
+            .project(&provider)
+            .unwrap();
+        assert_eq!(context.prompts.len(), 1);
+        assert_eq!(context.prompts[0].name, "two");
+        assert!(
+            provider
+                .execute_now(&ExecuteRequest {
+                    name: READ_TOOL.to_owned(),
+                    arguments_json: r#"{"name":"one"}"#.to_owned().try_into().unwrap()
+                })
+                .is_err()
+        );
+        config.allowed_skills = Some(vec![]);
+        assert!(load_snapshot(&config).unwrap().skills.is_empty());
+    }
+
+    #[test]
     fn generated_descriptor_owns_tool_prompt_and_tui_roles() {
         let descriptor: serde_json::Value = serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
         let provided = descriptor["provided_capabilities"].as_array().unwrap();
 
         assert_eq!(descriptor["plugin_id"], "lenso.agent.skills.filesystem");
-        assert_eq!(provided.len(), 3);
-        assert_eq!(provided[0]["capability_id"], "lenso.agent.tool-provider@2");
-        assert_eq!(
-            provided[1]["capability_id"],
-            "lenso.agent.prompt-provider@1"
-        );
-        assert_eq!(provided[2]["capability_id"], "lenso.tui.suggestion@1");
+        assert_eq!(provided.len(), 4);
+        for id in [
+            "lenso.agent.tool-provider@2",
+            "lenso.agent.prompt-provider@1",
+            "lenso.tui.suggestion@1",
+            "lenso.agent.context-source@1",
+        ] {
+            assert!(provided.iter().any(|item| item["capability_id"] == id));
+        }
     }
 
     fn write_skill(root: &Path, name: &str, description: &str, body: &str) {

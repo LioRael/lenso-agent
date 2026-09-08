@@ -14,6 +14,8 @@ root-slot = "tool-hooks"
 
 [dependencies]
 lenso.workspace = true
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+tokio.workspace = true
 lenso-capability-agent-tool-hook = { path = "../lenso-capability-agent-tool-hook" }
 lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true

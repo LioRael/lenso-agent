@@ -5,17 +5,26 @@ use lenso_app_plan::authoring::{PluginInstanceId, PluginRootInstance, PluginRoot
 const MAX_PROFILE_BYTES: u64 = 256 * 1024;
 const DEFAULT_AGENT: &str = "lenso.agent.loop/agent";
 
-#[derive(Clone, Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProfileDocument {
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct ProfileDocument {
     #[serde(default)]
     #[serde(rename = "description")]
-    _description: String,
+    pub description: String,
     #[serde(default = "default_agent")]
-    agent: String,
+    pub agent: String,
     #[serde(default)]
-    include_enabled: bool,
-    instances: Vec<String>,
+    pub include_enabled: bool,
+    pub instances: Vec<String>,
+    #[serde(default)]
+    pub excluded_instances: Vec<String>,
+    #[serde(default)]
+    pub allowed_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub instructions: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(flatten)]
+    pub extra: std::collections::BTreeMap<String, toml::Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -77,6 +86,20 @@ fn apply(
         ));
     }
 
+    let excluded = document
+        .excluded_instances
+        .iter()
+        .map(|value| parse_instance_id(value, "excluded_instances"))
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if excluded.contains(&agent) {
+        return Err("The selected Agent cannot be disabled".into());
+    }
+    if document.instructions.len() > 65536 {
+        return Err("Profile instructions exceed 64 KiB".into());
+    }
+    if let Some(tools) = &document.allowed_tools {
+        lenso_agent_loop_plugin::RunScope::new(tools.clone())?;
+    }
     let root_instances = root
         .instances()
         .iter()
@@ -95,13 +118,16 @@ fn apply(
         ));
     }
 
-    let instances = root
+    let mut instances = root
         .instances()
         .iter()
-        .filter(|instance| document.include_enabled || selected.contains(instance.id()))
+        .filter(|instance| {
+            !excluded.contains(instance.id())
+                && (document.include_enabled || selected.contains(instance.id()))
+        })
         .cloned()
         .collect::<Vec<_>>();
-    let disabled = root
+    let mut disabled = root
         .disabled()
         .iter()
         .filter(|instance| {
@@ -110,10 +136,120 @@ fn apply(
         })
         .cloned()
         .collect::<Vec<_>>();
+    disabled.extend(excluded);
+    disabled.sort();
+    disabled.dedup();
+    if document.allowed_tools.is_some() || document.model.is_some() {
+        if agent.plugin_id() != "lenso.agent.loop" {
+            return Err("Tool and model defaults require a Lenso Agent Loop".into());
+        }
+        let existing = instances
+            .iter()
+            .position(|instance| instance.id() == &agent);
+        let mut configuration = existing.map_or_else(
+            || serde_json::json!({}),
+            |index| instances[index].configuration().clone(),
+        );
+        if let Some(tools) = &document.allowed_tools {
+            configuration["tool_allowlist"] = serde_json::json!(tools);
+        }
+        if let Some(model) = &document.model {
+            configuration["model"] = serde_json::json!(model);
+        }
+        let item = PluginRootInstance::new(agent.plugin_id(), agent.instance_key())
+            .with_configuration(configuration);
+        if let Some(index) = existing {
+            instances[index] = item;
+        } else {
+            instances.push(item);
+        }
+    }
+    apply_skill_and_approval_defaults(document, &mut instances, &disabled)?;
+    apply_instructions(document, &mut instances)?;
     Ok(SelectedProfile {
         agent,
         root: PluginRootSnapshot::new(root.releases().iter().cloned(), instances, disabled),
     })
+}
+
+fn apply_instructions(
+    document: &ProfileDocument,
+    instances: &mut Vec<PluginRootInstance>,
+) -> Result<(), String> {
+    if !document.instructions.trim().is_empty() {
+        if instances.iter().any(|instance| {
+            instance.id().to_string() == "lenso.agent.prompt.static/profile-instructions"
+        }) {
+            return Err(
+                "Profile instructions conflict with the reserved profile-instructions instance"
+                    .into(),
+            );
+        }
+        instances.push(PluginRootInstance::new("lenso.agent.prompt.static", "profile-instructions").with_configuration(serde_json::json!({
+            "contributions": [{"id":"profile.instructions", "version":"1", "kind":"instruction", "content":document.instructions}]
+        })));
+    }
+    Ok(())
+}
+
+fn apply_skill_and_approval_defaults(
+    document: &ProfileDocument,
+    instances: &mut Vec<PluginRootInstance>,
+    disabled: &[PluginInstanceId],
+) -> Result<(), String> {
+    if let Some(value) = document.extra.get("allowed_skills") {
+        let names = value
+            .as_array()
+            .ok_or_else(|| "Profile allowed_skills must be a list".to_owned())?;
+        if names
+            .iter()
+            .any(|name| name.as_str().is_none_or(|name| name.trim().is_empty()))
+        {
+            return Err("Profile Skill names must be non-empty strings".to_owned());
+        }
+        let id = PluginInstanceId::new("lenso.agent.skills.filesystem", "skills");
+        if disabled.contains(&id) {
+            return Err("Enable the Skills provider before selecting individual Skills".to_owned());
+        }
+        let existing = instances.iter().position(|item| item.id() == &id);
+        let mut config = existing.map_or_else(
+            || serde_json::json!({}),
+            |index| instances[index].configuration().clone(),
+        );
+        config["allowed_skills"] =
+            serde_json::to_value(names).map_err(|error| error.to_string())?;
+        let item = PluginRootInstance::new("lenso.agent.skills.filesystem", "skills")
+            .with_configuration(config);
+        if let Some(index) = existing {
+            instances[index] = item;
+        } else {
+            instances.push(item);
+        }
+    }
+    if let Some(value) = document.extra.get("approval_mode") {
+        let mode = value
+            .as_str()
+            .filter(|mode| matches!(*mode, "request" | "assisted" | "full"))
+            .ok_or_else(|| "Profile approval_mode must be request, assisted or full".to_owned())?;
+        let hook = PluginInstanceId::new("lenso.agent.interactive-approval-hook", "default");
+        if disabled.contains(&hook) {
+            return Err("Approval mode requires the approval Hook".to_owned());
+        }
+        let existing = instances.iter().position(|instance| instance.id() == &hook);
+        let mut configuration = existing.map_or_else(
+            || serde_json::json!({}),
+            |index| instances[index].configuration().clone(),
+        );
+        configuration["approval_mode"] = serde_json::json!(mode);
+        let item = PluginRootInstance::new("lenso.agent.interactive-approval-hook", "default")
+            .with_configuration(configuration);
+        if let Some(index) = existing {
+            instances[index] = item;
+        } else {
+            instances.push(item);
+        }
+    }
+    Ok(())
 }
 
 fn parse_instance_id(value: &str, field: &str) -> Result<PluginInstanceId, String> {
@@ -133,7 +269,7 @@ fn parse_instance_id(value: &str, field: &str) -> Result<PluginInstanceId, Strin
     Ok(PluginInstanceId::new(plugin_id, instance_key))
 }
 
-fn validate_profile_name(name: &str) -> Result<(), String> {
+pub fn validate_profile_name(name: &str) -> Result<(), String> {
     if name.is_empty()
         || name.len() > 64
         || !name.bytes().enumerate().all(|(index, byte)| {
@@ -164,6 +300,77 @@ mod tests {
     }
 
     #[test]
+    fn profile_skill_selection_preserves_provider_configuration() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [instance("lenso.agent.skills.filesystem", "skills")
+                .with_configuration(serde_json::json!({"root":"/skills"}))],
+            [],
+        );
+        for names in [serde_json::json!([]), serde_json::json!(["review"])] {
+            let document: ProfileDocument = serde_json::from_value(
+                serde_json::json!({"instances":[],"allowed_skills":names,"include_enabled":true}),
+            )
+            .unwrap();
+            let selected = apply("test", &document, &root).unwrap();
+            let config = selected
+                .root()
+                .instances()
+                .iter()
+                .find(|item| item.id().to_string() == "lenso.agent.skills.filesystem/skills")
+                .unwrap()
+                .configuration();
+            assert_eq!(config["root"], "/skills");
+            assert_eq!(config["allowed_skills"], names);
+        }
+        for names in [
+            serde_json::json!([""]),
+            serde_json::json!([4]),
+            serde_json::json!("all"),
+        ] {
+            let document: ProfileDocument =
+                serde_json::from_value(serde_json::json!({"instances":[],"allowed_skills":names}))
+                    .unwrap();
+            assert!(apply("test", &document, &root).is_err());
+        }
+    }
+
+    #[test]
+    fn approval_modes_materialize_and_reject_invalid_values() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [
+                instance("lenso.agent.interactive-approval-hook", "default").with_configuration(
+                    serde_json::json!({"default_decision":"ask","max_preview_bytes":1024}),
+                ),
+            ],
+            [],
+        );
+        for mode in ["request", "assisted", "full"] {
+            let document: ProfileDocument = serde_json::from_value(
+                serde_json::json!({"approval_mode":mode,"instances":[],"include_enabled":true}),
+            )
+            .unwrap();
+            let selected = apply("test", &document, &root).unwrap();
+            let hook = selected
+                .root()
+                .instances()
+                .iter()
+                .find(|item| {
+                    item.id().to_string() == "lenso.agent.interactive-approval-hook/default"
+                })
+                .unwrap();
+            assert_eq!(hook.configuration()["approval_mode"], mode);
+            assert_eq!(hook.configuration()["default_decision"], "ask");
+        }
+        let document: ProfileDocument = serde_json::from_value(
+            serde_json::json!({"approval_mode":"unknown","instances":[],"include_enabled":true}),
+        )
+        .unwrap();
+        assert!(apply("test", &document, &root).is_err());
+    }
+
+    #[test]
     fn profile_enables_declared_instances_alongside_global_instances() {
         let root = PluginRootSnapshot::new(
             [],
@@ -182,7 +389,12 @@ mod tests {
         let selected = apply(
             "game",
             &ProfileDocument {
-                _description: "Game agent".to_owned(),
+                excluded_instances: vec![],
+                allowed_tools: None,
+                instructions: String::new(),
+                model: None,
+                extra: std::collections::BTreeMap::default(),
+                description: "Game agent".to_owned(),
                 agent: "example.game-loop/game".to_owned(),
                 include_enabled: true,
                 instances: vec!["example.code-tools/code".to_owned()],
@@ -227,7 +439,12 @@ mod tests {
         let selected = apply(
             "code",
             &ProfileDocument {
-                _description: String::new(),
+                excluded_instances: vec![],
+                allowed_tools: None,
+                instructions: String::new(),
+                model: None,
+                extra: std::collections::BTreeMap::default(),
+                description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
                 instances: vec!["example.code-tools/code".to_owned()],
@@ -262,7 +479,12 @@ mod tests {
         let code = apply(
             "code",
             &ProfileDocument {
-                _description: String::new(),
+                excluded_instances: vec![],
+                allowed_tools: None,
+                instructions: String::new(),
+                model: None,
+                extra: std::collections::BTreeMap::default(),
+                description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
                 instances: vec!["lenso.secrets.keychain/code".to_owned()],
@@ -273,7 +495,12 @@ mod tests {
         let game = apply(
             "game",
             &ProfileDocument {
-                _description: String::new(),
+                excluded_instances: vec![],
+                allowed_tools: None,
+                instructions: String::new(),
+                model: None,
+                extra: std::collections::BTreeMap::default(),
+                description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
                 instances: vec!["lenso.secrets.keychain/game".to_owned()],
@@ -298,7 +525,12 @@ mod tests {
         let missing = apply(
             "code",
             &ProfileDocument {
-                _description: String::new(),
+                excluded_instances: vec![],
+                allowed_tools: None,
+                instructions: String::new(),
+                model: None,
+                extra: std::collections::BTreeMap::default(),
+                description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
                 instances: vec!["example.tools/code".to_owned()],
@@ -311,7 +543,12 @@ mod tests {
         let duplicate = apply(
             "code",
             &ProfileDocument {
-                _description: String::new(),
+                excluded_instances: vec![],
+                allowed_tools: None,
+                instructions: String::new(),
+                model: None,
+                extra: std::collections::BTreeMap::default(),
+                description: String::new(),
                 agent: default_agent(),
                 include_enabled: false,
                 instances: vec![

@@ -1,4 +1,5 @@
 mod profile_import;
+pub(crate) mod profiles;
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -135,6 +136,7 @@ impl SqlitePluginConfigurationAuthority {
     }
 
     fn reconcile(&self, connection: &mut Connection) -> anyhow::Result<PluginRootAuthoringState> {
+        self.recover_profile_drafts(connection)?;
         self.recover_profile_imports(connection)?;
         let materialized = self.local.inspect()?;
         let materialized_revision = materialized.revision().as_str();
@@ -778,6 +780,7 @@ fn open_database(path: &Path) -> anyhow::Result<Connection> {
 }
 
 fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result<()> {
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS profile_drafts (name TEXT PRIMARY KEY, source TEXT NOT NULL, materialized TEXT, previous_materialized TEXT, materializing INTEGER NOT NULL DEFAULT 0)")?;
     connection.execute_batch("CREATE TABLE IF NOT EXISTS profile_imports (id TEXT PRIMARY KEY, base_revision TEXT NOT NULL, candidate_revision TEXT NOT NULL, files TEXT NOT NULL, phase TEXT NOT NULL)")?;
     connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS authority_state (
@@ -1130,6 +1133,36 @@ mod tests {
         authority
             .propose(&base, "example.agent", "default", toml)
             .unwrap()
+    }
+
+    #[test]
+    fn profile_materialization_journal_recovers_and_rejects_external_edits() {
+        let root = fixture_root();
+        let database = root.path().join("configuration.sqlite3");
+        let authority = open_authority(&root, &database);
+        let source = "instances = []\ninclude_enabled = true\n";
+        authority.with_operation(|connection| {
+            connection.execute("INSERT INTO profile_drafts(name,source,materialized,materializing) VALUES ('review',?1,?1,1)", [source])?;
+            Ok(())
+        }).unwrap();
+        drop(authority);
+        let authority = open_authority(&root, &database);
+        assert_eq!(
+            fs::read_to_string(root.path().join("profiles/review.toml")).unwrap(),
+            source
+        );
+        fs::write(root.path().join("profiles/review.toml"), "instances = []\n").unwrap();
+        assert!(
+            authority
+                .materialize_profile("review", None)
+                .unwrap_err()
+                .to_string()
+                .contains("outside the editor")
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("profiles/review.toml")).unwrap(),
+            "instances = []\n"
+        );
     }
 
     #[test]

@@ -394,6 +394,56 @@ impl ModelProvider for DirectModel {
 }
 
 impl DirectModel {
+    // Authentication is user state, not a prerequisite for serving the login UI.
+    // Keep this Generation unavailable for inference until a live account supplies
+    // its catalog; never reuse another account's cached catalog to bypass login.
+    fn wait_for_login(&self) -> Result<(), RuntimeFailure> {
+        let plugin = self.clone();
+        let cancellation = self
+            .tasks
+            .cancellation()
+            .map_err(|_| protocol_failure("catalog login recovery is unavailable"))?;
+        let publisher = self
+            .config
+            .catalog_snapshot_path
+            .as_deref()
+            .map(claim_refresh_publisher);
+        self.tasks.spawn_local(async move {
+            let mut loaded = false;
+            loop {
+                let delay = if loaded { plugin.config.catalog_refresh_seconds.max(1) } else { 1 };
+                tokio::select! {
+                    () = cancellation.cancelled() => break,
+                    () = tokio::time::sleep(Duration::from_secs(delay)) => {}
+                }
+                if let (Some(path), Some(owner)) = (plugin.config.catalog_snapshot_path.as_deref(), publisher)
+                    && !is_refresh_publisher(path, owner) { break; }
+                let credential = tokio::select! {
+                    () = cancellation.cancelled() => break,
+                    credential = plugin.auth.access(AccessRequest {}) => credential,
+                };
+                let Ok(credential) = credential else {
+                    plugin.catalog.replace(None);
+                    loaded = false;
+                    continue;
+                };
+                let acquired = tokio::select! {
+                    () = cancellation.cancelled() => break,
+                    acquired = plugin.acquire_catalog(&credential.access_token, &credential.account_id) => acquired,
+                };
+                let Ok(acquired) = acquired else { continue; };
+                if let (Some(path), Some(owner)) = (plugin.config.catalog_snapshot_path.as_deref(), publisher) {
+                    if !is_refresh_publisher(path, owner) { break; }
+                    if publish_provider_snapshot(path, &acquired.snapshot, owner).is_err() { continue; }
+                }
+                plugin.catalog.replace(Some(acquired.catalog));
+                loaded = true;
+                if plugin.config.catalog_refresh_seconds == 0 { break; }
+            }
+        }).map_err(|_| protocol_failure("catalog login recovery failed to start"))?;
+        Ok(())
+    }
+
     async fn initial_catalog(
         &self,
         access_token: &str,
@@ -542,6 +592,10 @@ impl DirectModel {
 }
 
 impl Lifecycle for DirectModel {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Activation keeps transport, authentication and catalog readiness in lifecycle order"
+    )]
     async fn activate(&self, _context: ActivateContext) -> Result<(), RuntimeFailure> {
         if self.config.transport != websocket::Transport::Sse {
             let pool = self.websocket.clone();
@@ -563,11 +617,20 @@ impl Lifecycle for DirectModel {
                     protocol_failure("direct Codex WebSocket maintenance failed to start")
                 })?;
         }
-        let credential = self.auth.access(AccessRequest {}).await.map_err(|error| {
-            RuntimeFailure::PluginFailure {
-                detail: format!("direct Codex model catalog authentication failed: {error:?}"),
+        let credential = match self.auth.access(AccessRequest {}).await {
+            Ok(credential) => credential,
+            Err(OpenaiCodexInvocationError::Domain(
+                auth_contract::AccessError::NotAuthenticated
+                | auth_contract::AccessError::RefreshRejected,
+            )) => {
+                return self.wait_for_login();
             }
-        })?;
+            Err(error) => {
+                return Err(RuntimeFailure::PluginFailure {
+                    detail: format!("direct Codex model catalog authentication failed: {error:?}"),
+                });
+            }
+        };
         let (acquired, revalidate_immediately) = self
             .initial_catalog(&credential.access_token, &credential.account_id)
             .await?;

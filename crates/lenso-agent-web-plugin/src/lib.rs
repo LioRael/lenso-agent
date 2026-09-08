@@ -54,7 +54,7 @@ mod tests {
                 },
                 {
                     "capability_id": "lenso.agent.session@1",
-                    "descriptor_version": "1.7.0",
+                    "descriptor_version": "1.8.0",
                     "cardinality": "one"
                 },
                 {

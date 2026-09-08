@@ -437,6 +437,40 @@ async fn queues_two_parallel_tool_approvals_and_completes_both_calls() {
     assert!(body.contains("Both parallel reads completed."), "{body}");
     assert!(body.contains("turn_completed"), "{body}");
     assert!(!body.contains("ResourceExhausted"), "{body}");
+
+    // A per-turn override skips the same approval Hook without changing tool access.
+    let full = client.post(format!("http://{address}/api/console/v1/agent/turns"))
+        .json(&serde_json::json!({"input":"Read README.md twice with parallel approval.","request_id":"full-approval","approval_mode":"full"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let body = tokio::time::timeout(Duration::from_secs(5), full.text())
+        .await
+        .expect("Full access must not wait for approval")
+        .unwrap();
+    assert!(body.contains("Both parallel reads completed."), "{body}");
+    assert!(body.contains("turn_completed"), "{body}");
+    // The mock model cannot produce a valid review, so assisted mode must ask.
+    let assisted = client.post(format!("http://{address}/api/console/v1/agent/turns"))
+        .json(&serde_json::json!({"input":"Read README.md twice with parallel approval.","request_id":"assisted-approval","approval_mode":"assisted"}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let stream = tokio::spawn(async move { assisted.text().await.unwrap() });
+    for _ in 0..2 {
+        let interaction = wait_for_interaction(
+            &client,
+            address,
+            "assisted-approval",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert_eq!(interaction["questions"][0]["questionId"], "approval");
+        client.post(format!("http://{address}/api/console/v1/agent/turns/assisted-approval/interactions/{}/answer", interaction["interactionId"].as_str().unwrap()))
+            .json(&serde_json::json!({"answers":[{"questionId":"approval","selectedOptionIds":["approve"],"other":null}]}))
+            .send().await.unwrap().error_for_status().unwrap();
+    }
+    let body = tokio::time::timeout(Duration::from_secs(5), stream)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(body.contains("turn_completed"), "{body}");
 }
 
 #[tokio::test(flavor = "current_thread")]

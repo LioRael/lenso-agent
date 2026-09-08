@@ -3377,11 +3377,13 @@ name = "lenso-agent-interactive-approval-hook-plugin"
 version = "0.1.0"
 dependencies = [
  "lenso",
+ "lenso-capability-agent-model",
  "lenso-capability-agent-tool-hook",
  "lenso-capability-agent-user-interaction",
  "lenso-kernel",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3780,6 +3782,7 @@ version = "0.2.0"
 dependencies = [
  "directories",
  "lenso",
+ "lenso-capability-agent-context-source",
  "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-tui-suggestion",
@@ -3960,12 +3963,15 @@ dependencies = [
  "clap",
  "fs2",
  "futures",
+ "lenso",
  "lenso-agent-console-plugins",
  "lenso-agent-default-plugins",
  "lenso-agent-host",
+ "lenso-agent-interactive-approval-hook-plugin",
  "lenso-agent-loop-plugin",
  "lenso-agent-session-inspection",
  "lenso-agent-session-terminal-plugin",
+ "lenso-agent-skills-filesystem-plugin",
  "lenso-agent-web-plugin",
  "lenso-app-plan",
  "lenso-capability-agent",
@@ -3992,6 +3998,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-tungstenite",
+ "toml 0.9.12+spec-1.1.0",
  "tower",
  "uuid",
 ]

@@ -170,7 +170,7 @@ fn direct_model_uses_private_auth_and_resumes_after_a_tool_call() {
 }
 
 #[test]
-fn missing_direct_credential_rejects_generation_readiness_without_starting_http() {
+fn missing_direct_credential_rejects_turn_admission_without_starting_http() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let missing = temporary.path().join("missing-credential.json");
@@ -185,7 +185,7 @@ fn missing_direct_credential_rejects_generation_readiness_without_starting_http(
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("direct Codex model catalog authentication failed"),
+        stderr.contains("Model catalog snapshot failed: Unavailable"),
         "{stderr}"
     );
     assert!(!stderr.contains("direct-access-secret"));
