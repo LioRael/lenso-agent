@@ -32,6 +32,7 @@ standalone = ["dep:lenso-agent-default-plugins"]
 console-standalone = ["dep:lenso-agent-console-plugins"]
 
 [dependencies]
+lenso-agent-skills-filesystem-plugin = { path = "../../crates/lenso-agent-skills-filesystem-plugin" }
 lenso.workspace = true
 lenso-agent-interactive-approval-hook-plugin = { path = "../../crates/lenso-agent-interactive-approval-hook-plugin" }
 anyhow.workspace = true

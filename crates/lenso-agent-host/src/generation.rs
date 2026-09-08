@@ -2855,7 +2855,8 @@ fn default_skills_plugin() -> HostDefaultPlugin {
             "max_resource_total_bytes": 16_777_216,
             "max_skills": 256,
             "max_total_bytes": 8_388_608,
-            "root": "~/.agents/skills"
+            "root": "~/.agents/skills",
+            "additional_roots": ["~/.codex/skills", "~/.claude/skills", ".agents/skills", ".claude/skills"]
         }),
     )
 }

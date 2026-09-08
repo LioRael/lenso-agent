@@ -247,6 +247,17 @@ impl TypedExtension for TurnModelSelection {
     const KEY: &'static str = TURN_MODEL_SELECTION_EXTENSION;
 }
 
+/// Original surface text when the Host has added explicit context to model input.
+/// This affects history presentation only; replay continues to use the full input.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnInputPresentation {
+    pub input: String,
+}
+impl TypedExtension for TurnInputPresentation {
+    const KEY: &'static str = "lenso.agent.turn-input-presentation.v1";
+}
+
 /// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
@@ -364,6 +375,8 @@ pub fn inspect_turn_generation_provenance(
     struct TurnStartedPayload {
         #[serde(default, rename = "attachments")]
         _attachments: Option<serde_json::Value>,
+        #[serde(default, rename = "display_input")]
+        _display_input: Option<String>,
         generation_spec_digest: String,
         #[serde(default)]
         agent_behavior_digest: Option<String>,
@@ -1181,6 +1194,9 @@ async fn start_turn(
         &serde_json::json!({"input": start.input, "run_scope": start.run_scope}),
     )
     .await?;
+    let presentation = context
+        .typed_extension::<TurnInputPresentation>()
+        .map_err(|error| invalid_system_instruction(error.to_string()))?;
     let mut turn_events = interrupted_turn_events(start.history)?;
     turn_events.push(session_event(
         AppendSessionRequestEventsItemKind::TurnStarted,
@@ -1191,6 +1207,7 @@ async fn start_turn(
             "resolved_turn_profile": start.resolved_turn_profile,
             "model_selection": start.model_selection,
             "input": start.input,
+            "display_input": presentation.map(|value| value.input),
             "attachments": start.attachments,
             "run_scope": start.run_scope
         }),

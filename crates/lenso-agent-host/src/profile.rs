@@ -164,6 +164,35 @@ fn apply(
             instances.push(item);
         }
     }
+    if let Some(value) = document.extra.get("allowed_skills") {
+        let names = value
+            .as_array()
+            .ok_or_else(|| "Profile allowed_skills must be a list".to_owned())?;
+        if names
+            .iter()
+            .any(|name| name.as_str().is_none_or(|name| name.trim().is_empty()))
+        {
+            return Err("Profile Skill names must be non-empty strings".to_owned());
+        }
+        let id = PluginInstanceId::new("lenso.agent.skills.filesystem", "skills");
+        if disabled.contains(&id) {
+            return Err("Enable the Skills provider before selecting individual Skills".to_owned());
+        }
+        let existing = instances.iter().position(|item| item.id() == &id);
+        let mut config = existing.map_or_else(
+            || serde_json::json!({}),
+            |index| instances[index].configuration().clone(),
+        );
+        config["allowed_skills"] =
+            serde_json::to_value(names).map_err(|error| error.to_string())?;
+        let item = PluginRootInstance::new("lenso.agent.skills.filesystem", "skills")
+            .with_configuration(config);
+        if let Some(index) = existing {
+            instances[index] = item;
+        } else {
+            instances.push(item);
+        }
+    }
     if let Some(value) = document.extra.get("approval_mode") {
         let mode = value
             .as_str()
@@ -251,6 +280,42 @@ mod tests {
 
     fn instance(plugin_id: &str, instance_key: &str) -> PluginRootInstance {
         PluginRootInstance::new(plugin_id, instance_key)
+    }
+
+    #[test]
+    fn profile_skill_selection_preserves_provider_configuration() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [instance("lenso.agent.skills.filesystem", "skills")
+                .with_configuration(serde_json::json!({"root":"/skills"}))],
+            [],
+        );
+        for names in [serde_json::json!([]), serde_json::json!(["review"])] {
+            let document: ProfileDocument = serde_json::from_value(
+                serde_json::json!({"instances":[],"allowed_skills":names,"include_enabled":true}),
+            )
+            .unwrap();
+            let selected = apply("test", &document, &root).unwrap();
+            let config = selected
+                .root()
+                .instances()
+                .iter()
+                .find(|item| item.id().to_string() == "lenso.agent.skills.filesystem/skills")
+                .unwrap()
+                .configuration();
+            assert_eq!(config["root"], "/skills");
+            assert_eq!(config["allowed_skills"], names);
+        }
+        for names in [
+            serde_json::json!([""]),
+            serde_json::json!([4]),
+            serde_json::json!("all"),
+        ] {
+            let document: ProfileDocument =
+                serde_json::from_value(serde_json::json!({"instances":[],"allowed_skills":names}))
+                    .unwrap();
+            assert!(apply("test", &document, &root).is_err());
+        }
     }
 
     #[test]

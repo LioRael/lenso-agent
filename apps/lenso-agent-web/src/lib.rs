@@ -505,6 +505,8 @@ enum RuntimeInteractionError {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
+    #[serde(default)]
+    context_references: Vec<WebContextReference>,
     #[serde(skip)]
     approval_user_request: Option<String>,
     #[serde(default)]
@@ -529,6 +531,13 @@ struct WebTurnRequest {
     session_id: Option<String>,
     #[serde(default)]
     service_tier: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum WebContextReference {
+    Prompt { source: String, name: String },
+    Resource { source: String, uri: String },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1200,6 +1209,7 @@ fn validate_plugin_control_configuration(
 fn router(runtime: WebRuntime) -> Router {
     let data_plane = Router::new()
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
+        .route("/api/console/v1/agent/skills", get(available_skills))
         .route("/api/console/v1/agent/models", get(model_catalog))
         .route("/api/console/v1/agent/tools", get(agent_tool_catalog))
         .route(
@@ -1557,6 +1567,15 @@ async fn import_profiles(
     Ok(Json(
         serde_json::json!({"revision": revision, "profiles": ["plan", "code", "code-sandbox"]}),
     ))
+}
+
+async fn available_skills()
+-> Result<Json<Vec<lenso_agent_skills_filesystem_plugin::AvailableSkill>>, ApiProblem> {
+    tokio::task::spawn_blocking(lenso_agent_skills_filesystem_plugin::common_skill_catalog)
+        .await
+        .map_err(|error| ApiProblem::unavailable(error.to_string()))?
+        .map(Json)
+        .map_err(ApiProblem::unavailable)
 }
 
 async fn list_editable_profiles(
@@ -2581,7 +2600,7 @@ async fn runtime_actor(
                     cancellation.cancel();
                 }
                 request.approval_user_request = Some(request.input.clone());
-                request.input = match compose_web_context(&app, &request.input).await {
+                request.input = match compose_references(&app, &request).await {
                     Ok(input) => input,
                     Err(error) => {
                         send_stream_event(
@@ -3265,6 +3284,40 @@ fn project_session_list(listed: ListSessionsResponse) -> WebSessionList {
     WebSessionList { sessions }
 }
 
+async fn compose_references(app: &AgentApp, request: &WebTurnRequest) -> Result<String, String> {
+    if request.context_references.len() > 8 {
+        return Err("Choose up to eight context references".to_owned());
+    }
+    let mut input = compose_web_context(app, &request.input).await?;
+    for reference in &request.context_references {
+        let command = match reference {
+            WebContextReference::Prompt { source, name } => {
+                if !source
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || "._-".contains(c))
+                    || !name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || "._-".contains(c))
+                {
+                    return Err("Invalid prompt reference".into());
+                }
+                format!("/mcp-prompt {source}/{name} {input}")
+            }
+            WebContextReference::Resource { source, uri } => {
+                if source.contains(['/', '=', ' ']) || uri.chars().any(char::is_whitespace) {
+                    return Err("Invalid resource reference".into());
+                }
+                format!("/mcp-resource {source}={uri} {input}")
+            }
+        };
+        input = compose_web_context(app, &command).await?;
+        if input.len() > 1_048_576 {
+            return Err("Selected context exceeds one MiB".into());
+        }
+    }
+    Ok(input)
+}
+
 async fn compose_web_context(app: &AgentApp, input: &str) -> Result<String, String> {
     if let Some((source, name, task)) = selected_context_prompt(input)? {
         let rendered = app
@@ -3415,6 +3468,19 @@ async fn invoke_turn(
             },
         )
         .map_err(|error| format!("failed to capture approval scope: {error}"))?;
+    let context = if request
+        .approval_user_request
+        .as_ref()
+        .is_some_and(|input| input != &request.input)
+    {
+        context
+            .with_typed_extension(&lenso_agent_loop_plugin::TurnInputPresentation {
+                input: request.approval_user_request.clone().unwrap_or_default(),
+            })
+            .map_err(|error| format!("failed to preserve user input: {error}"))?
+    } else {
+        context
+    };
     let requested_session_id = match (request.session_id, request.edit_turn_id) {
         (Some(session_id), Some(turn_id)) => {
             turn.fork_session_before_turn(session_id, turn_id).await?
@@ -4005,6 +4071,7 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        context_references: vec![],
                         approval_user_request: None,
                         approval_mode: None,
                         attachments: None,
@@ -4029,6 +4096,7 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    context_references: vec![],
                     approval_user_request: None,
                     approval_mode: None,
                     attachments: None,
@@ -4058,6 +4126,7 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        context_references: vec![],
                         approval_user_request: None,
                         approval_mode: None,
                         attachments: None,
@@ -4083,6 +4152,7 @@ mod tests {
             RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    context_references: vec![],
                     approval_user_request: None,
                     approval_mode: None,
                     attachments: None,
@@ -4114,6 +4184,7 @@ mod tests {
                 RuntimeCommand::RunTurn {
                     events,
                     request: WebTurnRequest {
+                        context_references: vec![],
                         approval_user_request: None,
                         approval_mode: None,
                         attachments: None,
@@ -4150,6 +4221,7 @@ mod tests {
             pending.push_back(RuntimeCommand::RunTurn {
                 events,
                 request: WebTurnRequest {
+                    context_references: vec![],
                     approval_user_request: None,
                     approval_mode: None,
                     attachments: None,
@@ -4695,6 +4767,7 @@ mod tests {
     fn rejects_empty_and_oversized_turns() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                context_references: vec![],
                 approval_user_request: None,
                 approval_mode: None,
                 attachments: None,
@@ -4713,6 +4786,7 @@ mod tests {
         );
         assert!(
             validate_turn_request(&WebTurnRequest {
+                context_references: vec![],
                 approval_user_request: None,
                 approval_mode: None,
                 attachments: None,
@@ -4749,6 +4823,7 @@ mod tests {
     fn rejects_ambiguous_reasoning_controls() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                context_references: vec![],
                 approval_user_request: None,
                 approval_mode: None,
                 attachments: None,
