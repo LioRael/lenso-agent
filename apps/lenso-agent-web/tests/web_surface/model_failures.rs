@@ -281,6 +281,13 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
 }
 
 fn failing_sse_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>) {
+    scripted_sse_provider(root, false)
+}
+
+fn scripted_sse_provider(
+    root: &Path,
+    tool_domain_failure: bool,
+) -> (CatalogServerGuard, Arc<AtomicUsize>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
@@ -302,7 +309,7 @@ fn failing_sse_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>) {
         address,
         stopped,
         thread: Some(thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
+            'requests: while !stop.load(Ordering::Relaxed) {
                 let (mut tcp, _) = match listener.accept() {
                     Ok(value) => value,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -314,11 +321,21 @@ fn failing_sse_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>) {
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
-                tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                tcp.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
                 let mut header = Vec::new();
                 while !header.ends_with(b"\r\n\r\n") {
                     let mut byte = [0];
-                    tcp.read_exact(&mut byte).unwrap();
+                    if let Err(error) = tcp.read_exact(&mut byte) {
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::WouldBlock
+                                | std::io::ErrorKind::TimedOut
+                                | std::io::ErrorKind::UnexpectedEof
+                        ) {
+                            continue 'requests;
+                        }
+                        panic!("{error}");
+                    }
                     header.push(byte[0]);
                 }
                 let header = String::from_utf8(header).unwrap();
@@ -338,31 +355,167 @@ fn failing_sse_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>) {
                 let mut request_body = vec![0; length];
                 tcp.read_exact(&mut request_body).unwrap();
                 let index = requests.fetch_add(1, Ordering::SeqCst);
-                let mut body = String::from(
-                    "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n",
-                );
-                if index == 1 {
-                    body.push_str("data: {invalid json}\n\n");
-                }
-                if index == 3 {
-                    body.push_str(r#"data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"invalid-read","name":"read","arguments":"{}"}}"#);
-                    body.push_str("\n\n");
-                }
-                if index == 4 {
-                    assert!(
-                        String::from_utf8(request_body)
-                            .unwrap()
-                            .contains("InvalidArguments")
-                    );
-                }
-                if index >= 3 {
-                    body.push_str("data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n");
-                }
+                let body = scripted_sse_body(index, tool_domain_failure, request_body);
                 // A short HTTP body reproduces a transport interruption after output.
-                let length = body.len() + if index == 0 { 100 } else { 0 };
+                let length = body.len()
+                    + if !tool_domain_failure && index == 0 {
+                        100
+                    } else {
+                        0
+                    };
                 write!(tcp, "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {length}\r\nconnection: close\r\n\r\n{body}").unwrap();
+                if !tool_domain_failure && index == 0 {
+                    tcp.flush().unwrap();
+                    // Let the client consume headers and output before truncating the stream.
+                    thread::sleep(Duration::from_millis(100));
+                }
             }
         })),
     };
     (provider, creates)
+}
+
+fn scripted_sse_body(index: usize, tool_domain_failure: bool, request_body: Vec<u8>) -> String {
+    use std::fmt::Write as _;
+    let mut body =
+        String::from("data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\n");
+    if tool_domain_failure {
+        if index == 0 {
+            for (id, name, arguments) in [
+                ("listed", "list", r#"{"path":"."}"#),
+                ("git-failed", "git_status", "{}"),
+            ] {
+                write!(
+                    body,
+                    "data: {}\n\n",
+                    serde_json::json!({
+                        "type":"response.output_item.done", "item": {
+                            "type":"function_call", "call_id":id, "name":name, "arguments":arguments
+                        }
+                    })
+                )
+                .unwrap();
+            }
+        } else if index == 1 {
+            let request = String::from_utf8(request_body).unwrap();
+            assert!(
+                request.contains("git_failed"),
+                "Missing Tool error feedback"
+            );
+            assert!(
+                request.contains("not a git repository"),
+                "Missing Git failure detail"
+            );
+        }
+        body.push_str(
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n",
+        );
+    } else {
+        if index == 1 {
+            body.push_str("data: {invalid json}\n\n");
+        }
+        if index == 3 {
+            body.push_str(r#"data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"invalid-read","name":"read","arguments":"{}"}}"#);
+            body.push_str("\n\n");
+        }
+        if index == 4 {
+            assert!(
+                String::from_utf8(request_body)
+                    .unwrap()
+                    .contains("InvalidArguments")
+            );
+        }
+        if index >= 3 {
+            body.push_str(
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"recovered\"}}\n\n",
+            );
+        }
+    }
+    body
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn git_domain_failure_preserves_generation_and_next_turn() {
+    let _server_test = WEB_SERVER_TEST.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let (provider, creates) = scripted_sse_provider(root.path(), true);
+    for (path, content) in [
+        (
+            "plugins/lenso.agent.process.native/default.toml",
+            "root = \".\"\nallowed_programs = [\"git\"]\nprogram_presets = []\nenvironment_allowlist = [\"PATH\", \"HOME\", \"TMPDIR\"]\n",
+        ),
+        (
+            "plugins/lenso.agent.git-tools/default.toml",
+            "default_timeout_ms = 30000\n",
+        ),
+        (
+            "profiles/git-test.toml",
+            "description = \"Git domain failure regression\"\ninclude_enabled = true\ninstances = [\"lenso.agent.process.native/default\", \"lenso.agent.git-tools/default\"]\n",
+        ),
+    ] {
+        let path = root.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    assert!(!root.path().join(".git").exists());
+    let address = available_address();
+    let mut server = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args([
+                "--listen",
+                &address.to_string(),
+                "--profile",
+                "git-test",
+                "--allow-tool",
+                "list",
+                "--allow-tool",
+                "git_status",
+            ])
+            .current_dir(root.path())
+            .env("LENSO_AGENT_HOME", root.path())
+            .env_remove("LENSO_AGENT_PROFILE")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap();
+    wait_until_ready(&client, address, &mut server.0).await;
+    let base = format!("http://{address}/api/console/v1/agent");
+    let generation = active_generation_digest(root.path());
+    let mut session_id = None;
+    for index in 0..2 {
+        let body = client.post(format!("{base}/turns"))
+            .json(&serde_json::json!({"request_id":format!("git-attempt-{index}"),"session_id":session_id,"input":"Inspect the workspace","allowed_tools":["list","git_status"]}))
+            .send().await.unwrap().error_for_status().unwrap().text().await.unwrap();
+        let sessions = client.get(format!("{base}/sessions")).send().await.unwrap();
+        assert!(
+            sessions.status().is_success(),
+            "Tool domain failure must not retire the active Generation: {body}"
+        );
+        assert!(body.contains("turn.completed"), "{body}");
+        assert_eq!(active_generation_digest(root.path()), generation);
+        assert!(!body.contains("turn.cancelled"), "{body}");
+        if index == 0 {
+            assert!(body.contains("git_failed"), "{body}");
+        }
+        let sessions: serde_json::Value = sessions.json().await.unwrap();
+        assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1);
+        session_id = Some(
+            sessions["sessions"][0]["sessionId"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    assert_eq!(
+        creates.load(Ordering::SeqCst),
+        3,
+        "Failed Tool is not automatically replayed"
+    );
+    drop(server);
+    drop(provider);
 }

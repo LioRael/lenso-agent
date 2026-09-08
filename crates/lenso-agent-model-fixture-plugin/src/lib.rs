@@ -554,6 +554,12 @@ fn ask_user_response(
         ));
     }
     match tool_results {
+        [result]
+            if result.content.starts_with("Tool failed:")
+                && result.content.contains("interaction_unavailable") =>
+        {
+            Ok(previous_response(&result.content))
+        }
         [] => Ok(named_tool_request(
             "call-ask-user",
             "ask_user",
@@ -691,6 +697,12 @@ fn subagent_root_response(
         ));
     }
     match tool_results {
+        [result]
+            if result.content.starts_with("Tool failed:")
+                && result.content.contains("child_output_limit_exceeded") =>
+        {
+            Ok(previous_response(&result.content))
+        }
         [] => Ok(named_tool_request(
             "call-delegate-readme",
             "delegate",

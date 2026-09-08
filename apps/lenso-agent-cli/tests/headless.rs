@@ -2359,9 +2359,13 @@ fn delegated_output_limit_failure_retains_child_session_provenance() {
     );
 
     let output = run_configured_derived(temporary.path(), "Delegate a README.md summary.", None);
-    assert!(!output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("child_output_limit_exceeded"),
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("child_output_limit_exceeded"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -2400,7 +2404,7 @@ fn delegated_output_limit_failure_retains_child_session_provenance() {
 }
 
 #[test]
-fn headless_ask_user_fails_immediately_instead_of_waiting_for_a_timeout() {
+fn headless_ask_user_returns_tool_error_without_waiting_for_a_timeout() {
     let temporary = tempfile::tempdir().unwrap();
     fs::write(temporary.path().join("README.md"), "# Fixture\n").unwrap();
     let started = std::time::Instant::now();
@@ -2411,10 +2415,14 @@ fn headless_ask_user_fails_immediately_instead_of_waiting_for_a_timeout() {
         None,
     );
 
-    assert!(!output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("interaction_unavailable"),
+        String::from_utf8_lossy(&output.stdout).contains("interaction_unavailable"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
