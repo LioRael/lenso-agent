@@ -290,6 +290,26 @@ async fn sse_failures_preserve_generation_and_session_without_replaying() {
     drop(provider);
 }
 
+#[test]
+fn scripted_sse_accepts_fragmented_request_headers() {
+    let root = tempfile::tempdir().unwrap();
+    let (provider, requests) = scripted_sse_provider(root.path(), true);
+    let mut tcp = std::net::TcpStream::connect(provider.address).unwrap();
+    tcp.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    tcp.write_all(b"POST /codex/responses HTTP/1.1\r\n")
+        .unwrap();
+    // TCP is a byte stream: a request header need not arrive in one packet.
+    thread::sleep(Duration::from_millis(100));
+    tcp.write_all(b"Host: localhost\r\nContent-Length: 2\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    thread::sleep(Duration::from_millis(100));
+    tcp.write_all(b"{}").unwrap();
+    let mut response = String::new();
+    tcp.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
 fn failing_sse_provider(root: &Path) -> (CatalogServerGuard, Arc<AtomicUsize>) {
     scripted_sse_provider(root, false)
 }
@@ -331,6 +351,9 @@ fn scripted_sse_provider(
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
+                // macOS can inherit the listener's nonblocking mode. Header/body
+                // reads below must wait for later TCP fragments, not drop them.
+                tcp.set_nonblocking(false).unwrap();
                 tcp.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
                 let mut header = Vec::new();
                 while !header.ends_with(b"\r\n\r\n") {
