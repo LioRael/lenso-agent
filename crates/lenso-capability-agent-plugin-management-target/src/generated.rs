@@ -6,7 +6,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.plugin-management-target@1";
 pub const DESCRIPTOR_VERSION: &str = "1.2.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:2310ba33dd386bc15771375fc1875424850972acd3ba0bdfa06b6161b616b56c";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:0bafd6399c8e1f642f3b99fedae64600c07d138eadc238d33c0c38598941a293";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PLUGIN_MANAGEMENT_TARGET_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -120,6 +120,7 @@ pub enum CatalogError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -202,6 +203,7 @@ pub enum HistoryError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -290,6 +292,7 @@ pub enum InspectError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -374,6 +377,7 @@ pub enum ProposeError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -433,6 +437,7 @@ pub enum ProposeInstallError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -489,6 +494,7 @@ pub enum ProposeRemovalError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -566,6 +572,7 @@ pub enum ProposeRollbackError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -628,6 +635,7 @@ pub enum PublishError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -687,6 +695,7 @@ pub enum PublishInstallError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -746,6 +755,7 @@ pub enum PublishRemovalError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -811,6 +821,7 @@ pub enum PublishRollbackError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -873,6 +884,7 @@ pub enum SetEnabledError {
     ProposalNotReady,
     PublicationNotFound,
     TargetNotFound,
+    TargetUnavailable,
     Unsupported,
     Unknown(UnknownDomainError),
 }
@@ -1169,6 +1181,7 @@ impl serde::Serialize for CatalogError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1202,6 +1215,7 @@ impl<'de> serde::Deserialize<'de> for CatalogError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1234,6 +1248,7 @@ impl serde::Serialize for HistoryError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1267,6 +1282,7 @@ impl<'de> serde::Deserialize<'de> for HistoryError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1299,6 +1315,7 @@ impl serde::Serialize for InspectError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1332,6 +1349,7 @@ impl<'de> serde::Deserialize<'de> for InspectError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1364,6 +1382,7 @@ impl serde::Serialize for ProposeError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1397,6 +1416,7 @@ impl<'de> serde::Deserialize<'de> for ProposeError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1429,6 +1449,7 @@ impl serde::Serialize for ProposeInstallError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1462,6 +1483,7 @@ impl<'de> serde::Deserialize<'de> for ProposeInstallError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1494,6 +1516,7 @@ impl serde::Serialize for ProposeRemovalError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1527,6 +1550,7 @@ impl<'de> serde::Deserialize<'de> for ProposeRemovalError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1559,6 +1583,7 @@ impl serde::Serialize for ProposeRollbackError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1592,6 +1617,7 @@ impl<'de> serde::Deserialize<'de> for ProposeRollbackError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1624,6 +1650,7 @@ impl serde::Serialize for PublishError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1657,6 +1684,7 @@ impl<'de> serde::Deserialize<'de> for PublishError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1689,6 +1717,7 @@ impl serde::Serialize for PublishInstallError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1722,6 +1751,7 @@ impl<'de> serde::Deserialize<'de> for PublishInstallError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1754,6 +1784,7 @@ impl serde::Serialize for PublishRemovalError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1787,6 +1818,7 @@ impl<'de> serde::Deserialize<'de> for PublishRemovalError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1819,6 +1851,7 @@ impl serde::Serialize for PublishRollbackError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1852,6 +1885,7 @@ impl<'de> serde::Deserialize<'de> for PublishRollbackError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -1884,6 +1918,7 @@ impl serde::Serialize for SetEnabledError {
             Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
             Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
             Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
             Self::Unsupported => serializer.serialize_str("unsupported"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -1917,6 +1952,7 @@ impl<'de> serde::Deserialize<'de> for SetEnabledError {
                 "proposal_not_ready" => Ok(Self::ProposalNotReady),
                 "publication_not_found" => Ok(Self::PublicationNotFound),
                 "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
                 "unsupported" => Ok(Self::Unsupported),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },

@@ -118,6 +118,7 @@
     "streamId": "018f0f5f-8b8a-7c3e-9b34-7f7f8d3f6b20"
   },
   "management": {
+    "bindingCount": 1,
     "configurationAuthority": {
       "kind": "sqlite_configuration_store",
       "publicationHistory": true,

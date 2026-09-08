@@ -485,6 +485,7 @@ pub struct PublishRemovalResponse {
 
 #[derive(lenso::DomainError)]
 pub enum PluginManagementTargetError {
+    TargetUnavailable,
     InvalidRequest,
     TargetNotFound,
     Unsupported,
