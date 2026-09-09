@@ -129,3 +129,5 @@ reasons on their own.
 - [0101 — Version Session instructions on Profile selection](0101-version-session-instructions-on-profile-selection.md)
 
 - [0104 — Edit named Profiles through SQLite drafts](0104-edit-named-profiles-through-sqlite-drafts.md)
+
+- [0108 — Pin native Tool targets at Turn admission](0108-pin-native-tool-targets-at-turn-admission.md)

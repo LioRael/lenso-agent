@@ -178,6 +178,18 @@ impl fmt::Debug for AppAgentToolTarget {
 }
 
 impl AgentToolTarget for AppAgentToolTarget {
+    fn snapshot_for_turn(&self) -> Result<Option<Arc<dyn AgentToolTarget>>, String> {
+        let frozen = self
+            .frozen
+            .read()
+            .map_err(|_| "App Agent Tool catalog lock is unavailable")?
+            .clone();
+        Ok(Some(Arc::new(Self {
+            agents: self.agents.clone(),
+            frozen: Arc::new(RwLock::new(frozen)),
+        })))
+    }
+
     fn catalog(
         &self,
         _context: lenso_kernel::InvocationContext,
@@ -1970,6 +1982,32 @@ fn protocol_failure(detail: impl Into<String>) -> RuntimeFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn admitted_target_keeps_catalog_when_live_target_is_replaced() {
+        let target = AppAgentToolTarget::new(vec![]);
+        *target.frozen.write().unwrap() = Some(FrozenToolCatalog::default());
+        let snapshot = target.snapshot_for_turn().unwrap().unwrap();
+        *target.frozen.write().unwrap() = None;
+        let context = || {
+            lenso_kernel::InvocationContext::new(1, None, lenso_kernel::CancellationToken::new())
+        };
+        assert!(
+            target
+                .catalog(context(), tool_contract::CatalogRequest {})
+                .await
+                .is_err()
+        );
+        assert!(
+            snapshot
+                .catalog(context(), tool_contract::CatalogRequest {})
+                .await
+                .unwrap()
+                .unwrap()
+                .tools
+                .is_empty()
+        );
+    }
 
     fn adapter(id: &str, plugin_configuration: bool, plugin_lifecycle: bool) -> AppAgentAdapter {
         let mut adapter = AppAgentAdapter::parse(&format!("{id}=http://127.0.0.1:3031")).unwrap();

@@ -1,3 +1,6 @@
+mod turn_scope;
+pub(crate) use turn_scope::{TurnToolTargetLease, TurnToolTargetRouter};
+
 use std::{rc::Rc, sync::Arc};
 
 use lenso_app_plan::{CapabilityEndpointPlan, authoring::PluginDescriptor};
@@ -10,6 +13,13 @@ pub(crate) const BRIDGE_PLUGIN_VERSION: &str = "0.1.0";
 
 /// Host adapter that freezes and routes the Console Agent's App Agent Tool catalog.
 pub trait AgentToolTarget: std::fmt::Debug + Send + Sync + 'static {
+    /// Captures connection authority before this Turn is admitted. Mutable connection
+    /// adapters must return an immutable target, including a disconnected snapshot.
+    /// The default is for targets whose authority is already immutable.
+    fn snapshot_for_turn(&self) -> Result<Option<Arc<dyn AgentToolTarget>>, String> {
+        Ok(None)
+    }
+
     fn catalog(
         &self,
         context: InvocationContext,
