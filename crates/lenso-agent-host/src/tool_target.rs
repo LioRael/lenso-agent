@@ -12,11 +12,13 @@ pub(crate) const BRIDGE_PLUGIN_VERSION: &str = "0.1.0";
 pub trait AgentToolTarget: std::fmt::Debug + Send + Sync + 'static {
     fn catalog(
         &self,
+        context: InvocationContext,
         request: contract::CatalogRequest,
     ) -> lenso_kernel::NativeRequestFuture<contract::ToolTargetCatalog>;
 
     fn execute(
         &self,
+        context: InvocationContext,
         request: contract::ExecuteRequest,
     ) -> lenso_kernel::NativeRequestFuture<contract::ToolTargetExecute>;
 }
@@ -61,22 +63,22 @@ struct Provider {
 impl contract::ToolTargetProvider for Provider {
     fn catalog(
         &self,
-        _context: InvocationContext,
+        context: InvocationContext,
         request: contract::CatalogRequest,
     ) -> lenso_kernel::NativeRequestFuture<contract::ToolTargetCatalog> {
         match self.target.as_ref() {
-            Some(target) => target.catalog(request),
+            Some(target) => target.catalog(context, request),
             None => Box::pin(async { Ok(Ok(contract::CatalogResponse { tools: Vec::new() })) }),
         }
     }
 
     fn execute(
         &self,
-        _context: InvocationContext,
+        context: InvocationContext,
         request: contract::ExecuteRequest,
     ) -> lenso_kernel::NativeRequestFuture<contract::ToolTargetExecute> {
         match self.target.as_ref() {
-            Some(target) => target.execute(request),
+            Some(target) => target.execute(context, request),
             None => Box::pin(async { Ok(Err(contract::ExecuteError::TargetNotFound)) }),
         }
     }
@@ -93,4 +95,75 @@ pub(crate) fn bridge_descriptor() -> PluginDescriptor {
             )
             .with_limits(8, 1),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contract::ToolTargetProvider;
+    use lenso_kernel::CancellationToken;
+    use std::time::Duration;
+
+    #[derive(Debug)]
+    struct InspectTarget;
+
+    impl AgentToolTarget for InspectTarget {
+        fn catalog(
+            &self,
+            context: InvocationContext,
+            _request: contract::CatalogRequest,
+        ) -> lenso_kernel::NativeRequestFuture<contract::ToolTargetCatalog> {
+            assert_context(&context);
+            Box::pin(async { Ok(Ok(contract::CatalogResponse { tools: Vec::new() })) })
+        }
+
+        fn execute(
+            &self,
+            context: InvocationContext,
+            _request: contract::ExecuteRequest,
+        ) -> lenso_kernel::NativeRequestFuture<contract::ToolTargetExecute> {
+            assert_context(&context);
+            Box::pin(async move {
+                Err(RuntimeFailure::Cancelled {
+                    request_id: context.request_id(),
+                })
+            })
+        }
+    }
+
+    fn assert_context(context: &InvocationContext) {
+        assert_eq!(context.request_id(), 42);
+        assert_eq!(context.caller_instance(), Some("console-agent"));
+        assert_eq!(context.deadline(), Some(Duration::from_secs(5)));
+        assert!(context.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn bridge_preserves_invocation_context_and_runtime_failure() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let context = InvocationContext::new(42, Some(Duration::from_secs(5)), cancellation)
+            .with_caller_instance("console-agent");
+        let provider = Provider {
+            target: Some(Arc::new(InspectTarget)),
+        };
+        provider
+            .catalog(context.clone(), contract::CatalogRequest {})
+            .await
+            .unwrap()
+            .unwrap();
+        let result = provider
+            .execute(
+                context,
+                contract::ExecuteRequest {
+                    name: "projects_get_issue".into(),
+                    arguments_json: "{}".parse().unwrap(),
+                },
+            )
+            .await;
+        assert!(matches!(
+            result,
+            Err(RuntimeFailure::Cancelled { request_id: 42 })
+        ));
+    }
 }
