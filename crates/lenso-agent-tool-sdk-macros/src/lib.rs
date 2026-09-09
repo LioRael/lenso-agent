@@ -13,8 +13,10 @@ use syn::{
 /// Each method marked with
 /// `#[tool(name = "...", description = "...", execution = "parallel_safe|exclusive")]` accepts exactly one typed
 /// argument (optionally after `&self`) and may accept `lenso::Ctx` last. It returns the Tool Provider contract's
-/// `Result<ExecuteResponse, ExecuteError>` shape. Both synchronous and asynchronous Tools are
-/// supported.
+/// `Result<ExecuteResponse, ExecuteError>` shape. Native methods may instead
+/// return `lenso::PluginResult<ExecuteResponse, ExecuteError>` to preserve runtime
+/// failures from required Capabilities. Both synchronous and asynchronous Tools
+/// are supported.
 #[proc_macro_attribute]
 pub fn tool_provider(attribute: TokenStream, item: TokenStream) -> TokenStream {
     if !attribute.is_empty() {
@@ -37,9 +39,16 @@ struct ToolMethod {
     takes_self: bool,
     takes_context: bool,
     is_async: bool,
+    result_kind: ToolResultKind,
     name: LitStr,
     description: LitStr,
     execution: LitStr,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolResultKind {
+    Domain,
+    Plugin,
 }
 
 fn expand(implementation: &mut ItemImpl) -> syn::Result<proc_macro2::TokenStream> {
@@ -99,6 +108,15 @@ fn expand_portable(
     implementation: &ItemImpl,
     tools: &[ToolMethod],
 ) -> syn::Result<proc_macro2::TokenStream> {
+    if let Some(tool) = tools
+        .iter()
+        .find(|tool| tool.result_kind == ToolResultKind::Plugin)
+    {
+        return Err(syn::Error::new(
+            tool.method.span(),
+            "PluginResult Tool methods currently require the native lenso facade",
+        ));
+    }
     if let Some(tool) = tools.iter().find(|tool| tool.is_async) {
         return Err(syn::Error::new(
             tool.method.span(),
@@ -283,7 +301,7 @@ fn parse_tool_method(method: &mut ImplItemFn) -> syn::Result<Option<ToolMethod>>
     if matches!(method.sig.output, ReturnType::Default) {
         return Err(syn::Error::new(
             method.sig.ident.span(),
-            "Tool methods must return Result<ExecuteResponse, ExecuteError>",
+            "Tool methods must return Result<ExecuteResponse, ExecuteError> or native PluginResult<ExecuteResponse, ExecuteError>",
         ));
     }
     let mut inputs = method.sig.inputs.iter();
@@ -317,10 +335,28 @@ fn parse_tool_method(method: &mut ImplItemFn) -> syn::Result<Option<ToolMethod>>
         takes_self,
         takes_context,
         is_async: method.sig.asyncness.is_some(),
+        result_kind: if is_plugin_result(&method.sig.output) {
+            ToolResultKind::Plugin
+        } else {
+            ToolResultKind::Domain
+        },
         name,
         description,
         execution,
     }))
+}
+
+fn is_plugin_result(output: &ReturnType) -> bool {
+    let ReturnType::Type(_, ty) = output else {
+        return false;
+    };
+    let syn::Type::Path(path) = ty.as_ref() else {
+        return false;
+    };
+    path.path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "PluginResult")
 }
 
 fn is_context_type(ty: &syn::Type) -> bool {
@@ -394,6 +430,11 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
         (false, true, false) => quote!(Self::#method(arguments).await),
         (false, false, false) => quote!(Self::#method(arguments)),
     };
+    let outcome = if tool.result_kind == ToolResultKind::Plugin {
+        invoke
+    } else {
+        quote!(#invoke.map_err(::lenso::PluginError::domain))
+    };
     quote! {
         #name => {
             let arguments: #argument_type =
@@ -403,7 +444,7 @@ fn dispatch_arm(tool: &ToolMethod) -> proc_macro2::TokenStream {
                 .map_err(|_| ::lenso::PluginError::domain(
                     ::lenso_agent_tool_sdk::__private::contract::ExecuteError::InvalidArguments,
                 ))?;
-            #invoke.map_err(::lenso::PluginError::domain)
+            #outcome
         }
     }
 }
@@ -505,4 +546,29 @@ fn parse_tool_attribute(attribute: &Attribute) -> syn::Result<(LitStr, LitStr, L
         description.ok_or_else(|| syn::Error::new(attribute.span(), "missing Tool description"))?,
         execution.ok_or_else(|| syn::Error::new(attribute.span(), "missing Tool execution"))?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_plugin_result_is_detected_and_portable_use_is_rejected() {
+        let mut implementation: ItemImpl = syn::parse_quote! {
+            impl Tools {
+                #[tool(name = "lookup", description = "Lookup", execution = "parallel_safe")]
+                fn lookup(request: Request) -> lenso::PluginResult<Response, Error> {
+                    unimplemented!()
+                }
+            }
+        };
+        let tools = collect_tools(&mut implementation).unwrap();
+        assert!(tools[0].result_kind == ToolResultKind::Plugin);
+        let error = expand_portable(&implementation, &tools).unwrap_err();
+        assert!(error.to_string().contains("native lenso facade"));
+        let imported: ReturnType = syn::parse_quote!(-> PluginResult<Response, Error>);
+        assert!(is_plugin_result(&imported));
+        let domain_only: ReturnType = syn::parse_quote!(-> Result<Response, Error>);
+        assert!(!is_plugin_result(&domain_only));
+    }
 }
