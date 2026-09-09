@@ -23,7 +23,9 @@ ends, or at most one hour. Cancellation releases the snapshot through a managed
 task; shutdown ends all such tasks. Remote App revocation and expiry are checked
 at every Tool request and remain authoritative.
 
-The first integration uses `GET /projects/agent/tools` and
+Generation preparation reads public static Tool descriptions from
+`GET /projects/agent/manifest` without a credential. Descriptions remain available
+before login; execution still requires the admitted Turn identity. The integration uses
 `POST /projects/agent/tools/execute`. HTTP ingress must map the Bearer credential
 to the protocol-neutral `session` scheme. The App owns Auth authentication,
 operation audiences, membership, scoped RBAC, Team visibility, revisions and

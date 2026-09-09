@@ -235,13 +235,10 @@ impl BusinessConnection {
         context: InvocationContext,
         _request: tools::CatalogRequest,
     ) -> Result<Result<tools::CatalogResponse, tools::CatalogError>, RuntimeFailure> {
-        let Some(grant) = self.state.lock().await.for_context(&context, false)? else {
-            return Ok(Ok(tools::CatalogResponse { tools: vec![] }));
-        };
         let cancellation = context.cancellation();
         let catalog = tokio::select! {
             () = cancellation.cancelled() => return Err(failure()),
-            result = async { response(client()?.get(format!("{}/projects/agent/tools", self.config.origin)).bearer_auth(grant.credential.as_str()).send().await.map_err(|_| failure())?, Some(&grant.credential)).await } => result?,
+            result = async { response(client()?.get(format!("{}/projects/agent/manifest", self.config.origin)).send().await.map_err(|_| failure())?, None).await } => result?,
         };
         Ok(Ok(catalog))
     }

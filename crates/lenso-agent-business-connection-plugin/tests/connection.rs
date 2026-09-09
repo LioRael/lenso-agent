@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    routing::post,
+    routing::{get, post},
 };
 use lenso_app_plan::{
     AppComposition, CapabilityBinding, CapabilityEndpointPlan, CapabilityRequirementPlan,
@@ -102,6 +102,13 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                         .route("/auth/agent/connection/begin", post(begin))
                         .route("/auth/agent/connection/poll", post(poll))
                         .route("/projects/agent/tools/execute", post(execute))
+                        .route(
+                            "/projects/agent/manifest",
+                            get(|headers: HeaderMap| async move {
+                                assert!(!headers.contains_key("authorization"));
+                                Json(json!({"tools":[]}))
+                            }),
+                        )
                         .with_state(remote.clone()),
                 )
                 .into_future(),
@@ -149,6 +156,16 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
             )
             .await
             .unwrap();
+            let catalog = app
+                .invoke::<tools::ToolProviderCatalog>(
+                    "caller",
+                    tools::CATALOG_OPERATION,
+                    tools::CatalogRequest {},
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(catalog.tools.is_empty());
             let mut turns = Vec::new();
             for _ in 0..2 {
                 // Completed login can be replaced, without mutating admitted scopes.
