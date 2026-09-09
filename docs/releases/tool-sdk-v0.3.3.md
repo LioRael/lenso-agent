@@ -7,3 +7,7 @@ Forward the supplied context through generated `*_with_context` clients to retai
 The SDK and macro authoring tests cover both result forms, Runtime failures, business rejection and context preservation. Independent Auth Account Admin acceptance uses a real PostgreSQL-backed provider to verify operator-authorized queries and mutations, session revocation, denied access and restart persistence.
 
 Packages: `lenso-agent-tool-sdk-macros` 0.3.3, followed by `lenso-agent-tool-sdk` 0.3.3. This release does not change the TypeScript SDK or npm Agent launcher, enable Account Admin tools by default, or add end-user delegation.
+
+## Publication
+
+Run `release-tool-sdk-crates.yml` from `main` with version `0.3.3`. The default is verification only; set `publish` explicitly to publish. Configure both existing crates to trust only `LioRael/lenso-agent` and this workflow filename. Authentication uses short-lived GitHub OIDC credentials; no stored registry token is required.
