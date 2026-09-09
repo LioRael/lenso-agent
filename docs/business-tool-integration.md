@@ -1,7 +1,9 @@
 # Business Plugin Tool integration
 
 Status: native Tool authoring supports downstream Domain and Runtime outcomes.
-Authenticated business reads/writes are not yet integrated or released.
+The first business proof uses the existing Auth Account Admin Tool Plugin with
+real PostgreSQL and explicit provider-owned Instance authorization. This does
+not introduce end-user delegation or ship a new default Agent tool.
 
 ## Reuse the existing declaration path
 
@@ -33,7 +35,23 @@ ExecuteError>` methods remain unchanged. Custom result aliases are not detected;
 use imported or qualified `PluginResult`. The portable authoring path rejects
 this native-only result explicitly; its Runtime outcome design is separate.
 
-## Business identity prerequisite
+## Choose the business authority explicitly
+
+Not every business Capability requires an end-user assertion. Auth Account Admin
+already authorizes trusted caller Instances through its `admin_callers` policy.
+The existing `lenso.auth.account-admin.agent-tools` adapter is therefore a valid
+first business consumer: it forwards context to the bound Account Admin provider
+and exposes only two reads and one status mutation. Use that existing contract;
+do not fabricate an end-user identity or add a parallel permission model.
+
+The Auth repository now exercises this adapter and the real Account provider
+through Kernel composition with PostgreSQL. It proves reads, writes, immediate
+session revocation, restart persistence, denied read/write after removing the
+Instance grant, cancellation before mutation, infrastructure failure, and removal
+of the Tool Plugin while Auth facts remain. See
+`lenso-auth-plugin/crates/lenso-auth-account-admin-agent-tools-plugin/tests/business_flow.rs`.
+
+### When a business operation requires an end user
 
 The current Agent source has no Auth ActorAssertion integration. Model login,
 the Console control token, a caller Instance, a Session ID and an approval mode
@@ -45,7 +63,7 @@ Team visibility. Its Web consumer authenticates credential evidence before
 attaching an assertion. A Tool cannot replace that path with a configured user
 ID, a model-provided actor field, or an administrative control credential.
 
-Before exposing real Projects tools, the owning Auth/Agent boundary needs an
+Before exposing real Projects tools that act for a user, the owning Auth/Agent boundary needs an
 explicit delegated-user contract specifying:
 
 - which authenticated ingress establishes the actor and session association;
@@ -60,7 +78,7 @@ This work belongs to Auth/Agent integration. Console Workspace routing and the
 cross-App service Connector remain owned by the separate Console task. No new
 universal Capability proxy is introduced here.
 
-## First real business proof
+## Later end-user business proof
 
 After the identity prerequisite is implemented, use the existing Projects
 provider for `get_issue` and a state change through `update_issue`. The latter
@@ -83,5 +101,7 @@ backward compatibility. The macro test covers portable rejection.
 
 These tests use a fixture, not an authenticated business provider. They do not
 prove signed identity propagation, real Capability dispatch, durable writes,
-streaming, or end-to-end cancellation. The query/mutation acceptance above
-remains outstanding until the identity contract and actual consumer exist.
+streaming, or end-to-end cancellation. The Projects-specific acceptance above remains outstanding. The independent
+Auth Account Admin acceptance uses a real bound business provider and database;
+it proves the supported operator-authority path without pretending to establish
+a signed end-user delegation path.
