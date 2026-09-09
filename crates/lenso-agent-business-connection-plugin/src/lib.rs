@@ -1,4 +1,5 @@
 //! Owns business grants; no credential crosses the `AuthConnection` surface.
+mod login;
 mod state;
 use lenso::ManagedTasks;
 use lenso_capability_agent_auth_connection as auth;
@@ -6,7 +7,7 @@ use lenso_capability_agent_tool_provider as tools;
 use lenso_capability_agent_turn_binding as binding;
 use lenso_kernel::{InvocationContext, RuntimeFailure};
 use serde::{Deserialize, Serialize};
-use state::{Attempt, Grant, State};
+use state::{Attempt, State};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
@@ -108,8 +109,12 @@ impl BusinessConnection {
             return Ok(Err(auth::BeginError::UnsupportedMethod));
         }
         let mut state = self.state.lock().await;
-        if state.attempt.as_ref().is_some_and(Attempt::valid) {
-            return Ok(Err(auth::BeginError::AttemptInProgress));
+        if let Some(attempt) = state
+            .attempt
+            .as_ref()
+            .filter(|a| a.valid() && !a.connected && !a.failed)
+        {
+            return Ok(Ok(attempt.presentation()));
         }
         let cancellation = context.cancellation();
         let remote = tokio::select! {
@@ -118,15 +123,21 @@ impl BusinessConnection {
         };
         let attempt = Attempt::new(remote, &self.config.origin)?;
         let presentation = attempt.presentation();
+        let shutdown = self.tasks.cancellation().map_err(|_| failure())?;
+        let work = login::complete(&self.config.origin, &self.state, &attempt, shutdown);
         state.attempt = Some(attempt);
+        if self.tasks.spawn_local(work).is_err() {
+            state.attempt = None;
+            return Err(failure());
+        }
         Ok(Ok(presentation))
     }
     async fn poll(
         &self,
-        context: InvocationContext,
+        _context: InvocationContext,
         request: auth::AttemptRequest,
     ) -> Result<Result<auth::PollResponse, auth::PollError>, RuntimeFailure> {
-        let mut state = self.state.lock().await;
+        let state = self.state.lock().await;
         let Some(attempt) = state
             .attempt
             .as_ref()
@@ -134,35 +145,16 @@ impl BusinessConnection {
         else {
             return Ok(Err(auth::PollError::UnknownAttempt));
         };
-        if attempt.connected {
-            return Ok(Ok(auth::PollResponse {
-                state: auth::LoginState::Connected,
-            }));
-        }
-        let cancellation = context.cancellation();
-        let remote: state::Poll = tokio::select! {
-            () = cancellation.cancelled() => return Err(failure()),
-            result = async { response(client()?.post(format!("{}/auth/agent/connection/poll", self.config.origin))
-                .json(&serde_json::json!({"attempt_id":attempt.remote_id,"polling_secret":attempt.secret.as_str()})).send().await.map_err(|_| failure())?, None).await } => result?,
+        let state = if attempt.connected {
+            auth::LoginState::Connected
+        } else if attempt.failed {
+            auth::LoginState::Failed
+        } else {
+            auth::LoginState::Pending
         };
-        let status = match remote.state.as_str() {
-            "pending" => auth::LoginState::Pending,
-            "connected" => {
-                let grant = Grant::new(remote.grant.ok_or_else(failure)?)?;
-                state.grant = Some(Arc::new(grant));
-                if let Some(attempt) = state.attempt.as_mut() {
-                    attempt.connected = true;
-                }
-                auth::LoginState::Connected
-            }
-            "failed" => {
-                state.attempt = None;
-                auth::LoginState::Failed
-            }
-            _ => return Err(failure()),
-        };
-        Ok(Ok(auth::PollResponse { state: status }))
+        Ok(Ok(auth::PollResponse { state }))
     }
+
     async fn cancel(
         &self,
         _context: InvocationContext,

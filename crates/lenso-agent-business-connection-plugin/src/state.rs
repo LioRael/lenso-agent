@@ -69,6 +69,13 @@ pub(super) struct Attempt {
     pub authorization_url: String,
     pub expires: u64,
     pub connected: bool,
+    pub failed: bool,
+    pub cancellation: CancellationToken,
+}
+impl Drop for Attempt {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
 }
 impl Attempt {
     pub fn new(begin: Begin, origin: &str) -> Result<Self, RuntimeFailure> {
@@ -96,6 +103,8 @@ impl Attempt {
             authorization_url: begin.authorization_url,
             expires,
             connected: false,
+            failed: false,
+            cancellation: CancellationToken::new(),
         })
     }
     pub fn valid(&self) -> bool {
@@ -149,7 +158,7 @@ impl Grant {
         self.expires > i128::from(now())
     }
 }
-fn now() -> u64 {
+pub(super) fn now() -> u64 {
     u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000).unwrap_or(0)
 }
 

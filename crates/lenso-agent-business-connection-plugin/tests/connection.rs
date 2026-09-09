@@ -43,6 +43,7 @@ struct Remote {
     origin: String,
     account: Arc<AtomicUsize>,
     revoked: Arc<AtomicBool>,
+    approved: Arc<AtomicBool>,
 }
 async fn begin(State(s): State<Remote>) -> Json<Value> {
     s.account.fetch_add(1, Ordering::SeqCst);
@@ -52,6 +53,9 @@ async fn begin(State(s): State<Remote>) -> Json<Value> {
 }
 async fn poll(State(s): State<Remote>, Json(body): Json<Value>) -> Json<Value> {
     assert_eq!(body["polling_secret"], "private-poll");
+    if !s.approved.load(Ordering::SeqCst) {
+        return Json(json!({"state":"pending","grant":null}));
+    }
     Json(
         json!({"state":"connected","grant":{"credential":format!("private-account-{}",s.account.load(Ordering::SeqCst)),"expires_at":(time::OffsetDateTime::now_utc()+time::Duration::minutes(10)).format(&time::format_description::well_known::Rfc3339).unwrap()}}),
     )
@@ -94,6 +98,7 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                 origin: format!("http://{}", listener.local_addr().unwrap()),
                 account: Arc::new(AtomicUsize::new(0)),
                 revoked: Arc::new(AtomicBool::new(false)),
+                approved: Arc::new(AtomicBool::new(false)),
             };
             let server = tokio::spawn(
                 axum::serve(
@@ -168,6 +173,7 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
             assert!(catalog.tools.is_empty());
             let mut turns = Vec::new();
             for _ in 0..2 {
+                remote.approved.store(false, Ordering::SeqCst);
                 // Completed login can be replaced, without mutating admitted scopes.
                 app.invoke::<auth::AuthConnectionDisconnect>(
                     "caller",
@@ -189,6 +195,40 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                     .unwrap()
                     .unwrap();
                 assert!(!serde_json::to_string(&attempt).unwrap().contains("private"));
+                let resumed = app
+                    .invoke::<auth::AuthConnectionBegin>(
+                        "caller",
+                        auth::BEGIN_OPERATION,
+                        auth::BeginRequest {
+                            method: auth::LoginMethod::BrowserConsent,
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(resumed.attempt_id, attempt.attempt_id);
+                assert_eq!(resumed.authorization_url, attempt.authorization_url);
+                remote.approved.store(true, Ordering::SeqCst);
+                // Simulate navigating away: no UI poll request drives completion.
+                tokio::time::timeout(Duration::from_secs(5), async {
+                    loop {
+                        let status = app
+                            .invoke::<auth::AuthConnectionStatus>(
+                                "caller",
+                                auth::STATUS_OPERATION,
+                                auth::StatusRequest {},
+                            )
+                            .await
+                            .unwrap()
+                            .unwrap();
+                        if status.connected {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .unwrap();
                 let result = app
                     .invoke::<auth::AuthConnectionPoll>(
                         "caller",
@@ -262,6 +302,64 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                 .await
                 .unwrap();
             assert!(matches!(output, Err(tools::ExecuteError::PermissionDenied)));
+            app.invoke::<auth::AuthConnectionDisconnect>(
+                "caller",
+                auth::DISCONNECT_OPERATION,
+                auth::DisconnectRequest {},
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            remote.approved.store(false, Ordering::SeqCst);
+            let cancelled = app
+                .invoke::<auth::AuthConnectionBegin>(
+                    "caller",
+                    auth::BEGIN_OPERATION,
+                    auth::BeginRequest {
+                        method: auth::LoginMethod::BrowserConsent,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let cancelled = app
+                .invoke::<auth::AuthConnectionCancel>(
+                    "caller",
+                    auth::CANCEL_OPERATION,
+                    auth::AttemptRequest {
+                        attempt_id: cancelled.attempt_id,
+                    },
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(cancelled.cancelled);
+            remote.approved.store(true, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(2100)).await;
+            assert!(
+                !app.invoke::<auth::AuthConnectionStatus>(
+                    "caller",
+                    auth::STATUS_OPERATION,
+                    auth::StatusRequest {},
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .connected
+            );
+            remote.approved.store(false, Ordering::SeqCst);
+            app.invoke::<auth::AuthConnectionBegin>(
+                "caller",
+                auth::BEGIN_OPERATION,
+                auth::BeginRequest {
+                    method: auth::LoginMethod::BrowserConsent,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            // Shutdown owns and terminates the pending polling task.
+
             turns[0].1.cancel();
             tokio::task::yield_now().await;
             assert!(
