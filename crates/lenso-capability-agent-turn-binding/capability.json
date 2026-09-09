@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.turn-binding@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "capture",
+      "interaction": "request",
+      "request_schema": "schemas/capture-request.schema.json",
+      "response_schema": "schemas/capture-response.schema.json",
+      "domain_error_schema": "schemas/capture-error.schema.json"
+    }
+  ]
+}

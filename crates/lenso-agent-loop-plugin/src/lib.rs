@@ -559,6 +559,7 @@ struct AgentLoop {
     compaction: Port<compaction_capability::ContextCompactionClient>,
     memory: Port<memory_capability::MemoryClient>,
     lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
+    turn_binding: ManyPort<lenso_capability_agent_turn_binding::TurnBindingClient>,
     artifact: Port<artifact_capability::ArtifactClient>,
     #[tasks]
     tasks: ManagedTasks,
@@ -4751,7 +4752,7 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 10);
+        assert_eq!(requirements.len(), 11);
         assert!(requirements.iter().any(|requirement| {
             requirement["capability_id"] == "lenso.agent.artifact@1"
                 && requirement["cardinality"] == "one"
@@ -4763,7 +4764,8 @@ mod tests {
                     !matches!(
                         requirement["capability_id"].as_str(),
                         Some(
-                            "lenso.agent.lifecycle@1"
+                            "lenso.agent.turn-binding@1"
+                                | "lenso.agent.lifecycle@1"
                                 | "lenso.agent.session-presentation@1"
                                 | "lenso.agent.model-selection@1"
                         )

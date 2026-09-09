@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+lenso-agent-business-connection-plugin = { path = "../lenso-agent-business-connection-plugin" }
 lenso-agent-approval-hook-plugin = { path = "../lenso-agent-approval-hook-plugin" }
 lenso-agent-artifact-file-plugin = { path = "../lenso-agent-artifact-file-plugin" }
 lenso-agent-browser-playwright-plugin = { path = "../lenso-agent-browser-playwright-plugin" }

@@ -11,6 +11,7 @@ pub struct StatusRequest {}
 pub enum LoginMethod {
     DeviceCode,
     BrowserLoopback,
+    BrowserConsent,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -93,7 +94,7 @@ pub enum ConnectionError {
 #[lenso::capability(
     id = "lenso.agent.auth-connection",
     major = 1,
-    version = "1.0.0",
+    version = "1.1.0",
     portable = false,
     cross_lane_transfer = false
 )]

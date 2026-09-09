@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.auth-connection@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:4f66755d89127deb55ced9a53fec85f87bd6adcddb83adab23046077b6202f2f";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:f79198a344d42ebba4f5efbc46a0836a18699b9630b93d783f6618df9e80a343";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const AUTH_CONNECTION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const AUTH_CONNECTION_CONTRACT: CapabilityReference<AuthConnectionClient> = 
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_auth_connection { () => { "{\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"begin\",\"cancel\",\"disconnect\",\"poll\",\"status\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_auth_connection { () => { "{\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"begin\",\"cancel\",\"disconnect\",\"poll\",\"status\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_auth_connection_client {
-    () => { "{\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_auth_connection_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_auth_connection_client {
-    () => { "{\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.auth-connection@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const BEGIN_OPERATION: &str = "begin";
@@ -60,6 +60,8 @@ pub enum LoginMethod {
     DeviceCode,
     #[serde(rename = "browser_loopback")]
     BrowserLoopback,
+    #[serde(rename = "browser_consent")]
+    BrowserConsent,
 }
 
 #[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]

@@ -1,4 +1,5 @@
-//! Standard surface-neutral Plugin linkage for the distributed Agent Hosts.
+use lenso_agent_business_connection_plugin as _;
+// Standard surface-neutral Plugin linkage for the distributed Agent Hosts.
 
 use lenso_agent_approval_hook_plugin as _;
 use lenso_agent_artifact_file_plugin as _;
