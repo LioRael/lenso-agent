@@ -441,6 +441,7 @@ async fn recover_or_open_host<F: CatalogFactory>(
 
 #[derive(Debug)]
 pub struct AgentApp {
+    tool_target_router: Arc<crate::tool_target::TurnToolTargetRouter>,
     host: FrameworkHost<NativeApp>,
     resolved_plan: ResolvedAppPlan,
     runtime: RuntimeAttachment,
@@ -487,10 +488,13 @@ impl AgentApp {
         let generation = initial.generation.clone();
         let store = runtime_attachment.control_store();
         let durable = store.load(APP_ID).map_err(control_error)?;
+        let tool_target_router = Arc::new(crate::tool_target::TurnToolTargetRouter::new(
+            plugin_authoring.tool_target,
+        ));
         let runtime = KernelGenerationRuntime::new(agent_catalog_factory(
             plugin_authoring.configuration,
             plugin_authoring.management_target,
-            plugin_authoring.tool_target,
+            Some(tool_target_router.clone()),
             plugin_authoring.selection,
         ));
         let mut host =
@@ -560,6 +564,7 @@ impl AgentApp {
             online_generation.clone(),
         );
         Ok(Self {
+            tool_target_router,
             host,
             resolved_plan,
             runtime: runtime_attachment,
@@ -1094,7 +1099,9 @@ impl AgentApp {
         } else {
             None
         };
+        let tool_target_lease = self.tool_target_router.capture()?;
         Ok(TurnGeneration {
+            tool_target_lease,
             consumer_instance: consumer_instance.to_owned(),
             route,
             handle,
@@ -1550,6 +1557,7 @@ impl TerminalGeneration {
 
 #[derive(Debug)]
 pub struct TurnGeneration {
+    tool_target_lease: crate::tool_target::TurnToolTargetLease,
     consumer_instance: String,
     route: DurableGenerationRoute<NativeApp>,
     handle: Rc<NativeStreamHandle<Agent>>,
@@ -1817,6 +1825,7 @@ impl TurnGeneration {
             .map_err(|error| format!("failed to attach Session Profile: {error}"))?
             .with_typed_extension(profile)
             .map_err(|error| format!("failed to attach resolved Turn profile: {error}"))?;
+        let context = self.tool_target_lease.attach(context)?;
         if self.interactive {
             context
                 .with_typed_extension(&InteractiveSurface)
