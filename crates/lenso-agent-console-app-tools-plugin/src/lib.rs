@@ -14,13 +14,13 @@ struct ConsoleAppTools {
 impl ConsoleAppTools {
     async fn catalog(
         &self,
-        _context: lenso::Ctx,
+        context: lenso::Ctx,
         _request: provider_contract::CatalogRequest,
     ) -> lenso::PluginResult<provider_contract::CatalogResponse, provider_contract::CatalogError>
     {
         let response = self
             .target
-            .catalog(target_contract::CatalogRequest {})
+            .catalog_with_context(context, target_contract::CatalogRequest {})
             .await
             .map_err(map_catalog_invocation_error)?;
         Ok(provider_contract::CatalogResponse {
@@ -46,16 +46,19 @@ impl ConsoleAppTools {
 
     async fn execute(
         &self,
-        _context: lenso::Ctx,
+        context: lenso::Ctx,
         request: provider_contract::ExecuteRequest,
     ) -> lenso::PluginResult<provider_contract::ExecuteResponse, provider_contract::ExecuteError>
     {
         let response = self
             .target
-            .execute(target_contract::ExecuteRequest {
-                arguments_json: request.arguments_json,
-                name: request.name,
-            })
+            .execute_with_context(
+                context,
+                target_contract::ExecuteRequest {
+                    arguments_json: request.arguments_json,
+                    name: request.name,
+                },
+            )
             .await
             .map_err(map_execute_invocation_error)?;
         serde_json::from_str(response.response_json.as_str()).map_err(|error| {

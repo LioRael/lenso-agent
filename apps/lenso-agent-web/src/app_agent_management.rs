@@ -180,6 +180,7 @@ impl fmt::Debug for AppAgentToolTarget {
 impl AgentToolTarget for AppAgentToolTarget {
     fn catalog(
         &self,
+        _context: lenso_kernel::InvocationContext,
         _request: tool_contract::CatalogRequest,
     ) -> lenso_kernel::NativeRequestFuture<tool_contract::ToolTargetCatalog> {
         let result = self
@@ -202,6 +203,7 @@ impl AgentToolTarget for AppAgentToolTarget {
 
     fn execute(
         &self,
+        context: lenso_kernel::InvocationContext,
         request: tool_contract::ExecuteRequest,
     ) -> lenso_kernel::NativeRequestFuture<tool_contract::ToolTargetExecute> {
         let route = self
@@ -215,6 +217,11 @@ impl AgentToolTarget for AppAgentToolTarget {
                     .cloned()
             });
         Box::pin(async move {
+            if context.is_cancelled() {
+                return Err(RuntimeFailure::Cancelled {
+                    request_id: context.request_id(),
+                });
+            }
             let Some(route) = route? else {
                 return Ok(Err(tool_contract::ExecuteError::ToolNotFound));
             };
