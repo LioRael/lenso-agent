@@ -37,3 +37,8 @@ Verification includes native Kernel dispatch against an HTTP test service,
 account switching, revocation, cancelled/expired/unknown bindings, non-secret
 status/poll projections and clean shutdown. That fixture alone does not prove a
 real business login, PostgreSQL authorization, model use or npm distribution.
+
+For a real PostgreSQL App and Console/model acceptance, use the
+[Projects acceptance guide](../../scripts/projects-acceptance/README.md). Parent
+and child sessions must authorize both the Tool Provider execute hop and the
+exact final Projects operations; neither scope substitutes for the other.

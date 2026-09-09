@@ -1,0 +1,15 @@
+{
+  "id": "lenso.organization-directory@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": true,
+  "operations": [
+    {
+      "name": "get_organization",
+      "interaction": "request",
+      "request_schema": "schemas/get-organization-request.schema.json",
+      "response_schema": "schemas/get-organization-response.schema.json",
+      "domain_error_schema": "schemas/get-organization-error.schema.json"
+    }
+  ]
+}

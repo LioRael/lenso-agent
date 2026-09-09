@@ -2,8 +2,8 @@
 
 Status: native Tool authoring supports downstream Domain and Runtime outcomes.
 The first business proof uses the existing Auth Account Admin Tool Plugin with
-real PostgreSQL and explicit provider-owned Instance authorization. This does
-not introduce end-user delegation or ship a new default Agent tool.
+real PostgreSQL and explicit provider-owned Instance authorization. The Projects integration additionally supports browser-authorized end-user
+delegation through a removable Business App connection; it adds no default tool.
 
 ## Reuse the existing declaration path
 
@@ -53,44 +53,41 @@ of the Tool Plugin while Auth facts remain. See
 
 ### When a business operation requires an end user
 
-The current Agent source has no Auth ActorAssertion integration. Model login,
-the Console control token, a caller Instance, a Session ID and an approval mode
-are not evidence of an authenticated Projects user.
+Model login, the Console control token, a caller Instance, a Session ID and an
+approval mode are not evidence of an authenticated Projects user.
 
-The existing Projects provider requires an Auth-issued assertion, checks the
-caller Instance, Organization membership and Access Control, and then enforces
-Team visibility. Its Web consumer authenticates credential evidence before
-attaching an assertion. A Tool cannot replace that path with a configured user
-ID, a model-provided actor field, or an administrative control credential.
+The removable Business App connection uses the App's browser consent flow to
+obtain a narrowed child session. Its provider retains credentials in memory and
+captures an immutable snapshot at Turn admission. The App authenticates every
+request and attaches its own assertion. Agent never receives signing material.
+Projects then checks caller, Organization membership, Access Control and Team
+visibility. Server-side expiry and revocation remain authoritative.
 
-Before exposing real Projects tools that act for a user, the owning Auth/Agent boundary needs an
-explicit delegated-user contract specifying:
+Both parent and child audiences must permit the intermediate
+`lenso.agent.tool-provider@2:execute` hop and each allowed final Projects
+operation. The intermediate hop never substitutes for the final audience.
+Tool descriptions are public static metadata at `/projects/agent/manifest`;
+execution remains authenticated. See the [connection Plugin](../crates/lenso-agent-business-connection-plugin/README.md)
+and [ADR-0109](adr/0109-provider-owned-business-turn-bindings.md).
 
-- which authenticated ingress establishes the actor and session association;
-- how a Turn obtains an audience-bound assertion without exposing credentials
-  or signing material in model inputs, histories or Tool outputs;
-- exact provider/operation scope, expiry, revocation and failure outcomes;
-- preservation through Tool Hooks and any App Agent forwarding; and
-- denial when identity is missing, expired, revoked or inappropriate for the
-  target, independent of Agent approval mode.
+## Projects acceptance
 
-This work belongs to Auth/Agent integration. Console Workspace routing and the
-cross-App service Connector remain owned by the separate Console task. No new
-universal Capability proxy is introduced here.
+The [reproducible local App](../scripts/projects-acceptance/README.md) composes
+real Auth, Organization, Access Control and Projects Plugins with PostgreSQL.
+Its protocol verifier covers browser consent, private Team and Organization
+isolation, revision and idempotency semantics, narrowed operation audiences,
+parent revocation and account isolation. It does not invoke a model.
 
-## Later end-user business proof
+A separate Console/browser acceptance used a real model to read `issue-public`,
+change only its title and read revision `2` back. Database inspection confirmed
+that the update activity belongs to the signed-in user and other fields remained
+unchanged. This proves a local business App chain, not deployment of a production
+App or publication of an npm release. Release receipts are separate evidence.
 
-After the identity prerequisite is implemented, use the existing Projects
-provider for `get_issue` and a state change through `update_issue`. The latter
-is a full aggregate update: preserve other fields and the observed
-`expected_revision`. Read the real Team workflow catalog. A conflict is a
-business outcome and must not silently repeat or overwrite the user's edit.
-
-Acceptance includes authorized query and mutation, missing/denied actor,
-private-Team denial, expired assertion, revision conflict, provider outage,
-cancellation and no automatic replay after an ambiguous mutation. Confirm the
-durable record and prove denied calls do not change it. Test through generated
-clients and a resolved runtime composition, not only direct provider methods.
+Updates remain full aggregate operations: preserve other fields and the observed
+`expected_revision`. Read the Team workflow catalog before changing state.
+A revision conflict must not silently overwrite another user's edit. Transport
+failures do not automatically replay a potentially completed mutation.
 
 ## Evidence and limits of this change
 
@@ -101,7 +98,8 @@ backward compatibility. The macro test covers portable rejection.
 
 These tests use a fixture, not an authenticated business provider. They do not
 prove signed identity propagation, real Capability dispatch, durable writes,
-streaming, or end-to-end cancellation. The Projects-specific acceptance above remains outstanding. The independent
+streaming, or end-to-end cancellation. The Projects acceptance is separate
+from these SDK fixtures. The independent
 Auth Account Admin acceptance uses a real bound business provider and database;
 it proves the supported operator-authority path without pretending to establish
 a signed end-user delegation path.
