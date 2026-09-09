@@ -128,10 +128,14 @@ pub(super) struct Poll {
 pub(super) struct RemoteGrant {
     pub credential: String,
     pub expires_at: String,
+    #[serde(default)]
+    pub subject: Option<String>,
 }
 pub(super) struct Grant {
     pub credential: Zeroizing<String>,
-    expires: i128,
+    pub expires: i128,
+    pub subject: Option<String>,
+    rejected: std::sync::atomic::AtomicBool,
 }
 impl Grant {
     pub fn new(grant: RemoteGrant) -> Result<Self, RuntimeFailure> {
@@ -152,10 +156,19 @@ impl Grant {
         Ok(Self {
             credential: Zeroizing::new(grant.credential),
             expires,
+            subject: grant
+                .subject
+                .filter(|value| !value.is_empty() && value.len() <= 512),
+            rejected: std::sync::atomic::AtomicBool::new(false),
         })
     }
+    pub fn reject(&self) {
+        self.rejected
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
     pub fn valid(&self) -> bool {
-        self.expires > i128::from(now())
+        !self.rejected.load(std::sync::atomic::Ordering::Relaxed)
+            && self.expires > i128::from(now())
     }
 }
 pub(super) fn now() -> u64 {
@@ -169,6 +182,8 @@ mod tests {
         Arc::new(Grant {
             credential: Zeroizing::new(secret.into()),
             expires: i128::from(now()) + 60_000,
+            subject: Some(secret.into()),
+            rejected: std::sync::atomic::AtomicBool::new(false),
         })
     }
     fn context(id: uuid::Uuid) -> InvocationContext {

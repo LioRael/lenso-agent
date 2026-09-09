@@ -19,7 +19,8 @@ come from crates.io. Paths are explicit and never discovered from another App.
 
 ```sh
 python3 scripts/projects-acceptance/prepare.py \
-  --auth-root ../lenso-auth-plugin --projects-root ../lenso-projects-plugin
+  --auth-root ../lenso-auth-plugin --projects-root ../lenso-projects-plugin \
+  --projects-web-root ../lenso-projects-web-plugin
 export LENSO_POSTGRES_TEST_URL=postgresql://test_user@127.0.0.1:5432/test_database
 export LENSO_ACCEPTANCE_RECEIPT="$PWD/.lenso/projects-acceptance/receipt.json"
 cargo run --manifest-path .lenso/projects-acceptance/Cargo.toml
@@ -78,3 +79,27 @@ forwarding; it does not grant an unlisted final operation. Include `:catalog`
 only when using the authenticated catalog. The public manifest needs no grant.
 Never solve an audience mismatch by copying signing material into Agent or by
 accepting a model-supplied actor.
+
+## Daily workflow browser acceptance
+
+The fixture also links the standalone Projects Web Plugin. Pass its source
+checkout with `--projects-web-root ../lenso-projects-web-plugin` when preparing
+this App. This is required; the Web Plugin is not copied into Console.
+
+After installing Console's locked browser test dependencies, run:
+
+```sh
+mkdir -p .lenso/browser-evidence
+node scripts/projects-acceptance/browser.mjs \
+  .lenso/projects-acceptance/receipt.json ../lenso-console .lenso/browser-evidence
+```
+
+The browser test uses only disposable fixture users. It verifies cookie login
+and return to an Issue, login recovery from consent, explicit approval, workflow
+update through the actual Tool ingress, conflict recovery and the refreshed
+Issue/activity page. The grant stays inside the test process. It writes only a
+non-secret receipt and screenshot. This test invokes the real business Tool
+protocol, not a language model; model acceptance remains separate.
+
+The current Issue contract has no assignee field. The fixture proves access to
+visible Issues, not an assigned-to-me filter.

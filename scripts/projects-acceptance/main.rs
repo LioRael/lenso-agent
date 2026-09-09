@@ -219,7 +219,7 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         instance(
             "consent",
             lenso_auth_agent_connection_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"origin":ORIGIN,"label":"Projects acceptance","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue"],"grant_ttl_seconds":3600}),
+            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue"],"grant_ttl_seconds":3600}),
         ),
         organization(
             json!({"schema":format!("{prefix}_organization"),"database_url_secret":"auth/database-url","admin_callers":["caller"],"directory_callers":["caller"],"membership_admin_callers":["caller"]}),
@@ -232,7 +232,7 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         instance(
             "projects",
             lenso_projects_postgres_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"schema":format!("{prefix}_projects"),"database_url_secret":"auth/database-url","auth_issuer":ISSUER,"auth_assertion_public_key":public,"project_callers":["caller","tools"],"admin_callers":["caller"],"governance_callers":["caller"]}),
+            &json!({"schema":format!("{prefix}_projects"),"database_url_secret":"auth/database-url","auth_issuer":ISSUER,"auth_assertion_public_key":public,"project_callers":["caller","tools","projects-web"],"admin_callers":["caller","projects-web"],"governance_callers":["caller"]}),
         ),
         instance(
             "tools",
@@ -243,6 +243,11 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
             "ingress",
             lenso_projects_agent_web_plugin::PLUGIN_DESCRIPTOR_JSON,
             &json!({}),
+        ),
+        instance(
+            "projects-web",
+            lenso_projects_web_plugin::PLUGIN_DESCRIPTOR_JSON,
+            &json!({"origin":ORIGIN}),
         ),
         PluginInstancePlan::new("secrets", SECRETS_PACKAGE_ID).with_capability(
             CapabilityEndpointPlan::new(
@@ -306,6 +311,10 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
     for (key, source) in [
         ("account", lenso_auth_account_plugin::PLUGIN_DESCRIPTOR_JSON),
         (
+            "projects-web",
+            lenso_projects_web_plugin::PLUGIN_DESCRIPTOR_JSON,
+        ),
+        (
             "password",
             lenso_auth_password_plugin::PLUGIN_DESCRIPTOR_JSON,
         ),
@@ -343,7 +352,8 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
                 lenso_capability_organization_membership::CAPABILITY_ID => "organization",
                 lenso_capability_access_control::CAPABILITY_ID => "acl",
                 projects::CAPABILITY_ID
-                | lenso_capability_projects_collaboration::CAPABILITY_ID => "projects",
+                | lenso_capability_projects_collaboration::CAPABILITY_ID
+                | project_admin::CAPABILITY_ID => "projects",
                 lenso_capability_agent_tool_provider::CAPABILITY_ID => "tools",
                 _ => panic!("unexpected fixture binding {id}"),
             };
@@ -356,7 +366,17 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         secrets::DESCRIPTOR_VERSION,
         "secrets",
     ));
-    instances.extend([caller, web]);
+    let projects_web_caller =
+        PluginInstancePlan::new("projects-web-caller", CALLER_PACKAGE_ID).with_requirement(
+            CapabilityRequirementPlan::one(http::CAPABILITY_ID, http::DESCRIPTOR_VERSION),
+        );
+    bindings.push(CapabilityBinding::new(
+        "projects-web-caller",
+        http::CAPABILITY_ID,
+        http::DESCRIPTOR_VERSION,
+        "projects-web",
+    ));
+    instances.extend([caller, web, projects_web_caller]);
     Kernel::start_native(
         AppComposition::new(instances, bindings).resolve().unwrap(),
         TokioDriver::new(),
@@ -597,9 +617,18 @@ async fn dispatch(
         return reply(400, "Ambiguous credentials");
     };
     if request.path == "/login" && request.method == "GET" {
+        let fields: BTreeMap<String, String> =
+            serde_urlencoded::from_str(request.query.as_deref().unwrap_or("")).unwrap_or_default();
+        let return_to = fields.get("return_to").map(String::as_str).unwrap_or("");
+        let return_to = return_to
+            .replace('&', "&amp;")
+            .replace('"', "&quot;")
+            .replace('<', "&lt;");
         return reply(
             200,
-            "<!doctype html><html lang=en><meta charset=utf-8><title>Projects acceptance login</title><main><h1>Projects acceptance</h1><p>Local test accounts only. Sign in before connecting Agent.</p><form method=post action=/login><label>Email <input name=identifier type=email required></label><label>Password <input name=password type=password required></label><button>Sign in</button></form></main></html>",
+            format!(
+                "<!doctype html><html lang=en><meta charset=utf-8><title>Projects acceptance login</title><main><h1>Projects acceptance</h1><form method=post action=/login><input type=hidden name=return_to value=\"{return_to}\"><label>Email <input name=identifier type=email required></label><label>Password <input name=password type=password required></label><button>Sign in</button></form></main></html>"
+            ),
         );
     }
     if request.path == "/login" && request.method == "POST" {
@@ -640,6 +669,15 @@ async fn dispatch(
             .parse()
             .unwrap(),
         );
+        if let Some(path) = fields.get("return_to").filter(|path| {
+            (path.starts_with("/auth/agent/authorize?") || path.starts_with("/projects?"))
+                && !path.contains(['\\', '\r', '\n'])
+        }) {
+            *response.status_mut() = axum::http::StatusCode::SEE_OTHER;
+            if let Ok(location) = path.parse() {
+                response.headers_mut().insert("location", location);
+            }
+        }
         return response;
     }
     if request.path == "/" {
@@ -689,6 +727,30 @@ async fn dispatch(
         ("POST", "/auth/agent/connection/poll") => ("caller", "auth.agent-connection.poll"),
         ("GET", "/auth/agent/authorize") => ("caller", "auth.agent-connection.authorize"),
         ("POST", "/auth/agent/approve") => ("caller", "auth.agent-connection.approve"),
+        ("GET", "/api/projects") => ("projects-web-caller", "projects.web.projects.list"),
+        ("GET", "/api/projects/catalog/teams") => {
+            ("projects-web-caller", "projects.web.catalog.teams")
+        }
+        ("GET", "/api/projects/catalog/project-statuses") => (
+            "projects-web-caller",
+            "projects.web.catalog.project-statuses",
+        ),
+        ("GET", "/api/projects/catalog/workflow-states") => (
+            "projects-web-caller",
+            "projects.web.catalog.workflow-states",
+        ),
+        ("GET", "/api/projects/catalog/cycles") => {
+            ("projects-web-caller", "projects.web.catalog.cycles")
+        }
+        ("GET", "/projects") => ("projects-web-caller", "projects.web.page"),
+        ("GET", "/projects/assets/app.css") => ("projects-web-caller", "projects.web.css"),
+        ("GET", "/projects/assets/app.js") => ("projects-web-caller", "projects.web.js"),
+        ("GET", path) if path.starts_with("/api/issues/") && path.ends_with("/activity") => {
+            ("projects-web-caller", "projects.web.issues.activity")
+        }
+        ("GET", path) if path.starts_with("/api/issues/") => {
+            ("projects-web-caller", "projects.web.issues.detail")
+        }
         ("GET", "/projects/agent/tools") => ("web-caller", "projects.agent.catalog"),
         ("GET", "/projects/agent/manifest") => ("web-caller", "projects.agent.manifest"),
         ("POST", "/projects/agent/tools/execute") => ("web-caller", "projects.agent.execute"),
@@ -720,7 +782,23 @@ async fn dispatch(
                         }]
                     })
                     .unwrap_or_default(),
-                path_parameters: vec![],
+                path_parameters: if route == "projects.web.issues.activity" {
+                    vec![http::HandleRequestPathParametersItem {
+                        name: "issue_id".into(),
+                        value: request
+                            .path
+                            .trim_start_matches("/api/issues/")
+                            .trim_end_matches("/activity")
+                            .into(),
+                    }]
+                } else if route == "projects.web.issues.detail" {
+                    vec![http::HandleRequestPathParametersItem {
+                        name: "issue_ref".into(),
+                        value: request.path.trim_start_matches("/api/issues/").into(),
+                    }]
+                } else {
+                    vec![]
+                },
             },
         )
         .await;

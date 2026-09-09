@@ -16,10 +16,42 @@
       "items": {
         "$ref": "#/$defs/LoginMethod"
       }
+    },
+    "account": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConnectionAccount"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Non-secret provider presentation for account management only."
     }
   },
   "additionalProperties": false,
   "$defs": {
+    "ConnectionAccount": {
+      "type": "object",
+      "required": ["origin", "reconnect_required"],
+      "properties": {
+        "origin": {
+          "type": "string"
+        },
+        "subject": {
+          "type": ["string", "null"],
+          "description": "Authenticated subject returned by the business App, never chosen by Agent."
+        },
+        "expires_at_millis": {
+          "type": ["string", "null"]
+        },
+        "reconnect_required": {
+          "type": "boolean",
+          "description": "True after local expiry or an explicit remote authentication rejection."
+        }
+      },
+      "additionalProperties": false
+    },
     "LoginMethod": {
       "type": "string",
       "enum": ["device_code", "browser_loopback", "browser_consent"]

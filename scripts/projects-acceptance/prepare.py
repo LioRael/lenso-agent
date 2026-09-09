@@ -8,6 +8,7 @@ from pathlib import Path
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--auth-root", required=True, type=Path)
 parser.add_argument("--projects-root", required=True, type=Path)
+parser.add_argument("--projects-web-root", required=True, type=Path)
 parser.add_argument("--output", type=Path, default=Path(".lenso/projects-acceptance"))
 args = parser.parse_args()
 source = Path(__file__).resolve().parent
@@ -20,6 +21,7 @@ manifest = (source / "Cargo.toml.in").read_text()
 for token, root in [
     ("AUTH_ROOT", args.auth_root),
     ("PROJECTS_ROOT", args.projects_root),
+    ("PROJECTS_WEB_ROOT", args.projects_web_root),
 ]:
     root = root.resolve()
     if not (root / "Cargo.toml").is_file():

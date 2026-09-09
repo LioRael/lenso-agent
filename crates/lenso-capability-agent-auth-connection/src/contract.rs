@@ -22,6 +22,19 @@ pub struct StatusResponse {
     /// Presence of a stored grant, not proof that a remote service accepts it.
     pub connected: bool,
     pub methods: Vec<LoginMethod>,
+    /// Non-secret provider presentation for account management only.
+    pub account: Option<ConnectionAccount>,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct ConnectionAccount {
+    pub origin: String,
+    /// Authenticated subject returned by the business App, never chosen by Agent.
+    pub subject: Option<String>,
+    pub expires_at_millis: Option<String>,
+    /// True after local expiry or an explicit remote authentication rejection.
+    pub reconnect_required: bool,
 }
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
@@ -94,7 +107,7 @@ pub enum ConnectionError {
 #[lenso::capability(
     id = "lenso.agent.auth-connection",
     major = 1,
-    version = "1.1.0",
+    version = "1.2.0",
     portable = false,
     cross_lane_transfer = false
 )]
