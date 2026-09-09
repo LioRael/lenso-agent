@@ -3835,7 +3835,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-tool-sdk"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "futures",
  "lenso",
@@ -3849,7 +3849,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-tool-sdk-macros"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
