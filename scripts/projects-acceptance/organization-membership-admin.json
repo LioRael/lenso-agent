@@ -1,0 +1,29 @@
+{
+  "id": "lenso.organization-membership-admin@1",
+  "version": "1.1.0",
+  "portable": true,
+  "cross_lane_transfer": true,
+  "operations": [
+    {
+      "name": "list_members",
+      "interaction": "request",
+      "request_schema": "schemas/list-members-request.schema.json",
+      "response_schema": "schemas/list-members-response.schema.json",
+      "domain_error_schema": "schemas/list-members-error.schema.json"
+    },
+    {
+      "name": "add_member",
+      "interaction": "request",
+      "request_schema": "schemas/add-member-request.schema.json",
+      "response_schema": "schemas/add-member-response.schema.json",
+      "domain_error_schema": "schemas/add-member-error.schema.json"
+    },
+    {
+      "name": "remove_member",
+      "interaction": "request",
+      "request_schema": "schemas/remove-member-request.schema.json",
+      "response_schema": "schemas/remove-member-response.schema.json",
+      "domain_error_schema": "schemas/remove-member-error.schema.json"
+    }
+  ]
+}
