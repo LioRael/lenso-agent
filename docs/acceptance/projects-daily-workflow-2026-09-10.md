@@ -31,7 +31,7 @@ No npm or binary release was performed for this iteration.
 
 The source fixture pins Auth `8d5ab52ff34f9ff3cd487b6e83982fef6e5c72da`,
 Projects `909a5482871fb79f04e92c65308bae7a5a466378`, and Projects Web
-`6721eddfda1ee3dbad3cc49fe4e95f340f35c85d`. Their merge/release state is separate
+`556e3067509476199911f64bfd9e030ed09b4fad`. Their merge/release state is separate
 from this local evidence.
 
 The current Issue contract has no assignee field. This flow concerns visible
