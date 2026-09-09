@@ -1099,9 +1099,10 @@ impl AgentApp {
         } else {
             None
         };
-        let tool_target_lease = self.tool_target_router.capture()?;
+        let turn_binding = ProviderTurnBinding::capture(&route, &agent_provider).await?;
         Ok(TurnGeneration {
-            tool_target_lease,
+            tool_target_lease: self.tool_target_router.capture()?,
+            turn_binding,
             consumer_instance: consumer_instance.to_owned(),
             route,
             handle,
@@ -1555,9 +1556,59 @@ impl TerminalGeneration {
     }
 }
 
+/// Cancellation releases provider-owned snapshots, including failed admissions.
+#[derive(Debug)]
+struct ProviderTurnBinding {
+    id: String,
+    cancellation: CancellationToken,
+}
+impl ProviderTurnBinding {
+    async fn capture(
+        route: &DurableGenerationRoute<NativeApp>,
+        agent_provider: &str,
+    ) -> Result<Self, String> {
+        let turn_binding = Self::new();
+        let bindings = route
+            .target()
+            .many_handle::<lenso_capability_agent_turn_binding::TurnBinding>(agent_provider)
+            .map_err(|_| "Turn identity providers are unavailable")?;
+        let context = route
+            .target()
+            .invocation_context_after(Duration::from_secs(30), turn_binding.cancellation.clone());
+        let capture = bindings.invoke_many_with_context(
+            lenso_capability_agent_turn_binding::CAPTURE_OPERATION,
+            context,
+            lenso_capability_agent_turn_binding::CaptureRequest {
+                scope_id: turn_binding.id.clone(),
+            },
+        );
+        let outcomes = tokio::time::timeout(Duration::from_secs(30), capture)
+            .await
+            .map_err(|_| "Turn identity capture timed out")?
+            .map_err(|_| "Turn identity capture failed")?;
+        if outcomes.iter().any(Result::is_err) {
+            return Err("Turn identity provider rejected admission".into());
+        }
+        Ok(turn_binding)
+    }
+
+    fn new() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            cancellation: CancellationToken::new(),
+        }
+    }
+}
+impl Drop for ProviderTurnBinding {
+    fn drop(&mut self) {
+        self.cancellation.cancel();
+    }
+}
+
 #[derive(Debug)]
 pub struct TurnGeneration {
     tool_target_lease: crate::tool_target::TurnToolTargetLease,
+    turn_binding: ProviderTurnBinding,
     consumer_instance: String,
     route: DurableGenerationRoute<NativeApp>,
     handle: Rc<NativeStreamHandle<Agent>>,
@@ -1825,7 +1876,14 @@ impl TurnGeneration {
             .map_err(|error| format!("failed to attach Session Profile: {error}"))?
             .with_typed_extension(profile)
             .map_err(|error| format!("failed to attach resolved Turn profile: {error}"))?;
-        let context = self.tool_target_lease.attach(context)?;
+        let context = self
+            .tool_target_lease
+            .attach(context)?
+            .with_extension(
+                lenso_capability_agent_turn_binding::SCOPE_EXTENSION,
+                self.turn_binding.id.as_bytes().to_vec(),
+            )
+            .map_err(|_| "Could not attach turn identity binding")?;
         if self.interactive {
             context
                 .with_typed_extension(&InteractiveSurface)
@@ -4039,6 +4097,41 @@ mod tests {
                 .unwrap()
                 .iter()
                 .all(|binding| binding["capability_id"] != "lenso.agent.session-presentation@1")
+        );
+    }
+
+    #[test]
+    fn business_connection_binds_auth_tools_and_admission_and_is_removable() {
+        let root = PluginRootSnapshot::new(
+            [],
+            [lenso_app_plan::authoring::PluginRootInstance::new(
+                "lenso.agent.business-connection",
+                "projects",
+            )
+            .with_configuration(
+                serde_json::json!({"origin":"https://projects.example", "label":"Projects"}),
+            )],
+            [],
+        );
+        let plan = resolve_host_plan(&root).unwrap();
+        let value = serde_json::to_value(&plan).unwrap();
+        let bindings = value["capability_bindings"].as_array().unwrap();
+        for capability in ["lenso.agent.turn-binding@1", "lenso.agent.tool-provider@2"] {
+            assert!(
+                bindings
+                    .iter()
+                    .any(|edge| edge["capability_id"] == capability
+                        && edge["provider_instance"] == "lenso.agent.business-connection/projects"),
+                "{capability} must be bound"
+            );
+        }
+        let removed = resolve_host_plan(&PluginRootSnapshot::default()).unwrap();
+        assert!(
+            removed
+                .plugin_instances()
+                .iter()
+                .all(|instance| instance.instance_key()
+                    != "lenso.agent.business-connection/projects")
         );
     }
 

@@ -1,6 +1,6 @@
 {
   "id": "lenso.agent.auth-connection@1",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "portable": false,
   "cross_lane_transfer": false,
   "operations": [

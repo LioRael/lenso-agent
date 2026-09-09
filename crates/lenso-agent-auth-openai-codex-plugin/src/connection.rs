@@ -87,6 +87,9 @@ impl ConnectionManager {
             }
         }
         let (response, task) = match request.method {
+            contract::LoginMethod::BrowserConsent => {
+                return Ok(Err(contract::BeginError::UnsupportedMethod));
+            }
             contract::LoginMethod::BrowserLoopback => {
                 let pending = begin_browser_login(options.clone()).await
                     .map_err(|_| plugin_failure("browser sign-in could not start; use device code if the callback port is occupied"))?;

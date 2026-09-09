@@ -3034,6 +3034,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-business-connection-plugin"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lenso",
+ "lenso-app-plan",
+ "lenso-capability-agent-auth-connection",
+ "lenso-capability-agent-tool-provider",
+ "lenso-capability-agent-turn-binding",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "lenso-runner",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
 name = "lenso-agent-channel"
 version = "0.1.0"
 dependencies = [
@@ -3160,6 +3182,7 @@ dependencies = [
  "lenso-agent-artifact-file-plugin",
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
+ "lenso-agent-business-connection-plugin",
  "lenso-agent-console-app-tools-plugin",
  "lenso-agent-console-instructions-plugin",
  "lenso-agent-console-plugin-tools-plugin",
@@ -3209,6 +3232,7 @@ dependencies = [
  "lenso-agent-ask-user-tools-plugin",
  "lenso-agent-auth-openai-codex-plugin",
  "lenso-agent-browser-playwright-plugin",
+ "lenso-agent-business-connection-plugin",
  "lenso-agent-code-mode-tools-plugin",
  "lenso-agent-context-compaction-command-plugin",
  "lenso-agent-context-compaction-plugin",
@@ -3331,6 +3355,7 @@ dependencies = [
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-tool-target",
  "lenso-capability-agent-tools",
+ "lenso-capability-agent-turn-binding",
  "lenso-capability-agent-turn-input",
  "lenso-capability-agent-user-interaction",
  "lenso-capability-agent-workspace-read",
@@ -3432,6 +3457,7 @@ dependencies = [
  "lenso-capability-agent-session-control",
  "lenso-capability-agent-session-presentation",
  "lenso-capability-agent-tools",
+ "lenso-capability-agent-turn-binding",
  "lenso-capability-agent-turn-input",
  "lenso-kernel",
  "serde",
@@ -4596,6 +4622,25 @@ dependencies = [
  "lenso-runtime-codec 0.4.1",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lenso-capability-agent-turn-binding"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-contract-authoring",
+ "lenso-contract-codegen 0.9.0",
+ "lenso-contract-runtime",
+ "lenso-guest-sdk 0.5.0",
+ "lenso-kernel",
+ "lenso-plugin-authoring",
+ "lenso-runtime-codec 0.4.1",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
