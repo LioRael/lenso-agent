@@ -1,0 +1,72 @@
+name: Projects delegated-user acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/projects-acceptance/**'
+      - '.github/workflows/projects-acceptance.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: lenso_test
+          POSTGRES_PASSWORD: acceptance-only
+          POSTGRES_DB: acceptance
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U lenso_test -d acceptance'
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: LioRael/lenso-auth-plugin
+          ref: 397fa2f3cec6d66bab563a667b7f9ce8e6b11cbe
+          path: .lenso/acceptance-sources/auth
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: LioRael/lenso-projects-plugin
+          ref: 569e58f5a8a7ea9beaad11004e13fb28c6f71e1c
+          path: .lenso/acceptance-sources/projects
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: nightly-2026-07-10
+      - name: Prepare actual business App
+        run: |
+          python3 scripts/projects-acceptance/prepare.py \
+            --auth-root .lenso/acceptance-sources/auth \
+            --projects-root .lenso/acceptance-sources/projects
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: .lenso/projects-acceptance
+      - name: Verify delegated identity and durable authorization
+        env:
+          LENSO_POSTGRES_TEST_URL: postgresql://lenso_test:acceptance-only@127.0.0.1:5432/acceptance
+          LENSO_ACCEPTANCE_RECEIPT: .lenso/projects-acceptance/receipt.json
+        run: |
+          cargo build --manifest-path .lenso/projects-acceptance/Cargo.toml
+          .lenso/projects-acceptance/target/debug/projects-browser-acceptance >.lenso/acceptance.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill -INT "$fixture_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            test ! -f "$LENSO_ACCEPTANCE_RECEIPT" || break
+            kill -0 "$fixture_pid" || { cat .lenso/acceptance.log; exit 1; }
+            sleep 1
+          done
+          python3 scripts/projects-acceptance/verify.py --receipt "$LENSO_ACCEPTANCE_RECEIPT"
+          kill -INT "$fixture_pid"
+          wait "$fixture_pid"
+          trap - EXIT
