@@ -34,7 +34,7 @@ mod tests {
                 {"capability_id": "lenso.agent.artifact@1", "descriptor_version": "1.0.0", "cardinality": "one"},
                 {
                     "capability_id": "lenso.agent.auth-connection@1",
-                    "descriptor_version": "1.1.0",
+                    "descriptor_version": "1.2.0",
                     "cardinality": "many"
                 },
                 {
