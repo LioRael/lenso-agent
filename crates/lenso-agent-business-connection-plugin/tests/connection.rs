@@ -9,6 +9,7 @@ use lenso_app_plan::{
     PluginInstancePlan,
 };
 use lenso_capability_agent_auth_connection as auth;
+use lenso_capability_agent_prompt_provider as prompts;
 use lenso_capability_agent_tool_provider as tools;
 use lenso_capability_agent_turn_binding as binding;
 use lenso_kernel::{CancellationToken, Kernel, RuntimeFailure, ShutdownOutcome};
@@ -144,6 +145,7 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                     tools::DESCRIPTOR_VERSION,
                     vec![tools::CATALOG_OPERATION, tools::EXECUTE_OPERATION],
                 ),
+                (prompts::CAPABILITY_ID, prompts::DESCRIPTOR_VERSION, vec![prompts::CONTRIBUTE_OPERATION]),
             ] {
                 plugin =
                     plugin.with_capability(CapabilityEndpointPlan::new(id, version, operations));
@@ -171,6 +173,9 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                 .unwrap()
                 .unwrap();
             assert!(catalog.tools.is_empty());
+            let prompt = app.invoke::<prompts::PromptProvider>("caller", prompts::CONTRIBUTE_OPERATION, prompts::ContributeRequest {}).await.unwrap().unwrap();
+            assert!(prompt.contributions[0].content.contains("Never invent"));
+            assert!(!prompt.contributions[0].content.contains(&remote.origin));
             let mut turns = Vec::new();
             for _ in 0..2 {
                 remote.approved.store(false, Ordering::SeqCst);

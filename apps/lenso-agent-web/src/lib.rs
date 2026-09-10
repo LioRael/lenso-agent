@@ -397,6 +397,9 @@ struct WebRuntimeConfig {
     reason = "The bounded runtime channel owns each complete turn request"
 )]
 enum RuntimeCommand {
+    RefreshToolCatalog {
+        reply: oneshot::Sender<Result<Vec<BootstrapTool>, String>>,
+    },
     ForkSession {
         session_id: String,
         request: ForkSessionRequest,
@@ -1496,6 +1499,7 @@ async fn cancel_terminal(
 async fn bootstrap(
     State(runtime): State<WebRuntime>,
 ) -> Result<Json<BootstrapResponse>, ApiProblem> {
+    runtime.refresh_tool_catalog().await?;
     let policy = runtime.read_tool_policy()?;
     let coding_profiles = runtime.coding_profile_import_enabled().await?;
     Ok(Json(BootstrapResponse {
@@ -1546,6 +1550,7 @@ async fn read_tool_policy(
     headers: HeaderMap,
 ) -> Result<Json<ToolPolicyResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
+    runtime.refresh_tool_catalog().await?;
     runtime.read_tool_policy().map(Json)
 }
 
@@ -1555,6 +1560,7 @@ async fn update_tool_policy(
     Json(request): Json<UpdateToolPolicyRequest>,
 ) -> Result<Json<ToolPolicyResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
+    runtime.refresh_tool_catalog().await?;
     runtime.update_tool_policy(request).map(Json)
 }
 
@@ -2264,6 +2270,23 @@ impl WebRuntime {
         }
     }
 
+    async fn refresh_tool_catalog(&self) -> Result<(), ApiProblem> {
+        let (reply, response) = oneshot::channel();
+        self.commands
+            .send(RuntimeCommand::RefreshToolCatalog { reply })
+            .await
+            .map_err(|_| ApiProblem::unavailable("Agent runtime is unavailable"))?;
+        let catalog = response
+            .await
+            .map_err(|_| ApiProblem::unavailable("Agent runtime stopped"))?
+            .map_err(ApiProblem::unavailable)?;
+        *self
+            .available_tools
+            .write()
+            .map_err(|_| ApiProblem::unavailable("Agent Tool catalog lock is poisoned"))? = catalog;
+        Ok(())
+    }
+
     fn read_tool_policy(&self) -> Result<ToolPolicyResponse, ApiProblem> {
         let policy = self
             .policy
@@ -2376,6 +2399,9 @@ async fn runtime_actor(
                     Err(error) => Err(error),
                 };
                 let _ = reply.send(result);
+            }
+            RuntimeCommand::RefreshToolCatalog { reply } => {
+                let _ = reply.send(resolve_tool_policy(&app, &[]).await);
             }
             RuntimeCommand::ModelCatalog { reply } => {
                 let _ = reply.send(app.provider_model_catalog().await);
@@ -2712,6 +2738,9 @@ async fn runtime_actor(
                                     break;
                                 };
                                 match command {
+                                    RuntimeCommand::RefreshToolCatalog { reply } => {
+                                        let _ = reply.send(resolve_tool_policy(&app, &[]).await);
+                                    }
                                     RuntimeCommand::ModelCatalog { reply } => {
                                         let _ = reply.send(app.provider_model_catalog().await);
                                     }
@@ -2925,6 +2954,7 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
         | RuntimeCommand::CancelTurn { .. }
         | RuntimeCommand::TaskSnapshot { .. }
         | RuntimeCommand::PendingInteractions { .. }
+        | RuntimeCommand::RefreshToolCatalog { .. }
         | RuntimeCommand::Shutdown { .. } => {
             unreachable!("active-Turn priority command reached the deferred queue")
         }
@@ -4495,6 +4525,12 @@ mod tests {
                             .any(|plugin| plugin["instanceKey"] == instance)
                     );
                 }
+                let previous_policy = surface.runtime.read_tool_policy().unwrap();
+                surface.runtime.available_tools.write().unwrap().clear();
+                surface.runtime.refresh_tool_catalog().await.unwrap();
+                let refreshed = surface.runtime.read_tool_policy().unwrap();
+                assert_eq!(refreshed.allowed, previous_policy.allowed);
+                assert!(!refreshed.available.is_empty());
                 let available_tools = surface.runtime.available_tools.read().unwrap().clone();
                 let available = available_tools
                     .iter()

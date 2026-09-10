@@ -4116,7 +4116,11 @@ mod tests {
         let plan = resolve_host_plan(&root).unwrap();
         let value = serde_json::to_value(&plan).unwrap();
         let bindings = value["capability_bindings"].as_array().unwrap();
-        for capability in ["lenso.agent.turn-binding@1", "lenso.agent.tool-provider@2"] {
+        for capability in [
+            "lenso.agent.turn-binding@1",
+            "lenso.agent.tool-provider@2",
+            "lenso.agent.prompt-provider@1",
+        ] {
             assert!(
                 bindings
                     .iter()
