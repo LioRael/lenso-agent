@@ -30,9 +30,9 @@ acceptance is separate and is not reused as proof of these source changes.
 No npm or binary release was performed for this iteration.
 
 The source fixture pins merged Auth `b68d87654e18910e8d14649e48e3166636fa99a1`,
-merged Projects `badf709faf5cb0e343498e3d15c264bb4e31a132`, and Projects Web
-`556e3067509476199911f64bfd9e030ed09b4fad`. The Projects Web merge/release
-state is separate from this local evidence.
+merged Projects `badf709faf5cb0e343498e3d15c264bb4e31a132`, and merged Projects Web
+`cc8109782d71e6a5edfa4c989e1eac99f11a46fa`. Registry release state remains
+separate from this source acceptance.
 
 The current Issue contract has no assignee field. This flow concerns visible
 Issues supplied through their App links, not an assigned-to-me inbox.

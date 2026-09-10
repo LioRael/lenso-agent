@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-projects-web-plugin
-          ref: 556e3067509476199911f64bfd9e030ed09b4fad
+          ref: cc8109782d71e6a5edfa4c989e1eac99f11a46fa
           path: .lenso/acceptance-sources/projects-web
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
