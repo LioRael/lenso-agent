@@ -29,10 +29,10 @@ it does not invoke a language model. The previously published 1.11.0 model
 acceptance is separate and is not reused as proof of these source changes.
 No npm or binary release was performed for this iteration.
 
-The source fixture pins Auth `8d5ab52ff34f9ff3cd487b6e83982fef6e5c72da`,
-Projects `909a5482871fb79f04e92c65308bae7a5a466378`, and Projects Web
-`556e3067509476199911f64bfd9e030ed09b4fad`. Their merge/release state is separate
-from this local evidence.
+The source fixture pins merged Auth `b68d87654e18910e8d14649e48e3166636fa99a1`,
+merged Projects `badf709faf5cb0e343498e3d15c264bb4e31a132`, and Projects Web
+`556e3067509476199911f64bfd9e030ed09b4fad`. The Projects Web merge/release
+state is separate from this local evidence.
 
 The current Issue contract has no assignee field. This flow concerns visible
 Issues supplied through their App links, not an assigned-to-me inbox.
