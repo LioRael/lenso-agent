@@ -19,7 +19,8 @@ come from crates.io. Paths are explicit and never discovered from another App.
 
 ```sh
 python3 scripts/projects-acceptance/prepare.py \
-  --auth-root ../lenso-auth-plugin --projects-root ../lenso-projects-plugin
+  --auth-root ../lenso-auth-plugin --projects-root ../lenso-projects-plugin \
+  --projects-web-root ../lenso-projects-web-plugin
 export LENSO_POSTGRES_TEST_URL=postgresql://test_user@127.0.0.1:5432/test_database
 export LENSO_ACCEPTANCE_RECEIPT="$PWD/.lenso/projects-acceptance/receipt.json"
 cargo run --manifest-path .lenso/projects-acceptance/Cargo.toml
@@ -78,3 +79,47 @@ forwarding; it does not grant an unlisted final operation. Include `:catalog`
 only when using the authenticated catalog. The public manifest needs no grant.
 Never solve an audience mismatch by copying signing material into Agent or by
 accepting a model-supplied actor.
+
+## Daily workflow browser acceptance
+
+The fixture also links the standalone Projects Web Plugin. Pass its source
+checkout with `--projects-web-root ../lenso-projects-web-plugin` when preparing
+this App. This is required; the Web Plugin is not copied into Console.
+
+After installing Console's locked browser test dependencies, run:
+
+```sh
+mkdir -p .lenso/browser-evidence
+node scripts/projects-acceptance/browser.mjs \
+  .lenso/projects-acceptance/receipt.json ../lenso-console .lenso/browser-evidence
+```
+
+The browser test uses only disposable fixture users. It verifies cookie login
+and return to an Issue, login recovery from consent, explicit approval, workflow
+update through the actual Tool ingress, conflict recovery and the refreshed
+Issue/activity page. The grant stays inside the test process. It writes only a
+non-secret receipt and screenshot. This test invokes the real business Tool
+protocol, not a language model; model acceptance remains separate.
+
+The current Issue contract has no assignee field. The fixture proves access to
+visible Issues, not an assigned-to-me filter.
+
+## Native Console Workspace
+
+Prepare the App with the current Auth, Projects and Projects Web checkouts. Build
+Projects Web and import `src/workspace` into Console with its
+`scripts/import-projects-workspace.mjs`. Start the business App on 55440 and the
+actual Console Host on 55450 with `LENSO_CONSOLE_PROJECTS_ORIGIN` pointing to 55440.
+Use disposable Agent homes and the real local Agent binaries for Console bootstrap.
+
+```sh
+node scripts/projects-acceptance/console-browser.mjs RECEIPT CONSOLE_CHECKOUT OUTPUT
+```
+
+This test signs into the disposable business App, grants the Workspace connection,
+reads Issue/activity/workflow data, follows native Console navigation without a
+page reload, creates a project through the real business service, and opens the
+existing mini agent. It also checks theme propagation, cross-organization denial,
+destination override rejection and credential-free browser connection status.
+It resets only the dedicated acceptance Console's Projects connection and creates
+a test project. It does not call a model or mutate production accounts.

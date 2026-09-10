@@ -238,6 +238,7 @@ impl CodexAuth {
             .map_err(|_| plugin_failure("failed to read authentication status"))?;
         Ok(Ok(connection_contract::StatusResponse {
             label: format!("ChatGPT ({})", self.config.profile),
+            account: None,
             connected: status.authenticated,
             methods: vec![
                 connection_contract::LoginMethod::BrowserLoopback,

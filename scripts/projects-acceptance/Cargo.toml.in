@@ -34,6 +34,7 @@ lenso-capability-auth={path="@AUTH_ROOT@/crates/lenso-capability-auth"}
 lenso-capability-auth-delegation={path="@AUTH_ROOT@/crates/lenso-capability-auth-delegation"}
 lenso-capability-identity-directory={path="@AUTH_ROOT@/crates/lenso-capability-identity-directory"}
 lenso-capability-credential-issuer={path="@AUTH_ROOT@/crates/lenso-capability-credential-issuer"}
+lenso-projects-web-plugin={path="@PROJECTS_WEB_ROOT@"}
 lenso-projects-postgres-plugin={path="@PROJECTS_ROOT@/crates/lenso-projects-postgres-plugin"}
 lenso-projects-agent-tools-plugin={path="@PROJECTS_ROOT@/crates/lenso-projects-agent-tools-plugin"}
 lenso-projects-agent-web-plugin={path="@PROJECTS_ROOT@/crates/lenso-projects-agent-web-plugin"}
@@ -46,3 +47,7 @@ sqlx={version="0.9",default-features=false,features=["runtime-tokio","postgres",
 [patch.crates-io]
 lenso-auth-sdk={path="@AUTH_ROOT@/crates/lenso-auth-sdk"}
 lenso-capability-auth={path="@AUTH_ROOT@/crates/lenso-capability-auth"}
+
+lenso-capability-projects={path="@PROJECTS_ROOT@/crates/lenso-capability-projects"}
+lenso-capability-projects-admin={path="@PROJECTS_ROOT@/crates/lenso-capability-projects-admin"}
+lenso-capability-projects-collaboration={path="@PROJECTS_ROOT@/crates/lenso-capability-projects-collaboration"}

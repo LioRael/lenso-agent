@@ -42,3 +42,17 @@ For a real PostgreSQL App and Console/model acceptance, use the
 [Projects acceptance guide](../../scripts/projects-acceptance/README.md). Parent
 and child sessions must authorize both the Tool Provider execute hop and the
 exact final Projects operations; neither scope substitutes for the other.
+
+## Daily workflow presentation
+
+Account management exposes the configured App origin, the App-issued subject ID,
+expiry and reconnect state through AuthConnection 1.2. Credentials remain private
+and memory-only. A remote 401 invalidates only the exact grant used by that Turn;
+a resource-level 403 does not disconnect the account. Newer account connections
+are unaffected by a late rejection from an older Turn.
+
+Successful Issue responses include `_links` derived from the configured origin
+and returned organization/Issue IDs. Opening a link uses the App's own browser
+session and does not grant access. The matching Projects Web surface owns the
+`/projects?organization_id=...&issue=...` route. Removing this connection removes
+these Tools and local account state; it does not delete Projects data.

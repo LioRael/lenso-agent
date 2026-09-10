@@ -24,3 +24,13 @@ they cannot select a newer account. Browser auth status and poll return no grant
 This supplements ADR 0108 for Plan-bound Plugins. It does not create a Kernel
 registry, mutable Plan, cross-process context format or portable credential API.
 The native provider is trusted code; an opaque scope is not a sandbox boundary.
+
+## Account management presentation
+
+AuthConnection 1.2 adds an optional non-secret account presentation: configured
+App origin, App-issued subject, grant expiry and reconnect requirement. This
+projection is available only on the existing operator management surface. It is
+not copied into model input or Tool results and never includes a credential.
+Absent presentation supports providers without business accounts. An explicit
+HTTP 401 invalidates that exact grant across its captured Turns; HTTP 403 remains
+a resource permission denial. Neither response invalidates a newer grant.

@@ -1,5 +1,6 @@
 //! Owns business grants; no credential crosses the `AuthConnection` surface.
 mod login;
+mod presentation;
 mod state;
 use lenso::ManagedTasks;
 use lenso_capability_agent_auth_connection as auth;
@@ -88,18 +89,21 @@ impl BusinessConnection {
         _context: InvocationContext,
         _request: auth::StatusRequest,
     ) -> Result<Result<auth::StatusResponse, auth::StatusError>, RuntimeFailure> {
+        let state = self.state.lock().await;
+        let grant = state.grant.as_ref();
         Ok(Ok(auth::StatusResponse {
             label: self.config.label.clone(),
-            connected: self
-                .state
-                .lock()
-                .await
-                .grant
-                .as_ref()
-                .is_some_and(|grant| grant.valid()),
+            connected: grant.is_some_and(|grant| grant.valid()),
             methods: vec![auth::LoginMethod::BrowserConsent],
+            account: Some(Some(auth::ConnectionAccount {
+                origin: self.config.origin.clone(),
+                subject: Some(grant.and_then(|grant| grant.subject.clone())),
+                expires_at_millis: Some(grant.map(|grant| grant.expires.to_string())),
+                reconnect_required: grant.is_some_and(|grant| !grant.valid()),
+            })),
         }))
     }
+
     async fn begin(
         &self,
         context: InvocationContext,
@@ -240,7 +244,7 @@ impl BusinessConnection {
         request: tools::ExecuteRequest,
     ) -> Result<Result<tools::ExecuteResponse, tools::ExecuteError>, RuntimeFailure> {
         let Some(grant) = self.state.lock().await.for_context(&context, true)? else {
-            return Ok(Err(tools::ExecuteError::PermissionDenied));
+            return Ok(Err(reconnect_required()));
         };
         if !request.name.starts_with("projects_") {
             return Ok(Err(tools::ExecuteError::NotFound));
@@ -252,7 +256,13 @@ impl BusinessConnection {
                 .bearer_auth(grant.credential.as_str()).json(&request).send() => result.map_err(|_| failure())?,
         };
         match result.status().as_u16() {
-            401 | 403 => Ok(Err(tools::ExecuteError::PermissionDenied)),
+            401 => {
+                // Reject only this exact grant. A late response from an older Turn
+                // must never invalidate a newly connected account.
+                grant.reject();
+                Ok(Err(reconnect_required()))
+            }
+            403 => Ok(Err(tools::ExecuteError::PermissionDenied)),
             404 => Ok(Err(tools::ExecuteError::NotFound)),
             400 => Ok(Err(tools::ExecuteError::InvalidArguments)),
             413 => Ok(Err(tools::ExecuteError::OutputLimitExceeded)),
@@ -280,7 +290,22 @@ impl BusinessConnection {
                     Err(failure())
                 }
             }
-            _ => Ok(Ok(response(result, Some(&grant.credential)).await?)),
+            _ => {
+                let mut output: tools::ExecuteResponse =
+                    response(result, Some(&grant.credential)).await?;
+                presentation::present(&self.config.origin, &mut output);
+                Ok(Ok(output))
+            }
         }
+    }
+}
+
+fn reconnect_required() -> tools::ExecuteError {
+    tools::ExecuteError::ExecutionFailed {
+        payload: tools::ExecutionFailedPayload {
+            reason_code: "connection_required".into(),
+            message: "Reconnect the business App in Settings → Connections, then start a new turn. This operation was not authorized.".into(),
+            details_json: "{}".parse().expect("static JSON"),
+        },
     }
 }

@@ -57,7 +57,7 @@ async fn poll(State(s): State<Remote>, Json(body): Json<Value>) -> Json<Value> {
         return Json(json!({"state":"pending","grant":null}));
     }
     Json(
-        json!({"state":"connected","grant":{"credential":format!("private-account-{}",s.account.load(Ordering::SeqCst)),"expires_at":(time::OffsetDateTime::now_utc()+time::Duration::minutes(10)).format(&time::format_description::well_known::Rfc3339).unwrap()}}),
+        json!({"state":"connected","grant":{"subject":format!("user-{}",s.account.load(Ordering::SeqCst)),"credential":format!("private-account-{}",s.account.load(Ordering::SeqCst)),"expires_at":(time::OffsetDateTime::now_utc()+time::Duration::minutes(10)).format(&time::format_description::well_known::Rfc3339).unwrap()}}),
     )
 }
 async fn execute(
@@ -301,7 +301,19 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                 )
                 .await
                 .unwrap();
-            assert!(matches!(output, Err(tools::ExecuteError::PermissionDenied)));
+            assert!(matches!(output, Err(tools::ExecuteError::ExecutionFailed { payload }) if payload.reason_code == "connection_required"));
+            // An old Turn's 401 cannot disconnect the newer account.
+            let status = app.invoke::<auth::AuthConnectionStatus>("caller", auth::STATUS_OPERATION, auth::StatusRequest {}).await.unwrap().unwrap();
+            assert!(status.connected);
+            let account = status.account.unwrap().unwrap();
+            assert_eq!(account.subject.as_ref().unwrap().as_deref(), Some("user-2"));
+            assert!(account.expires_at_millis.as_ref().unwrap().is_some());
+            assert!(!account.reconnect_required);
+            assert!(!serde_json::to_string(&account).unwrap().contains("private"));
+            let _ = app.handle::<tools::ToolProviderExecute>("caller").unwrap().invoke_with_context(tools::EXECUTE_OPERATION, invoke(&turns[1].0), tools::ExecuteRequest { name: "projects_read_issue".into(), arguments_json: "{}".parse().unwrap() }).await.unwrap();
+            let status = app.invoke::<auth::AuthConnectionStatus>("caller", auth::STATUS_OPERATION, auth::StatusRequest {}).await.unwrap().unwrap();
+            assert!(!status.connected);
+            assert!(status.account.unwrap().unwrap().reconnect_required);
             app.invoke::<auth::AuthConnectionDisconnect>(
                 "caller",
                 auth::DISCONNECT_OPERATION,
