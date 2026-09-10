@@ -108,7 +108,11 @@ try {
   )
     throw new Error("conflict not actionable");
   await page.getByRole("button", { name: "Refresh issue" }).click();
-  await page.getByText(`Revision ${saved.revision}`, { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Record details", exact: true }).click();
+  await page.locator('[data-slot="description-list-item"]')
+    .filter({ has: page.getByText("Version", { exact: true }) })
+    .getByText(String(saved.revision), { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Record details", exact: true }).click();
   await page
     .locator("#issue-activity")
     .getByText(/Issue updated/)
@@ -117,6 +121,9 @@ try {
     .locator("#issue-state")
     .getByText("Done", { exact: true })
     .waitFor();
+  await page.getByRole("button", { name: /Issue updated/ }).last().click();
+  await page.getByText(receipt.alice_subject, { exact: true }).last().waitFor();
+  await page.getByRole("button", { name: /Issue updated/ }).last().click();
   if (errors.length) throw new Error(errors.join("\n"));
   const result = {
     passed: true,

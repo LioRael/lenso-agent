@@ -219,7 +219,7 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         instance(
             "consent",
             lenso_auth_agent_connection_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue"],"grant_ttl_seconds":3600}),
+            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects@1:create_project", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
         ),
         organization(
             json!({"schema":format!("{prefix}_organization"),"database_url_secret":"auth/database-url","admin_callers":["caller"],"directory_callers":["caller"],"membership_admin_callers":["caller"]}),
@@ -727,6 +727,16 @@ async fn dispatch(
         ("POST", "/auth/agent/connection/poll") => ("caller", "auth.agent-connection.poll"),
         ("GET", "/auth/agent/authorize") => ("caller", "auth.agent-connection.authorize"),
         ("POST", "/auth/agent/approve") => ("caller", "auth.agent-connection.approve"),
+        ("POST", "/api/projects") => ("projects-web-caller", "projects.web.projects.create"),
+        ("GET", path) if path.starts_with("/api/projects/") && path.ends_with("/issues") => {
+            ("projects-web-caller", "projects.web.issues.list")
+        }
+        ("GET", path)
+            if path.starts_with("/api/projects/")
+                && !path.starts_with("/api/projects/catalog/") =>
+        {
+            ("projects-web-caller", "projects.web.projects.detail")
+        }
         ("GET", "/api/projects") => ("projects-web-caller", "projects.web.projects.list"),
         ("GET", "/api/projects/catalog/teams") => {
             ("projects-web-caller", "projects.web.catalog.teams")
@@ -771,18 +781,32 @@ async fn dispatch(
                     scheme: "session".into(),
                     value,
                 }),
-                headers: request
-                    .headers
-                    .get("origin")
-                    .and_then(|x| x.to_str().ok())
-                    .map(|value| {
-                        vec![http::HandleRequestHeadersItem {
-                            name: "origin".into(),
-                            value: value.into(),
-                        }]
+                headers: ["origin", "content-type"]
+                    .into_iter()
+                    .filter_map(|name| {
+                        request
+                            .headers
+                            .get(name)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|value| http::HandleRequestHeadersItem {
+                                name: name.into(),
+                                value: value.into(),
+                            })
                     })
-                    .unwrap_or_default(),
-                path_parameters: if route == "projects.web.issues.activity" {
+                    .collect(),
+                path_parameters: if matches!(
+                    route,
+                    "projects.web.projects.detail" | "projects.web.issues.list"
+                ) {
+                    vec![http::HandleRequestPathParametersItem {
+                        name: "project_id".into(),
+                        value: request
+                            .path
+                            .trim_start_matches("/api/projects/")
+                            .trim_end_matches("/issues")
+                            .into(),
+                    }]
+                } else if route == "projects.web.issues.activity" {
                     vec![http::HandleRequestPathParametersItem {
                         name: "issue_id".into(),
                         value: request

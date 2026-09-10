@@ -103,3 +103,23 @@ protocol, not a language model; model acceptance remains separate.
 
 The current Issue contract has no assignee field. The fixture proves access to
 visible Issues, not an assigned-to-me filter.
+
+## Native Console Workspace
+
+Prepare the App with the current Auth, Projects and Projects Web checkouts. Build
+Projects Web and import `src/workspace` into Console with its
+`scripts/import-projects-workspace.mjs`. Start the business App on 55440 and the
+actual Console Host on 55450 with `LENSO_CONSOLE_PROJECTS_ORIGIN` pointing to 55440.
+Use disposable Agent homes and the real local Agent binaries for Console bootstrap.
+
+```sh
+node scripts/projects-acceptance/console-browser.mjs RECEIPT CONSOLE_CHECKOUT OUTPUT
+```
+
+This test signs into the disposable business App, grants the Workspace connection,
+reads Issue/activity/workflow data, follows native Console navigation without a
+page reload, creates a project through the real business service, and opens the
+existing mini agent. It also checks theme propagation, cross-organization denial,
+destination override rejection and credential-free browser connection status.
+It resets only the dedicated acceptance Console's Projects connection and creates
+a test project. It does not call a model or mutate production accounts.
