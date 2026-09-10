@@ -2923,7 +2923,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-acp"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "agent-client-protocol",
  "clap",
@@ -3082,7 +3082,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-cli"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "lenso-agent-approval-hook-plugin",
  "lenso-agent-auth-openai-codex-plugin",
@@ -3901,7 +3901,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-tui"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "clap",
  "crossterm",
@@ -3982,7 +3982,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-web"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "anyhow",
  "axum",
