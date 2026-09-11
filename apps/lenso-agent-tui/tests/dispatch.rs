@@ -11,7 +11,7 @@ use std::{
 
 fn fixture(script: &str) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    fs::hard_link(
+    fs::copy(
         env!("CARGO_BIN_EXE_lenso-agent"),
         root.path().join("lenso-agent"),
     )
