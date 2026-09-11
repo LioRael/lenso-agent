@@ -26,9 +26,7 @@ use lenso_capability_terminal_command::{
     CommandDefinition, CommandExecute, ExecuteError, ExecuteMessage, ExecuteOpen, OutputKind,
 };
 use lenso_capability_tui_panel::PanelItem;
-use lenso_capability_tui_suggestion::{
-    SuggestionItem as Suggestion, SuggestionKind, validate_snapshot_suggestions,
-};
+use lenso_capability_tui_suggestion::{SuggestionItem as Suggestion, SuggestionKind};
 use lenso_kernel::{NativeStream, StreamEvent};
 use ratatui::{
     Frame, Terminal,
@@ -51,7 +49,7 @@ use super::blocks::{
 use super::markdown::lines as markdown_lines;
 use super::markdown::lines_with_width as markdown_lines_with_width;
 use lenso_agent_host::generation::{
-    AgentApp, OnlineGenerationEvent, TerminalGeneration, TurnGeneration,
+    AgentApp, OnlineGenerationEvent, TerminalGeneration, TurnGeneration, compose_tui_suggestions,
 };
 use lenso_terminal_cli_surface::{ParseOutcome, parse_line as parse_terminal_line};
 
@@ -114,7 +112,7 @@ async fn terminal_surface_snapshot(app: &AgentApp) -> Result<TerminalSurfaceSnap
     let commands = terminal.catalog().await?.commands;
     validate_terminal_namespaces(&commands)?;
     suggestions.extend(commands.iter().map(terminal_command_suggestion));
-    validate_snapshot_suggestions(&suggestions)?;
+    let suggestions = compose_tui_suggestions(suggestions)?;
     Ok(TerminalSurfaceSnapshot {
         panels,
         suggestions,

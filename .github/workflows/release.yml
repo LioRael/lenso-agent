@@ -140,6 +140,7 @@ jobs:
         run: |
           target="target/${{ matrix.rust-target }}/release"
           "${target}/lenso-agent" --version
+          python3 scripts/smoke-tui-startup.py "${target}/lenso-agent"
           "${target}/lenso-agent" run --help
           "${target}/lenso-agent" acp --version
           "${target}/lenso-agent-cli" --version

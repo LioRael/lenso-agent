@@ -18,7 +18,7 @@ Define native-only request Capability `lenso.agent.tui-suggestion@1`. Its
 `prompt`, or `resource` items with a
 stable ID, label, exact insertion text, and description. The TUI Shell consumes
 explicitly bound providers with `many` cardinality, snapshots them before raw
-terminal mode, rejects duplicate IDs and aggregate limit violations, and then
+terminal mode, rejects invalid provider snapshots and duplicate IDs, and then
 filters the immutable in-memory catalog at the active composer token.
 
 The base App selects three independently removable providers. The command
@@ -56,3 +56,14 @@ leave the composer open.
 - Startup cost is bounded and observable; per-keystroke filesystem work is
   absent.
 - The first contract is native-only and does not claim Bun or Wasm portability.
+
+## Discovery saturation (2026-09-11)
+
+Valid provider snapshots can collectively exceed the composer budget, notably
+2048 workspace files plus the default Skills catalog. The Host retains at most
+2112 items and 2 MiB of text instead of failing TUI startup. It prioritizes
+commands, then Skills, then Prompts/Resources, then files, preserving resolved
+provider order within each priority. Items that do not fit are omitted from
+autocomplete only; this does not disable the underlying commands or Skills.
+Provider contract violations and duplicate IDs remain errors, including duplicates
+among items that would otherwise be omitted. Provider-local limits are unchanged.
