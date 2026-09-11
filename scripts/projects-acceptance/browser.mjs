@@ -69,7 +69,22 @@ try {
     issue_ref: "issue-public",
   });
   if (read.status !== 200) throw new Error(`read ${read.status}`);
-  const issue = JSON.parse(read.body.content);
+  let issue = JSON.parse(read.body.content);
+  const assignmentArgs = { organization_id: receipt.organization_id, issue_id: "issue-public", assignee_subject: receipt.alice_subject, expected_revision: issue.revision, idempotency_key: crypto.randomUUID() };
+  const assigned = await call("projects_set_issue_assignee", assignmentArgs);
+  if (assigned.status !== 200) throw Error(`assignment ${JSON.stringify(assigned)}`);
+  const assignment = JSON.parse(assigned.body.content);
+  const replayed = await call("projects_set_issue_assignee", assignmentArgs);
+  if (replayed.status !== 200 || JSON.parse(replayed.body.content).revision !== assignment.revision) throw Error('Assignment replay failed');
+  const inactive = await call("projects_set_issue_assignee", { ...assignmentArgs, assignee_subject: 'usr_not_a_member', expected_revision: assignment.revision, idempotency_key: crypto.randomUUID() });
+  if(inactive.status !== 403) throw Error(`Non-member assignment accepted: ${inactive.status}`);
+  const privateRead = await call("projects_get_issue", { organization_id: receipt.organization_id, issue_ref: 'issue-private' });
+  const privateIssue = JSON.parse(privateRead.body.content);
+  const denied = await call("projects_set_issue_assignee", { ...assignmentArgs, issue_id: 'issue-private', assignee_subject: receipt.bob_subject, expected_revision: privateIssue.revision, idempotency_key: crypto.randomUUID() });
+  if (denied.status !== 403) throw Error(`Private-team assignment accepted: ${denied.status}`);
+  const cleared = await call("projects_set_issue_assignee", { ...assignmentArgs, assignee_subject: null, expected_revision: assignment.revision, idempotency_key: crypto.randomUUID() });
+  if (cleared.status !== 200 || JSON.parse(cleared.body.content).assignee_subject !== null) throw Error('Unassign failed');
+  issue = JSON.parse((await call("projects_get_issue", { organization_id: receipt.organization_id, issue_ref: 'issue-public' })).body.content);
   const states = await call("projects_list_issue_workflow_states", {
     organization_id: receipt.organization_id,
     team_id: issue.team_id,
@@ -115,7 +130,7 @@ try {
   await page.getByRole("button", { name: "Record details", exact: true }).click();
   await page
     .locator("#issue-activity")
-    .getByText(/Issue updated/)
+    .getByText(/Issue updated/).first()
     .waitFor();
   await page
     .locator("#issue-state")
@@ -128,6 +143,10 @@ try {
   const result = {
     passed: true,
     checks: [
+      "assignee-save-and-clear",
+      "assignment-idempotency",
+      "nonmember-assignment-denied",
+      "private-team-assignment-denied",
       "cookie-login-return",
       "issue-deeplink",
       "activity-actor",

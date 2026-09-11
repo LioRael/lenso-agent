@@ -12,9 +12,9 @@ lenso-runner="0.2.13"
 lenso-capability-secrets="0.1.4"
 lenso-capability-http-endpoint="0.3.0"
 lenso-capability-agent-tool-provider="0.2.2"
-lenso-organization-postgres-plugin="0.5.0"
+lenso-organization-postgres-plugin="0.5.1"
 lenso-capability-organization-admin="0.4.0"
-lenso-capability-organization-directory="0.2.0"
+lenso-capability-organization-directory="0.3.0"
 lenso-capability-organization-membership="0.2.0"
 lenso-capability-organization-membership-admin="0.3.0"
 lenso-access-control-postgres-plugin="0.2.0"
@@ -51,3 +51,13 @@ lenso-capability-auth={path="@AUTH_ROOT@/crates/lenso-capability-auth"}
 lenso-capability-projects={path="@PROJECTS_ROOT@/crates/lenso-capability-projects"}
 lenso-capability-projects-admin={path="@PROJECTS_ROOT@/crates/lenso-capability-projects-admin"}
 lenso-capability-projects-collaboration={path="@PROJECTS_ROOT@/crates/lenso-capability-projects-collaboration"}
+
+lenso-organization-postgres-plugin={path="@ORGANIZATION_ROOT@/crates/lenso-organization-postgres-plugin"}
+
+lenso-capability-organization-directory={path="@ORGANIZATION_ROOT@/crates/lenso-capability-organization-directory"}
+
+lenso-capability-organization-admin={path="@ORGANIZATION_ROOT@/crates/lenso-capability-organization-admin"}
+
+lenso-capability-organization-membership={path="@ORGANIZATION_ROOT@/crates/lenso-capability-organization-membership"}
+
+lenso-capability-organization-membership-admin={path="@ORGANIZATION_ROOT@/crates/lenso-capability-organization-membership-admin"}
