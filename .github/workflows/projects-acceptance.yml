@@ -37,14 +37,20 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          repository: LioRael/lenso-organization-plugin
+          ref: ea80c5fe0e77841e6b5c3f7d992ee7c603e8a7cd
+          path: .lenso/acceptance-sources/organization
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
           repository: LioRael/lenso-projects-plugin
-          ref: badf709faf5cb0e343498e3d15c264bb4e31a132
+          ref: 49cda8f405ce10c3d936a6a07d81dd07232b5157
           path: .lenso/acceptance-sources/projects
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-projects-web-plugin
-          ref: cc8109782d71e6a5edfa4c989e1eac99f11a46fa
+          ref: df70768a71ab14772bc717f59c60bb1d6ee54c1d
           path: .lenso/acceptance-sources/projects-web
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
@@ -54,6 +60,7 @@ jobs:
         run: |
           python3 scripts/projects-acceptance/prepare.py \
             --auth-root .lenso/acceptance-sources/auth \
+            --organization-root .lenso/acceptance-sources/organization \
             --projects-root .lenso/acceptance-sources/projects \
             --projects-web-root .lenso/acceptance-sources/projects-web
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32

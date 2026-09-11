@@ -127,6 +127,38 @@ assert jsoncall("/projects/agent/tools")[0] == 401
 assert read(None)[0] == 401 and read("invalid-session")[0] == 401
 assert read(b, "issue-public")[0] == 200 and read(b)[0] == 403
 assert read(a, organization=receipt["other_organization_id"])[0] == 403
+# Assignment is part of the same revision sequence as other Issue edits.
+_, public_issue = read(a, "issue-public")
+assignment = {
+    "organization_id": org,
+    "issue_id": "issue-public",
+    "assignee_subject": receipt["alice_subject"],
+    "expected_revision": public_issue["revision"],
+    "idempotency_key": "protocol-assignment-" + run_id,
+}
+assigned = tool(a, "projects_set_issue_assignee", assignment)
+assert assigned[0] == 200, assigned
+assert tool(a, "projects_set_issue_assignee", assignment) == assigned
+_, current = read(a, "issue-public")
+assert int(current["revision"]) == int(public_issue["revision"]) + 1
+for subject in ["not-an-organization-member"]:
+    assert tool(a, "projects_set_issue_assignee", {
+        **assignment, "assignee_subject": subject,
+        "expected_revision": current["revision"],
+        "idempotency_key": "protocol-nonmember-" + run_id,
+    })[0] == 403
+assert read(a, "issue-public")[1] == current
+cleared = tool(a, "projects_set_issue_assignee", {
+    **assignment, "assignee_subject": None,
+    "expected_revision": current["revision"],
+    "idempotency_key": "protocol-clear-" + run_id,
+})
+assert cleared[0] == 200, cleared
+status, assignee = tool(a, "projects_get_issue_assignee", {
+    "organization_id": org, "issue_id": "issue-public",
+})
+assert status == 200 and json.loads(assignee["content"])["assignee_subject"] is None
+
 status, original = read(a)
 assert status == 200
 keys = [
@@ -208,6 +240,9 @@ print(
                 "private-team-read-denied",
                 "nonmember-scope-denied",
                 "revision-update",
+                "assignment-idempotency",
+                "nonmember-assignment-denied",
+                "clear-assignment",
                 "idempotent-replay",
                 "revision-conflict",
                 "private-team-write-denied",

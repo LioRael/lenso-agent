@@ -13,13 +13,15 @@ Ctrl-C shutdown. A crash deliberately leaves evidence for inspection.
 ## Run the protocol acceptance
 
 Check out `LioRael/lenso-auth-plugin` containing PR #101 and
-`LioRael/lenso-projects-plugin` containing PR #8. Their private composition
-Plugins require these source checkouts; the Organization and ACL dependencies
-come from crates.io. Paths are explicit and never discovered from another App.
+`LioRael/lenso-projects-plugin` containing PR #11, plus Organization and Projects
+Web at the revisions pinned in the acceptance workflow. Private composition
+Plugins and the evolving business contracts use these explicit source checkouts;
+ACL dependencies come from crates.io. Paths are never discovered from another App.
 
 ```sh
 python3 scripts/projects-acceptance/prepare.py \
   --auth-root ../lenso-auth-plugin --projects-root ../lenso-projects-plugin \
+  --organization-root ../lenso-organization-plugin \
   --projects-web-root ../lenso-projects-web-plugin
 export LENSO_POSTGRES_TEST_URL=postgresql://test_user@127.0.0.1:5432/test_database
 export LENSO_ACCEPTANCE_RECEIPT="$PWD/.lenso/projects-acceptance/receipt.json"
@@ -51,8 +53,8 @@ Each run uses fresh idempotency keys and can run again against the same fixture.
    label = "Projects acceptance"
    ```
 
-2. Start Console against that Agent. Enable only the five delegated Projects
-   Tools in its Tool policy. Model authentication is separate from business login.
+2. Start Console against that Agent. Enable the delegated Projects
+   Tools needed for the acceptance scenario in its Tool policy. Model authentication is separate from business login.
 3. Sign into the App at `http://127.0.0.1:55440/login` as `alice@example.test`
    with password `Local-acceptance-only-2026!`. In Console Connections, select
    Projects acceptance, sign in through the browser and approve its exact scope.
@@ -101,8 +103,8 @@ Issue/activity page. The grant stays inside the test process. It writes only a
 non-secret receipt and screenshot. This test invokes the real business Tool
 protocol, not a language model; model acceptance remains separate.
 
-The current Issue contract has no assignee field. The fixture proves access to
-visible Issues, not an assigned-to-me filter.
+The Issue assignment contract supports one assignee, clearing assignment, and
+revision-safe writes. An assigned-to-me list filter is not part of this fixture.
 
 ## Native Console Workspace
 
@@ -123,3 +125,30 @@ existing mini agent. It also checks theme propagation, cross-organization denial
 destination override rejection and credential-free browser connection status.
 It resets only the dedicated acceptance Console's Projects connection and creates
 a test project. It does not call a model or mutate production accounts.
+
+Workspace discovery requires the source Organization Directory 1.1.0 contract and its provider. The prepare command patches the explicit Organization source checkout; this is local integration proof, not a published release.
+
+The browser acceptance also verifies assignment and clearing, exact-request
+idempotency, rejection of non-members and private-Team assignment, and the
+existing workflow revision-conflict recovery. These checks invoke the real
+delegated tool endpoint; they do not constitute a live model inference test.
+
+## Live model acceptance
+
+Use a disposable seeded Issue and authorize the App separately in Console and
+Agent Connections. Enable only the needed Tools: `projects_get_issue`,
+`projects_get_issue_assignee`, `projects_assign_issue_to_me`,
+`projects_update_issue`, and optionally `ask_user` and
+`projects_list_issue_workflow_states`. Connecting an App does not expand the saved
+Tool allowlist. The self-assignment Tool requires the remote assignment catalog
+and an App grant that supplies a subject.
+
+Open the Issue in Console and start a new mini Agent chat. Ask it to assign the
+Issue to you, make it high priority, and add acceptance criteria. Do not supply a
+subject ID. Verify the actual saved Issue and activity, the model's Tool results,
+and the page's automatic refresh. A high-priority Issue needs no redundant
+priority write. Request an Issue link and open it to verify navigation and
+persistence. Record model, session ID, operation statuses and resulting revision;
+never record login or grant credentials. Keep these receipts distinct from the
+deterministic HTTP acceptance and do not substitute a fixture model for this
+check.
