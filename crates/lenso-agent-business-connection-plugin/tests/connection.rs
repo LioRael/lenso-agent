@@ -249,6 +249,13 @@ async fn native_connection_keeps_grants_private_and_turns_pinned() {
                     serde_json::to_string(&result).unwrap(),
                     "{\"state\":\"connected\"}"
                 );
+                let issuer = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("console.auth", [7; 32]);
+                let now = time::OffsetDateTime::now_utc();
+                let member = issuer.issue("member", "user", "password", vec![lenso_auth_sdk::audience(binding::CAPABILITY_ID, binding::CAPTURE_OPERATION)],
+                    lenso_auth_sdk::Validity::new(now - time::Duration::seconds(1), now + time::Duration::minutes(2)).unwrap(), std::collections::BTreeMap::new());
+                let context = member.attach(app.invocation_context_after(Duration::from_secs(30), CancellationToken::new())).unwrap();
+                assert!(app.handle::<binding::TurnBinding>("caller").unwrap().invoke_with_context(binding::CAPTURE_OPERATION, context,
+                    binding::CaptureRequest { scope_id: uuid::Uuid::new_v4().to_string() }).await.unwrap().is_err());
                 let id = uuid::Uuid::new_v4().to_string();
                 let token = CancellationToken::new();
                 app.handle::<binding::TurnBinding>("caller")

@@ -211,6 +211,14 @@ impl BusinessConnection {
         context: InvocationContext,
         request: binding::CaptureRequest,
     ) -> Result<Result<binding::CaptureResponse, binding::CaptureError>, RuntimeFailure> {
+        // This connection owns an operator's browser-consent grant. It cannot
+        // supply that grant to an authenticated Console member's turn.
+        if context
+            .sealed_extension(lenso_auth_sdk::ACTOR_ASSERTION_EXTENSION)
+            .is_some()
+        {
+            return Ok(Err(binding::CaptureError::Unavailable));
+        }
         let id = uuid::Uuid::parse_str(&request.scope_id).map_err(|_| failure())?;
         let mut state = self.state.lock().await;
         state.prune();

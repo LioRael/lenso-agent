@@ -13,6 +13,9 @@ plugin-id = "lenso.agent.artifact.file"
 root-slot = "artifact"
 
 [dependencies]
+lenso-auth-sdk = "0.2.3"
+time.workspace = true
+serde_json.workspace = true
 base64.workspace = true
 lenso.workspace = true
 lenso-capability-agent-artifact = { path = "../lenso-capability-agent-artifact" }

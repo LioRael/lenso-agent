@@ -13,6 +13,9 @@ plugin-id = "lenso.agent.user-interaction.local"
 root-slot = "user-interaction"
 
 [dependencies]
+lenso-auth-sdk = "0.2.3"
+time.workspace = true
+serde_json.workspace = true
 lenso.workspace = true
 lenso-capability-agent-user-interaction = { path = "../lenso-capability-agent-user-interaction" }
 lenso-kernel.workspace = true

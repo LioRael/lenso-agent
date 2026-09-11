@@ -1958,6 +1958,9 @@ fn rename_problem(error: RenameSessionFailure) -> ApiProblem {
         RenameSessionFailure::Domain(RenameError::InvalidRevision) => {
             ApiProblem::bad_request("Session title revision is invalid")
         }
+        RenameSessionFailure::Domain(RenameError::PermissionDenied) => {
+            ApiProblem::forbidden("Session access is not authorized")
+        }
         RenameSessionFailure::Domain(RenameError::NotFound) => {
             ApiProblem::not_found("Session was not found")
         }

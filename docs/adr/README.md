@@ -131,3 +131,5 @@ reasons on their own.
 - [0104 — Edit named Profiles through SQLite drafts](0104-edit-named-profiles-through-sqlite-drafts.md)
 
 - [0108 — Pin native Tool targets at Turn admission](0108-pin-native-tool-targets-at-turn-admission.md)
+
+- [0110 — Authenticated Session ownership](0110-authenticated-session-ownership.md)

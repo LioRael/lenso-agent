@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.user-interaction@2";
-pub const DESCRIPTOR_VERSION: &str = "2.0.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:7fe3b0e843eec7ce41511b4da640eb1444417678e8a3a3f853a3b84df26af41b";
+pub const DESCRIPTOR_VERSION: &str = "2.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:277c19608a955d760b0857a3bf0deaa6cf0e656cf925dbf60496e242beab5eeb";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const USER_INTERACTION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const USER_INTERACTION_CONTRACT: CapabilityReference<UserInteractionClient> 
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_user_interaction { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"operations\":[\"answer\",\"ask\",\"pending\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_user_interaction { () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.1.0\",\"operations\":[\"answer\",\"ask\",\"pending\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_user_interaction_client {
-    () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_user_interaction_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_user_interaction_client {
-    () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.0.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.user-interaction@2\",\"descriptor_version\":\"2.1.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const ANSWER_OPERATION: &str = "answer";
@@ -79,6 +79,7 @@ pub struct AnswerResponse {
 pub enum AnswerError {
     InvalidAnswer,
     NotFound,
+    PermissionDenied,
     Unknown(UnknownDomainError),
 }
 
@@ -139,6 +140,7 @@ pub struct AskResponse {
 #[derive(Clone, Debug, PartialEq)]
 pub enum AskError {
     InvalidRequest,
+    PermissionDenied,
     Timeout,
     TooManyPending,
     Unavailable,
@@ -169,6 +171,7 @@ pub struct PendingInteraction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum PendingError {
+    PermissionDenied,
     Unavailable,
     Unknown(UnknownDomainError),
 }
@@ -251,6 +254,7 @@ impl serde::Serialize for AnswerError {
         match self {
             Self::InvalidAnswer => serializer.serialize_str("invalid_answer"),
             Self::NotFound => serializer.serialize_str("not_found"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
                 map.serialize_entry("code", &value.code)?;
@@ -276,6 +280,7 @@ impl<'de> serde::Deserialize<'de> for AnswerError {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_answer" => Ok(Self::InvalidAnswer),
                 "not_found" => Ok(Self::NotFound),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {
@@ -299,6 +304,7 @@ impl serde::Serialize for AskError {
         use serde::ser::SerializeMap;
         match self {
             Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Timeout => serializer.serialize_str("timeout"),
             Self::TooManyPending => serializer.serialize_str("too_many_pending"),
             Self::Unavailable => serializer.serialize_str("unavailable"),
@@ -326,6 +332,7 @@ impl<'de> serde::Deserialize<'de> for AskError {
         match value {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_request" => Ok(Self::InvalidRequest),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 "timeout" => Ok(Self::Timeout),
                 "too_many_pending" => Ok(Self::TooManyPending),
                 "unavailable" => Ok(Self::Unavailable),
@@ -351,6 +358,7 @@ impl serde::Serialize for PendingError {
     {
         use serde::ser::SerializeMap;
         match self {
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Unavailable => serializer.serialize_str("unavailable"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -375,6 +383,7 @@ impl<'de> serde::Deserialize<'de> for PendingError {
         let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
         match value {
             serde_json::Value::String(code) => match code.as_str() {
+                "permission_denied" => Ok(Self::PermissionDenied),
                 "unavailable" => Ok(Self::Unavailable),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },

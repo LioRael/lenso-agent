@@ -835,7 +835,7 @@ impl AgentApp {
 
     async fn task_snapshot(&self, consumer_instance: &str) -> Result<TaskSnapshotResponse, String> {
         let route = self.host.route().await.map_err(control_error)?;
-        task_snapshot_on_route(&route, consumer_instance).await
+        task_snapshot_on_route(&route, consumer_instance, None).await
     }
 
     /// Renders one user-selected Context Prompt for the CLI surface.
@@ -1019,6 +1019,28 @@ impl AgentApp {
     }
 
     async fn lease_turn_for(&self, consumer_instance: &str) -> Result<TurnGeneration, String> {
+        self.lease_turn_for_actor(consumer_instance, None).await
+    }
+
+    /// Retains an Auth-issued assertion for every invocation made by this lease.
+    /// The ingress and each target provider must still verify their own authorization;
+    /// carrying an assertion does not authorize shared native tools or account state.
+    pub async fn lease_web_turn_for_actor(
+        &self,
+        actor: lenso_auth_sdk::ActorAssertion,
+    ) -> Result<TurnGeneration, String> {
+        self.lease_turn_for_actor("web", Some(actor)).await
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "lease admission pins all provider handles and identity to the same generation"
+    )]
+    async fn lease_turn_for_actor(
+        &self,
+        consumer_instance: &str,
+        actor: Option<lenso_auth_sdk::ActorAssertion>,
+    ) -> Result<TurnGeneration, String> {
         let route = self.host.route().await.map_err(control_error)?;
         let session_profile = self.retained_session_profile(route.generation_spec_digest())?;
         let consumer_instance = surface_consumer_instance(consumer_instance)?;
@@ -1099,8 +1121,10 @@ impl AgentApp {
         } else {
             None
         };
-        let turn_binding = ProviderTurnBinding::capture(&route, &agent_provider).await?;
+        let turn_binding =
+            ProviderTurnBinding::capture(&route, &agent_provider, actor.as_ref()).await?;
         Ok(TurnGeneration {
+            actor: actor.map(RetainedActor),
             tool_target_lease: self.tool_target_router.capture()?,
             turn_binding,
             consumer_instance: consumer_instance.to_owned(),
@@ -1398,9 +1422,23 @@ fn plan_is_authoring_managed(
         .is_ok_and(|derived| derived == plan_bytes)
 }
 
+fn attach_actor(
+    context: InvocationContext,
+    actor: Option<&lenso_auth_sdk::ActorAssertion>,
+) -> Result<InvocationContext, String> {
+    match actor {
+        Some(actor) => actor
+            .clone()
+            .attach(context)
+            .map_err(|_| "Could not attach authenticated actor".to_owned()),
+        None => Ok(context),
+    }
+}
+
 async fn task_snapshot_on_route(
     route: &DurableGenerationRoute<NativeApp>,
     consumer_instance: &str,
+    actor: Option<&lenso_auth_sdk::ActorAssertion>,
 ) -> Result<TaskSnapshotResponse, String> {
     let handle = route
         .target()
@@ -1410,6 +1448,7 @@ async fn task_snapshot_on_route(
     let context = route
         .target()
         .invocation_context_after(TUI_SNAPSHOT_TIMEOUT, cancellation.clone());
+    let context = attach_actor(context, actor)?;
     let invocation =
         handle.invoke_many_with_context(TASK_SNAPSHOT_OPERATION, context, TaskSnapshotRequest {});
     let responses = match tokio::time::timeout(TUI_SNAPSHOT_TIMEOUT, invocation).await {
@@ -1580,6 +1619,7 @@ impl ProviderTurnBinding {
     async fn capture(
         route: &DurableGenerationRoute<NativeApp>,
         agent_provider: &str,
+        actor: Option<&lenso_auth_sdk::ActorAssertion>,
     ) -> Result<Self, String> {
         let turn_binding = Self::new();
         let bindings = route
@@ -1589,6 +1629,7 @@ impl ProviderTurnBinding {
         let context = route
             .target()
             .invocation_context_after(Duration::from_secs(30), turn_binding.cancellation.clone());
+        let context = attach_actor(context, actor)?;
         let capture = bindings.invoke_many_with_context(
             lenso_capability_agent_turn_binding::CAPTURE_OPERATION,
             context,
@@ -1619,8 +1660,16 @@ impl Drop for ProviderTurnBinding {
     }
 }
 
+struct RetainedActor(lenso_auth_sdk::ActorAssertion);
+impl std::fmt::Debug for RetainedActor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("<authenticated actor>")
+    }
+}
+
 #[derive(Debug)]
 pub struct TurnGeneration {
+    actor: Option<RetainedActor>,
     tool_target_lease: crate::tool_target::TurnToolTargetLease,
     turn_binding: ProviderTurnBinding,
     consumer_instance: String,
@@ -1647,7 +1696,12 @@ struct UserInteractionSurfaceHandles {
 impl TurnGeneration {
     /// Reads child-task facts from this Turn's immutable Generation lease.
     pub async fn task_snapshot(&self) -> Result<TaskSnapshotResponse, String> {
-        task_snapshot_on_route(&self.route, &self.consumer_instance).await
+        task_snapshot_on_route(
+            &self.route,
+            &self.consumer_instance,
+            self.actor.as_ref().map(|actor| &actor.0),
+        )
+        .await
     }
 
     pub fn handle(&self) -> &NativeStreamHandle<Agent> {
@@ -1898,6 +1952,7 @@ impl TurnGeneration {
                 self.turn_binding.id.as_bytes().to_vec(),
             )
             .map_err(|_| "Could not attach turn identity binding")?;
+        let context = attach_actor(context, self.actor.as_ref().map(|actor| &actor.0))?;
         if self.interactive {
             context
                 .with_typed_extension(&InteractiveSurface)
@@ -3706,6 +3761,49 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lenso_agent_web_plugin as _;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn leased_identity_reaches_session_provider_and_does_not_change_between_callers() {
+        tokio::task::LocalSet::new().run_until(Box::pin(async {
+            let home = tempfile::tempdir().unwrap();
+            let directories = AgentDirectories::from_home(home.path()).unwrap();
+            let issuer = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [7; 32]);
+            let session_root = home.path().join("plugins/lenso.agent.session.sqlite");
+            std::fs::create_dir_all(&session_root).unwrap();
+            std::fs::write(session_root.join("sessions.toml"), format!("database = {}\n[authentication]\nissuer = \"test.auth\"\nverification_key = {}\n",
+                serde_json::to_string(&directories.session_database()).unwrap(), serde_json::to_string(&issuer.public_key_base64()).unwrap())).unwrap();
+            for (plugin, file, config) in [
+                ("lenso.agent.model.fixture", "model.toml", "model = \"fixture/readme-summary-v1\"\n"),
+                ("lenso.agent.loop", "agent.toml", "model = \"fixture/readme-summary-v1\"\n")
+            ] {
+                let directory = home.path().join("plugins").join(plugin);
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join(file), config).unwrap();
+            }
+            let host = crate::AgentHost::builder().plugins(lenso_agent_default_plugins::link)
+                .agent_home(home.path()).unwrap().surface(crate::WebSurface::browser()).build().unwrap();
+            host.prepare_authoring().unwrap();
+            let mut app = host.run(crate::Profile::Default).await.unwrap();
+            let assertion = |subject: &str| {
+                let now = time::OffsetDateTime::now_utc();
+                issuer.issue(subject, "user", "password", ["open", "read", "rename"].map(|operation| lenso_auth_sdk::audience(lenso_capability_agent_session::CAPABILITY_ID, operation)),
+                    lenso_auth_sdk::Validity::new(now - time::Duration::seconds(1), now + time::Duration::minutes(2)).unwrap(), BTreeMap::new())
+            };
+            let alice = app.lease_web_turn_for_actor(assertion("alice")).await.unwrap();
+            let session = alice.open_session().await.unwrap();
+            let bob = app.lease_web_turn_for_actor(assertion("bob")).await.unwrap();
+            assert!(bob.read_session(session.clone(), 0, 1).await.is_err());
+            assert!(bob.rename_session(session.clone(), "not yours".into(), "0".into()).await.is_err());
+            assert!(alice.read_session(session.clone(), 0, 1).await.is_ok());
+            assert!(alice.rename_session(session.clone(), "Alice private".into(), "0".into()).await.is_ok());
+            let local = app.lease_web_turn().await.unwrap();
+            assert!(local.open_session().await.is_err());
+            assert!(alice.read_session(session, 0, 1).await.is_ok());
+            drop((alice, bob, local));
+            app.shutdown().await.unwrap();
+        })).await;
+    }
 
     fn suggestion(id: String, kind: SuggestionKind) -> Suggestion {
         Suggestion {

@@ -14,6 +14,8 @@ root-slot = "session"
 
 [dependencies]
 futures.workspace = true
+lenso-auth-sdk = "0.2.3"
+time.workspace = true
 lenso.workspace = true
 lenso-capability-agent-session = { path = "../lenso-capability-agent-session" }
 lenso-agent-session-inspection = { path = "../lenso-agent-session-inspection" }

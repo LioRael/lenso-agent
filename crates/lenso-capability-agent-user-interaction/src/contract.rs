@@ -56,6 +56,7 @@ pub struct AskResponse {
 
 #[derive(lenso::DomainError)]
 pub enum AskError {
+    PermissionDenied,
     Unavailable,
     InvalidRequest,
     TooManyPending,
@@ -84,6 +85,7 @@ pub struct PendingInteraction {
 
 #[derive(lenso::DomainError)]
 pub enum PendingError {
+    PermissionDenied,
     Unavailable,
 }
 
@@ -102,6 +104,7 @@ pub struct AnswerResponse {}
 
 #[derive(lenso::DomainError)]
 pub enum AnswerError {
+    PermissionDenied,
     NotFound,
     InvalidAnswer,
 }
@@ -109,7 +112,7 @@ pub enum AnswerError {
 #[lenso::capability(
     id = "lenso.agent.user-interaction",
     major = 2,
-    version = "2.0.0",
+    version = "2.1.0",
     portable = true,
     cross_lane_transfer = false
 )]

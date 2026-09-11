@@ -28,6 +28,7 @@ pub struct PutResponse {
 
 #[derive(lenso::DomainError)]
 pub enum PutError {
+    PermissionDenied,
     InvalidRequest,
     InvalidData,
     TooLarge,
@@ -58,6 +59,7 @@ pub struct ReadResponse {
 
 #[derive(lenso::DomainError)]
 pub enum ReadError {
+    PermissionDenied,
     InvalidHandle,
     InvalidRange,
     NotFound,
@@ -66,7 +68,7 @@ pub enum ReadError {
 #[lenso::capability(
     id = "lenso.agent.artifact",
     major = 1,
-    version = "1.0.0",
+    version = "1.1.0",
     portable = true,
     cross_lane_transfer = false
 )]
