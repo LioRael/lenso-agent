@@ -31,14 +31,24 @@ Use lenso-agent run --help for headless options.";
 
 /// Only reserved command names select another surface. Arguments are never
 /// interpreted as shell syntax and executable lookup never searches PATH.
-pub(super) fn route(args: &[OsString]) -> Option<(&'static str, &[OsString])> {
-    match args.first()?.to_str()? {
-        "cli" => Some(("lenso-agent-cli", &args[1..])),
-        "acp" => Some(("lenso-agent-acp", &args[1..])),
-        "run" | "auth" | "profiles" | "sessions" | "models" | "contexts" | "approvals"
-        | "doctor" | "generations" | "runtime" | "plugins" => Some(("lenso-agent-cli", args)),
-        _ => None,
-    }
+pub(super) fn route(args: &[OsString]) -> Option<(&'static str, Vec<OsString>)> {
+    let (executable, forwarded) = match args.first()?.to_str()? {
+        "run" => {
+            // Preserve the legacy CLI's ability to treat the word `run` as a
+            // prompt or a contributed command. Only this entrypoint selects
+            // the explicit headless parser through an internal mode argument.
+            let forwarded = std::iter::once(OsString::from("--agent-headless"))
+                .chain(args[1..].iter().cloned())
+                .collect();
+            return Some(("lenso-agent-cli", forwarded));
+        }
+        "cli" => ("lenso-agent-cli", &args[1..]),
+        "acp" => ("lenso-agent-acp", &args[1..]),
+        "auth" | "profiles" | "sessions" | "models" | "contexts" | "approvals" | "doctor"
+        | "generations" | "runtime" | "plugins" => ("lenso-agent-cli", args),
+        _ => return None,
+    };
+    Some((executable, forwarded.to_vec()))
 }
 
 pub(super) fn launch(executable: &str, args: &[OsString]) -> ExitCode {

@@ -311,7 +311,7 @@ async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), Str
 }
 
 fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
-    if raw.first().is_some_and(|value| value == "run") {
+    if raw.first().is_some_and(|value| value == "--agent-headless") {
         return parse_run_args(raw.into_iter().skip(1).collect());
     }
     if matches!(raw.as_slice(), [argument] if argument == "--version" || argument == "-V") {
@@ -999,8 +999,14 @@ mod profile_tests {
 
     #[test]
     fn explicit_run_never_interprets_a_prompt_as_a_management_command() {
+        let legacy = vec!["run".to_owned()];
+        assert!(crate::terminal::should_try_composed_surface(&legacy));
+        let CliCommand::Run(args) = parse_command(legacy).unwrap() else {
+            panic!("legacy run prompt was reinterpreted");
+        };
+        assert_eq!(args.prompt, "run");
         for prompt in ["doctor", "auth", "sessions", "profiles", "run"] {
-            let raw = vec!["run".to_owned(), prompt.to_owned()];
+            let raw = vec!["--agent-headless".to_owned(), prompt.to_owned()];
             assert!(!crate::terminal::should_try_composed_surface(&raw));
             let super::CliCommand::Run(args) = super::parse_command(raw).unwrap() else {
                 panic!("task prompt was interpreted as a command");
@@ -1008,7 +1014,7 @@ mod profile_tests {
             assert_eq!(args.prompt, prompt);
         }
         let super::CliCommand::Run(args) = super::parse_command(
-            vec!["run", "--profile", "plan", "--", "--help"]
+            vec!["--agent-headless", "--profile", "plan", "--", "--help"]
                 .into_iter()
                 .map(str::to_owned)
                 .collect(),
@@ -1019,7 +1025,7 @@ mod profile_tests {
         assert_eq!(args.prompt, "--help");
         assert_eq!(args.profile.as_deref(), Some("plan"));
         assert!(matches!(
-            super::parse_command(vec!["run".into(), "--help".into()]).unwrap(),
+            super::parse_command(vec!["--agent-headless".into(), "--help".into()]).unwrap(),
             super::CliCommand::Help
         ));
     }

@@ -55,10 +55,10 @@ fn dispatch_preserves_arguments_workspace_environment_and_stdio() {
         child.stdin.take().unwrap().write_all(b"input\n").unwrap();
         let output = child.wait_with_output().unwrap();
         assert_eq!(output.status.code(), Some(17));
-        let prefix = if matches!(command, "cli" | "acp") {
-            String::new()
-        } else {
-            format!("{command}\n")
+        let prefix = match command {
+            "cli" | "acp" => String::new(),
+            "run" => "--agent-headless\n".to_owned(),
+            _ => format!("{command}\n"),
         };
         let expected = format!(
             "{}\npreserved\n{prefix}literal ; $(request)\n--profile\ncode\ninput\n",

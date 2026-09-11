@@ -46,7 +46,7 @@ struct Args {
 fn main() -> ExitCode {
     let mut raw = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some((executable, args)) = dispatch::route(&raw) {
-        return dispatch::launch(executable, args);
+        return dispatch::launch(executable, &args);
     }
     if raw.first().is_some_and(|arg| arg == "tui") {
         raw.remove(0);

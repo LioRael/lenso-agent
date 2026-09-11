@@ -124,7 +124,7 @@ pub(super) fn should_try_composed_surface(raw: &[String]) -> bool {
             | "-h"
             | "--version"
             | "-V"
-            | "run"
+            | "--agent-headless"
             | "doctor"
             | "auth"
             | "plugins"

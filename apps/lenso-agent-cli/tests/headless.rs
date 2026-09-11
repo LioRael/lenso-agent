@@ -1675,7 +1675,7 @@ fn explicit_run_executes_a_task_without_command_discovery() {
     let temporary = tempfile::tempdir().unwrap();
     configure_fixture_app(temporary.path());
     let output = command(temporary.path())
-        .args(["run", "Answer directly: hello"])
+        .args(["--agent-headless", "Answer directly: hello"])
         .output()
         .unwrap();
     assert!(
