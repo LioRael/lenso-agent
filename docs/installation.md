@@ -1,11 +1,48 @@
 # Install, upgrade, and remove Lenso Agent
 
+## Homebrew
+
+Install the terminal UI, management CLI, and ACP entrypoint:
+
+```sh
+brew install LioRael/tap/lenso-agent
+```
+
+Homebrew checks the published archive digests and installs ripgrep. Use
+`brew upgrade lenso-agent` to upgrade and `brew uninstall lenso-agent` to remove
+these binaries. Agent Home is preserved. Continue with [First run](#first-run).
+
+## npm / npx
+
+Run the terminal from your project without a global install:
+
+```sh
+npx @lenso/agent cli auth login
+npx @lenso/agent cli profiles install coding
+npx @lenso/agent --profile code
+```
+
+For a persistent installation, `npm install -g @lenso/agent` exposes the same
+launcher as `lenso-agent`; use `lenso-agent cli` for management commands and
+`lenso-agent acp` for an editor. Choose one global installation method so npm
+and Homebrew do not compete for the `lenso-agent` command.
+
+Use `npx @lenso/agent web` to start Agent and Console in your browser. The npm
+package requires Node.js 22.12+ and supports macOS 15+ on Apple silicon or
+Ubuntu 24.04+ x64 (glibc 2.39+). It opens the local UI; use `--no-open` to print
+the URL instead. See the [npm distribution guide](https://github.com/LioRael/lenso-console/blob/main/docs/agent-npm-distribution.md).
+
+The npm launcher version follows Console; `npx @lenso/agent tui --version`
+reports its pinned native Agent version. Native binaries remain independently
+versioned. Use `npm update -g @lenso/agent` or `npm uninstall -g @lenso/agent`
+for a global npm install; both preserve durable Agent state.
+
 ## Supported release targets
 
-The first binary release supports:
+The `0.1.10` prerelease provides binaries for:
 
 - Apple silicon on macOS 15 or later (`darwin-aarch64`); and
-- x86-64 Linux (`linux-x86_64`).
+- x86-64 Linux with glibc 2.39+ (`linux-x86_64`, Ubuntu 24.04+).
 
 Windows, Intel macOS, and ARM64 Linux remain source-build targets until their
 native release jobs and clean-room acceptance gates exist.
@@ -17,10 +54,10 @@ it without elevated privileges:
 
 ```sh
 curl --fail --location \
-  https://github.com/LioRael/lenso-agent/releases/download/v0.1.0/install.sh \
+  https://github.com/LioRael/lenso-agent/releases/download/v0.1.10/install.sh \
   --output /tmp/lenso-agent-install.sh
 less /tmp/lenso-agent-install.sh
-sh /tmp/lenso-agent-install.sh --version 0.1.0
+sh /tmp/lenso-agent-install.sh --version 0.1.10
 ```
 
 The default destination is `~/.local/bin`. Set `LENSO_AGENT_INSTALL_DIR` or
@@ -33,12 +70,14 @@ The default selection installs:
 
 - `lenso-agent`, the interactive terminal product; and
 - `lenso-agent-cli`, authentication, Profile management, diagnostics, Session
-  operations, and the headless surface.
+  operations, and the headless surface;
+- `lenso-agent-web`, the standalone Agent Web API; and
+- `lenso-agent-console-web`, the Console Agent Web API.
 
 Install the independent ACP entrypoint when an editor needs it:
 
 ```sh
-sh /tmp/lenso-agent-install.sh --version 0.1.0 --component acp
+sh /tmp/lenso-agent-install.sh --version 0.1.10 --component acp
 ```
 
 ## First run
@@ -55,7 +94,8 @@ configuration authority. The offline installer refuses Homes carrying the
 managed-configuration guard (and legacy default SQLite stores) before changing
 files. Stopping the Host does not relinquish its durable authority. Use a fresh
 Home for local coding Profiles or the owning authority's supported publication
-operations; live managed Profile import is not supported.
+operations. For a running SQLite-managed Home, use
+[the live Profile import command](integrations.md#web-api-and-configuration-control).
 
 
 `doctor --json` exposes the same non-secret checks for support automation. It
@@ -69,11 +109,11 @@ Every archive has a sibling `.sha256` record and the Release includes one
 
 ```sh
 gh attestation verify \
-  lenso-agent-v0.1.0-darwin-aarch64.tar.gz \
+  lenso-agent-v0.1.10-darwin-aarch64.tar.gz \
   --repo LioRael/lenso-agent
 ```
 
-The initial macOS prerelease is not platform-signed. Verify its SHA-256 and
+The macOS prerelease is not platform-signed. Verify its SHA-256 and
 GitHub build-provenance attestation before use.
 
 ## Upgrade and rollback
