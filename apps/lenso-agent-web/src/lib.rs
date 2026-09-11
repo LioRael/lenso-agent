@@ -3946,12 +3946,29 @@ mod tests {
         }
     }
 
+    fn runtime_with_catalog_responder(access: AgentWebAccess) -> WebRuntime {
+        let mut runtime = runtime_with_access(access);
+        let (commands, mut receiver) = mpsc::channel(1);
+        runtime.commands = commands;
+        tokio::spawn(async move {
+            while let Some(command) = receiver.recv().await {
+                match command {
+                    RuntimeCommand::RefreshToolCatalog { reply } => {
+                        let _ = reply.send(Ok(Vec::new()));
+                    }
+                    other => panic!("unexpected authorization test command: {other:?}"),
+                }
+            }
+        });
+        runtime
+    }
+
     async fn bootstrap_status(access: AgentWebAccess, token: Option<&str>) -> StatusCode {
         let mut request = Request::builder().uri("/api/console/v1/agent/bootstrap");
         if let Some(token) = token {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
-        router(runtime_with_access(access))
+        router(runtime_with_catalog_responder(access))
             .oneshot(request.body(axum::body::Body::empty()).unwrap())
             .await
             .unwrap()
@@ -3963,7 +3980,7 @@ mod tests {
         control: AgentWebControl,
         token: Option<&str>,
     ) -> StatusCode {
-        let mut runtime = runtime_with_access(access);
+        let mut runtime = runtime_with_catalog_responder(access);
         runtime.control = control.into();
         let mut request = Request::builder().uri("/api/console/v1/agent/control/tool-policy");
         if let Some(token) = token {
