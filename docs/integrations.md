@@ -12,7 +12,7 @@ After downloading the installer in the [installation guide](installation.md),
 install the ACP component and expose a Profile to an editor over stdio:
 
 ```sh
-sh /tmp/lenso-agent-install.sh --version 0.1.10 --component acp
+sh /tmp/lenso-agent-install.sh --version 0.1.11 --component acp
 lenso-agent-acp --profile code
 ```
 
@@ -92,7 +92,7 @@ restarting or writing behind the authority's back. Use the same control token as
 the running Web Host (the URL includes the Agent API prefix):
 
 ```sh
-lenso-agent-cli profiles import coding \
+lenso-agent profiles import coding \
   --url http://127.0.0.1:8788/api/console/v1/agent
 ```
 

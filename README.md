@@ -34,20 +34,21 @@ Install with Homebrew:
 
 ```sh
 brew install LioRael/tap/lenso-agent
-lenso-agent-cli auth login
-lenso-agent-cli profiles install coding
+lenso-agent auth login
+lenso-agent profiles install coding
 lenso-agent --profile code
 ```
 
 Or use npm without a global installation:
 
 ```sh
-npx @lenso/agent cli auth login
-npx @lenso/agent cli profiles install coding
+npx @lenso/agent auth login
+npx @lenso/agent profiles install coding
 npx @lenso/agent --profile code
 ```
 
-The npm package also supports `cli` for headless requests and `acp` for editors.
+Use `run` for headless tasks and `acp` for editor integration. Homebrew and npm
+share the same terminal commands; `cli` remains available for compatibility.
 For direct binary downloads, verification, upgrades, and removal, see
 [installation](docs/installation.md). Release binaries support Apple silicon on
 macOS 15+ and x86-64 Linux with glibc 2.39+ (Ubuntu 24.04+).
@@ -93,14 +94,14 @@ for the exact boundaries.
   independently of the project you open. Resume a session when you return.
 
 ```sh
-lenso-agent-cli sessions list
+lenso-agent sessions list
 lenso-agent --profile code --session <id>
 ```
 
 For a single request from a script or terminal, use the headless CLI:
 
 ```sh
-lenso-agent-cli --profile plan "Summarize this workspace README."
+lenso-agent run --profile plan "Summarize this workspace README."
 ```
 
 ## Make it yours
