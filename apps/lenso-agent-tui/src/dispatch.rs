@@ -64,7 +64,7 @@ pub(super) fn launch(executable: &str, args: &[OsString]) -> ExitCode {
 }
 
 fn launch_inner(executable: &str, args: &[OsString]) -> std::io::Result<ExitCode> {
-    let current = env::current_exe()?;
+    let current = env::current_exe()?.canonicalize()?;
     let mut path = current.with_file_name(executable);
     if let Some(extension) = current.extension() {
         path.set_extension(extension);

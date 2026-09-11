@@ -70,6 +70,23 @@ fn dispatch_preserves_arguments_workspace_environment_and_stdio() {
 }
 
 #[test]
+fn symlink_launch_resolves_companions_beside_the_real_executable() {
+    let root = fixture("printf '%s\\n' \"$@\"; exit 17");
+    let links = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        root.path().join("lenso-agent"),
+        links.path().join("lenso-agent"),
+    )
+    .unwrap();
+    let output = Command::new(links.path().join("lenso-agent"))
+        .args(["doctor", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(17));
+    assert_eq!(output.stdout, b"doctor\n--json\n");
+}
+
+#[test]
 fn missing_sibling_never_falls_back_to_path() {
     let root = fixture("exit 0");
     let decoy = tempfile::tempdir().unwrap();
