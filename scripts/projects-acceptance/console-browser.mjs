@@ -17,7 +17,20 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 const errors = [];
+const consoleMessages = [];
+const failedRequests = [];
+const failedResponses = [];
 page.on("pageerror", (e) => errors.push(e.message));
+page.on("console", (message) =>
+  consoleMessages.push({ type: message.type(), text: message.text() }),
+);
+page.on("requestfailed", (request) =>
+  failedRequests.push({ url: request.url(), error: request.failure()?.errorText }),
+);
+page.on("response", (response) => {
+  if (response.status() >= 400)
+    failedResponses.push({ url: response.url(), status: response.status() });
+});
 page.setDefaultTimeout(10000);
 try {
   await context.request.post(
@@ -83,9 +96,49 @@ try {
     .getByRole("button", { name: /Console workspace acceptance/ })
     .first()
     .waitFor();
-  await page.locator("[data-agent-tray]").click();
-  await page.getByText("Welcome to Lenso", { exact: true }).waitFor();
-  await page.screenshot({ path: resolve(outputRoot, "mini-agent.png") });
+  await page.evaluate(() => {
+    history.pushState(
+      {
+        ...(history.state || {}),
+        __lensoWorkspaceHandoff: {
+          handoff: {
+            kind: "lenso.observe.trace@1",
+            payload: {
+              kind: "lenso.observe.trace@1",
+              source_id: "projects-acceptance",
+              trace_id: "01010101010101010101010101010101",
+              method: "POST",
+              route: "/api/checkout",
+              status_code: 503,
+              duration_nano: "25000000",
+              selected_span: "POST /api/checkout",
+            },
+          },
+          subject: { kind: "console" },
+          workspaceId: "projects",
+        },
+      },
+      "",
+      "/workspaces/projects",
+    );
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await page.getByLabel("Organization").fill(receipt.organization_id);
+  await page.getByRole("button", { name: "Open workspace", exact: true }).click();
+  await page.getByRole("button", { name: "Create issue from trace", exact: true }).click();
+  await page.getByRole("dialog").waitFor();
+  await page.getByRole("textbox", { name: "Title", exact: true }).waitFor();
+  await page.screenshot({ path: resolve(outputRoot, "create-trace-issue.png") });
+  await page.getByRole("button", { name: "Create issue", exact: true }).click();
+  await page.getByRole("button", { name: "Hand to Agent", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Hand to Agent", exact: true }).click();
+  const composer = page.locator(
+    '[contenteditable="true"][aria-label="Send a message to Lenso Agent"]',
+  );
+  await composer.waitFor();
+  if (!(await composer.textContent())?.includes("projects_get_issue"))
+    throw Error("Issue handoff did not create the expected Agent draft");
+  await page.screenshot({ path: resolve(outputRoot, "mini-agent-issue-draft.png") });
   const denied = await context.request.post(
     `${origin}/api/console/v1/pages/projects/services/projects/invoke/get_issue`,
     { data: { organization_id: receipt.other_organization_id, issue_id: "issue-public" } },
@@ -126,6 +179,9 @@ try {
           "issue read and activity",
           "navigation preserves document",
           "project creation through business authorization",
+          "Observe trace handoff into Projects",
+          "issue creation through business authorization",
+          "unsubmitted issue draft handed to the App Agent",
           "shared dialog and select",
           "existing mini agent",
           "cross-organization denial",
@@ -140,6 +196,13 @@ try {
   );
   console.log("Console Projects acceptance passed");
 } catch (e) {
+  console.log(
+    JSON.stringify(
+      { pageErrors: errors, consoleMessages, failedRequests, failedResponses },
+      null,
+      2,
+    ),
+  );
   console.log((await page.locator("body").innerText()).slice(0, 5000));
   await page.screenshot({ path: resolve(outputRoot, "failure.png") });
   throw e;

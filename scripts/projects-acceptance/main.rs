@@ -219,7 +219,7 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         instance(
             "consent",
             lenso_auth_agent_connection_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects@1:create_project", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
+            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects@1:create_project", "lenso.projects@1:create_issue", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
         ),
         organization(
             json!({"schema":format!("{prefix}_organization"),"database_url_secret":"auth/database-url","admin_callers":["caller"],"directory_callers":["caller"],"membership_admin_callers":["caller"]}),
@@ -731,6 +731,9 @@ async fn dispatch(
         ("GET", path) if path.starts_with("/api/projects/") && path.ends_with("/issues") => {
             ("projects-web-caller", "projects.web.issues.list")
         }
+        ("POST", path) if path.starts_with("/api/projects/") && path.ends_with("/issues") => {
+            ("projects-web-caller", "projects.web.issues.create")
+        }
         ("GET", path)
             if path.starts_with("/api/projects/")
                 && !path.starts_with("/api/projects/catalog/") =>
@@ -796,7 +799,9 @@ async fn dispatch(
                     .collect(),
                 path_parameters: if matches!(
                     route,
-                    "projects.web.projects.detail" | "projects.web.issues.list"
+                    "projects.web.projects.detail"
+                        | "projects.web.issues.list"
+                        | "projects.web.issues.create"
                 ) {
                     vec![http::HandleRequestPathParametersItem {
                         name: "project_id".into(),
