@@ -5,7 +5,9 @@ Start with the job you need to complete:
 - Tutorial: [build and add a Tool Plugin in 10 minutes](tutorials/10-minute-tool-provider.md).
 - Tutorial: [add one Plugin command to the CLI and TUI](tutorials/add-terminal-command-provider.md).
 - How-to: [install, verify, upgrade, and remove Lenso Agent](installation.md).
-- How-to: use the root README for Plugin Root configuration, lifecycle commands, and packaging.
+- How-to: [configure Profiles, models, MCP, memory, and Plugins](configuration.md).
+- How-to: [connect editors, Web APIs, embedding, and chat channels](integrations.md).
+- Maintainers: [publish package-manager distributions](distribution.md).
 - Reference: [Capability contracts](contracts.md), [control-plane glossary](glossary.md), and [ADR index](adr/README.md).
 - Explanation: [Lenso Agent v1 architecture](architecture/lenso-agent.md),
   [Host implementation and operations](architecture/host-internals.md),
