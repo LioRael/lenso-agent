@@ -76,7 +76,7 @@ use lenso_capability_tui_panel::{
 use lenso_capability_tui_suggestion::{
     SNAPSHOT_OPERATION as SUGGESTION_SNAPSHOT_OPERATION,
     SnapshotRequest as SuggestionSnapshotRequest, Suggestion as TuiSuggestion,
-    SuggestionItem as Suggestion, validate_snapshot_suggestions,
+    SuggestionItem as Suggestion, SuggestionKind, validate_snapshot_suggestions,
 };
 use lenso_kernel::{
     CancellationToken, ExecutionAdapterCatalog, InvocationContext, NativeApp, NativeRequestHandle,
@@ -1189,8 +1189,7 @@ impl AgentApp {
             })?;
             suggestions.extend(response.suggestions);
         }
-        validate_tui_suggestions(&suggestions)?;
-        Ok(suggestions)
+        compose_tui_suggestions(suggestions)
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
@@ -1473,31 +1472,46 @@ fn validate_tui_panels(panels: &[PanelItem]) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_tui_suggestions(suggestions: &[Suggestion]) -> Result<(), String> {
-    if suggestions.len() > MAX_TUI_SUGGESTIONS {
-        return Err(format!(
-            "TUI suggestions exceed the {MAX_TUI_SUGGESTIONS}-item aggregate limit"
-        ));
-    }
+/// Fit valid provider snapshots into the composer budget without making discovery
+/// saturation fatal to the terminal. Validate identities before dropping anything.
+pub fn compose_tui_suggestions(
+    mut suggestions: Vec<Suggestion>,
+) -> Result<Vec<Suggestion>, String> {
     let mut ids = BTreeSet::new();
-    let mut total_bytes = 0usize;
-    for suggestion in suggestions {
+    for suggestion in &suggestions {
         if !ids.insert(suggestion.id.as_str()) {
             return Err(format!("duplicate TUI suggestion id `{}`", suggestion.id));
         }
-        total_bytes = total_bytes
-            .checked_add(suggestion.id.len())
-            .and_then(|total| total.checked_add(suggestion.label.len()))
-            .and_then(|total| total.checked_add(suggestion.insert_text.len()))
-            .and_then(|total| total.checked_add(suggestion.description.len()))
-            .ok_or_else(|| "TUI suggestion size overflowed".to_owned())?;
-        if total_bytes > MAX_TUI_SUGGESTION_BYTES {
-            return Err(format!(
-                "TUI suggestions exceed the {MAX_TUI_SUGGESTION_BYTES}-byte aggregate limit"
-            ));
-        }
     }
-    Ok(())
+    // The provider count bound does not apply to the combined catalog. Chunking
+    // reuses field validation while the global identity check above spans chunks.
+    for chunk in suggestions.chunks(lenso_capability_tui_suggestion::MAX_SUGGESTIONS_PER_SNAPSHOT) {
+        validate_snapshot_suggestions(chunk)?;
+    }
+    // Stable ordering preserves resolved provider order within each priority.
+    // A full workspace snapshot must not crowd out slash commands and Skills.
+    suggestions.sort_by_key(|suggestion| match suggestion.kind {
+        SuggestionKind::Command => 0,
+        SuggestionKind::Skill => 1,
+        SuggestionKind::Prompt | SuggestionKind::Resource => 2,
+        SuggestionKind::File => 3,
+    });
+    let mut remaining_bytes = MAX_TUI_SUGGESTION_BYTES;
+    let mut remaining_items = MAX_TUI_SUGGESTIONS;
+    suggestions.retain(|suggestion| {
+        // Individual field lengths were already validated against the contract.
+        let bytes = suggestion.id.len()
+            + suggestion.label.len()
+            + suggestion.insert_text.len()
+            + suggestion.description.len();
+        if remaining_items == 0 || bytes > remaining_bytes {
+            return false;
+        }
+        remaining_items -= 1;
+        remaining_bytes -= bytes;
+        true
+    });
+    Ok(suggestions)
 }
 
 /// Immutable Generation lease shared by terminal discovery and execution.
@@ -3692,6 +3706,79 @@ fn control_error(error: ControlPlaneError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn suggestion(id: String, kind: SuggestionKind) -> Suggestion {
+        Suggestion {
+            label: id.clone(),
+            insert_text: id.clone(),
+            id,
+            kind,
+            description: String::new(),
+        }
+    }
+
+    #[test]
+    fn full_workspace_and_skill_snapshots_keep_commands_and_bound_files() {
+        let files = (0..2048).map(|i| suggestion(format!("file.{i}"), SuggestionKind::File));
+        let skills = (0..256).map(|i| suggestion(format!("skill.{i}"), SuggestionKind::Skill));
+        let commands = (0..4).map(|i| suggestion(format!("command.{i}"), SuggestionKind::Command));
+        let selected =
+            compose_tui_suggestions(files.chain(skills).chain(commands).collect()).unwrap();
+        assert_eq!(selected.len(), MAX_TUI_SUGGESTIONS);
+        assert_eq!(selected[0].id, "command.0");
+        assert_eq!(selected[3].id, "command.3");
+        assert_eq!(selected[4].id, "skill.0");
+        assert_eq!(selected[259].id, "skill.255");
+        assert_eq!(selected[260].id, "file.0");
+        assert_eq!(selected.last().unwrap().id, "file.1851");
+    }
+
+    #[test]
+    fn suggestion_budget_counts_utf8_bytes_and_keeps_later_fitting_items() {
+        let mut items: Vec<_> = (0..2048)
+            .map(|i| {
+                let mut item = suggestion(format!("file.{i}"), SuggestionKind::File);
+                item.insert_text = "界".repeat(1024);
+                item
+            })
+            .collect();
+        validate_snapshot_suggestions(&items).unwrap();
+        items.push(suggestion("small".into(), SuggestionKind::File));
+        let selected = compose_tui_suggestions(items).unwrap();
+        assert!(selected.len() < MAX_TUI_SUGGESTIONS);
+        assert_eq!(selected.last().unwrap().id, "small");
+        let total: usize = selected
+            .iter()
+            .map(|s| s.id.len() + s.label.len() + s.insert_text.len() + s.description.len())
+            .sum();
+        assert!(total <= MAX_TUI_SUGGESTION_BYTES);
+        assert!(total + 3072 > MAX_TUI_SUGGESTION_BYTES);
+    }
+
+    #[test]
+    fn invalid_suggestion_beyond_budget_is_still_rejected() {
+        let mut items: Vec<_> = (0..=MAX_TUI_SUGGESTIONS)
+            .map(|i| suggestion(format!("file.{i}"), SuggestionKind::File))
+            .collect();
+        items.last_mut().unwrap().insert_text.clear();
+        assert!(
+            compose_tui_suggestions(items)
+                .unwrap_err()
+                .contains("invalid")
+        );
+    }
+
+    #[test]
+    fn duplicate_suggestion_beyond_budget_is_still_rejected() {
+        let mut items: Vec<_> = (0..=MAX_TUI_SUGGESTIONS)
+            .map(|i| suggestion(format!("file.{i}"), SuggestionKind::File))
+            .collect();
+        items.push(suggestion("file.0".into(), SuggestionKind::File));
+        assert_eq!(
+            compose_tui_suggestions(items).unwrap_err(),
+            "duplicate TUI suggestion id `file.0`"
+        );
+    }
 
     #[test]
     fn completed_branch_is_inclusive_preserves_context_and_excludes_future() {
