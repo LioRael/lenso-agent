@@ -73,6 +73,16 @@ LENSO_AGENT_HOME="${agent_home}" ./scripts/install.sh \
   --component console-web \
   --component acp >/dev/null
 
+# Selecting only the public Agent command also installs its CLI companion.
+./scripts/install.sh --version 0.1.0 --target darwin-aarch64 \
+  --base-url "${base_url}" --install-dir "${install_root}/agent-only" \
+  --component agent >/dev/null
+test -x "${install_root}/agent-only/lenso-agent"
+test -x "${install_root}/agent-only/lenso-agent-cli"
+./scripts/install.sh --install-dir "${install_root}/agent-only" \
+  --component agent --uninstall >/dev/null
+test ! -e "${install_root}/agent-only/lenso-agent-cli"
+
 before="$(shasum -a 256 "${install_root}/bin/lenso-agent" | awk '{print $1}')"
 printf 'tamper\n' >>"${artifacts}/lenso-agent-v0.1.0-darwin-aarch64.tar.gz"
 if LENSO_AGENT_HOME="${agent_home}" ./scripts/install.sh \

@@ -72,7 +72,7 @@ manifest. Keep every configuration beside its Plugin in the Agent Home:
 Install the official coding experience once:
 
 ```sh
-lenso-agent-cli profiles install coding
+lenso-agent profiles install coding
 ```
 
 This creates three inspectable Profiles and their Plugin Instance configuration:
@@ -146,7 +146,7 @@ Start or resume a Session through that Profile:
 ```sh
 lenso-agent --profile game
 lenso-agent --profile game --session <id>
-lenso-agent-cli --profile code "Review this workspace."
+lenso-agent run --profile code "Review this workspace."
 ```
 
 ### Session titles and model selection
@@ -213,7 +213,7 @@ instances = ["lenso.agent.session.file/local"]
 ```
 
 Inspect its Generation provenance with
-`lenso-agent-cli sessions provenance --session <id>`. Pass
+`lenso-agent sessions provenance --session <id>`. Pass
 `--directory /absolute/path/to/.lenso/agent/sessions` when inspecting an
 explicitly selected file store.
 
@@ -446,9 +446,9 @@ The CLI can explicitly render one user-selected Prompt and attach one or more
 application-selected Resources before opening the Turn:
 
 ```sh
-lenso-agent-cli contexts --profile code
+lenso-agent contexts --profile code
 
-lenso-agent-cli \
+lenso-agent run \
   --profile code \
   --context-prompt filesystem/review \
   --context-arguments '{"focus":"safety"}' \
@@ -514,7 +514,7 @@ cd ~/.lenso/agent
 lenso plugins list
 lenso plugins configure lenso.agent.workspace-edit
 
-lenso-agent-cli --profile code "Create and edit a workspace note."
+lenso-agent run --profile code "Create and edit a workspace note."
 
 lenso plugins disable lenso.agent.workspace-edit
 lenso plugins enable lenso.agent.workspace-edit

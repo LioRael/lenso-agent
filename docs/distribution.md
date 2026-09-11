@@ -21,7 +21,7 @@ Publishing a native release does not by itself publish either downstream package
    generates a Formula update PR and dispatches macOS/Linux install checks:
 
    ```sh
-   gh workflow run update.yml --repo LioRael/homebrew-tap -f version=0.1.10
+   gh workflow run update.yml --repo LioRael/homebrew-tap -f version=0.1.11
    ```
 
    Review and merge the update after both installation checks pass.

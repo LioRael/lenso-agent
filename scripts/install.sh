@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-DEFAULT_VERSION="0.1.10"
+DEFAULT_VERSION="0.1.11"
 REPOSITORY="LioRael/lenso-agent"
 
 usage() {
@@ -12,7 +12,7 @@ usage: install.sh [options]
 
   --version <x.y.z>          Exact release version (default: ${DEFAULT_VERSION})
   --install-dir <absolute>   Binary directory (default: ~/.local/bin)
-  --component <name>         agent, cli, web, console-web, or acp; repeatable
+  --component <name>         agent (includes cli), cli, web, console-web, or acp; repeatable
   --target <platform>        Override detected release target
   --base-url <URL>           Override the exact-version asset base URL
   --uninstall                Remove selected binaries and preserve Agent Home
@@ -106,6 +106,17 @@ for component in $components; do
     *) fail "unsupported component: $component" ;;
   esac
 done
+
+# The public Agent command dispatches headless and management operations to
+# its sibling CLI. Keep that component present even for an agent-only install.
+case " $components " in
+  *" agent "*)
+    case " $components " in
+      *" cli "*) ;;
+      *) components="$components cli" ;;
+    esac
+    ;;
+esac
 
 binary_for_component() {
   case "$1" in

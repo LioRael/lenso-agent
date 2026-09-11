@@ -140,12 +140,14 @@ jobs:
         run: |
           target="target/${{ matrix.rust-target }}/release"
           "${target}/lenso-agent" --version
+          "${target}/lenso-agent" run --help
+          "${target}/lenso-agent" acp --version
           "${target}/lenso-agent-cli" --version
           "${target}/lenso-agent-acp" --version
           "${target}/lenso-agent-web" --version
           "${target}/lenso-agent-console-web" --version
           LENSO_AGENT_HOME="${RUNNER_TEMP}/lenso-agent-doctor" \
-            "${target}/lenso-agent-cli" doctor --json
+            "${target}/lenso-agent" doctor --json
       - name: Package release binaries
         run: |
           target="target/${{ matrix.rust-target }}/release"
@@ -220,7 +222,7 @@ jobs:
           "${install_root}/bin/lenso-agent-acp" --version
           "${install_root}/bin/lenso-agent-web" --version
           "${install_root}/bin/lenso-agent-console-web" --version
-          LENSO_AGENT_HOME="${agent_home}" "${install_root}/bin/lenso-agent-cli" doctor --json
+          LENSO_AGENT_HOME="${agent_home}" "${install_root}/bin/lenso-agent" doctor --json
           LENSO_AGENT_HOME="${agent_home}" ./dist/install.sh \
             --install-dir "${install_root}/bin" \
             --component agent \

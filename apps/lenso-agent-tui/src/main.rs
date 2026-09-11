@@ -9,6 +9,7 @@ use lenso_agent_tui_workspace_suggestions_plugin as _;
 use lenso_terminal_command_plugin as _;
 use lenso_terminal_tui_plugin as _;
 
+mod dispatch;
 mod tui;
 use tui::TuiOptions;
 
@@ -17,7 +18,8 @@ use tui::TuiOptions;
 #[command(
     name = "lenso-agent",
     version,
-    about = "Run the composed Lenso Agent terminal interface"
+    about = "Lenso Agent: interactive coding, headless tasks, and workspace management",
+    after_help = dispatch::COMMAND_HELP
 )]
 struct Args {
     /// Exact immutable Resolved App Plan used by the TUI.
@@ -41,10 +43,23 @@ struct Args {
     no_tools: bool,
 }
 
+fn main() -> ExitCode {
+    let mut raw = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some((executable, args)) = dispatch::route(&raw) {
+        return dispatch::launch(executable, args);
+    }
+    if raw.first().is_some_and(|arg| arg == "tui") {
+        raw.remove(0);
+    }
+    let args =
+        Args::parse_from(std::iter::once(std::ffi::OsString::from("lenso-agent")).chain(raw));
+    run_tui(args)
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> ExitCode {
+async fn run_tui(args: Args) -> ExitCode {
     let local = tokio::task::LocalSet::new();
-    match Box::pin(local.run_until(run(Args::parse()))).await {
+    match Box::pin(local.run_until(run(args))).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");

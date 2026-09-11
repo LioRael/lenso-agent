@@ -311,6 +311,9 @@ async fn invoke(turn: &generation::TurnGeneration, args: Args) -> Result<(), Str
 }
 
 fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
+    if raw.first().is_some_and(|value| value == "run") {
+        return parse_run_args(raw.into_iter().skip(1).collect());
+    }
     if matches!(raw.as_slice(), [argument] if argument == "--version" || argument == "-V") {
         return Ok(CliCommand::Version);
     }
@@ -353,7 +356,7 @@ fn parse_doctor(arguments: &[String]) -> Result<CliCommand, String> {
     match arguments {
         [] => Ok(CliCommand::Doctor { json: false }),
         [flag] if flag == "--json" => Ok(CliCommand::Doctor { json: true }),
-        _ => Err("usage: lenso-agent-cli doctor [--json]".to_owned()),
+        _ => Err("usage: lenso-agent doctor [--json]".to_owned()),
     }
 }
 
@@ -368,7 +371,7 @@ fn parse_runtime(arguments: &[String]) -> Result<CliCommand, String> {
                 root: PathBuf::from(root),
             })
         }
-        _ => Err("usage: lenso-agent-cli runtime status [--root <runtime-root>]".to_owned()),
+        _ => Err("usage: lenso-agent runtime status [--root <runtime-root>]".to_owned()),
     }
 }
 
@@ -378,7 +381,7 @@ fn parse_contexts(arguments: &[String]) -> Result<CliCommand, String> {
         [flag, profile] if flag == "--profile" && !profile.is_empty() => Ok(CliCommand::Contexts {
             profile: Some(profile.clone()),
         }),
-        _ => Err("usage: lenso-agent-cli contexts [--profile <name>]".to_owned()),
+        _ => Err("usage: lenso-agent contexts [--profile <name>]".to_owned()),
     }
 }
 
@@ -388,7 +391,7 @@ fn parse_models(arguments: &[String]) -> Result<CliCommand, String> {
         [flag, profile] if flag == "--profile" && !profile.is_empty() => Ok(CliCommand::Models {
             profile: Some(profile.clone()),
         }),
-        _ => Err("usage: lenso-agent-cli models [--profile <name>]".to_owned()),
+        _ => Err("usage: lenso-agent models [--profile <name>]".to_owned()),
     }
 }
 
@@ -406,6 +409,10 @@ fn parse_run_args(raw: Vec<String>) -> Result<CliCommand, String> {
     let mut arguments = raw.into_iter();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
+            "--" => {
+                parse_literal_prompt(&mut arguments, &mut prompt)?;
+                break;
+            }
             "--plan" => {
                 if let Some(source) = plan_source {
                     return Err(format!("--plan conflicts with {source}"));
@@ -463,15 +470,7 @@ fn parse_run_args(raw: Vec<String>) -> Result<CliCommand, String> {
             unknown if unknown.starts_with('-') => {
                 return Err(format!("unknown argument `{unknown}`"));
             }
-            positional_prompt => {
-                if prompt.is_some() {
-                    return Err(
-                        "only one prompt is accepted; quote multi-word prompts as one argument"
-                            .to_owned(),
-                    );
-                }
-                prompt = Some(positional_prompt.to_owned());
-            }
+            positional_prompt => set_prompt(&mut prompt, positional_prompt.to_owned())?,
         }
     }
     if context_arguments.is_some() && context_prompt.is_none() {
@@ -491,6 +490,29 @@ fn parse_run_args(raw: Vec<String>) -> Result<CliCommand, String> {
         context_prompt,
         context_resources,
     }))
+}
+
+fn set_prompt(prompt: &mut Option<String>, value: String) -> Result<(), String> {
+    if prompt.is_some() {
+        return Err(
+            "only one prompt is accepted; quote multi-word prompts as one argument".to_owned(),
+        );
+    }
+    *prompt = Some(value);
+    Ok(())
+}
+
+fn parse_literal_prompt(
+    arguments: &mut impl Iterator<Item = String>,
+    prompt: &mut Option<String>,
+) -> Result<(), String> {
+    let value = required_value(arguments, "--", "a prompt")?;
+    if arguments.next().is_some() {
+        return Err(
+            "only one prompt is accepted; quote multi-word prompts as one argument".to_owned(),
+        );
+    }
+    set_prompt(prompt, value)
 }
 
 fn parse_context_prompt(
@@ -541,7 +563,7 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent-cli <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent-cli <contexts|models> [--profile <name>]\n       lenso-agent-cli doctor [--json]\n       lenso-agent-cli runtime status [--root <runtime-root>]\n       lenso-agent-cli <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent-cli profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent run <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent <contexts|models> [--profile <name>]\n       lenso-agent doctor [--json]\n       lenso-agent runtime status [--root <runtime-root>]\n       lenso-agent <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -646,7 +668,7 @@ fn run_doctor(json: bool) -> Result<(), String> {
         if report.authentication.authenticated {
             "ready"
         } else {
-            "missing; run `lenso-agent-cli auth login`"
+            "missing; run `lenso-agent auth login`"
         }
     );
     for check in report.components.iter().chain(&report.dependencies) {
@@ -709,7 +731,7 @@ fn parse_profile(arguments: &[String]) -> Result<ProfileCommand, String> {
             Ok(ProfileCommand::InstallCoding)
         }
         [import, preset, flag, url] if import == "import" && preset == "coding" && flag == "--url" => Ok(ProfileCommand::ImportCoding { url: url.clone() }),
-        _ => Err("usage: lenso-agent-cli profiles install coding | profiles import coding --url <agent-control-base-url>".to_owned()),
+        _ => Err("usage: lenso-agent profiles install coding | profiles import coding --url <agent-control-base-url>".to_owned()),
     }
 }
 
@@ -859,7 +881,7 @@ fn parse_approval(arguments: &[String]) -> Result<ApprovalCommand, String> {
             root,
         }),
         _ => Err(
-            "usage: lenso-agent-cli approvals <list|approve <id>|reject <id>> [--root <directory>]"
+            "usage: lenso-agent approvals <list|approve <id>|reject <id>> [--root <directory>]"
                 .to_owned(),
         ),
     }
@@ -896,7 +918,7 @@ fn parse_auth(arguments: &[String]) -> Result<AuthCommand, String> {
         }
         [command] if command == "status" => Ok(AuthCommand::Status),
         [command] if command == "logout" => Ok(AuthCommand::Logout),
-        _ => Err("usage: lenso-agent-cli auth <login [--device-auth]|status|logout>".to_owned()),
+        _ => Err("usage: lenso-agent auth <login [--device-auth]|status|logout>".to_owned()),
     }
 }
 
@@ -974,6 +996,33 @@ fn open_browser(url: &str) -> Result<(), String> {
 #[cfg(test)]
 mod profile_tests {
     use super::*;
+
+    #[test]
+    fn explicit_run_never_interprets_a_prompt_as_a_management_command() {
+        for prompt in ["doctor", "auth", "sessions", "profiles", "run"] {
+            let raw = vec!["run".to_owned(), prompt.to_owned()];
+            assert!(!crate::terminal::should_try_composed_surface(&raw));
+            let super::CliCommand::Run(args) = super::parse_command(raw).unwrap() else {
+                panic!("task prompt was interpreted as a command");
+            };
+            assert_eq!(args.prompt, prompt);
+        }
+        let super::CliCommand::Run(args) = super::parse_command(
+            vec!["run", "--profile", "plan", "--", "--help"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        )
+        .unwrap() else {
+            panic!("literal prompt was interpreted as help");
+        };
+        assert_eq!(args.prompt, "--help");
+        assert_eq!(args.profile.as_deref(), Some("plan"));
+        assert!(matches!(
+            super::parse_command(vec!["run".into(), "--help".into()]).unwrap(),
+            super::CliCommand::Help
+        ));
+    }
 
     #[test]
     fn coding_install_preserves_custom_managed_plugin_root() {

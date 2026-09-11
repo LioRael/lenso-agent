@@ -1671,6 +1671,22 @@ fn product_runner_resolves_a_configured_app_without_cargo_or_a_plan_path() {
 }
 
 #[test]
+fn explicit_run_executes_a_task_without_command_discovery() {
+    let temporary = tempfile::tempdir().unwrap();
+    configure_fixture_app(temporary.path());
+    let output = command(temporary.path())
+        .args(["run", "Answer directly: hello"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Direct answer.\n");
+}
+
+#[test]
 fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
     let output = Command::new(env!("CARGO_BIN_EXE_lenso-agent-cli"))
         .arg("--help")
@@ -1679,7 +1695,7 @@ fn product_runner_help_leads_with_the_simple_interface_and_plugin_workflow() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("usage: lenso-agent-cli <prompt> [--profile <name>]"));
+    assert!(stdout.starts_with("usage: lenso-agent run <prompt> [--profile <name>]"));
     assert!(stdout.contains("current directory remains the Workspace"));
     assert!(stdout.contains("Advanced: --prompt <text> and --plan <path> remain available"));
 }
