@@ -5,7 +5,9 @@ Instance under the Agent Home Plugin Root with a clean `origin` and a display
 `label`. The Host makes the Plugin available; it is not enabled by default.
 
 The Plugin provides `lenso.agent.auth-connection@1`,
-`lenso.agent.turn-binding@1` and `lenso.agent.tool-provider@2`. It requires no
+`lenso.agent.turn-binding@1`, `lenso.agent.tool-provider@2`, and
+`lenso.agent.prompt-provider@1`. The prompt contribution contains static workflow
+and verified-link guidance only; it carries no account or grant data. It requires no
 other Plugin's storage or private API. Removing its Instance removes its login
 and Tools without affecting other accounts or native Host Tool targets.
 
@@ -56,3 +58,13 @@ and returned organization/Issue IDs. Opening a link uses the App's own browser
 session and does not grant access. The matching Projects Web surface owns the
 `/projects?organization_id=...&issue=...` route. Removing this connection removes
 these Tools and local account state; it does not delete Projects data.
+
+When the remote catalog supports Issue assignment, the connection adds
+`projects_assign_issue_to_me`. It resolves the assignment subject from the grant
+captured for that Turn and forwards the existing assignment operation. The model
+cannot supply or override that subject. The subject is a resource field, not an
+authority override; remote membership, visibility, revision and idempotency
+checks still apply. No account presentation or credential enters model input.
+
+After changing enabled Plugins, Web bootstrap and Tool settings refresh the
+active catalog. This does not expand the operator's saved Tool allowlist.

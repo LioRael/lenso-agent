@@ -3041,6 +3041,7 @@ dependencies = [
  "lenso",
  "lenso-app-plan",
  "lenso-capability-agent-auth-connection",
+ "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-turn-binding",
  "lenso-kernel",
