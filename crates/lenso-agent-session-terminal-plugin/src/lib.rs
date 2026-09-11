@@ -322,6 +322,9 @@ fn map_list_error(
         session_contract::SessionListInvocationError::Domain(
             session_contract::ListError::Unknown(unknown),
         ) => PluginError::domain(unknown_session_error(unknown.code)),
+        session_contract::SessionListInvocationError::Domain(
+            session_contract::ListError::PermissionDenied,
+        ) => PluginError::domain(ExecuteError::PermissionDenied),
         session_contract::SessionListInvocationError::Runtime(error) => PluginError::runtime(error),
     }
 }
@@ -339,6 +342,9 @@ fn map_read_error(
         session_contract::SessionReadInvocationError::Domain(
             session_contract::ReadError::Unknown(unknown),
         ) => PluginError::domain(unknown_session_error(unknown.code)),
+        session_contract::SessionReadInvocationError::Domain(
+            session_contract::ReadError::PermissionDenied,
+        ) => PluginError::domain(ExecuteError::PermissionDenied),
         session_contract::SessionReadInvocationError::Runtime(error) => PluginError::runtime(error),
     }
 }

@@ -9,6 +9,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+lenso-auth-sdk = "0.2.3"
 lenso-capability-agent-turn-binding = { path = "../lenso-capability-agent-turn-binding" }
 lenso-capability-agent-auth-connection = { path = "../lenso-capability-agent-auth-connection" }
 anyhow.workspace = true
@@ -70,6 +71,7 @@ uuid.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+lenso-agent-web-plugin = { path = "../lenso-agent-web-plugin" }
 lenso-agent-cli-plugin = { path = "../lenso-agent-cli-plugin" }
 lenso-agent-default-plugins = { path = "../lenso-agent-default-plugins" }
 tempfile.workspace = true

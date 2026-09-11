@@ -15,6 +15,9 @@ use lenso_agent_session_inspection::{
     InspectedSession, InspectedSessionEvent, SessionArchive, SessionImporter, SessionInspector,
     valid_session_id, validate_session,
 };
+use lenso_auth_sdk::{
+    ActorAssertion, ActorAssertionVerifier, ActorProjectionError, FixedClock, TypedActor,
+};
 use lenso_capability_agent_session::{
     self as session_contract, AppendError, AppendErrorRevisionConflictPayload,
     AppendSessionRequest, AppendSessionRequestEventsItem, AppendSessionResponse, ListError,
@@ -36,6 +39,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY NOT NULL,
     revision INTEGER NOT NULL CHECK (revision >= 0)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS session_owners (
+    session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    owner TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS session_owners_owner ON session_owners(owner, session_id);
 CREATE TABLE IF NOT EXISTS events (
     session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     revision INTEGER NOT NULL CHECK (revision > 0),
@@ -75,7 +83,7 @@ const LIST_SESSIONS_SQL: &str = "SELECT s.session_id, s.revision, e.occurred_at,
  FROM sessions s \
  JOIN events e ON e.session_id = s.session_id AND e.revision = s.revision \
  LEFT JOIN session_titles t ON t.session_id = s.session_id \
- WHERE s.revision > 0 \
+ WHERE s.revision > 0 AND (SELECT owner FROM session_owners o WHERE o.session_id = s.session_id) IS ?2 \
  ORDER BY e.occurred_at DESC, s.session_id DESC \
  LIMIT ?1";
 
@@ -83,11 +91,43 @@ const LIST_SESSIONS_SQL: &str = "SELECT s.session_id, s.revision, e.occurred_at,
 #[serde(deny_unknown_fields)]
 struct SqliteSessionConfig {
     database: PathBuf,
+    #[serde(default)]
+    authentication: Option<SessionAuthentication>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionAuthentication {
+    issuer: String,
+    verification_key: String,
+}
+
+struct SessionOwner(String);
+impl TypedActor for SessionOwner {
+    fn from_assertion(assertion: &ActorAssertion) -> Result<Self, ActorProjectionError> {
+        if assertion.actor_kind() != "user" {
+            return Err(ActorProjectionError::UnexpectedActorKind {
+                expected: "user".into(),
+                actual: assertion.actor_kind().into(),
+            });
+        }
+        // JSON tuple encoding is unambiguous even for subjects containing delimiters.
+        Ok(Self(
+            serde_json::json!([assertion.issuer(), assertion.subject()]).to_string(),
+        ))
+    }
 }
 
 fn validate_config(config: &SqliteSessionConfig) -> Result<(), RuntimeFailure> {
     if config.database.as_os_str().is_empty() {
         return Err(invalid_plan("Session database path must not be empty"));
+    }
+    if let Some(auth) = &config.authentication {
+        if auth.issuer.is_empty() {
+            return Err(invalid_plan("Session assertion issuer must not be empty"));
+        }
+        ActorAssertionVerifier::from_public_key_base64(&auth.issuer, &auth.verification_key)
+            .map_err(|_| invalid_plan("Session assertion verification key is invalid"))?;
     }
     Ok(())
 }
@@ -124,22 +164,27 @@ enum SqliteSessionCommand {
         release: std::sync::mpsc::Receiver<()>,
     },
     Append {
+        owner: Option<String>,
         request: AppendSessionRequest,
         reply: oneshot::Sender<Result<Result<AppendSessionResponse, AppendError>, RuntimeFailure>>,
     },
     Open {
+        owner: Option<String>,
         request: OpenSessionRequest,
         reply: oneshot::Sender<Result<Result<OpenSessionResponse, OpenError>, RuntimeFailure>>,
     },
     List {
+        owner: Option<String>,
         request: ListSessionsRequest,
         reply: oneshot::Sender<Result<Result<ListSessionsResponse, ListError>, RuntimeFailure>>,
     },
     Read {
+        owner: Option<String>,
         request: ReadSessionRequest,
         reply: oneshot::Sender<Result<Result<ReadSessionResponse, ReadError>, RuntimeFailure>>,
     },
     Rename {
+        owner: Option<String>,
         request: RenameSessionRequest,
         reply: oneshot::Sender<Result<Result<RenameSessionResponse, RenameError>, RuntimeFailure>>,
     },
@@ -148,17 +193,91 @@ enum SqliteSessionCommand {
     },
 }
 
+impl SqliteSessionCommand {
+    fn execute(self, provider: &SqliteSessionProvider) -> bool {
+        match self {
+            #[cfg(test)]
+            SqliteSessionCommand::Block { started, release } => {
+                let _ = started.send(());
+                let _ = release.recv();
+            }
+            SqliteSessionCommand::Append {
+                owner,
+                request,
+                reply,
+            } => {
+                let provider = SqliteSessionProvider {
+                    owner,
+                    ..provider.clone()
+                };
+                let _ = reply.send(native_result(provider.append_now(request)));
+            }
+            SqliteSessionCommand::Open {
+                owner,
+                request,
+                reply,
+            } => {
+                let provider = SqliteSessionProvider {
+                    owner,
+                    ..provider.clone()
+                };
+                let _ = reply.send(native_result(provider.open_now(request)));
+            }
+            SqliteSessionCommand::List {
+                owner,
+                request,
+                reply,
+            } => {
+                let provider = SqliteSessionProvider {
+                    owner,
+                    ..provider.clone()
+                };
+                let _ = reply.send(native_result(provider.list_now(&request)));
+            }
+            SqliteSessionCommand::Read {
+                owner,
+                request,
+                reply,
+            } => {
+                let provider = SqliteSessionProvider {
+                    owner,
+                    ..provider.clone()
+                };
+                let _ = reply.send(native_result(provider.read_now(request)));
+            }
+            SqliteSessionCommand::Rename {
+                owner,
+                request,
+                reply,
+            } => {
+                let provider = SqliteSessionProvider {
+                    owner,
+                    ..provider.clone()
+                };
+                let _ = reply.send(native_result(provider.rename_now(&request)));
+            }
+            SqliteSessionCommand::Shutdown { reply } => {
+                let _ = reply.send(());
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[derive(Clone, Debug)]
 struct SqliteSessionProvider {
     database: PathBuf,
     operation_lock: Rc<RefCell<()>>,
+    owner: Option<String>,
 }
 
 impl SqliteSessionWorker {
     async fn start(
         database: PathBuf,
     ) -> Result<(SqliteSessionRuntime, SqliteSessionWorker), RuntimeFailure> {
-        let (commands, mut receiver) = mpsc::channel(SESSION_WORKER_QUEUE_CAPACITY);
+        let (commands, mut receiver) =
+            mpsc::channel::<SqliteSessionCommand>(SESSION_WORKER_QUEUE_CAPACITY);
         let (ready, readiness) = oneshot::channel();
         let thread = std::thread::Builder::new()
             .name("lenso-session-sqlite".to_owned())
@@ -166,6 +285,7 @@ impl SqliteSessionWorker {
                 let provider = SqliteSessionProvider {
                     database,
                     operation_lock: Rc::new(RefCell::new(())),
+                    owner: None,
                 };
                 let prepared = provider.prepare_store();
                 let run = prepared.is_ok();
@@ -174,31 +294,8 @@ impl SqliteSessionWorker {
                     return;
                 }
                 while let Some(command) = receiver.blocking_recv() {
-                    match command {
-                        #[cfg(test)]
-                        SqliteSessionCommand::Block { started, release } => {
-                            let _ = started.send(());
-                            let _ = release.recv();
-                        }
-                        SqliteSessionCommand::Append { request, reply } => {
-                            let _ = reply.send(native_result(provider.append_now(request)));
-                        }
-                        SqliteSessionCommand::Open { request, reply } => {
-                            let _ = reply.send(native_result(provider.open_now(request)));
-                        }
-                        SqliteSessionCommand::List { request, reply } => {
-                            let _ = reply.send(native_result(provider.list_now(&request)));
-                        }
-                        SqliteSessionCommand::Read { request, reply } => {
-                            let _ = reply.send(native_result(provider.read_now(request)));
-                        }
-                        SqliteSessionCommand::Rename { request, reply } => {
-                            let _ = reply.send(native_result(provider.rename_now(&request)));
-                        }
-                        SqliteSessionCommand::Shutdown { reply } => {
-                            let _ = reply.send(());
-                            break;
-                        }
+                    if !command.execute(&provider) {
+                        break;
                     }
                 }
             })
@@ -307,7 +404,7 @@ impl SqliteSessionProvider {
         let schema_version = connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .map_err(sql_failure)?;
-        if !matches!(schema_version, 0 | 1) {
+        if !matches!(schema_version, 0..=2) {
             return Err(store_failure(format!(
                 "Session database schema version {schema_version} is unsupported"
             )));
@@ -316,9 +413,9 @@ impl SqliteSessionProvider {
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;")
             .map_err(sql_failure)?;
         connection.execute_batch(SCHEMA).map_err(sql_failure)?;
-        if schema_version == 0 {
+        if schema_version < 2 {
             connection
-                .pragma_update(None, "user_version", 1_i64)
+                .pragma_update(None, "user_version", 2_i64)
                 .map_err(sql_failure)?;
         }
         Ok(())
@@ -335,66 +432,76 @@ impl SqliteSessionProvider {
         Ok(connection)
     }
 
+    fn owns(&self, connection: &Connection, session_id: &str) -> Result<bool, RuntimeFailure> {
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sessions s WHERE s.session_id = ?1 AND (SELECT owner FROM session_owners o WHERE o.session_id = s.session_id) IS ?2)",
+            params![session_id, self.owner], |row| row.get(0),
+        ).map_err(sql_failure)
+    }
+
     fn open_now(
         &self,
         request: OpenSessionRequest,
     ) -> Result<OpenSessionResponse, OperationFailure<OpenError>> {
         let _operation = self.operation_lock.borrow_mut();
-        let connection = self.connect().map_err(OperationFailure::Runtime)?;
-        if let Some(session_id) = request.create_session_id {
-            if request.session_id.is_some() || !valid_session_id(&session_id) {
-                return Err(OpenError::InvalidSessionId.into());
-            }
-            let inserted = connection
-                .execute(
-                    "INSERT OR IGNORE INTO sessions(session_id, revision) VALUES (?1, 0)",
-                    [&session_id],
-                )
-                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
-            let revision: i64 = connection
-                .query_row(
-                    "SELECT revision FROM sessions WHERE session_id = ?1",
-                    [&session_id],
-                    |row| row.get(0),
-                )
-                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
-            return Ok(OpenSessionResponse {
-                created: inserted == 1,
-                revision: revision.to_string(),
-                session_id,
-            });
+        if request.create_session_id.is_some() && request.session_id.is_some() {
+            return Err(OpenError::InvalidSessionId.into());
         }
-        if let Some(session_id) = request.session_id {
-            if !valid_session_id(&session_id) {
-                return Err(OpenError::InvalidSessionId.into());
-            }
-            let revision = connection
-                .query_row(
-                    "SELECT revision FROM sessions WHERE session_id = ?1",
-                    [&session_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()
-                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?
-                .ok_or(OpenError::NotFound)?;
-            return Ok(OpenSessionResponse {
-                created: false,
-                revision: database_revision(revision)
-                    .map_err(OperationFailure::Runtime)?
-                    .to_string(),
-                session_id,
-            });
+        let create = request.session_id.is_none();
+        let session_id = request
+            .session_id
+            .or(request.create_session_id)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        if !valid_session_id(&session_id) {
+            return Err(OpenError::InvalidSessionId.into());
         }
-        let session_id = uuid::Uuid::new_v4().to_string();
-        connection
-            .execute(
-                "INSERT INTO sessions(session_id, revision) VALUES (?1, 0)",
+        let mut connection = self.connect().map_err(OperationFailure::Runtime)?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        let revision: Option<i64> = transaction
+            .query_row(
+                "SELECT revision FROM sessions WHERE session_id = ?1",
                 [&session_id],
+                |row| row.get(0),
             )
+            .optional()
+            .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        let created = revision.is_none();
+        let revision = if let Some(revision) = revision {
+            if !self
+                .owns(&transaction, &session_id)
+                .map_err(OperationFailure::Runtime)?
+            {
+                return Err(OpenError::NotFound.into());
+            }
+            revision
+        } else {
+            if !create {
+                return Err(OpenError::NotFound.into());
+            }
+            transaction
+                .execute(
+                    "INSERT INTO sessions(session_id, revision) VALUES (?1, 0)",
+                    [&session_id],
+                )
+                .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+            if let Some(owner) = &self.owner {
+                transaction
+                    .execute(
+                        "INSERT INTO session_owners(session_id, owner) VALUES (?1, ?2)",
+                        params![session_id, owner],
+                    )
+                    .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+            }
+            0
+        };
+        transaction
+            .commit()
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
         Ok(OpenSessionResponse {
-            created: true,
-            revision: "0".to_owned(),
+            created,
+            revision: revision.to_string(),
             session_id,
         })
     }
@@ -423,6 +530,12 @@ impl SqliteSessionProvider {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        if !self
+            .owns(&transaction, &request.session_id)
+            .map_err(OperationFailure::Runtime)?
+        {
+            return Err(AppendError::NotFound.into());
+        }
         let current = transaction
             .query_row(
                 "SELECT revision FROM sessions WHERE session_id = ?1",
@@ -516,6 +629,12 @@ impl SqliteSessionProvider {
         let transaction = connection
             .transaction()
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        if !self
+            .owns(&transaction, &request.session_id)
+            .map_err(OperationFailure::Runtime)?
+        {
+            return Err(ReadError::NotFound.into());
+        }
         let (revision, manual_title, title_revision) = transaction
             .query_row(
                 "SELECT s.revision, t.title, COALESCE(t.title_revision, 0) FROM sessions s LEFT JOIN session_titles t ON t.session_id = s.session_id WHERE s.session_id = ?1",
@@ -593,7 +712,7 @@ impl SqliteSessionProvider {
             .prepare(LIST_SESSIONS_SQL)
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
         let rows = statement
-            .query_map([request.limit], |row| {
+            .query_map(params![request.limit, self.owner], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, i64>(1)?,
@@ -647,6 +766,12 @@ impl SqliteSessionProvider {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(|error| OperationFailure::Runtime(sql_failure(error)))?;
+        if !self
+            .owns(&transaction, &request.session_id)
+            .map_err(OperationFailure::Runtime)?
+        {
+            return Err(RenameError::NotFound.into());
+        }
         let current = transaction
             .query_row(
                 "SELECT COALESCE(t.title_revision, 0) FROM sessions s LEFT JOIN session_titles t ON t.session_id = s.session_id WHERE s.session_id = ?1",
@@ -875,14 +1000,21 @@ impl SessionProvider for SqliteSessionProvider {
 impl SessionProvider for SqliteSessionPlugin {
     fn append(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         request: AppendSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionAppend> {
+        let Ok(owner) = self.session_owner(&context, "append") else {
+            return Box::pin(ready(Ok(Err(AppendError::PermissionDenied))));
+        };
         let provider = self.provider.borrow().clone();
         match provider {
             Some(provider) => Box::pin(async move {
                 provider
-                    .invoke(|reply| SqliteSessionCommand::Append { reply, request })
+                    .invoke(|reply| SqliteSessionCommand::Append {
+                        owner,
+                        reply,
+                        request,
+                    })
                     .await
             }),
             None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
@@ -892,14 +1024,21 @@ impl SessionProvider for SqliteSessionPlugin {
     }
     fn open(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         request: OpenSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionOpen> {
+        let Ok(owner) = self.session_owner(&context, "open") else {
+            return Box::pin(ready(Ok(Err(OpenError::PermissionDenied))));
+        };
         let provider = self.provider.borrow().clone();
         match provider {
             Some(provider) => Box::pin(async move {
                 provider
-                    .invoke(|reply| SqliteSessionCommand::Open { reply, request })
+                    .invoke(|reply| SqliteSessionCommand::Open {
+                        owner,
+                        reply,
+                        request,
+                    })
                     .await
             }),
             None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
@@ -909,14 +1048,21 @@ impl SessionProvider for SqliteSessionPlugin {
     }
     fn list(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         request: ListSessionsRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionList> {
+        let Ok(owner) = self.session_owner(&context, "list") else {
+            return Box::pin(ready(Ok(Err(ListError::PermissionDenied))));
+        };
         let provider = self.provider.borrow().clone();
         match provider {
             Some(provider) => Box::pin(async move {
                 provider
-                    .invoke(|reply| SqliteSessionCommand::List { reply, request })
+                    .invoke(|reply| SqliteSessionCommand::List {
+                        owner,
+                        reply,
+                        request,
+                    })
                     .await
             }),
             None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
@@ -926,14 +1072,21 @@ impl SessionProvider for SqliteSessionPlugin {
     }
     fn read(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         request: ReadSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRead> {
+        let Ok(owner) = self.session_owner(&context, "read") else {
+            return Box::pin(ready(Ok(Err(ReadError::PermissionDenied))));
+        };
         let provider = self.provider.borrow().clone();
         match provider {
             Some(provider) => Box::pin(async move {
                 provider
-                    .invoke(|reply| SqliteSessionCommand::Read { reply, request })
+                    .invoke(|reply| SqliteSessionCommand::Read {
+                        owner,
+                        reply,
+                        request,
+                    })
                     .await
             }),
             None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
@@ -943,14 +1096,21 @@ impl SessionProvider for SqliteSessionPlugin {
     }
     fn rename(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         request: RenameSessionRequest,
     ) -> lenso_kernel::NativeRequestFuture<SessionRename> {
+        let Ok(owner) = self.session_owner(&context, "rename") else {
+            return Box::pin(ready(Ok(Err(RenameError::PermissionDenied))));
+        };
         let provider = self.provider.borrow().clone();
         match provider {
             Some(provider) => Box::pin(async move {
                 provider
-                    .invoke(|reply| SqliteSessionCommand::Rename { reply, request })
+                    .invoke(|reply| SqliteSessionCommand::Rename {
+                        owner,
+                        reply,
+                        request,
+                    })
                     .await
             }),
             None => Box::pin(ready(Err(RuntimeFailure::Unavailable {
@@ -961,6 +1121,34 @@ impl SessionProvider for SqliteSessionPlugin {
 }
 
 impl SqliteSessionPlugin {
+    fn session_owner(
+        &self,
+        context: &InvocationContext,
+        operation: &str,
+    ) -> Result<Option<String>, RuntimeFailure> {
+        let Some(auth) = &self.config.authentication else {
+            if context
+                .sealed_extension(lenso_auth_sdk::ACTOR_ASSERTION_EXTENSION)
+                .is_some()
+            {
+                return Err(store_failure("Session authentication is not configured"));
+            }
+            return Ok(None);
+        };
+        let verifier =
+            ActorAssertionVerifier::from_public_key_base64(&auth.issuer, &auth.verification_key)
+                .map_err(|_| store_failure("Session authentication configuration is invalid"))?;
+        let owner = verifier
+            .project_context::<SessionOwner>(
+                context,
+                session_contract::CAPABILITY_ID,
+                operation,
+                &FixedClock::new(time::OffsetDateTime::now_utc()),
+            )
+            .map_err(|_| store_failure("Session authentication required"))?;
+        Ok(Some(owner.0))
+    }
+
     async fn prepare_runtime(&self) -> Result<(), RuntimeFailure> {
         if self.worker.borrow().is_some() {
             return Err(store_failure("Session database worker is already prepared"));
@@ -1039,6 +1227,7 @@ impl SessionImporter for SqliteSessionImporter {
         let provider = SqliteSessionProvider {
             database: self.database.clone(),
             operation_lock: Rc::new(RefCell::new(())),
+            owner: None,
         };
         provider
             .prepare_store()
@@ -1118,7 +1307,7 @@ fn inspect_database(
     let schema_version = connection
         .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
         .map_err(|error| format!("failed to inspect Session database schema: {error}"))?;
-    if schema_version != 1 {
+    if !matches!(schema_version, 1 | 2) {
         return Err(format!(
             "Session database schema version {schema_version} is unsupported"
         ));
@@ -1139,8 +1328,13 @@ fn inspect_database(
         } else {
             "SELECT s.session_id, s.revision, NULL, 0 FROM sessions s WHERE (?1 IS NULL OR s.session_id = ?1) ORDER BY s.session_id"
         };
+        let query = if schema_version == 2 {
+            query.replace("ORDER BY s.session_id", "AND NOT EXISTS (SELECT 1 FROM session_owners o WHERE o.session_id = s.session_id) ORDER BY s.session_id")
+        } else {
+            query.to_owned()
+        };
         let mut statement = transaction
-            .prepare(query)
+            .prepare(&query)
             .map_err(|error| format!("failed to inspect Sessions: {error}"))?;
         statement
             .query_map(params![session_id], |row| {
@@ -1263,6 +1457,7 @@ mod tests {
         let provider = SqliteSessionProvider {
             database,
             operation_lock: Rc::new(RefCell::new(())),
+            owner: None,
         };
         provider.prepare_store().unwrap();
         provider
@@ -1277,6 +1472,7 @@ mod tests {
         blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
 
         let operation = runtime.invoke(|reply| SqliteSessionCommand::Open {
+            owner: None,
             request: OpenSessionRequest {
                 create_session_id: None,
                 session_id: None,
@@ -1309,6 +1505,7 @@ mod tests {
 
         let error = first_runtime
             .invoke(|reply| SqliteSessionCommand::Open {
+                owner: None,
                 request: OpenSessionRequest {
                     create_session_id: None,
                     session_id: None,
@@ -1322,6 +1519,7 @@ mod tests {
         let (second_runtime, second_worker) = SqliteSessionWorker::start(database).await.unwrap();
         let opened = second_runtime
             .invoke(|reply| SqliteSessionCommand::Open {
+                owner: None,
                 request: OpenSessionRequest {
                     create_session_id: None,
                     session_id: None,
@@ -1356,6 +1554,7 @@ mod tests {
             let (reply, _response) = oneshot::channel();
             commands
                 .try_send(SqliteSessionCommand::List {
+                    owner: None,
                     request: ListSessionsRequest { limit: 1 },
                     reply,
                 })
@@ -1364,6 +1563,7 @@ mod tests {
         let (reply, _response) = oneshot::channel();
         assert!(matches!(
             commands.try_send(SqliteSessionCommand::List {
+                owner: None,
                 request: ListSessionsRequest { limit: 1 },
                 reply,
             }),
@@ -1372,6 +1572,7 @@ mod tests {
 
         {
             let operation = runtime.invoke(|reply| SqliteSessionCommand::Open {
+                owner: None,
                 request: OpenSessionRequest {
                     create_session_id: None,
                     session_id: None,
@@ -1413,6 +1614,7 @@ mod tests {
         let database = directory.path().join("sessions.sqlite3");
         let plugin = SqliteSessionPlugin {
             config: SqliteSessionConfig {
+                authentication: None,
                 database: database.clone(),
             },
             provider: Rc::new(RefCell::new(None)),
@@ -1448,7 +1650,10 @@ mod tests {
         ));
 
         let fresh_generation = SqliteSessionPlugin {
-            config: SqliteSessionConfig { database },
+            config: SqliteSessionConfig {
+                authentication: None,
+                database,
+            },
             provider: Rc::new(RefCell::new(None)),
             worker: Rc::new(RefCell::new(None)),
         };
@@ -1468,6 +1673,267 @@ mod tests {
         fresh_generation.deactivate_runtime().await.unwrap();
         assert!(fresh_generation.provider.borrow().is_none());
         assert!(fresh_generation.worker.borrow().is_none());
+    }
+
+    fn identity_context(
+        issuer: &lenso_auth_sdk::ActorAssertionIssuer,
+        subject: &str,
+        operation: &str,
+        expired: bool,
+    ) -> InvocationContext {
+        let now = time::OffsetDateTime::now_utc();
+        issuer
+            .issue(
+                subject,
+                "user",
+                "password",
+                vec![lenso_auth_sdk::audience(
+                    session_contract::CAPABILITY_ID,
+                    operation,
+                )],
+                lenso_auth_sdk::Validity::new(
+                    now - time::Duration::minutes(2),
+                    now + time::Duration::seconds(if expired { -1 } else { 120 }),
+                )
+                .unwrap(),
+                std::collections::BTreeMap::new(),
+            )
+            .attach(InvocationContext::new(
+                1,
+                None,
+                lenso_kernel::CancellationToken::new(),
+            ))
+            .unwrap()
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one lifecycle scenario verifies all owner operations and restart persistence"
+    )]
+    async fn authenticated_sessions_enforce_owner_through_worker_and_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let database = directory.path().join("sessions.sqlite3");
+        let local = provider(database.clone());
+        let legacy = local
+            .open_now(OpenSessionRequest {
+                session_id: None,
+                create_session_id: None,
+            })
+            .unwrap();
+        let issuer = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [7; 32]);
+        let plugin = SqliteSessionPlugin {
+            config: SqliteSessionConfig {
+                database: database.clone(),
+                authentication: Some(SessionAuthentication {
+                    issuer: "test.auth".into(),
+                    verification_key: issuer.public_key_base64(),
+                }),
+            },
+            provider: Rc::new(RefCell::new(None)),
+            worker: Rc::new(RefCell::new(None)),
+        };
+        plugin.prepare_runtime().await.unwrap();
+        let opened = plugin
+            .open(
+                identity_context(&issuer, "alice", "open", false),
+                OpenSessionRequest {
+                    session_id: None,
+                    create_session_id: Some("alice-private".into()),
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        plugin
+            .append(
+                identity_context(&issuer, "alice", "append", false),
+                AppendSessionRequest {
+                    session_id: opened.session_id.clone(),
+                    expected_revision: "0".into(),
+                    events: vec![event("private-event")],
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        // Other callers cannot acquire ownership by reopening or retrying a known identifier.
+        for create in [false, true] {
+            assert!(matches!(
+                plugin
+                    .open(
+                        identity_context(&issuer, "bob", "open", false),
+                        OpenSessionRequest {
+                            session_id: (!create).then(|| opened.session_id.clone()),
+                            create_session_id: create.then(|| opened.session_id.clone()),
+                        }
+                    )
+                    .await
+                    .unwrap(),
+                Err(OpenError::NotFound)
+            ));
+        }
+        assert!(matches!(
+            plugin
+                .open(
+                    identity_context(&issuer, "alice", "open", false),
+                    OpenSessionRequest {
+                        session_id: Some(legacy.session_id),
+                        create_session_id: None,
+                    }
+                )
+                .await
+                .unwrap(),
+            Err(OpenError::NotFound)
+        ));
+        assert!(
+            plugin
+                .list(
+                    identity_context(&issuer, "bob", "list", false),
+                    ListSessionsRequest { limit: 10 }
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        assert_eq!(
+            plugin
+                .list(
+                    identity_context(&issuer, "alice", "list", false),
+                    ListSessionsRequest { limit: 10 }
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .sessions
+                .len(),
+            1
+        );
+        assert!(matches!(
+            plugin
+                .read(
+                    identity_context(&issuer, "bob", "read", false),
+                    ReadSessionRequest {
+                        session_id: opened.session_id.clone(),
+                        after_revision: "0".into(),
+                        limit: 10,
+                    }
+                )
+                .await
+                .unwrap(),
+            Err(ReadError::NotFound)
+        ));
+        assert!(matches!(
+            plugin
+                .append(
+                    identity_context(&issuer, "bob", "append", false),
+                    AppendSessionRequest {
+                        session_id: opened.session_id.clone(),
+                        expected_revision: "1".into(),
+                        events: vec![event("intrusion")],
+                    }
+                )
+                .await
+                .unwrap(),
+            Err(AppendError::NotFound)
+        ));
+        assert!(matches!(
+            plugin
+                .rename(
+                    identity_context(&issuer, "bob", "rename", false),
+                    RenameSessionRequest {
+                        session_id: opened.session_id.clone(),
+                        expected_title_revision: "0".into(),
+                        title: "intrusion".into(),
+                    }
+                )
+                .await
+                .unwrap(),
+            Err(RenameError::NotFound)
+        ));
+        // Local/operator inspection must not bypass the authenticated owner boundary.
+        assert!(
+            SqliteSessionInspector::new(&database)
+                .inspect_one(&opened.session_id)
+                .is_err()
+        );
+        assert!(matches!(
+            local.open_now(OpenSessionRequest {
+                session_id: Some(opened.session_id.clone()),
+                create_session_id: None
+            }),
+            Err(OperationFailure::Domain(OpenError::NotFound))
+        ));
+        plugin.deactivate_runtime().await.unwrap();
+        plugin.prepare_runtime().await.unwrap();
+        let read = plugin
+            .read(
+                identity_context(&issuer, "alice", "read", false),
+                ReadSessionRequest {
+                    session_id: opened.session_id,
+                    after_revision: "0".into(),
+                    limit: 10,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.events.len(), 1);
+        plugin.deactivate_runtime().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn session_authentication_rejects_missing_forged_expired_and_wrong_audience() {
+        let directory = tempfile::tempdir().unwrap();
+        let issuer = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [7; 32]);
+        let attacker = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [8; 32]);
+        let plugin = SqliteSessionPlugin {
+            config: SqliteSessionConfig {
+                database: directory.path().join("sessions.sqlite3"),
+                authentication: Some(SessionAuthentication {
+                    issuer: "test.auth".into(),
+                    verification_key: issuer.public_key_base64(),
+                }),
+            },
+            provider: Rc::new(RefCell::new(None)),
+            worker: Rc::new(RefCell::new(None)),
+        };
+        plugin.prepare_runtime().await.unwrap();
+        for context in [
+            InvocationContext::new(1, None, lenso_kernel::CancellationToken::new()),
+            identity_context(&attacker, "alice", "open", false),
+            identity_context(&issuer, "alice", "open", true),
+            identity_context(&issuer, "alice", "list", false),
+        ] {
+            assert!(
+                plugin
+                    .open(
+                        context,
+                        OpenSessionRequest {
+                            session_id: None,
+                            create_session_id: None
+                        }
+                    )
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+        }
+        assert!(
+            plugin
+                .list(
+                    identity_context(&issuer, "alice", "list", false),
+                    ListSessionsRequest { limit: 10 }
+                )
+                .await
+                .unwrap()
+                .unwrap()
+                .sessions
+                .is_empty()
+        );
+        plugin.deactivate_runtime().await.unwrap();
     }
 
     fn event(id: &str) -> AppendSessionRequestEventsItem {
@@ -1549,7 +2015,9 @@ mod tests {
             .prepare(&format!("EXPLAIN QUERY PLAN {LIST_SESSIONS_SQL}"))
             .unwrap();
         let details = statement
-            .query_map([10], |row| row.get::<_, String>(3))
+            .query_map(params![10, Option::<String>::None], |row| {
+                row.get::<_, String>(3)
+            })
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();

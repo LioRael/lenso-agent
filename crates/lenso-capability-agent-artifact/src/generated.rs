@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.artifact@1";
-pub const DESCRIPTOR_VERSION: &str = "1.0.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:36dc5fa441b998ecf5faa408184a33bc7f9e29037a406e4c5051697bfbe3682c";
+pub const DESCRIPTOR_VERSION: &str = "1.1.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:216cc1c32cec3290a2374abe13c37e3da2e3bd897f1482aaa17d100a6c045412";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const ARTIFACT_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const ARTIFACT_CONTRACT: CapabilityReference<ArtifactClient> = CapabilityRef
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_artifact { () => { "{\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.0.0\",\"operations\":[\"put\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_artifact { () => { "{\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.1.0\",\"operations\":[\"put\",\"read\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_artifact_client {
-    () => { "{\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_artifact_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_artifact_client {
-    () => { "{\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.0.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.artifact@1\",\"descriptor_version\":\"1.1.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const PUT_OPERATION: &str = "put";
@@ -78,6 +78,7 @@ pub enum PutError {
     CapacityExceeded,
     InvalidData,
     InvalidRequest,
+    PermissionDenied,
     TooLarge,
     Unknown(UnknownDomainError),
 }
@@ -116,6 +117,7 @@ pub enum ReadError {
     InvalidHandle,
     InvalidRange,
     NotFound,
+    PermissionDenied,
     Unknown(UnknownDomainError),
 }
 
@@ -175,6 +177,7 @@ impl serde::Serialize for PutError {
             Self::CapacityExceeded => serializer.serialize_str("capacity_exceeded"),
             Self::InvalidData => serializer.serialize_str("invalid_data"),
             Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::TooLarge => serializer.serialize_str("too_large"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
@@ -202,6 +205,7 @@ impl<'de> serde::Deserialize<'de> for PutError {
                 "capacity_exceeded" => Ok(Self::CapacityExceeded),
                 "invalid_data" => Ok(Self::InvalidData),
                 "invalid_request" => Ok(Self::InvalidRequest),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 "too_large" => Ok(Self::TooLarge),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
@@ -228,6 +232,7 @@ impl serde::Serialize for ReadError {
             Self::InvalidHandle => serializer.serialize_str("invalid_handle"),
             Self::InvalidRange => serializer.serialize_str("invalid_range"),
             Self::NotFound => serializer.serialize_str("not_found"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
                 map.serialize_entry("code", &value.code)?;
@@ -254,6 +259,7 @@ impl<'de> serde::Deserialize<'de> for ReadError {
                 "invalid_handle" => Ok(Self::InvalidHandle),
                 "invalid_range" => Ok(Self::InvalidRange),
                 "not_found" => Ok(Self::NotFound),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {
