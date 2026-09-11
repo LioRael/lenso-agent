@@ -2,7 +2,7 @@ use lenso_app_plan::{
     AppComposition, CapabilityBinding, CapabilityEndpointPlan, CapabilityRequirementPlan,
     PluginInstancePlan,
 };
-use lenso_auth_account_plugin::{AccountAuthConfig, AccountAuthOperator, assertion_public_key};
+use lenso_auth_account_plugin::{assertion_public_key, AccountAuthConfig, AccountAuthOperator};
 use lenso_capability_auth as auth;
 use lenso_capability_auth_delegation as delegation;
 use lenso_capability_credential_issuer as issuer;
@@ -19,7 +19,7 @@ use lenso_native_adapter::{
     NativePluginFactory, NativePluginFactoryContext, NativePluginInstance, NativePluginRegistry,
 };
 use lenso_runner::TokioDriver;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use std::{collections::BTreeMap, rc::Rc, time::Duration};
 const CALLER_PACKAGE_ID: &str = "test.auth-caller";
@@ -133,6 +133,7 @@ fn instance(key: &str, descriptor: &str, config: &Value) -> PluginInstancePlan {
 
 use lenso_capability_access_control_admin as acl_admin;
 use lenso_capability_organization_admin as org_admin;
+use lenso_capability_organization_directory as org_directory;
 use lenso_capability_organization_membership_admin as org_members;
 use lenso_capability_password_auth as password;
 use lenso_capability_projects as projects;
@@ -349,7 +350,9 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
                 | directory::CAPABILITY_ID
                 | issuer::CAPABILITY_ID
                 | delegation::CAPABILITY_ID => "account",
-                lenso_capability_organization_membership::CAPABILITY_ID => "organization",
+                org_directory::CAPABILITY_ID
+                | lenso_capability_organization_membership::CAPABILITY_ID
+                | org_members::CAPABILITY_ID => "organization",
                 lenso_capability_access_control::CAPABILITY_ID => "acl",
                 projects::CAPABILITY_ID
                 | lenso_capability_projects_collaboration::CAPABILITY_ID

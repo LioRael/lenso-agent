@@ -38,13 +38,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-projects-plugin
-          ref: badf709faf5cb0e343498e3d15c264bb4e31a132
+          ref: 49cda8f405ce10c3d936a6a07d81dd07232b5157
           path: .lenso/acceptance-sources/projects
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-projects-web-plugin
-          ref: cc8109782d71e6a5edfa4c989e1eac99f11a46fa
+          ref: d274ddf2f44cf71a618c6470d6aa160d0cc10ab1
           path: .lenso/acceptance-sources/projects-web
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88

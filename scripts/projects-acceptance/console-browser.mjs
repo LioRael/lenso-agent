@@ -74,12 +74,7 @@ try {
   if (!(await page.evaluate(() => window.__projectsAcceptanceDocument)))
     throw Error("Workspace navigation reloaded Console");
 
-  await page
-    .locator(".project-list")
-    .getByRole("button")
-    .filter({ hasText: "public project" })
-    .first()
-    .waitFor();
+  await page.getByRole("link", { name: /public project/i }).first().waitFor();
   await page.screenshot({ path: resolve(outputRoot, "projects.png") });
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await page.getByRole("dialog").waitFor();
@@ -92,10 +87,7 @@ try {
   await page.screenshot({ path: resolve(outputRoot, "create-project.png") });
   await page.getByRole("button", { name: "Create project", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
-  await page
-    .getByRole("button", { name: /Console workspace acceptance/ })
-    .first()
-    .waitFor();
+  await page.getByRole("heading", { name: "Console workspace acceptance" }).waitFor();
   await page.evaluate(() => {
     history.pushState(
       {
@@ -123,8 +115,8 @@ try {
     );
     window.dispatchEvent(new PopStateEvent("popstate"));
   });
-  await page.getByLabel("Organization").fill(receipt.organization_id);
-  await page.getByRole("button", { name: "Open workspace", exact: true }).click();
+  await page.locator(`a.workspace-option[href*="${receipt.organization_id}"]`).click();
+  await page.getByRole("link", { name: /Console workspace acceptance/ }).click();
   await page.getByRole("button", { name: "Create issue from trace", exact: true }).click();
   await page.getByRole("dialog").waitFor();
   await page.getByRole("textbox", { name: "Title", exact: true }).waitFor();

@@ -167,24 +167,15 @@ denied = {
 }
 assert tool(b, "projects_update_issue", denied)[0] == 403
 assert read(a)[1] == updated, "denied and stale writes must not change the issue"
-create = {
-    k: updated[k]
-    for k in [
-        "organization_id",
-        "project_id",
-        "team_id",
-        "title",
-        "description",
-        "priority",
-        "workflow_state_id",
-        "cycle_id",
-        "milestone_id",
-        "parent_issue_id",
-        "label_ids",
-    ]
+move = {
+    "idempotency_key": "outside-grant-" + run_id,
+    "organization_id": updated["organization_id"],
+    "issue_id": updated["issue_id"],
+    "expected_revision": updated["revision"],
+    "team_id": updated["team_id"],
+    "workflow_state_id": updated["workflow_state_id"],
 }
-create.update(idempotency_key="outside-grant-" + run_id, issue_id="must-not-exist")
-assert tool(a, "projects_create_issue", create)[0] == 403, (
+assert tool(a, "projects_move_issue", move)[0] == 403, (
     "Tool Provider forwarding must not widen the final operation audience"
 )
 status, _ = call("/logout", b"", {"Origin": origin}, alice)
