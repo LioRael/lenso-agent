@@ -14,6 +14,9 @@ jobs:
   acceptance:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: agent
     services:
       postgres:
         image: postgres:18
@@ -29,29 +32,30 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
+          path: agent
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-auth-plugin
           ref: b68d87654e18910e8d14649e48e3166636fa99a1
-          path: .lenso/acceptance-sources/auth
+          path: acceptance-sources/auth
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-organization-plugin
           ref: ea80c5fe0e77841e6b5c3f7d992ee7c603e8a7cd
-          path: .lenso/acceptance-sources/organization
+          path: acceptance-sources/organization
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-projects-plugin
           ref: 49cda8f405ce10c3d936a6a07d81dd07232b5157
-          path: .lenso/acceptance-sources/projects
+          path: acceptance-sources/projects
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: LioRael/lenso-projects-web-plugin
           ref: df70768a71ab14772bc717f59c60bb1d6ee54c1d
-          path: .lenso/acceptance-sources/projects-web
+          path: acceptance-sources/projects-web
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
@@ -59,13 +63,13 @@ jobs:
       - name: Prepare actual business App
         run: |
           python3 scripts/projects-acceptance/prepare.py \
-            --auth-root .lenso/acceptance-sources/auth \
-            --organization-root .lenso/acceptance-sources/organization \
-            --projects-root .lenso/acceptance-sources/projects \
-            --projects-web-root .lenso/acceptance-sources/projects-web
+            --auth-root ../acceptance-sources/auth \
+            --organization-root ../acceptance-sources/organization \
+            --projects-root ../acceptance-sources/projects \
+            --projects-web-root ../acceptance-sources/projects-web
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          workspaces: .lenso/projects-acceptance
+          workspaces: agent/.lenso/projects-acceptance
       - name: Verify delegated identity and durable authorization
         env:
           LENSO_POSTGRES_TEST_URL: postgresql://lenso_test:acceptance-only@127.0.0.1:5432/acceptance
