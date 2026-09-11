@@ -2,7 +2,7 @@ use lenso_app_plan::{
     AppComposition, CapabilityBinding, CapabilityEndpointPlan, CapabilityRequirementPlan,
     PluginInstancePlan,
 };
-use lenso_auth_account_plugin::{AccountAuthConfig, AccountAuthOperator, assertion_public_key};
+use lenso_auth_account_plugin::{assertion_public_key, AccountAuthConfig, AccountAuthOperator};
 use lenso_capability_auth as auth;
 use lenso_capability_auth_delegation as delegation;
 use lenso_capability_credential_issuer as issuer;
@@ -19,7 +19,7 @@ use lenso_native_adapter::{
     NativePluginFactory, NativePluginFactoryContext, NativePluginInstance, NativePluginRegistry,
 };
 use lenso_runner::TokioDriver;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use std::{collections::BTreeMap, rc::Rc, time::Duration};
 const CALLER_PACKAGE_ID: &str = "test.auth-caller";
@@ -133,6 +133,7 @@ fn instance(key: &str, descriptor: &str, config: &Value) -> PluginInstancePlan {
 
 use lenso_capability_access_control_admin as acl_admin;
 use lenso_capability_organization_admin as org_admin;
+use lenso_capability_organization_directory as org_directory;
 use lenso_capability_organization_membership_admin as org_members;
 use lenso_capability_password_auth as password;
 use lenso_capability_projects as projects;
@@ -219,7 +220,7 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         instance(
             "consent",
             lenso_auth_agent_connection_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects@1:create_project", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
+            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects@1:create_project", "lenso.projects@1:create_issue", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
         ),
         organization(
             json!({"schema":format!("{prefix}_organization"),"database_url_secret":"auth/database-url","admin_callers":["caller"],"directory_callers":["caller"],"membership_admin_callers":["caller"]}),
@@ -349,7 +350,9 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
                 | directory::CAPABILITY_ID
                 | issuer::CAPABILITY_ID
                 | delegation::CAPABILITY_ID => "account",
-                lenso_capability_organization_membership::CAPABILITY_ID => "organization",
+                org_directory::CAPABILITY_ID
+                | lenso_capability_organization_membership::CAPABILITY_ID
+                | org_members::CAPABILITY_ID => "organization",
                 lenso_capability_access_control::CAPABILITY_ID => "acl",
                 projects::CAPABILITY_ID
                 | lenso_capability_projects_collaboration::CAPABILITY_ID
@@ -731,6 +734,9 @@ async fn dispatch(
         ("GET", path) if path.starts_with("/api/projects/") && path.ends_with("/issues") => {
             ("projects-web-caller", "projects.web.issues.list")
         }
+        ("POST", path) if path.starts_with("/api/projects/") && path.ends_with("/issues") => {
+            ("projects-web-caller", "projects.web.issues.create")
+        }
         ("GET", path)
             if path.starts_with("/api/projects/")
                 && !path.starts_with("/api/projects/catalog/") =>
@@ -796,7 +802,9 @@ async fn dispatch(
                     .collect(),
                 path_parameters: if matches!(
                     route,
-                    "projects.web.projects.detail" | "projects.web.issues.list"
+                    "projects.web.projects.detail"
+                        | "projects.web.issues.list"
+                        | "projects.web.issues.create"
                 ) {
                     vec![http::HandleRequestPathParametersItem {
                         name: "project_id".into(),

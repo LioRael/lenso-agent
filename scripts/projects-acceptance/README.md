@@ -118,8 +118,10 @@ node scripts/projects-acceptance/console-browser.mjs RECEIPT CONSOLE_CHECKOUT OU
 
 This test signs into the disposable business App, grants the Workspace connection,
 reads Issue/activity/workflow data, follows native Console navigation without a
-page reload, creates a project through the real business service, and opens the
-existing mini agent. It also checks theme propagation, cross-organization denial,
-destination override rejection and credential-free browser connection status.
-It resets only the dedicated acceptance Console's Projects connection and creates
-a test project. It does not call a model or mutate production accounts.
+page reload, creates a project through the real business service, carries a bounded
+Observe trace handoff into Projects, creates an Issue through business authorization,
+and opens the existing mini agent with an unsubmitted Issue draft. It also checks
+theme propagation, cross-organization denial, destination override rejection and
+credential-free browser connection status. It resets only the dedicated acceptance
+Console's Projects connection and creates test records. It does not call a model or
+mutate production accounts.
