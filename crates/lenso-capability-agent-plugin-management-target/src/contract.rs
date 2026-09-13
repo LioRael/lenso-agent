@@ -423,6 +423,29 @@ pub struct PublishInstallResponse {
 
 #[derive(lenso::JsonSchema, serde::Deserialize)]
 #[schemars(deny_unknown_fields)]
+pub struct InstallationRequest {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub proposal_digest: String,
+}
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
+pub struct InstallationResponse {
+    #[schemars(length(min = 1, max = 64))]
+    pub agent_id: String,
+    #[schemars(length(min = 1, max = 64))]
+    pub operation_id: String,
+    #[schemars(length(min = 1, max = 32))]
+    pub status: String,
+    #[schemars(length(max = 4096))]
+    pub detail: String,
+    #[schemars(length(min = 71, max = 71))]
+    pub candidate_revision: String,
+}
+
+#[derive(lenso::JsonSchema, serde::Deserialize)]
+#[schemars(deny_unknown_fields)]
 pub struct ProposeRemovalRequest {
     #[schemars(length(min = 1, max = 64))]
     pub agent_id: String,
@@ -547,6 +570,12 @@ pub trait PluginManagementTarget {
         context: lenso::Ctx<'_>,
         request: SetEnabledRequest,
     ) -> Result<SetEnabledResponse, PluginManagementTargetError>;
+
+    async fn installation(
+        &self,
+        context: lenso::Ctx<'_>,
+        request: InstallationRequest,
+    ) -> Result<InstallationResponse, PluginManagementTargetError>;
 
     async fn catalog(
         &self,

@@ -228,7 +228,7 @@ pub struct AgentWebConfig {
     pub plugin_configuration_store: Option<PluginConfigurationStoreConfig>,
     /// Optional remote service selected as the Plugin configuration authority.
     ///
-    /// This conflicts with both injected and SQLite authorities. The service
+    /// This conflicts with both injected and `SQLite` authorities. The service
     /// owns desired-state CAS; the Host Plugin Root remains its exact materialized mirror.
     pub plugin_configuration_remote: Option<RemotePluginConfigurationConfig>,
     /// Exact linked Plugin inventory exposed by this Host build.
@@ -291,6 +291,8 @@ impl TrustedPluginBundle {
 #[derive(Clone, Debug)]
 pub struct AgentWebSurface {
     runtime: WebRuntime,
+    // Keep the target runtime link alive without retaining a Host/channel cycle.
+    _management_runtime: Arc<WebRuntime>,
 }
 
 #[derive(Clone, Debug)]
@@ -982,13 +984,14 @@ impl AgentWebSurface {
                 control
             }
         });
-        let management_target: Arc<dyn PluginManagementTarget> = Arc::new(
-            RoutedPluginManagementTarget::new(plugin_control.clone(), plugin_management_target),
-        );
+        let management_target = Arc::new(RoutedPluginManagementTarget::new(
+            plugin_control.clone(),
+            plugin_management_target,
+        ));
         let host = host.plugin_configuration_authority(Arc::clone(&plugin_configuration_authority));
         let host = with_plugin_management_adapters(
             host,
-            Some(management_target),
+            Some(management_target.clone()),
             agent_tool_target,
             plugin_selection_authority.as_ref(),
         );
@@ -1013,7 +1016,12 @@ impl AgentWebSurface {
                 remote_configuration: remote,
             },
         );
-        Ok(Self { runtime })
+        let management_runtime = Arc::new(runtime.clone());
+        management_target.bind_runtime(&management_runtime);
+        Ok(Self {
+            runtime,
+            _management_runtime: management_runtime,
+        })
     }
 
     /// Returns the same-origin Agent HTTP/SSE routes for composition into a Host router.
@@ -2367,6 +2375,38 @@ struct RuntimeProfileState {
     available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
 }
 
+// Native management tools may request inventory or register a generation while
+// executing. Service those control messages instead of waiting on ourselves.
+async fn execute_agent_tool_with_control(
+    app: &AgentApp,
+    policy: &Arc<RwLock<ToolPolicyDocument>>,
+    request: AgentToolExecuteRequest,
+    commands: &mut mpsc::Receiver<RuntimeCommand>,
+    pending: &mut VecDeque<RuntimeCommand>,
+    plugin_runtime: &mut PluginRuntimeState,
+) -> Result<AgentToolExecuteResponse, String> {
+    let execution = execute_agent_tool_on_app(app, policy, request);
+    tokio::pin!(execution);
+    loop {
+        tokio::select! {
+            result = &mut execution => return result,
+            command = commands.recv() => match command {
+                Some(RuntimeCommand::Plugin(command)) => plugin_runtime.dispatch(app, command),
+                Some(command @ RuntimeCommand::Shutdown { .. }) => {
+                    pending.push_front(command);
+                    return Err("Tool execution interrupted by shutdown".into());
+                }
+                Some(command) => {
+                    if pending.len() < MAX_DEFERRED_RUNTIME_COMMANDS { pending.push_back(command); }
+                    // Dropping a saturated request closes its reply channel. Its
+                    // caller reports unavailability instead of growing a queue.
+                }
+                None => return Err("Agent runtime command channel closed".into()),
+            }
+        }
+    }
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "the actor keeps every serialized runtime command in one auditable dispatch loop"
@@ -2420,7 +2460,15 @@ async fn runtime_actor(
                 let _ = reply.send(result);
             }
             RuntimeCommand::ExecuteTool { reply, request } => {
-                let result = execute_agent_tool_on_app(&app, &policy, request).await;
+                let result = execute_agent_tool_with_control(
+                    &app,
+                    &policy,
+                    request,
+                    &mut commands,
+                    &mut pending,
+                    &mut plugin_runtime,
+                )
+                .await;
                 let _ = reply.send(result);
             }
             RuntimeCommand::TerminalCatalog { reply } => {
@@ -2758,7 +2806,7 @@ async fn runtime_actor(
                                         let _ = reply.send(result);
                                     }
                                     RuntimeCommand::ExecuteTool { reply, request } => {
-                                        let result = execute_agent_tool_on_app(&app, &policy, request).await;
+                                        let result = execute_agent_tool_with_control(&app, &policy, request, &mut commands, &mut pending, &mut plugin_runtime).await;
                                         let _ = reply.send(result);
                                     }
                                     RuntimeCommand::TerminalCatalog { reply } => {
@@ -4088,6 +4136,7 @@ mod tests {
         runtime.control = control.clone().into();
         let surface = AgentWebSurface {
             runtime: runtime.clone(),
+            _management_runtime: Arc::new(runtime.clone()),
         };
 
         for rendered in [

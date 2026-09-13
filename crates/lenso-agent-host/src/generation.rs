@@ -3281,7 +3281,7 @@ fn console_interactive_approval_configuration() -> serde_json::Value {
         "allow_tools": [
             "inspect_app", "list_plugins", "inspect_plugin", "check_plugin_change",
             "list_plugin_changes", "check_plugin_rollback", "list_available_plugins",
-            "check_plugin_install", "check_plugin_removal"
+            "check_plugin_install", "check_plugin_removal", "get_plugin_installation"
         ],
         "ask_tools": [
             "apply_plugin_change", "apply_plugin_rollback", "set_plugin_enabled",
@@ -3924,7 +3924,8 @@ mod tests {
                 "check_plugin_rollback",
                 "list_available_plugins",
                 "check_plugin_install",
-                "check_plugin_removal"
+                "check_plugin_removal",
+                "get_plugin_installation"
             ])
         );
         assert_eq!(
