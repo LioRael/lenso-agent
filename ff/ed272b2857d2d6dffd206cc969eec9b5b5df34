@@ -1,0 +1,25 @@
+apps/lenso-agent-web/src/configuration_service_main.rs
+  s_3724267b9ee00e::t_2a2ecdab9dc96b 31
+apps/lenso-agent-web/src/plugin_control/marketplace.rs
+  s_3724267b9ee00e::t_64bbd6348814ad 705-958
+apps/lenso-agent-web/src/standalone.rs
+  s_3724267b9ee00e::t_efee3614630fbf 51
+crates/lenso-agent-console-plugin-tools-plugin/src/lib.rs
+  s_3724267b9ee00e::t_e3660514544b50 1298-1303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ffed272b2857d2d6dffd206cc969eec9b5b5df34",
+  "prompts": {},
+  "sessions": {
+    "s_3724267b9ee00e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09863-bdc5-7501-9f17-8276e89fcd6d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
