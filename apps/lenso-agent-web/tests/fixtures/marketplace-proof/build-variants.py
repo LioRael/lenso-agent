@@ -28,4 +28,6 @@ for version, prefix, name in [
         if prefix:
             code = code.replace('content: arguments.text,', f'content: format!("{prefix}{{}}", arguments.text),')
         (project / "src/lib.rs").write_text(code)
+        # Packing synchronizes the version offline; resolve a fresh fixture first.
+        subprocess.run([os.environ.get("CARGO", "cargo"), "generate-lockfile", "--manifest-path", str(project / "Cargo.toml")], check=True)
         subprocess.run([os.environ.get("LENSO", "lenso"), "plugin", "pack", "--repo-root", str(project), "--output", str(output / f"proof-{version}.lenso-plugin"), "--json"], check=True)
