@@ -28,7 +28,7 @@ struct Args {
     #[arg(long, value_name = "PATH")]
     root: PathBuf,
 
-    /// Absolute SQLite database path for CAS, proposal, and publication evidence.
+    /// Absolute `SQLite` database path for CAS, proposal, and publication evidence.
     #[arg(long, value_name = "PATH")]
     database: PathBuf,
 

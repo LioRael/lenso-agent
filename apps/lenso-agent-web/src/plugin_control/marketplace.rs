@@ -702,6 +702,260 @@ async fn read_receipt(runtime: WebRuntime, id: String) -> Result<Json<Receipt>, 
     Ok(Json(receipt))
 }
 
+fn entry_id(catalog_id: &str, release: &catalog::Release) -> String {
+    format!(
+        "market:{}",
+        catalog::digest(
+            format!("{catalog_id}\n{}\n{}", release.plugin_id, release.version).as_bytes()
+        )
+    )
+}
+
+fn refresh(store: &mut Store) -> Result<Vec<(String, String, catalog::VerifiedSnapshot)>> {
+    use std::io::Read;
+    let sources = store
+        .policy
+        .catalogs
+        .iter()
+        .map(|c| (c.catalog_id.clone(), c.snapshot_url.clone()))
+        .collect::<Vec<_>>();
+    let mut snapshots = Vec::new();
+    for (id, url) in sources {
+        let envelope = if let Some(url) = url {
+            let url = reqwest::Url::parse(&url)?;
+            let local = url.host_str().is_some_and(|host| {
+                host == "localhost"
+                    || host
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| ip.is_loopback())
+            });
+            ensure!(
+                url.username().is_empty()
+                    && url.password().is_none()
+                    && url.fragment().is_none()
+                    && (url.scheme() == "https" || (url.scheme() == "http" && local)),
+                "catalog requires HTTPS or an explicitly configured loopback source"
+            );
+            let client = reqwest::blocking::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .no_proxy()
+                .timeout(Duration::from_secs(30))
+                .build()?;
+            let response = client
+                .get(url)
+                .header("Accept-Encoding", "identity")
+                .send()?;
+            ensure!(
+                response.status() == reqwest::StatusCode::OK,
+                "catalog did not return HTTP 200"
+            );
+            let mut bytes = Vec::new();
+            response
+                .take(catalog::MAX_ENVELOPE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() <= catalog::MAX_ENVELOPE_BYTES,
+                "catalog exceeds bounds"
+            );
+            String::from_utf8(bytes)?
+        } else {
+            // Only in-process signed fixtures can omit transport configuration.
+            ensure!(cfg!(test), "configured catalog requires snapshot_url");
+            store
+                .connection
+                .query_row("SELECT envelope FROM catalogs WHERE id=?1", [&id], |r| {
+                    r.get(0)
+                })?
+        };
+        let verified = store.accept(&id, &envelope)?;
+        snapshots.push((id, envelope, verified));
+    }
+    Ok(snapshots)
+}
+
+pub(super) fn entries(
+    control: &PluginControl,
+    query: &str,
+) -> Result<Vec<super::TrustedPluginCatalogEntry>, String> {
+    if !control
+        .authority_home
+        .join(".lenso/marketplace-policy.json")
+        .exists()
+    {
+        return Ok(Vec::new());
+    }
+    (|| -> Result<_> {
+        let mut store = Store::open(control)?;
+        let query = query.to_lowercase();
+        let mut entries = Vec::new();
+        for (id, _, snapshot) in refresh(&mut store)? {
+            for release in &snapshot.snapshot().releases {
+                if snapshot
+                    .select(&release.plugin_id, &release.version, now())
+                    .is_err()
+                {
+                    continue;
+                }
+                if !query.is_empty()
+                    && !format!(
+                        "{} {} {}",
+                        release.plugin_id, release.title, release.summary
+                    )
+                    .to_lowercase()
+                    .contains(&query)
+                {
+                    continue;
+                }
+                entries.push(super::TrustedPluginCatalogEntry {
+                    catalog_entry_id: entry_id(&id, release),
+                    package_id: release.plugin_id.clone(),
+                    package_revision: release.version.clone(),
+                    source_digest: release.artifact.digest.clone(),
+                });
+            }
+        }
+        ensure!(entries.len() <= 256, "too many releases; narrow the search");
+        Ok(entries)
+    })()
+    .map_err(|e| e.to_string())
+}
+
+pub(super) fn propose_tool(
+    control: &PluginControl,
+    entry: &str,
+    base: &str,
+) -> Result<super::PluginInstallProposalResponse, String> {
+    (|| -> Result<_> {
+        let mut store = Store::open(control)?;
+        for (id, envelope, snapshot) in refresh(&mut store)? {
+            for release in &snapshot.snapshot().releases {
+                if entry_id(&id, release) != entry {
+                    continue;
+                }
+                let proposal = prepare(
+                    control,
+                    PrepareRequest {
+                        target_id: store.target_id.clone(),
+                        base_revision: base.into(),
+                        catalog_id: id.clone(),
+                        envelope: envelope.clone(),
+                        plugin_id: release.plugin_id.clone(),
+                        version: release.version.clone(),
+                        configuration: empty_object(),
+                    },
+                )?;
+                return Ok(super::PluginInstallProposalResponse {
+                    authority: super::PluginControl::lifecycle_authority(),
+                    base_revision: proposal.base_revision,
+                    candidate_revision: proposal.candidate_revision,
+                    catalog_entry_id: entry.into(),
+                    package_id: release.plugin_id.clone(),
+                    package_revision: release.version.clone(),
+                    proposal_digest: proposal.digest,
+                    source_digest: release.artifact.digest.clone(),
+                    schema: "lenso.agent.plugin-install-proposal.v1",
+                });
+            }
+        }
+        anyhow::bail!("signed catalog entry not found")
+    })()
+    .map_err(|e| e.to_string())
+}
+
+fn reviewed(store: &Store, digest: &str) -> Result<Proposal> {
+    let body: String = store.connection.query_row(
+        "SELECT body FROM proposals WHERE json_extract(body,'$.digest')=?1",
+        [digest],
+        |r| r.get(0),
+    )?;
+    Ok(serde_json::from_str(&body)?)
+}
+
+pub(super) async fn publish_tool(
+    runtime: WebRuntime,
+    request: super::target_contract::PublishInstallRequest,
+) -> Result<super::target_contract::PublishInstallResponse, String> {
+    let control = runtime.plugin_control().map_err(|e| e.detail)?;
+    let entry = request.catalog_entry_id.clone();
+    let base = request.expected_revision.clone();
+    let digest = request.proposal_digest.clone();
+    let (proposal, envelope) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut store = Store::open(&control)?;
+        let proposal = reviewed(&store, &digest)?;
+        ensure!(
+            proposal.base_revision == base
+                && entry_id(&proposal.catalog_id, &proposal.release) == entry,
+            "installation does not match reviewed target and release"
+        );
+        // A retry reads its retained receipt; it cannot publish again after expiry.
+        if store.receipt(&proposal.id)?.is_some() {
+            return Ok((proposal, String::new()));
+        }
+        let envelope = refresh(&mut store)?
+            .into_iter()
+            .find(|(id, _, _)| id == &proposal.catalog_id)
+            .context("catalog no longer configured")?
+            .1;
+        Ok((proposal, envelope))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let Json(inventory) = plugin_inventory(
+        State(runtime.clone()),
+        Query(PluginInventoryQuery { after: None }),
+    )
+    .await
+    .map_err(|e| e.detail)?;
+    let Json(receipt) = apply(
+        runtime,
+        ApplyRequest {
+            target_id: proposal.target_id.clone(),
+            proposal_id: proposal.id.clone(),
+            proposal_digest: proposal.digest.clone(),
+            idempotency_key: proposal.id.clone(),
+            expected_stream_id: inventory.stream_id,
+            envelope,
+        },
+    )
+    .await
+    .map_err(|e| e.detail)?;
+    if receipt.phase == "failed" {
+        return Err(receipt
+            .detail
+            .unwrap_or_else(|| "installation publication failed".into()));
+    }
+    Ok(super::target_contract::PublishInstallResponse {
+        agent_id: request.agent_id,
+        authority: super::lifecycle_authority_contract(PluginControl::lifecycle_authority()),
+        base_revision: proposal.base_revision,
+        catalog_entry_id: request.catalog_entry_id,
+        package_id: proposal.release.plugin_id,
+        package_revision: proposal.release.version,
+        proposal_digest: proposal.digest,
+        revision: proposal.candidate_revision,
+    })
+}
+
+pub(super) async fn status_tool(
+    runtime: WebRuntime,
+    request: super::target_contract::InstallationRequest,
+) -> Result<super::target_contract::InstallationResponse, String> {
+    let control = runtime.plugin_control().map_err(|e| e.detail)?;
+    let store = Store::open(&control).map_err(|e| e.to_string())?;
+    let proposal = reviewed(&store, &request.proposal_digest).map_err(|e| e.to_string())?;
+    let Json(receipt) = read_receipt(runtime, proposal.id)
+        .await
+        .map_err(|e| e.detail)?;
+    Ok(super::target_contract::InstallationResponse {
+        agent_id: request.agent_id,
+        operation_id: receipt.id,
+        status: receipt.phase,
+        detail: receipt.detail.unwrap_or_default(),
+        candidate_revision: receipt.candidate_revision,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -969,258 +1223,4 @@ mod tests {
             surface.shutdown().await.unwrap();
         }).await;
     }
-}
-
-fn entry_id(catalog_id: &str, release: &catalog::Release) -> String {
-    format!(
-        "market:{}",
-        catalog::digest(
-            format!("{catalog_id}\n{}\n{}", release.plugin_id, release.version).as_bytes()
-        )
-    )
-}
-
-fn refresh(store: &mut Store) -> Result<Vec<(String, String, catalog::VerifiedSnapshot)>> {
-    use std::io::Read;
-    let sources = store
-        .policy
-        .catalogs
-        .iter()
-        .map(|c| (c.catalog_id.clone(), c.snapshot_url.clone()))
-        .collect::<Vec<_>>();
-    let mut snapshots = Vec::new();
-    for (id, url) in sources {
-        let envelope = if let Some(url) = url {
-            let url = reqwest::Url::parse(&url)?;
-            let local = url.host_str().is_some_and(|host| {
-                host == "localhost"
-                    || host
-                        .parse::<std::net::IpAddr>()
-                        .is_ok_and(|ip| ip.is_loopback())
-            });
-            ensure!(
-                url.username().is_empty()
-                    && url.password().is_none()
-                    && url.fragment().is_none()
-                    && (url.scheme() == "https" || (url.scheme() == "http" && local)),
-                "catalog requires HTTPS or an explicitly configured loopback source"
-            );
-            let client = reqwest::blocking::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .no_proxy()
-                .timeout(Duration::from_secs(30))
-                .build()?;
-            let response = client
-                .get(url)
-                .header("Accept-Encoding", "identity")
-                .send()?;
-            ensure!(
-                response.status() == reqwest::StatusCode::OK,
-                "catalog did not return HTTP 200"
-            );
-            let mut bytes = Vec::new();
-            response
-                .take(catalog::MAX_ENVELOPE_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)?;
-            ensure!(
-                bytes.len() <= catalog::MAX_ENVELOPE_BYTES,
-                "catalog exceeds bounds"
-            );
-            String::from_utf8(bytes)?
-        } else {
-            // Only in-process signed fixtures can omit transport configuration.
-            ensure!(cfg!(test), "configured catalog requires snapshot_url");
-            store
-                .connection
-                .query_row("SELECT envelope FROM catalogs WHERE id=?1", [&id], |r| {
-                    r.get(0)
-                })?
-        };
-        let verified = store.accept(&id, &envelope)?;
-        snapshots.push((id, envelope, verified));
-    }
-    Ok(snapshots)
-}
-
-pub(super) fn entries(
-    control: &PluginControl,
-    query: &str,
-) -> Result<Vec<super::TrustedPluginCatalogEntry>, String> {
-    if !control
-        .authority_home
-        .join(".lenso/marketplace-policy.json")
-        .exists()
-    {
-        return Ok(Vec::new());
-    }
-    (|| -> Result<_> {
-        let mut store = Store::open(control)?;
-        let query = query.to_lowercase();
-        let mut entries = Vec::new();
-        for (id, _, snapshot) in refresh(&mut store)? {
-            for release in &snapshot.snapshot().releases {
-                if snapshot
-                    .select(&release.plugin_id, &release.version, now())
-                    .is_err()
-                {
-                    continue;
-                }
-                if !query.is_empty()
-                    && !format!(
-                        "{} {} {}",
-                        release.plugin_id, release.title, release.summary
-                    )
-                    .to_lowercase()
-                    .contains(&query)
-                {
-                    continue;
-                }
-                entries.push(super::TrustedPluginCatalogEntry {
-                    catalog_entry_id: entry_id(&id, release),
-                    package_id: release.plugin_id.clone(),
-                    package_revision: release.version.clone(),
-                    source_digest: release.artifact.digest.clone(),
-                });
-            }
-        }
-        ensure!(entries.len() <= 256, "too many releases; narrow the search");
-        Ok(entries)
-    })()
-    .map_err(|e| e.to_string())
-}
-
-pub(super) fn propose_tool(
-    control: &PluginControl,
-    entry: &str,
-    base: &str,
-) -> Result<super::PluginInstallProposalResponse, String> {
-    (|| -> Result<_> {
-        let mut store = Store::open(control)?;
-        for (id, envelope, snapshot) in refresh(&mut store)? {
-            for release in &snapshot.snapshot().releases {
-                if entry_id(&id, release) != entry {
-                    continue;
-                }
-                let proposal = prepare(
-                    control,
-                    PrepareRequest {
-                        target_id: store.target_id.clone(),
-                        base_revision: base.into(),
-                        catalog_id: id.clone(),
-                        envelope: envelope.clone(),
-                        plugin_id: release.plugin_id.clone(),
-                        version: release.version.clone(),
-                        configuration: empty_object(),
-                    },
-                )?;
-                return Ok(super::PluginInstallProposalResponse {
-                    authority: super::PluginControl::lifecycle_authority(),
-                    base_revision: proposal.base_revision,
-                    candidate_revision: proposal.candidate_revision,
-                    catalog_entry_id: entry.into(),
-                    package_id: release.plugin_id.clone(),
-                    package_revision: release.version.clone(),
-                    proposal_digest: proposal.digest,
-                    source_digest: release.artifact.digest.clone(),
-                    schema: "lenso.agent.plugin-install-proposal.v1",
-                });
-            }
-        }
-        anyhow::bail!("signed catalog entry not found")
-    })()
-    .map_err(|e| e.to_string())
-}
-
-fn reviewed(store: &Store, digest: &str) -> Result<Proposal> {
-    let body: String = store.connection.query_row(
-        "SELECT body FROM proposals WHERE json_extract(body,'$.digest')=?1",
-        [digest],
-        |r| r.get(0),
-    )?;
-    Ok(serde_json::from_str(&body)?)
-}
-
-pub(super) async fn publish_tool(
-    runtime: WebRuntime,
-    request: super::target_contract::PublishInstallRequest,
-) -> Result<super::target_contract::PublishInstallResponse, String> {
-    let control = runtime.plugin_control().map_err(|e| e.detail)?;
-    let entry = request.catalog_entry_id.clone();
-    let base = request.expected_revision.clone();
-    let digest = request.proposal_digest.clone();
-    let (proposal, envelope) = tokio::task::spawn_blocking(move || -> Result<_> {
-        let mut store = Store::open(&control)?;
-        let proposal = reviewed(&store, &digest)?;
-        ensure!(
-            proposal.base_revision == base
-                && entry_id(&proposal.catalog_id, &proposal.release) == entry,
-            "installation does not match reviewed target and release"
-        );
-        // A retry reads its retained receipt; it cannot publish again after expiry.
-        if store.receipt(&proposal.id)?.is_some() {
-            return Ok((proposal, String::new()));
-        }
-        let envelope = refresh(&mut store)?
-            .into_iter()
-            .find(|(id, _, _)| id == &proposal.catalog_id)
-            .context("catalog no longer configured")?
-            .1;
-        Ok((proposal, envelope))
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())?;
-    let Json(inventory) = plugin_inventory(
-        State(runtime.clone()),
-        Query(PluginInventoryQuery { after: None }),
-    )
-    .await
-    .map_err(|e| e.detail)?;
-    let Json(receipt) = apply(
-        runtime,
-        ApplyRequest {
-            target_id: proposal.target_id.clone(),
-            proposal_id: proposal.id.clone(),
-            proposal_digest: proposal.digest.clone(),
-            idempotency_key: proposal.id.clone(),
-            expected_stream_id: inventory.stream_id,
-            envelope,
-        },
-    )
-    .await
-    .map_err(|e| e.detail)?;
-    if receipt.phase == "failed" {
-        return Err(receipt
-            .detail
-            .unwrap_or_else(|| "installation publication failed".into()));
-    }
-    Ok(super::target_contract::PublishInstallResponse {
-        agent_id: request.agent_id,
-        authority: super::lifecycle_authority_contract(PluginControl::lifecycle_authority()),
-        base_revision: proposal.base_revision,
-        catalog_entry_id: request.catalog_entry_id,
-        package_id: proposal.release.plugin_id,
-        package_revision: proposal.release.version,
-        proposal_digest: proposal.digest,
-        revision: proposal.candidate_revision,
-    })
-}
-
-pub(super) async fn status_tool(
-    runtime: WebRuntime,
-    request: super::target_contract::InstallationRequest,
-) -> Result<super::target_contract::InstallationResponse, String> {
-    let control = runtime.plugin_control().map_err(|e| e.detail)?;
-    let store = Store::open(&control).map_err(|e| e.to_string())?;
-    let proposal = reviewed(&store, &request.proposal_digest).map_err(|e| e.to_string())?;
-    let Json(receipt) = read_receipt(runtime, proposal.id)
-        .await
-        .map_err(|e| e.detail)?;
-    Ok(super::target_contract::InstallationResponse {
-        agent_id: request.agent_id,
-        operation_id: receipt.id,
-        status: receipt.phase,
-        detail: receipt.detail.unwrap_or_default(),
-        candidate_revision: receipt.candidate_revision,
-    })
 }

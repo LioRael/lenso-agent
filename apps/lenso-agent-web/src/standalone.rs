@@ -48,7 +48,7 @@ struct Args {
     #[arg(long = "trusted-plugin-bundle", value_name = "ID=PATH", action = ArgAction::Append, requires = "plugin_control")]
     trusted_plugin_bundles: Vec<String>,
 
-    /// SQLite store for managed Plugin configuration proposals and publications.
+    /// `SQLite` store for managed Plugin configuration proposals and publications.
     #[arg(long, value_name = "PATH", requires = "plugin_control")]
     plugin_configuration_store: Option<PathBuf>,
 

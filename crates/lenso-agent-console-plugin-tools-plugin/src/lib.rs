@@ -1295,6 +1295,12 @@ fn execution_failed(reason_code: &str, message: &str) -> ExecuteError {
     }
 }
 
+lifecycle_error_mapper!(
+    map_installation_error,
+    PluginManagementTargetInstallationInvocationError,
+    InstallationError
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1321,9 +1327,3 @@ mod tests {
         assert_eq!(requirement["cardinality"], "one");
     }
 }
-
-lifecycle_error_mapper!(
-    map_installation_error,
-    PluginManagementTargetInstallationInvocationError,
-    InstallationError
-);
