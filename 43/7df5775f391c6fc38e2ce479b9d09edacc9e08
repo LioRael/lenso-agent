@@ -1,0 +1,37 @@
+Cargo.lock
+  s_3724267b9ee00e::t_46b07b379ba11d 2926,3086,3905,3986
+apps/lenso-agent-acp/Cargo.toml
+  s_3724267b9ee00e::t_d6ba1b326cf84a 3
+apps/lenso-agent-cli/Cargo.toml
+  s_3724267b9ee00e::t_89d6fa838b3b98 3
+apps/lenso-agent-tui/Cargo.toml
+  s_3724267b9ee00e::t_f9fed851812ff0 3
+apps/lenso-agent-web/Cargo.toml
+  s_3724267b9ee00e::t_a1fafbe71b71c5 3
+apps/lenso-agent-web/tests/web_surface/model_failures.rs
+  s_3724267b9ee00e::t_17e5de29580f1c 568-674
+crates/lenso-agent-model-openai-codex-direct-plugin/src/lib.rs
+  s_3724267b9ee00e::t_2f0f1a8925f379 397,400,405,443,626,634,636-644
+docs/architecture/model-catalog-lifecycle.md
+  s_3724267b9ee00e::t_b12f094fece343 54-58,85-91
+docs/releases/v0.1.12.md
+  s_3724267b9ee00e::t_88e6a559f377d2 1-9
+scripts/install.sh
+  s_3724267b9ee00e::t_eb47c746e983b9 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "437df5775f391c6fc38e2ce479b9d09edacc9e08",
+  "prompts": {},
+  "sessions": {
+    "s_3724267b9ee00e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09863-bdc5-7501-9f17-8276e89fcd6d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
