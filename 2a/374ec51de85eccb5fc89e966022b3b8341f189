@@ -1,0 +1,19 @@
+apps/lenso-agent-web/tests/fixtures/marketplace-proof/build-variants.py
+  s_3724267b9ee00e::t_14eaa240e44f20 31-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2a374ec51de85eccb5fc89e966022b3b8341f189",
+  "prompts": {},
+  "sessions": {
+    "s_3724267b9ee00e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09863-bdc5-7501-9f17-8276e89fcd6d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
