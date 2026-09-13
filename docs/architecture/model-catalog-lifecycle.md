@@ -51,8 +51,11 @@ the content revision unless the normalized projected facts change.
   configured stale bound permits it. No partial catalog is published.
 - **Restart:** the Provider restores only a valid, account-matching snapshot
   within the freshness policy, then revalidates normally. With no acceptable
-  snapshot, startup remains fail-closed until authenticated acquisition
-  succeeds.
+  snapshot, model admission remains unavailable until authenticated acquisition
+  succeeds. With periodic refresh enabled, an acquisition failure leaves the
+  Web recovery UI running and starts managed background retries; it does not
+  retire the App. Synchronous configurations still report acquisition failure
+  to their caller.
 - **Concurrent admission:** admission reads one immutable Host catalog snapshot
   and copies its revision and complete model profile. A concurrent refresh may
   affect the next admission, never the profile already copied.
@@ -79,7 +82,10 @@ fetch timestamp. The managed refresh task revalidates immediately in the
 background, then follows the configured interval. Each Turn still freezes its
 admitted facts.
 
-Missing, invalid, future-dated, mismatched, expired, or disabled caches follow
-the authenticated acquisition path before Ready. Disabling periodic refresh
-also keeps acquisition synchronous. This changes readiness scheduling, not the
-configured maximum cache age or the authority of remote model execution.
+Missing, invalid, future-dated, mismatched, expired, or disabled caches first
+attempt authenticated acquisition. If it fails with periodic refresh enabled,
+the Provider becomes ready with no selectable catalog and retries through its
+managed recovery task. Successful acquisition restores model selection without
+restarting Web. Disabling periodic refresh keeps acquisition synchronous and
+fatal on failure. Recovery never extends the configured maximum cache age or
+admits inference from an expired snapshot.
