@@ -1,0 +1,67 @@
+.cargo/config.toml
+  s_3724267b9ee00e::t_2213ead4116599 1-7
+.github/workflows/quality.yml
+  s_3724267b9ee00e::t_d400e889b29ebc 96-117
+Cargo.lock
+  s_3724267b9ee00e::t_84f9fd499e864e 476-481,1141,1392-1415,4022,4025,4048,4055,4841,4844-4846,4858,5008,5051,5081,5150,5874-5883,7105-7113,7177-7186
+apps/lenso-agent-web/Cargo.toml
+  s_3724267b9ee00e::t_1c1e33721cb532 35-39
+apps/lenso-agent-web/src/configuration_store/profiles.rs
+  s_3724267b9ee00e::t_dc03df68824779 1
+apps/lenso-agent-web/src/lib.rs
+  s_3724267b9ee00e::t_2fa367d7f3115e 231,294-295,987-990,994,1019-1024,2378-2409,2463-2471,2809,4139
+apps/lenso-agent-web/src/plugin_control.rs
+  s_3724267b9ee00e::t_32065800ce75b4 1-2,72,76-79,84-88,151-154,169-171,1215-1233,1289-1308,1310-1311,1313-1317,1331-1349,1351-1362,1364-1368,1379-1396,2835-2841
+apps/lenso-agent-web/src/plugin_control/marketplace.rs
+  s_3724267b9ee00e::t_d98978a19d4ca2 1-1226
+apps/lenso-agent-web/tests/fixtures/marketplace-proof/Cargo.toml
+  s_3724267b9ee00e::t_872ce3cb58ea8f 1-23
+apps/lenso-agent-web/tests/fixtures/marketplace-proof/build-variants.py
+  s_3724267b9ee00e::t_ec3667f1f244a1 1-31
+apps/lenso-agent-web/tests/fixtures/marketplace-proof/src/lib.rs
+  s_3724267b9ee00e::t_83085b36a2cc1b 1-35
+apps/lenso-agent-web/tests/fixtures/marketplace-proof/src/main.rs
+  s_3724267b9ee00e::t_6332f4ddd9016b 1-2
+crates/lenso-agent-console-instructions-plugin/src/lib.rs
+  s_3724267b9ee00e::t_bae7e35cd853fe 28
+crates/lenso-agent-console-plugin-tools-plugin/src/lib.rs
+  s_3724267b9ee00e::t_d4ba1435c5d56a 35-43,401-420,423,464,1324-1329
+crates/lenso-agent-host/src/generation.rs
+  s_3724267b9ee00e::t_607406ede7cfb0 3284,3927-3928
+crates/lenso-agent-host/src/plugin_configuration_authority.rs
+  s_3724267b9ee00e::t_12e48f4947f027 25-32,158-169,175,284,301,318,335,458
+crates/lenso-agent-host/src/plugin_root.rs
+  s_3724267b9ee00e::t_f0b3c333b2cc58 689
+crates/lenso-capability-agent-plugin-management-target/capability.json
+  s_3724267b9ee00e::t_b13afbf4b6cec4 56-62
+crates/lenso-capability-agent-plugin-management-target/schemas/installation-error.schema.json
+  s_3724267b9ee00e::t_8c1cda22ae9e8c 1-16
+crates/lenso-capability-agent-plugin-management-target/schemas/installation-request.schema.json
+  s_3724267b9ee00e::t_10cd408f008d1b 1-19
+crates/lenso-capability-agent-plugin-management-target/schemas/installation-response.schema.json
+  s_3724267b9ee00e::t_46b538105755cb 1-33
+crates/lenso-capability-agent-plugin-management-target/src/contract.rs
+  s_3724267b9ee00e::t_dd87f6d4d35ee7 424-446,574-579
+crates/lenso-capability-agent-plugin-management-target/src/generated.rs
+  s_3724267b9ee00e::t_4366c172abcda7 9,19,44,301-345,1007-1029,1438-1504,2129-2135,2286-2314,2580,2619-2625,2723-2730,2834-2840,2928,2981-2993,3151,3210-3221,3343,3386,3427-3431,3485,3501-3504,3552,3570-3573,3625-3627,3670-3672,3764-3778
+docs/adr/0110-marketplace-target-installation-authority.md
+  s_3724267b9ee00e::t_f47765f820193f 1-72
+docs/plugin-marketplace.md
+  s_3724267b9ee00e::t_b13e9b1872362b 1-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "01f0e524f74f65d9ee86780cafd430dbce1bfe41",
+  "prompts": {},
+  "sessions": {
+    "s_3724267b9ee00e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09863-bdc5-7501-9f17-8276e89fcd6d",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
