@@ -194,6 +194,13 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 single_match_else = "allow"
 
+# Each surface links a complete Host. Optimize across crate boundaries and omit
+# symbols from shipped executables; retain the default panic-unwind behavior.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
 # Host startup verifies large debug executables; keep that integrity path fast.
 [profile.dev.package.sha2]
 opt-level = 3
