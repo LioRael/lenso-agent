@@ -1,0 +1,7 @@
+# Immutable development cohort; replace with released minimum versions before
+# registry publication. A clean checkout must not require sibling worktrees.
+[patch.crates-io]
+lenso-cli = { git = "https://github.com/LioRael/lenso-cli.git", rev = "3b1c3948d65f716b480fb11b45a52835c8ae8c39" }
+lenso-plugin-bundle = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a78f1f399825f152708ad091cf6196e5670383f5" }
+lenso-process-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a78f1f399825f152708ad091cf6196e5670383f5" }
+lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a78f1f399825f152708ad091cf6196e5670383f5" }

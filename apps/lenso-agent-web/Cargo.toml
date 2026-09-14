@@ -32,6 +32,11 @@ standalone = ["dep:lenso-agent-default-plugins"]
 console-standalone = ["dep:lenso-agent-console-plugins"]
 
 [dependencies]
+rustix = { version = "1.1", features = ["fs"] }
+lenso-plugin-bundle.workspace = true
+ed25519-dalek = "2.2"
+hex = "0.4"
+tempfile.workspace = true
 lenso-agent-skills-filesystem-plugin = { path = "../../crates/lenso-agent-skills-filesystem-plugin" }
 lenso.workspace = true
 lenso-agent-interactive-approval-hook-plugin = { path = "../../crates/lenso-agent-interactive-approval-hook-plugin" }
@@ -80,4 +85,3 @@ workspace = true
 [dev-dependencies]
 tokio-tungstenite.workspace = true
 lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
-tempfile.workspace = true

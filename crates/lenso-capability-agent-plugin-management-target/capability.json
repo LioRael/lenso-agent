@@ -54,6 +54,13 @@
       "domain_error_schema": "schemas/set-enabled-error.schema.json"
     },
     {
+      "name": "installation",
+      "interaction": "request",
+      "request_schema": "schemas/installation-request.schema.json",
+      "response_schema": "schemas/installation-response.schema.json",
+      "domain_error_schema": "schemas/installation-error.schema.json"
+    },
+    {
       "name": "catalog",
       "interaction": "request",
       "request_schema": "schemas/catalog-request.schema.json",

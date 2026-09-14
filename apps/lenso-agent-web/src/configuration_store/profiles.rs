@@ -1,4 +1,4 @@
-//! Named Profile drafts are owned by the configured SQLite authority.
+//! Named Profile drafts are owned by the configured `SQLite` authority.
 use super::{
     Connection, Context, OptionalExtension, Path, SqlitePluginConfigurationAuthority, bail, fs,
     params,

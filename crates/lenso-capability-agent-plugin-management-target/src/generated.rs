@@ -6,7 +6,7 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.plugin-management-target@1";
 pub const DESCRIPTOR_VERSION: &str = "1.2.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:0bafd6399c8e1f642f3b99fedae64600c07d138eadc238d33c0c38598941a293";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:907f925e53ce75caad02c4881d7428f3603485bc697d2b576e57993029ea326b";
 pub const PORTABLE: bool = false;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const PLUGIN_MANAGEMENT_TARGET_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,7 +16,7 @@ pub const PLUGIN_MANAGEMENT_TARGET_CONTRACT: CapabilityReference<PluginManagemen
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_plugin_management_target { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"operations\":[\"catalog\",\"history\",\"inspect\",\"propose\",\"propose_install\",\"propose_removal\",\"propose_rollback\",\"publish\",\"publish_install\",\"publish_removal\",\"publish_rollback\",\"set_enabled\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_plugin_management_target { () => { "{\"capability_id\":\"lenso.agent.plugin-management-target@1\",\"descriptor_version\":\"1.2.0\",\"operations\":[\"catalog\",\"history\",\"inspect\",\"installation\",\"propose\",\"propose_install\",\"propose_removal\",\"propose_rollback\",\"publish\",\"publish_install\",\"publish_removal\",\"publish_rollback\",\"set_enabled\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
@@ -41,6 +41,7 @@ macro_rules! __lenso_required_many_plugin_management_target_client {
 pub const CATALOG_OPERATION: &str = "catalog";
 pub const HISTORY_OPERATION: &str = "history";
 pub const INSPECT_OPERATION: &str = "inspect";
+pub const INSTALLATION_OPERATION: &str = "installation";
 pub const PROPOSE_OPERATION: &str = "propose";
 pub const PROPOSE_INSTALL_OPERATION: &str = "propose_install";
 pub const PROPOSE_REMOVAL_OPERATION: &str = "propose_removal";
@@ -283,6 +284,51 @@ pub struct PluginInstanceInspection {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum InspectError {
+    AlreadySelected,
+    Conflict,
+    InvalidRequest,
+    NotDisableable,
+    PluginNotFound,
+    ProposalMismatch,
+    ProposalNotReady,
+    PublicationNotFound,
+    TargetNotFound,
+    TargetUnavailable,
+    Unsupported,
+    Unknown(UnknownDomainError),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InstallationRequest {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "proposal_digest")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub proposal_digest: String,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct InstallationResponse {
+    #[serde(rename = "agent_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub agent_id: String,
+    #[serde(rename = "candidate_revision")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub candidate_revision: String,
+    #[serde(rename = "detail")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub detail: String,
+    #[serde(rename = "operation_id")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub operation_id: String,
+    #[serde(rename = "status")]
+    #[serde(deserialize_with = "lenso_contract_runtime::serde::deserialize_required")]
+    pub status: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum InstallationError {
     AlreadySelected,
     Conflict,
     InvalidRequest,
@@ -959,6 +1005,29 @@ impl RequestCapability for PluginManagementTargetInspect {
 }
 
 #[derive(Debug)]
+pub struct PluginManagementTargetInstallation;
+impl RequestCapability for PluginManagementTargetInstallation {
+    type Request = InstallationRequest;
+    type Response = InstallationResponse;
+    type DomainError = InstallationError;
+    const ID: &'static str = CAPABILITY_ID;
+    const DESCRIPTOR_VERSION: &'static str = DESCRIPTOR_VERSION;
+
+    fn invoke_native(endpoint: &dyn NativeRequestEndpoint, operation: &str, request: Self::Request, context: InvocationContext) -> NativeRequestFuture<Self> {
+        if operation != INSTALLATION_OPERATION {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        }
+        let Some(typed_endpoint) = endpoint
+            .typed_endpoint()
+            .and_then(|endpoint| endpoint.downcast_ref::<PluginManagementTargetRequestEndpoint>())
+        else {
+            return lenso_kernel::invoke_typed_or_erased_native_request::<Self>(endpoint, operation, request, context);
+        };
+        Rc::clone(&typed_endpoint.provider).installation(context, request)
+    }
+}
+
+#[derive(Debug)]
 pub struct PluginManagementTargetPropose;
 impl RequestCapability for PluginManagementTargetPropose {
     type Request = ProposeRequest;
@@ -1333,6 +1402,73 @@ impl serde::Serialize for InspectError {
 }
 
 impl<'de> serde::Deserialize<'de> for InspectError {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = <serde_json::Value as serde::Deserialize>::deserialize(deserializer)?;
+        match value {
+            serde_json::Value::String(code) => match code.as_str() {
+                "already_selected" => Ok(Self::AlreadySelected),
+                "conflict" => Ok(Self::Conflict),
+                "invalid_request" => Ok(Self::InvalidRequest),
+                "not_disableable" => Ok(Self::NotDisableable),
+                "plugin_not_found" => Ok(Self::PluginNotFound),
+                "proposal_mismatch" => Ok(Self::ProposalMismatch),
+                "proposal_not_ready" => Ok(Self::ProposalNotReady),
+                "publication_not_found" => Ok(Self::PublicationNotFound),
+                "target_not_found" => Ok(Self::TargetNotFound),
+                "target_unavailable" => Ok(Self::TargetUnavailable),
+                "unsupported" => Ok(Self::Unsupported),
+                _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
+            },
+            serde_json::Value::Object(mut object) => {
+                let Some(code) = object.remove("code").and_then(|value| value.as_str().map(ToOwned::to_owned)) else {
+                    return Err(serde::de::Error::custom("Domain Error object is missing a string code"));
+                };
+                let payload = object.remove("payload");
+                let extra = object.into_iter().collect::<std::collections::BTreeMap<_, _>>();
+                Ok(Self::Unknown(UnknownDomainError { code, payload, extra }))
+            }
+            other => Err(serde::de::Error::custom(format!("Domain Error must be a string or object, got {other}"))),
+        }
+    }
+}
+
+impl serde::Serialize for InstallationError {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        match self {
+            Self::AlreadySelected => serializer.serialize_str("already_selected"),
+            Self::Conflict => serializer.serialize_str("conflict"),
+            Self::InvalidRequest => serializer.serialize_str("invalid_request"),
+            Self::NotDisableable => serializer.serialize_str("not_disableable"),
+            Self::PluginNotFound => serializer.serialize_str("plugin_not_found"),
+            Self::ProposalMismatch => serializer.serialize_str("proposal_mismatch"),
+            Self::ProposalNotReady => serializer.serialize_str("proposal_not_ready"),
+            Self::PublicationNotFound => serializer.serialize_str("publication_not_found"),
+            Self::TargetNotFound => serializer.serialize_str("target_not_found"),
+            Self::TargetUnavailable => serializer.serialize_str("target_unavailable"),
+            Self::Unsupported => serializer.serialize_str("unsupported"),
+            Self::Unknown(value) => {
+                let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
+                map.serialize_entry("code", &value.code)?;
+                if let Some(payload) = &value.payload {
+                    map.serialize_entry("payload", payload)?;
+                }
+                for (key, extra) in &value.extra {
+                    map.serialize_entry(key, extra)?;
+                }
+                map.end()
+            },
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for InstallationError {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -1990,6 +2126,13 @@ pub fn decode_inspect_response(wire: &str) -> Result<InspectResponse, serde_json
 pub fn encode_inspect_error(value: &InspectError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_inspect_error(wire: &str) -> Result<InspectError, serde_json::Error> { decode_portable_json(wire) }
 
+pub fn encode_installation_request(value: &InstallationRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_installation_request(wire: &str) -> Result<InstallationRequest, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_installation_response(value: &InstallationResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_installation_response(wire: &str) -> Result<InstallationResponse, serde_json::Error> { decode_portable_json(wire) }
+pub fn encode_installation_error(value: &InstallationError) -> Result<String, serde_json::Error> { encode_portable_json(value) }
+pub fn decode_installation_error(wire: &str) -> Result<InstallationError, serde_json::Error> { decode_portable_json(wire) }
+
 pub fn encode_propose_request(value: &ProposeRequest) -> Result<String, serde_json::Error> { encode_portable_json(value) }
 pub fn decode_propose_request(wire: &str) -> Result<ProposeRequest, serde_json::Error> { decode_portable_json(wire) }
 pub fn encode_propose_response(value: &ProposeResponse) -> Result<String, serde_json::Error> { encode_portable_json(value) }
@@ -2136,6 +2279,35 @@ impl __LensoIntoPluginManagementTargetInspectResult for Result<InspectResponse, 
             Ok(value) => Ok(Ok(value)),
             Err(PluginManagementTargetInspectInvocationError::Domain(error)) => Ok(Err(error)),
             Err(PluginManagementTargetInspectInvocationError::Runtime(error)) => Err(error),
+        }
+    }
+}
+
+#[doc(hidden)]
+pub trait __LensoIntoPluginManagementTargetInstallationResult {
+    fn __lenso_into_result(self) -> Result<Result<InstallationResponse, InstallationError>, RuntimeFailure>;
+}
+impl __LensoIntoPluginManagementTargetInstallationResult for Result<InstallationResponse, InstallationError> {
+    fn __lenso_into_result(self) -> Result<Result<InstallationResponse, InstallationError>, RuntimeFailure> { Ok(self) }
+}
+impl __LensoIntoPluginManagementTargetInstallationResult for Result<Result<InstallationResponse, InstallationError>, RuntimeFailure> {
+    fn __lenso_into_result(self) -> Result<Result<InstallationResponse, InstallationError>, RuntimeFailure> { self }
+}
+impl __LensoIntoPluginManagementTargetInstallationResult for Result<InstallationResponse, lenso_plugin_authoring::PluginError<InstallationError, RuntimeFailure>> {
+    fn __lenso_into_result(self) -> Result<Result<InstallationResponse, InstallationError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(lenso_plugin_authoring::PluginError::Domain(error)) => Ok(Err(error)),
+            Err(lenso_plugin_authoring::PluginError::Runtime(error)) => Err(error),
+        }
+    }
+}
+impl __LensoIntoPluginManagementTargetInstallationResult for Result<InstallationResponse, PluginManagementTargetInstallationInvocationError> {
+    fn __lenso_into_result(self) -> Result<Result<InstallationResponse, InstallationError>, RuntimeFailure> {
+        match self {
+            Ok(value) => Ok(Ok(value)),
+            Err(PluginManagementTargetInstallationInvocationError::Domain(error)) => Ok(Err(error)),
+            Err(PluginManagementTargetInstallationInvocationError::Runtime(error)) => Err(error),
         }
     }
 }
@@ -2405,6 +2577,7 @@ pub trait PluginManagementTargetProvider: fmt::Debug + 'static {
     fn catalog(&self, context: InvocationContext, request: CatalogRequest) -> NativeRequestFuture<PluginManagementTargetCatalog>;
     fn history(&self, context: InvocationContext, request: HistoryRequest) -> NativeRequestFuture<PluginManagementTargetHistory>;
     fn inspect(&self, context: InvocationContext, request: InspectRequest) -> NativeRequestFuture<PluginManagementTargetInspect>;
+    fn installation(&self, context: InvocationContext, request: InstallationRequest) -> NativeRequestFuture<PluginManagementTargetInstallation>;
     fn propose(&self, context: InvocationContext, request: ProposeRequest) -> NativeRequestFuture<PluginManagementTargetPropose>;
     fn propose_install(&self, context: InvocationContext, request: ProposeInstallRequest) -> NativeRequestFuture<PluginManagementTargetProposeInstall>;
     fn propose_removal(&self, context: InvocationContext, request: ProposeRemovalRequest) -> NativeRequestFuture<PluginManagementTargetProposeRemoval>;
@@ -2441,6 +2614,13 @@ macro_rules! __lenso_native_lower_plugin_management_target {
             ::std::boxed::Box::pin(async move {
                 let result = <$plugin>::inspect(&plugin, context, request).await;
                 $crate::__LensoIntoPluginManagementTargetInspectResult::__lenso_into_result(result)
+            })
+        }
+        fn installation(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::InstallationRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetInstallation> {
+            let plugin = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let result = <$plugin>::installation(&plugin, context, request).await;
+                $crate::__LensoIntoPluginManagementTargetInstallationResult::__lenso_into_result(result)
             })
         }
         fn propose(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPropose> {
@@ -2538,6 +2718,14 @@ macro_rules! __lenso_native_lower_object_plugin_management_target {
                 let plugin = object.get()?;
                 let result = <$plugin>::inspect(plugin.as_ref(), context, request).await;
                 $crate::__LensoIntoPluginManagementTargetInspectResult::__lenso_into_result(result)
+            })
+        }
+        fn installation(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::InstallationRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetInstallation> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                let result = <$plugin>::installation(plugin.as_ref(), context, request).await;
+                $crate::__LensoIntoPluginManagementTargetInstallationResult::__lenso_into_result(result)
             })
         }
         fn propose(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPropose> {
@@ -2643,6 +2831,13 @@ macro_rules! __lenso_native_lower_trait_object_plugin_management_target {
                 <$plugin as $crate::PluginManagementTargetProvider>::inspect(plugin.as_ref(), context, request).await
             })
         }
+        fn installation(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::InstallationRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetInstallation> {
+            let object = self.clone();
+            ::std::boxed::Box::pin(async move {
+                let plugin = object.get()?;
+                <$plugin as $crate::PluginManagementTargetProvider>::installation(plugin.as_ref(), context, request).await
+            })
+        }
         fn propose(&self, context: __LensoNativeSupportPluginManagementTarget::InvocationContext, request: $crate::ProposeRequest) -> __LensoNativeSupportPluginManagementTarget::NativeRequestFuture<$crate::PluginManagementTargetPropose> {
             let object = self.clone();
             ::std::boxed::Box::pin(async move {
@@ -2730,6 +2925,7 @@ impl<P: PluginManagementTargetProvider> NativeRequestEndpoint for PluginManageme
         CATALOG_OPERATION,
         HISTORY_OPERATION,
         INSPECT_OPERATION,
+        INSTALLATION_OPERATION,
         PROPOSE_OPERATION,
         PROPOSE_INSTALL_OPERATION,
         PROPOSE_REMOVAL_OPERATION,
@@ -2774,6 +2970,19 @@ impl<P: PluginManagementTargetProvider> NativeRequestEndpoint for PluginManageme
                     return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
                 };
                 let invocation = Rc::clone(&self.provider).inspect(context, *request);
+                Box::pin(async move {
+                    invocation.await.map(|result| {
+                        result
+                            .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                            .map_err(|error| Box::new(error) as Box<dyn std::any::Any>)
+                    })
+                })
+            },
+            INSTALLATION_OPERATION => {
+                let Ok(request) = request.downcast::<InstallationRequest>() else {
+                    return Box::pin(futures::future::ready(Err(RuntimeFailure::ProtocolViolation { capability: CAPABILITY_ID })));
+                };
+                let invocation = Rc::clone(&self.provider).installation(context, *request);
                 Box::pin(async move {
                     invocation.await.map(|result| {
                         result
@@ -2939,6 +3148,7 @@ pub struct PluginManagementTargetClient {
     catalog: NativeRequestHandle<PluginManagementTargetCatalog>,
     history: NativeRequestHandle<PluginManagementTargetHistory>,
     inspect: NativeRequestHandle<PluginManagementTargetInspect>,
+    installation: NativeRequestHandle<PluginManagementTargetInstallation>,
     propose: NativeRequestHandle<PluginManagementTargetPropose>,
     propose_install: NativeRequestHandle<PluginManagementTargetProposeInstall>,
     propose_removal: NativeRequestHandle<PluginManagementTargetProposeRemoval>,
@@ -2995,6 +3205,18 @@ impl PluginManagementTargetClient {
         self.inspect.invoke_with_context(INSPECT_OPERATION, context, request).await
             .map_err(PluginManagementTargetInspectInvocationError::Runtime)?
             .map_err(PluginManagementTargetInspectInvocationError::Domain)
+    }
+
+    pub async fn installation(&self, request: InstallationRequest) -> Result<InstallationResponse, PluginManagementTargetInstallationInvocationError> {
+        self.installation.invoke(INSTALLATION_OPERATION, request).await
+            .map_err(PluginManagementTargetInstallationInvocationError::Runtime)?
+            .map_err(PluginManagementTargetInstallationInvocationError::Domain)
+    }
+
+    pub async fn installation_with_context(&self, context: InvocationContext, request: InstallationRequest) -> Result<InstallationResponse, PluginManagementTargetInstallationInvocationError> {
+        self.installation.invoke_with_context(INSTALLATION_OPERATION, context, request).await
+            .map_err(PluginManagementTargetInstallationInvocationError::Runtime)?
+            .map_err(PluginManagementTargetInstallationInvocationError::Domain)
     }
 
     pub async fn propose(&self, request: ProposeRequest) -> Result<ProposeResponse, PluginManagementTargetProposeInvocationError> {
@@ -3118,6 +3340,7 @@ impl CapabilityClient for PluginManagementTargetClient {
             catalog: dependencies.one::<PluginManagementTargetCatalog>()?,
             history: dependencies.one::<PluginManagementTargetHistory>()?,
             inspect: dependencies.one::<PluginManagementTargetInspect>()?,
+            installation: dependencies.one::<PluginManagementTargetInstallation>()?,
             propose: dependencies.one::<PluginManagementTargetPropose>()?,
             propose_install: dependencies.one::<PluginManagementTargetProposeInstall>()?,
             propose_removal: dependencies.one::<PluginManagementTargetProposeRemoval>()?,
@@ -3160,6 +3383,7 @@ impl CapabilityClientMany for PluginManagementTargetClient {
                     catalog: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetCatalog>()?,
                     history: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetHistory>()?,
                     inspect: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetInspect>()?,
+                    installation: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetInstallation>()?,
                     propose: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetPropose>()?,
                     propose_install: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetProposeInstall>()?,
                     propose_removal: binding.handle().ok_or(RuntimeFailure::Unavailable { capability: CAPABILITY_ID })?.typed::<PluginManagementTargetProposeRemoval>()?,
@@ -3197,6 +3421,11 @@ pub enum PluginManagementTargetHistoryInvocationError {
 #[derive(Clone, Debug, PartialEq)]
 pub enum PluginManagementTargetInspectInvocationError {
     Domain(InspectError),
+    Runtime(RuntimeFailure),
+}
+#[derive(Clone, Debug, PartialEq)]
+pub enum PluginManagementTargetInstallationInvocationError {
+    Domain(InstallationError),
     Runtime(RuntimeFailure),
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -3253,7 +3482,7 @@ pub struct PluginManagementTargetGuestClient<'a, H: lenso_guest_sdk::HostImports
 impl<'a, H: lenso_guest_sdk::HostImports> PluginManagementTargetGuestClient<'a, H> {
     pub fn from_context(context: &'a lenso_guest_sdk::GuestContext<H>) -> Result<Self, lenso_guest_sdk::GuestError<serde_json::Value>> {
         context
-            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION], &[], &[])
+            .require(CAPABILITY_ID, DESCRIPTOR_VERSION, &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, INSTALLATION_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION], &[], &[])
             .map(|capability| Self { capability })
     }
 
@@ -3267,6 +3496,10 @@ impl<'a, H: lenso_guest_sdk::HostImports> PluginManagementTargetGuestClient<'a, 
 
     pub fn inspect(&self, request: &InspectRequest) -> Result<InspectResponse, lenso_guest_sdk::GuestError<InspectError>> {
         self.capability.request(INSPECT_OPERATION, request)
+    }
+
+    pub fn installation(&self, request: &InstallationRequest) -> Result<InstallationResponse, lenso_guest_sdk::GuestError<InstallationError>> {
+        self.capability.request(INSTALLATION_OPERATION, request)
     }
 
     pub fn propose(&self, request: &ProposeRequest) -> Result<ProposeResponse, lenso_guest_sdk::GuestError<ProposeError>> {
@@ -3316,7 +3549,7 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
 
     fn descriptor_digest(&self) -> &'static str { DESCRIPTOR_DIGEST }
 
-    fn request_operations(&self) -> &'static [&'static str] { &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION] }
+    fn request_operations(&self) -> &'static [&'static str] { &[CATALOG_OPERATION, HISTORY_OPERATION, INSPECT_OPERATION, INSTALLATION_OPERATION, PROPOSE_OPERATION, PROPOSE_INSTALL_OPERATION, PROPOSE_REMOVAL_OPERATION, PROPOSE_ROLLBACK_OPERATION, PUBLISH_OPERATION, PUBLISH_INSTALL_OPERATION, PUBLISH_REMOVAL_OPERATION, PUBLISH_ROLLBACK_OPERATION, SET_ENABLED_OPERATION] }
     fn stream_operations(&self) -> &'static [&'static str] { &[] }
     fn event_operations(&self) -> &'static [&'static str] { &[] }
 
@@ -3332,6 +3565,10 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
             },
             INSPECT_OPERATION => {
                 let value = request.downcast_ref::<InspectRequest>().ok_or_else(runtime_codec_protocol_failure)?;
+                serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
+            },
+            INSTALLATION_OPERATION => {
+                let value = request.downcast_ref::<InstallationRequest>().ok_or_else(runtime_codec_protocol_failure)?;
                 serde_json::to_value(value).map_err(|_| runtime_codec_protocol_failure())
             },
             PROPOSE_OPERATION => {
@@ -3385,6 +3622,9 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
             INSPECT_OPERATION => serde_json::from_value::<InspectResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
+            INSTALLATION_OPERATION => serde_json::from_value::<InstallationResponse>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
             PROPOSE_OPERATION => serde_json::from_value::<ProposeResponse>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
@@ -3425,6 +3665,9 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             INSPECT_OPERATION => serde_json::from_value::<InspectError>(value)
+                .map(|value| Box::new(value) as Box<dyn std::any::Any>)
+                .map_err(|_| runtime_codec_protocol_failure()),
+            INSTALLATION_OPERATION => serde_json::from_value::<InstallationError>(value)
                 .map(|value| Box::new(value) as Box<dyn std::any::Any>)
                 .map_err(|_| runtime_codec_protocol_failure()),
             PROPOSE_OPERATION => serde_json::from_value::<ProposeError>(value)
@@ -3516,6 +3759,21 @@ impl lenso_runtime_codec::JsonCapabilityCodec for PluginManagementTargetJsonCode
                     let request = request?;
                     let handle = dependency.typed::<PluginManagementTargetInspect>()?;
                     match handle.invoke_with_context(INSPECT_OPERATION, context, request).await? {
+                        Ok(response) => serde_json::to_value(response)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                        Err(error) => serde_json::to_value(error)
+                            .map(lenso_runtime_codec::JsonInvocationOutcome::DomainError)
+                            .map_err(|_| runtime_codec_protocol_failure()),
+                    }
+                })
+            },
+            INSTALLATION_OPERATION => {
+                let request = serde_json::from_value::<InstallationRequest>(request).map_err(|_| runtime_codec_protocol_failure());
+                Box::pin(async move {
+                    let request = request?;
+                    let handle = dependency.typed::<PluginManagementTargetInstallation>()?;
+                    match handle.invoke_with_context(INSTALLATION_OPERATION, context, request).await? {
                         Ok(response) => serde_json::to_value(response)
                             .map(lenso_runtime_codec::JsonInvocationOutcome::Success)
                             .map_err(|_| runtime_codec_protocol_failure()),

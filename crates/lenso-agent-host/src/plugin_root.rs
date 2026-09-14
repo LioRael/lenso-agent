@@ -686,11 +686,7 @@ fn read_bundle_descriptor(path: &Path, plugin_id: &str) -> Result<PluginDescript
 
 fn implementation_policy() -> ImplementationPolicy {
     ImplementationPolicy {
-        host_target: format!(
-            "{}-unknown-{}",
-            std::env::consts::ARCH,
-            std::env::consts::OS
-        ),
+        host_target: lenso_app_authoring::native_host_target().to_owned(),
         runtimes: [
             ("lenso.quickjs@1", "lenso.quickjs@1"),
             ("lenso.process@1", "lenso.process-stdio@2"),
