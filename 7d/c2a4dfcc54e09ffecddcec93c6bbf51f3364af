@@ -1,0 +1,31 @@
+.github/workflows/release.yml
+  s_f20b1a187f6c7e::t_841690c3cee9e4 201
+  s_f20b1a187f6c7e::t_99ddce30d49c33 163-167
+scripts/report-release-size.py
+  s_f20b1a187f6c7e::t_9277b0625c8bb7 1-15,21-24,26,32-35,39-44
+  s_f20b1a187f6c7e::t_565896d3af4a54 16-20,25,27-31,36-38
+docs/architecture/release-size.md
+  s_f20b1a187f6c7e::t_242fbba656325a 87-99
+  s_f20b1a187f6c7e::t_565896d3af4a54 3-6,18-20
+  s_f20b1a187f6c7e::t_12e3e6c585e441 61-86
+  s_f20b1a187f6c7e::t_59188847e461e4 1-2,7-17,21-60
+  s_f20b1a187f6c7e::t_e23595bdbb0e71 100-153
+Cargo.toml
+  s_f20b1a187f6c7e::t_2c899f2a182bfa 197-203
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "7dc2a4dfcc54e09ffecddcec93c6bbf51f3364af",
+  "prompts": {},
+  "sessions": {
+    "s_f20b1a187f6c7e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0a028-3805-7c23-9c30-83f6f3a6ec47",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
