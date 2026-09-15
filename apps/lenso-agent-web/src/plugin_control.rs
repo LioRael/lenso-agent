@@ -1535,6 +1535,11 @@ fn validate_managed_app_root(app_root: &Path) -> Result<(), String> {
 }
 
 fn digest_file(path: &Path) -> Result<String, String> {
+    if path.is_dir() {
+        return lenso_plugin_bundle::verify_bundle_directory(path)
+            .map(|bundle| bundle.manifest_digest)
+            .map_err(|error| format!("failed to verify trusted Plugin Bundle: {error}"));
+    }
     let bytes = fs::read(path).map_err(|error| {
         format!(
             "failed to read trusted Plugin Bundle {}: {error}",
@@ -3507,6 +3512,41 @@ mod tests {
     use super::*;
     use crate::plugin_control_api::fixture_desired_selection;
     use lenso_app_authoring::LocalPluginRootAuthority;
+
+    #[test]
+    fn trusted_bundle_directory_digest_verifies_artifact_integrity() {
+        use lenso_app_plan::{ExecutionClassId, authoring::PluginContract};
+        use lenso_plugin_bundle::{
+            SourcePluginImplementation, SourcePluginReleaseBuild,
+            build_source_plugin_release_bundle,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let artifact = root.path().join("plugin.js");
+        fs::write(&artifact, "export default {};").unwrap();
+        let output = root.path().join("bundle");
+        let verified = build_source_plugin_release_bundle(&SourcePluginReleaseBuild {
+            contract: PluginContract::new("example.echo", "1.0.0", "tool-providers")
+                .with_authoring_version(2),
+            implementations: vec![SourcePluginImplementation {
+                id: "bun".into(),
+                host_targets: vec!["*".into()],
+                artifact,
+                bundle_path: "implementations/bun/plugin.js".into(),
+                media_type: "application/javascript".into(),
+                target: "javascript-bun".into(),
+                entrypoint: "plugin.js".into(),
+                execution_class: ExecutionClassId::bun_child_process(),
+                runtime_profile: lenso_app_plan::PLUGIN_AUTHORING_V2_RUNTIME_PROFILE.into(),
+            }],
+            output: output.clone(),
+        })
+        .unwrap();
+        assert_eq!(digest_file(&output).unwrap(), verified.manifest_digest);
+
+        fs::write(output.join("implementations/bun/plugin.js"), "tampered").unwrap();
+        assert!(digest_file(&output).is_err());
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)] // One golden keeps the whole HTTP contract visually adjacent.
