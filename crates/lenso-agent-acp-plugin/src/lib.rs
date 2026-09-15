@@ -32,12 +32,12 @@ mod tests {
                 },
                 {
                     "capability_id": "lenso.agent.user-interaction@2",
-                    "descriptor_version": "2.0.0",
+                    "descriptor_version": "2.1.0",
                     "cardinality": "one"
                 },
                 {
                     "capability_id": "lenso.agent.session@1",
-                    "descriptor_version": "1.8.0",
+                    "descriptor_version": "1.9.0",
                     "cardinality": "one"
                 }
             ])

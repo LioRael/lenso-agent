@@ -11,6 +11,7 @@ rust-version.workspace = true
 plugin-id = "lenso.agent.business-connection"
 root-slot = "tool-providers"
 [dependencies]
+lenso-auth-sdk = "0.2.3"
 lenso.workspace = true
 lenso-kernel.workspace = true
 lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }

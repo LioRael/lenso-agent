@@ -2,25 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "RenameSessionError",
   "oneOf": [
-    { "const": "invalid_session_id" },
-    { "const": "not_found" },
-    { "const": "invalid_title" },
-    { "const": "invalid_revision" },
+    {
+      "const": "invalid_session_id"
+    },
+    {
+      "const": "not_found"
+    },
+    {
+      "const": "invalid_title"
+    },
+    {
+      "const": "invalid_revision"
+    },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "payload"],
+      "required": [
+        "code",
+        "payload"
+      ],
       "properties": {
-        "code": { "const": "revision_conflict" },
+        "code": {
+          "const": "revision_conflict"
+        },
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["current_title_revision"],
+          "required": [
+            "current_title_revision"
+          ],
           "properties": {
-            "current_title_revision": { "type": "string", "format": "uint64" }
+            "current_title_revision": {
+              "type": "string",
+              "format": "uint64"
+            }
           }
         }
       }
+    },
+    {
+      "const": "permission_denied"
     }
   ]
 }

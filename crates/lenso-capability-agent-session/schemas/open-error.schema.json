@@ -2,7 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "OpenSessionError",
   "oneOf": [
-    { "const": "invalid_session_id" },
-    { "const": "not_found" }
+    {
+      "const": "invalid_session_id"
+    },
+    {
+      "const": "not_found"
+    },
+    {
+      "const": "permission_denied"
+    }
   ]
 }

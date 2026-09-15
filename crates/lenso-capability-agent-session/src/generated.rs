@@ -5,8 +5,8 @@ use lenso_kernel::{InvocationContext, NativeRequestEndpoint, NativeRequestFuture
 
 use lenso_plugin_authoring::{BoundCapabilityClient, CapabilityClient, CapabilityClientMany, CapabilityReference};
 pub const CAPABILITY_ID: &str = "lenso.agent.session@1";
-pub const DESCRIPTOR_VERSION: &str = "1.8.0";
-pub const DESCRIPTOR_DIGEST: &str = "sha256:be84f412ce56324088c6154fc89b60af8dc4c67ccd11019c432dd1787d2692cb";
+pub const DESCRIPTOR_VERSION: &str = "1.9.0";
+pub const DESCRIPTOR_DIGEST: &str = "sha256:89b5389720708bd17f0687314c94c209a5035b2aa77b2ccf1682e4c1f261dd74";
 pub const PORTABLE: bool = true;
 pub const CROSS_LANE_TRANSFER: bool = false;
 pub const SESSION_CAPABILITY_ID: &str = CAPABILITY_ID;
@@ -16,26 +16,26 @@ pub const SESSION_CONTRACT: CapabilityReference<SessionClient> = CapabilityRefer
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"operations\":[\"append\",\"list\",\"open\",\"read\",\"rename\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
+macro_rules! __lenso_provided_session { () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.9.0\",\"operations\":[\"append\",\"list\",\"open\",\"read\",\"rename\"],\"operation_kinds\":{},\"default_admission\":{\"queue_capacity\":0,\"max_concurrency\":1},\"operation_admissions\":{},\"event_admission\":null,\"cross_lane_transfer\":false}" }; }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_session_client {
-    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"one\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"one\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.9.0\",\"cardinality\":\"one\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.9.0\",\"cardinality\":\"one\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_optional_session_client {
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"optional\"}") };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.9.0\",\"cardinality\":\"optional\"}") };
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __lenso_required_many_session_client {
-    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"many\"}" };
-    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.8.0\",\"cardinality\":\"many\"}") };
+    () => { "{\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.9.0\",\"cardinality\":\"many\"}" };
+    ($requirement_id:literal) => { concat!("{\"requirement_id\":", stringify!($requirement_id), ",\"capability_id\":\"lenso.agent.session@1\",\"descriptor_version\":\"1.9.0\",\"cardinality\":\"many\"}") };
 }
 
 pub const APPEND_OPERATION: &str = "append";
@@ -137,6 +137,7 @@ pub struct AppendErrorRevisionConflictPayload {
 pub enum AppendError {
     InvalidEvent,
     NotFound,
+    PermissionDenied,
     RevisionConflict { payload: AppendErrorRevisionConflictPayload },
     Unknown(UnknownDomainError),
 }
@@ -181,6 +182,7 @@ pub struct ListSessionsResponseSessionsItem {
 pub enum ListError {
     InvalidCursor,
     InvalidLimit,
+    PermissionDenied,
     Unknown(UnknownDomainError),
 }
 
@@ -211,6 +213,7 @@ pub struct OpenSessionResponse {
 pub enum OpenError {
     InvalidSessionId,
     NotFound,
+    PermissionDenied,
     Unknown(UnknownDomainError),
 }
 
@@ -312,6 +315,7 @@ pub enum ReadSessionResponseEventsItemKind {
 pub enum ReadError {
     InvalidCursor,
     NotFound,
+    PermissionDenied,
     Unknown(UnknownDomainError),
 }
 
@@ -351,6 +355,7 @@ pub enum RenameError {
     InvalidSessionId,
     InvalidTitle,
     NotFound,
+    PermissionDenied,
     RevisionConflict { payload: RenameErrorRevisionConflictPayload },
     Unknown(UnknownDomainError),
 }
@@ -479,6 +484,7 @@ impl serde::Serialize for AppendError {
         match self {
             Self::InvalidEvent => serializer.serialize_str("invalid_event"),
             Self::NotFound => serializer.serialize_str("not_found"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::RevisionConflict { payload } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("code", "revision_conflict")?;
@@ -510,6 +516,7 @@ impl<'de> serde::Deserialize<'de> for AppendError {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_event" => Ok(Self::InvalidEvent),
                 "not_found" => Ok(Self::NotFound),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {
@@ -543,6 +550,7 @@ impl serde::Serialize for ListError {
         match self {
             Self::InvalidCursor => serializer.serialize_str("invalid_cursor"),
             Self::InvalidLimit => serializer.serialize_str("invalid_limit"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
                 map.serialize_entry("code", &value.code)?;
@@ -568,6 +576,7 @@ impl<'de> serde::Deserialize<'de> for ListError {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_cursor" => Ok(Self::InvalidCursor),
                 "invalid_limit" => Ok(Self::InvalidLimit),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {
@@ -592,6 +601,7 @@ impl serde::Serialize for OpenError {
         match self {
             Self::InvalidSessionId => serializer.serialize_str("invalid_session_id"),
             Self::NotFound => serializer.serialize_str("not_found"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
                 map.serialize_entry("code", &value.code)?;
@@ -617,6 +627,7 @@ impl<'de> serde::Deserialize<'de> for OpenError {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_session_id" => Ok(Self::InvalidSessionId),
                 "not_found" => Ok(Self::NotFound),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {
@@ -641,6 +652,7 @@ impl serde::Serialize for ReadError {
         match self {
             Self::InvalidCursor => serializer.serialize_str("invalid_cursor"),
             Self::NotFound => serializer.serialize_str("not_found"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::Unknown(value) => {
                 let mut map = serializer.serialize_map(Some(1 + usize::from(value.payload.is_some()) + value.extra.len()))?;
                 map.serialize_entry("code", &value.code)?;
@@ -666,6 +678,7 @@ impl<'de> serde::Deserialize<'de> for ReadError {
             serde_json::Value::String(code) => match code.as_str() {
                 "invalid_cursor" => Ok(Self::InvalidCursor),
                 "not_found" => Ok(Self::NotFound),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {
@@ -692,6 +705,7 @@ impl serde::Serialize for RenameError {
             Self::InvalidSessionId => serializer.serialize_str("invalid_session_id"),
             Self::InvalidTitle => serializer.serialize_str("invalid_title"),
             Self::NotFound => serializer.serialize_str("not_found"),
+            Self::PermissionDenied => serializer.serialize_str("permission_denied"),
             Self::RevisionConflict { payload } => {
                 let mut map = serializer.serialize_map(Some(2))?;
                 map.serialize_entry("code", "revision_conflict")?;
@@ -725,6 +739,7 @@ impl<'de> serde::Deserialize<'de> for RenameError {
                 "invalid_session_id" => Ok(Self::InvalidSessionId),
                 "invalid_title" => Ok(Self::InvalidTitle),
                 "not_found" => Ok(Self::NotFound),
+                "permission_denied" => Ok(Self::PermissionDenied),
                 _ => Ok(Self::Unknown(UnknownDomainError { code, payload: None, extra: std::collections::BTreeMap::new() })),
             },
             serde_json::Value::Object(mut object) => {

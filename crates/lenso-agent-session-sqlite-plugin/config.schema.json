@@ -2,8 +2,30 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["database"],
+  "required": [
+    "database"
+  ],
   "properties": {
-    "database": { "type": "string" }
+    "database": {
+      "type": "string"
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer",
+        "verification_key"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verification_key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
   }
 }

@@ -2,12 +2,19 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AppendSessionError",
   "oneOf": [
-    { "const": "not_found" },
-    { "const": "invalid_event" },
+    {
+      "const": "not_found"
+    },
+    {
+      "const": "invalid_event"
+    },
     {
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "payload"],
+      "required": [
+        "code",
+        "payload"
+      ],
       "properties": {
         "code": {
           "const": "revision_conflict"
@@ -15,7 +22,9 @@
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["current_revision"],
+          "required": [
+            "current_revision"
+          ],
           "properties": {
             "current_revision": {
               "type": "string",
@@ -24,6 +33,9 @@
           }
         }
       }
+    },
+    {
+      "const": "permission_denied"
     }
   ]
 }

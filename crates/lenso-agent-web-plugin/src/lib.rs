@@ -31,7 +31,7 @@ mod tests {
         assert_eq!(
             descriptor["required_capabilities"],
             serde_json::json!([
-                {"capability_id": "lenso.agent.artifact@1", "descriptor_version": "1.0.0", "cardinality": "one"},
+                {"capability_id": "lenso.agent.artifact@1", "descriptor_version": "1.1.0", "cardinality": "one"},
                 {
                     "capability_id": "lenso.agent.auth-connection@1",
                     "descriptor_version": "1.2.0",
@@ -49,12 +49,12 @@ mod tests {
                 },
                 {
                     "capability_id": "lenso.agent.user-interaction@2",
-                    "descriptor_version": "2.0.0",
+                    "descriptor_version": "2.1.0",
                     "cardinality": "one"
                 },
                 {
                     "capability_id": "lenso.agent.session@1",
-                    "descriptor_version": "1.8.0",
+                    "descriptor_version": "1.9.0",
                     "cardinality": "one"
                 },
                 {

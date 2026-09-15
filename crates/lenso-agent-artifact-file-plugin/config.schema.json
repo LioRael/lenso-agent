@@ -2,11 +2,42 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["directory", "max_artifact_bytes", "max_total_bytes", "max_items"],
+  "required": [
+    "directory",
+    "max_artifact_bytes",
+    "max_total_bytes",
+    "max_items"
+  ],
   "properties": {
-    "directory": { "type": "string" },
-    "max_artifact_bytes": { "type": "integer" },
-    "max_total_bytes": { "type": "integer" },
-    "max_items": { "type": "integer" }
+    "directory": {
+      "type": "string"
+    },
+    "max_artifact_bytes": {
+      "type": "integer"
+    },
+    "max_total_bytes": {
+      "type": "integer"
+    },
+    "max_items": {
+      "type": "integer"
+    },
+    "authentication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "issuer",
+        "verification_key"
+      ],
+      "properties": {
+        "issuer": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verification_key": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
   }
 }

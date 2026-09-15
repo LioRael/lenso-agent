@@ -8,6 +8,9 @@ use std::{
 };
 
 use lenso::prelude::*;
+use lenso_auth_sdk::{
+    ActorAssertion, ActorAssertionVerifier, ActorProjectionError, FixedClock, TypedActor,
+};
 use lenso_capability_agent_user_interaction::{
     self as interaction_contract, AnswerError, AnswerRequest, AnswerResponse, AskError, AskRequest,
     AskResponse, InteractionAnswer, InteractiveSurface, PendingInteraction, PendingRequest,
@@ -21,12 +24,76 @@ use tokio::sync::oneshot;
 struct LocalInteractionConfig {
     max_pending: usize,
     timeout_ms: u64,
+    #[serde(default)]
+    authentication: Option<InteractionAuthentication>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InteractionAuthentication {
+    issuer: String,
+    verification_key: String,
+}
+struct InteractionOwner(String);
+impl TypedActor for InteractionOwner {
+    fn from_assertion(assertion: &ActorAssertion) -> Result<Self, ActorProjectionError> {
+        if assertion.actor_kind() != "user" {
+            return Err(ActorProjectionError::UnexpectedActorKind {
+                expected: "user".into(),
+                actual: assertion.actor_kind().into(),
+            });
+        }
+        Ok(Self(
+            serde_json::json!([assertion.issuer(), assertion.subject()]).to_string(),
+        ))
+    }
+}
+impl LocalInteractionConfig {
+    fn owner(
+        &self,
+        context: &InvocationContext,
+        operation: &str,
+    ) -> Result<Option<String>, RuntimeFailure> {
+        let fail = || RuntimeFailure::PluginFailure {
+            detail: "User Interaction authentication required".into(),
+        };
+        let Some(auth) = &self.authentication else {
+            if context
+                .sealed_extension(lenso_auth_sdk::ACTOR_ASSERTION_EXTENSION)
+                .is_some()
+            {
+                return Err(fail());
+            }
+            return Ok(None);
+        };
+        let verifier =
+            ActorAssertionVerifier::from_public_key_base64(&auth.issuer, &auth.verification_key)
+                .map_err(|_| fail())?;
+        let owner = verifier
+            .project_context::<InteractionOwner>(
+                context,
+                interaction_contract::CAPABILITY_ID,
+                operation,
+                &FixedClock::new(time::OffsetDateTime::now_utc()),
+            )
+            .map_err(|_| fail())?;
+        Ok(Some(owner.0))
+    }
 }
 
 fn validate_config(config: &LocalInteractionConfig) -> Result<(), RuntimeFailure> {
     if !(1..=16).contains(&config.max_pending) || !(1..=3_600_000).contains(&config.timeout_ms) {
         return Err(RuntimeFailure::InvalidResolvedPlan {
             detail: "User Interaction limits are invalid".to_owned(),
+        });
+    }
+    if let Some(auth) = &config.authentication
+        && (auth.issuer.is_empty()
+            || ActorAssertionVerifier::from_public_key_base64(&auth.issuer, &auth.verification_key)
+                .is_err())
+    {
+        return Err(RuntimeFailure::InvalidResolvedPlan {
+            detail: "User Interaction assertion configuration is invalid".into(),
         });
     }
     Ok(())
@@ -38,7 +105,8 @@ struct PendingEntry {
     sender: Option<oneshot::Sender<Vec<InteractionAnswer>>>,
 }
 
-type PendingState = Rc<RefCell<BTreeMap<String, PendingEntry>>>;
+type PendingKey = (Option<String>, String);
+type PendingState = Rc<RefCell<BTreeMap<PendingKey, PendingEntry>>>;
 
 #[lenso::plugin(configuration_schema = "config.schema.json", validate = validate_config)]
 #[derive(Clone, Debug)]
@@ -62,16 +130,21 @@ impl UserInteractionProvider for LocalUserInteractionPlugin {
 
     fn pending(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         _: PendingRequest,
     ) -> lenso_kernel::NativeRequestFuture<interaction_contract::UserInteractionPending> {
         let pending = self.pending.clone();
+        let owner = self.config.owner(&context, "pending");
         Box::pin(async move {
+            let Ok(owner) = owner else {
+                return Ok(Err(interaction_contract::PendingError::PermissionDenied));
+            };
             Ok(Ok(PendingResponse {
                 interactions: pending
                     .borrow()
-                    .values()
-                    .map(|entry| PendingInteraction {
+                    .iter()
+                    .filter(|((entry_owner, _), _)| entry_owner == &owner)
+                    .map(|(_, entry)| PendingInteraction {
                         interaction_id: entry.request.interaction_id.clone(),
                         questions: entry.request.questions.clone(),
                     })
@@ -82,11 +155,17 @@ impl UserInteractionProvider for LocalUserInteractionPlugin {
 
     fn answer(
         &self,
-        _: InvocationContext,
+        context: InvocationContext,
         request: AnswerRequest,
     ) -> lenso_kernel::NativeRequestFuture<interaction_contract::UserInteractionAnswer> {
         let pending = self.pending.clone();
-        Box::pin(async move { answer(&pending, request) })
+        let owner = self.config.owner(&context, "answer");
+        Box::pin(async move {
+            match owner {
+                Ok(owner) => answer(&pending, owner, request),
+                Err(_) => Ok(Err(AnswerError::PermissionDenied)),
+            }
+        })
     }
 }
 
@@ -96,6 +175,10 @@ async fn ask(
     context: InvocationContext,
     request: AskRequest,
 ) -> Result<Result<AskResponse, AskError>, RuntimeFailure> {
+    let Ok(owner) = config.owner(&context, "ask") else {
+        return Ok(Err(AskError::PermissionDenied));
+    };
+    let key = (owner, request.interaction_id.clone());
     let interactive = context
         .typed_extension::<InteractiveSurface>()
         .map_err(|error| RuntimeFailure::PluginFailure {
@@ -113,11 +196,11 @@ async fn ask(
         if state.len() >= config.max_pending {
             return Ok(Err(AskError::TooManyPending));
         }
-        if state.contains_key(&request.interaction_id) {
+        if state.contains_key(&key) {
             return Ok(Err(AskError::InvalidRequest));
         }
         state.insert(
-            request.interaction_id.clone(),
+            key.clone(),
             PendingEntry {
                 request: request.clone(),
                 sender: Some(sender),
@@ -125,7 +208,7 @@ async fn ask(
         );
     }
     let _guard = PendingGuard {
-        interaction_id: request.interaction_id,
+        key,
         pending: pending.clone(),
     };
     let cancellation = context.cancellation();
@@ -141,17 +224,19 @@ async fn ask(
 
 fn answer(
     pending: &PendingState,
+    owner: Option<String>,
     request: AnswerRequest,
 ) -> Result<Result<AnswerResponse, AnswerError>, RuntimeFailure> {
+    let key = (owner, request.interaction_id.clone());
     let entry = {
         let mut state = pending.borrow_mut();
-        let Some(entry) = state.get(&request.interaction_id) else {
+        let Some(entry) = state.get(&key) else {
             return Ok(Err(AnswerError::NotFound));
         };
         if !valid_answers(&entry.request, &request.answers) {
             return Ok(Err(AnswerError::InvalidAnswer));
         }
-        state.remove(&request.interaction_id)
+        state.remove(&key)
     };
     let Some(sender) = entry.and_then(|mut entry| entry.sender.take()) else {
         return Ok(Err(AnswerError::NotFound));
@@ -236,13 +321,13 @@ fn valid_answers(request: &AskRequest, answers: &[InteractionAnswer]) -> bool {
 }
 
 struct PendingGuard {
-    interaction_id: String,
+    key: PendingKey,
     pending: PendingState,
 }
 
 impl Drop for PendingGuard {
     fn drop(&mut self) {
-        self.pending.borrow_mut().remove(&self.interaction_id);
+        self.pending.borrow_mut().remove(&self.key);
     }
 }
 
@@ -255,6 +340,7 @@ mod tests {
         LocalInteractionConfig {
             max_pending: 2,
             timeout_ms: 1_000,
+            authentication: None,
         }
     }
 
@@ -277,6 +363,119 @@ mod tests {
                 multi_select: false,
             }],
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one broker lifecycle proves simultaneous users cannot consume each other answers"
+    )]
+    async fn members_cannot_observe_or_answer_each_others_pending_questions() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let issuer =
+                    lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [7; 32]);
+                let plugin = LocalUserInteractionPlugin {
+                    config: LocalInteractionConfig {
+                        authentication: Some(InteractionAuthentication {
+                            issuer: "test.auth".into(),
+                            verification_key: issuer.public_key_base64(),
+                        }),
+                        ..config()
+                    },
+                    pending: PendingState::default(),
+                };
+                let identity = |subject: &str, operation: &str| {
+                    let now = time::OffsetDateTime::now_utc();
+                    issuer
+                        .issue(
+                            subject,
+                            "user",
+                            "password",
+                            vec![lenso_auth_sdk::audience(
+                                interaction_contract::CAPABILITY_ID,
+                                operation,
+                            )],
+                            lenso_auth_sdk::Validity::new(
+                                now - time::Duration::seconds(1),
+                                now + time::Duration::minutes(2),
+                            )
+                            .unwrap(),
+                            BTreeMap::new(),
+                        )
+                        .attach(
+                            InvocationContext::new(1, None, lenso_kernel::CancellationToken::new())
+                                .with_typed_extension(&InteractiveSurface)
+                                .unwrap(),
+                        )
+                        .unwrap()
+                };
+                let alice_task =
+                    tokio::task::spawn_local(plugin.ask(identity("alice", "ask"), request()));
+                tokio::task::yield_now().await;
+                assert!(
+                    plugin
+                        .pending(identity("bob", "pending"), PendingRequest {})
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .interactions
+                        .is_empty()
+                );
+                let response = || AnswerRequest {
+                    interaction_id: "question-1".into(),
+                    answers: vec![InteractionAnswer {
+                        question_id: "mode".into(),
+                        selected_option_ids: vec!["safe".into()],
+                        other: Some(None),
+                    }],
+                };
+                assert_eq!(
+                    plugin
+                        .answer(identity("bob", "answer"), response())
+                        .await
+                        .unwrap(),
+                    Err(AnswerError::NotFound)
+                );
+                assert_eq!(
+                    plugin
+                        .pending(identity("alice", "pending"), PendingRequest {})
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .interactions
+                        .len(),
+                    1
+                );
+                // The same browser-generated interaction ID is valid for a different owner.
+                let bob_task =
+                    tokio::task::spawn_local(plugin.ask(identity("bob", "ask"), request()));
+                tokio::task::yield_now().await;
+                plugin
+                    .answer(identity("bob", "answer"), response())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                bob_task.await.unwrap().unwrap().unwrap();
+                assert_eq!(
+                    plugin
+                        .pending(identity("alice", "pending"), PendingRequest {})
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .interactions
+                        .len(),
+                    1
+                );
+                plugin
+                    .answer(identity("alice", "answer"), response())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                alice_task.await.unwrap().unwrap().unwrap();
+                assert!(plugin.pending.borrow().is_empty());
+            })
+            .await;
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -313,7 +512,7 @@ mod tests {
                     let snapshot = pending.borrow();
                     assert_eq!(snapshot.len(), 1);
                     assert_eq!(
-                        snapshot["question-1"].request.questions[0].prompt,
+                        snapshot[&(None, "question-1".to_owned())].request.questions[0].prompt,
                         "Choose a mode"
                     );
                 }
@@ -321,6 +520,7 @@ mod tests {
                 assert_eq!(
                     answer(
                         &pending,
+                        None,
                         AnswerRequest {
                             interaction_id: "question-1".to_owned(),
                             answers: vec![InteractionAnswer {
@@ -336,6 +536,7 @@ mod tests {
                 assert_eq!(
                     answer(
                         &pending,
+                        None,
                         AnswerRequest {
                             interaction_id: "question-1".to_owned(),
                             answers: vec![InteractionAnswer {

@@ -221,6 +221,10 @@ fn valid_arguments(arguments: &AskUserArguments) -> bool {
 
 fn map_interaction_error(error: &AskError) -> ExecuteError {
     let (reason_code, message) = match error {
+        AskError::PermissionDenied => (
+            "interaction_permission_denied",
+            "This user interaction is not authorized.",
+        ),
         AskError::Unavailable => (
             "interaction_unavailable",
             "This Agent surface cannot ask the user an interactive question.",

@@ -11,6 +11,9 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use lenso::prelude::*;
+use lenso_auth_sdk::{
+    ActorAssertion, ActorAssertionVerifier, ActorProjectionError, FixedClock, TypedActor,
+};
 use lenso_capability_agent_artifact::{
     self as artifact_contract, PutError, PutRequest, PutResponse, ReadError, ReadRequest,
     ReadResponse,
@@ -29,6 +32,32 @@ struct ArtifactConfig {
     max_artifact_bytes: u64,
     max_total_bytes: u64,
     max_items: usize,
+    #[serde(default)]
+    authentication: Option<ArtifactAuthentication>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ArtifactAuthentication {
+    issuer: String,
+    verification_key: String,
+}
+
+struct ArtifactOwner(String);
+impl TypedActor for ArtifactOwner {
+    fn from_assertion(assertion: &ActorAssertion) -> Result<Self, ActorProjectionError> {
+        if assertion.actor_kind() != "user" {
+            return Err(ActorProjectionError::UnexpectedActorKind {
+                expected: "user".into(),
+                actual: assertion.actor_kind().into(),
+            });
+        }
+        let identity = serde_json::json!([assertion.issuer(), assertion.subject()]).to_string();
+        Ok(Self(format!(
+            "owner-{:x}",
+            Sha256::digest(identity.as_bytes())
+        )))
+    }
 }
 
 fn validate_config(config: &ArtifactConfig) -> Result<(), RuntimeFailure> {
@@ -42,6 +71,13 @@ fn validate_config(config: &ArtifactConfig) -> Result<(), RuntimeFailure> {
             "Artifact storage requires an absolute directory and bounded item and byte limits",
         ));
     }
+    if let Some(auth) = &config.authentication {
+        if auth.issuer.is_empty() {
+            return Err(invalid_plan("Artifact assertion issuer must not be empty"));
+        }
+        ActorAssertionVerifier::from_public_key_base64(&auth.issuer, &auth.verification_key)
+            .map_err(|_| invalid_plan("Artifact assertion verification key is invalid"))?;
+    }
     Ok(())
 }
 
@@ -53,9 +89,42 @@ struct FileArtifactPlugin {
     lock: Rc<RefCell<()>>,
 }
 
+impl FileArtifactPlugin {
+    fn authorized_directory(
+        &self,
+        context: &lenso_kernel::InvocationContext,
+        operation: &str,
+    ) -> Result<PathBuf, RuntimeFailure> {
+        let Some(auth) = &self.config.authentication else {
+            if context
+                .sealed_extension(lenso_auth_sdk::ACTOR_ASSERTION_EXTENSION)
+                .is_some()
+            {
+                return Err(storage_failure("Artifact authentication is not configured"));
+            }
+            return Ok(self.config.directory.clone());
+        };
+        let verifier =
+            ActorAssertionVerifier::from_public_key_base64(&auth.issuer, &auth.verification_key)
+                .map_err(|_| storage_failure("Artifact authentication configuration is invalid"))?;
+        let owner = verifier
+            .project_context::<ArtifactOwner>(
+                context,
+                artifact_contract::CAPABILITY_ID,
+                operation,
+                &FixedClock::new(time::OffsetDateTime::now_utc()),
+            )
+            .map_err(|_| storage_failure("Artifact authentication required"))?;
+        Ok(self.config.directory.join(owner.0))
+    }
+}
+
 #[lenso::provides(artifact_contract::Artifact)]
 impl FileArtifactPlugin {
-    async fn put(&self, _context: Ctx, request: PutRequest) -> PluginResult<PutResponse, PutError> {
+    async fn put(&self, context: Ctx, request: PutRequest) -> PluginResult<PutResponse, PutError> {
+        let directory = self
+            .authorized_directory(&context, "put")
+            .map_err(|_| PluginError::domain(PutError::PermissionDenied))?;
         if !valid_component(&request.session_id, 128)
             || request.name.is_empty()
             || request.name.len() > 256
@@ -75,7 +144,8 @@ impl FileArtifactPlugin {
 
         let _guard = self.lock.borrow_mut();
         ensure_directory(&self.config.directory).map_err(PluginError::runtime)?;
-        let session_directory = self.config.directory.join(&request.session_id);
+        ensure_directory(&directory).map_err(PluginError::runtime)?;
+        let session_directory = directory.join(&request.session_id);
         ensure_directory(&session_directory).map_err(PluginError::runtime)?;
         let digest_hex = format!("{:x}", Sha256::digest(&bytes));
         let path = session_directory.join(&digest_hex);
@@ -84,7 +154,7 @@ impl FileArtifactPlugin {
                 .map_err(PluginError::runtime)?;
         } else {
             prune_to_fit(
-                &self.config.directory,
+                &directory,
                 u64::try_from(bytes.len()).unwrap_or(u64::MAX),
                 self.config.max_total_bytes,
                 self.config.max_items,
@@ -104,9 +174,12 @@ impl FileArtifactPlugin {
 
     async fn read(
         &self,
-        _context: Ctx,
+        context: Ctx,
         request: ReadRequest,
     ) -> PluginResult<ReadResponse, ReadError> {
+        let directory = self
+            .authorized_directory(&context, "read")
+            .map_err(|_| PluginError::domain(ReadError::PermissionDenied))?;
         let (session_id, digest) = parse_handle(&request.handle)
             .ok_or_else(|| PluginError::domain(ReadError::InvalidHandle))?;
         let offset = request
@@ -118,7 +191,9 @@ impl FileArtifactPlugin {
         }
         let _guard = self.lock.borrow_mut();
         ensure_existing_directory(&self.config.directory).map_err(PluginError::runtime)?;
-        let session_directory = self.config.directory.join(session_id);
+        ensure_existing_directory(&directory)
+            .map_err(|_| PluginError::domain(ReadError::NotFound))?;
+        let session_directory = directory.join(session_id);
         ensure_existing_directory(&session_directory).map_err(|error| match error {
             RuntimeFailure::Unavailable { .. } => PluginError::domain(ReadError::NotFound),
             error => PluginError::runtime(error),
@@ -365,6 +440,7 @@ mod tests {
                 max_artifact_bytes: 1024,
                 max_total_bytes: 2048,
                 max_items: 2,
+                authentication: None,
             },
             lock: Rc::new(RefCell::new(())),
         }
@@ -372,6 +448,142 @@ mod tests {
 
     fn context() -> InvocationContext {
         InvocationContext::new(1, None, CancellationToken::new())
+    }
+
+    fn member_context(
+        issuer: &lenso_auth_sdk::ActorAssertionIssuer,
+        subject: &str,
+        operation: &str,
+    ) -> InvocationContext {
+        let now = time::OffsetDateTime::now_utc();
+        issuer
+            .issue(
+                subject,
+                "user",
+                "password",
+                vec![lenso_auth_sdk::audience(
+                    artifact_contract::CAPABILITY_ID,
+                    operation,
+                )],
+                lenso_auth_sdk::Validity::new(
+                    now - time::Duration::seconds(1),
+                    now + time::Duration::minutes(2),
+                )
+                .unwrap(),
+                std::collections::BTreeMap::new(),
+            )
+            .attach(context())
+            .unwrap()
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one store fixture checks identity isolation, restart, and local access together"
+    )]
+    fn member_artifacts_are_private_even_with_known_handles_and_shared_session_ids() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = temporary.path().join("artifacts");
+        let issuer = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [7; 32]);
+        let mut store = provider(&directory);
+        store.config.authentication = Some(ArtifactAuthentication {
+            issuer: "test.auth".into(),
+            verification_key: issuer.public_key_base64(),
+        });
+        let put = |subject: &str, bytes: &[u8]| {
+            block_on(artifact_contract::ArtifactProvider::put(
+                &store,
+                member_context(&issuer, subject, "put"),
+                PutRequest {
+                    session_id: "shared-id".into(),
+                    name: "private.txt".into(),
+                    media_type: "text/plain".into(),
+                    data_base64: STANDARD.encode(bytes),
+                },
+            ))
+            .unwrap()
+            .unwrap()
+        };
+        let alice = put("alice", b"alice secret");
+        let bob = put("bob", b"bob secret");
+        let read = |subject: &str, handle: String| {
+            block_on(artifact_contract::ArtifactProvider::read(
+                &store,
+                member_context(&issuer, subject, "read"),
+                ReadRequest {
+                    handle,
+                    offset: "0".into(),
+                    max_bytes: 1024,
+                },
+            ))
+            .unwrap()
+        };
+        assert!(matches!(
+            read("bob", alice.handle.clone()),
+            Err(ReadError::NotFound)
+        ));
+        assert!(matches!(
+            read("alice", bob.handle),
+            Err(ReadError::NotFound)
+        ));
+        assert_eq!(
+            STANDARD
+                .decode(read("alice", alice.handle.clone()).unwrap().data_base64)
+                .unwrap(),
+            b"alice secret"
+        );
+        // A fresh provider resolves exactly the same durable identity namespace.
+        let restarted = store.clone();
+        let recovered = block_on(artifact_contract::ArtifactProvider::read(
+            &restarted,
+            member_context(&issuer, "alice", "read"),
+            ReadRequest {
+                handle: alice.handle.clone(),
+                offset: "0".into(),
+                max_bytes: 1024,
+            },
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            STANDARD.decode(recovered.data_base64).unwrap(),
+            b"alice secret"
+        );
+        let local = provider(&directory);
+        assert!(
+            block_on(artifact_contract::ArtifactProvider::read(
+                &local,
+                context(),
+                ReadRequest {
+                    handle: alice.handle,
+                    offset: "0".into(),
+                    max_bytes: 1024,
+                }
+            ))
+            .unwrap()
+            .is_err()
+        );
+        let forged = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("test.auth", [8; 32]);
+        for rejected in [
+            context(),
+            member_context(&forged, "alice", "put"),
+            member_context(&issuer, "alice", "read"),
+        ] {
+            assert!(
+                block_on(artifact_contract::ArtifactProvider::put(
+                    &store,
+                    rejected,
+                    PutRequest {
+                        session_id: "shared-id".into(),
+                        name: "private.txt".into(),
+                        media_type: "text/plain".into(),
+                        data_base64: STANDARD.encode(b"intrusion")
+                    }
+                ))
+                .unwrap()
+                .is_err()
+            );
+        }
     }
 
     #[test]
