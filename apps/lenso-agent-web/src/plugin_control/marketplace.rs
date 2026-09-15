@@ -979,6 +979,8 @@ pub(super) async fn status_tool(
 
 #[cfg(test)]
 mod tests {
+    mod remote_acceptance;
+
     use super::*;
     use std::path::Path;
 
