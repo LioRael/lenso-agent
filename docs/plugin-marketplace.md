@@ -22,10 +22,26 @@ First installation uses plugin defaults; a plugin requiring additional mandatory
 configuration may fail candidate validation and needs an authoring/configuration
 workflow before it can run. Tool access remains a separate Agent policy grant.
 
-## Configure target trust
+## Official Marketplace defaults
 
-The operator configures `.lenso/marketplace-policy.json` below the selected
-Agent authority Home. These values are deployment trust inputs; never obtain an
+Release builds can embed the official Marketplace source and public verification
+metadata. Users ask Console Agent to find and install a plugin; they do not create
+a policy file, manage keys or maintain checkpoints. Existing verification and
+installation receipts remain internal to the target. This does not introduce a
+new key-management UI or a separate rollback service.
+
+Release maintainers supply the public JSON policy through the repository variable
+`LENSO_OFFICIAL_MARKETPLACE_POLICY`. The release workflow embeds it at compilation;
+it is not a runtime environment override and must never contain a private key.
+Use the reviewed official endpoint, public verification key and artifact origins,
+not a proof deployment. An unset variable leaves development distributions without
+a default remote catalog; it must not be described as an enabled official market.
+The official source still needs deployment and release acceptance before rollout.
+
+## Existing operator override
+
+For existing private deployments, the operator configures
+`.lenso/marketplace-policy.json` below the selected Agent authority Home. These values are deployment trust inputs; never obtain an
 Agent credential or choose signing keys from a publisher description/model reply.
 For example:
 
@@ -47,8 +63,9 @@ checkpoint, verified artifacts, proposals and operation journal under
 `.lenso/marketplace/`. HTTPS is required except for an explicitly configured
 loopback metadata endpoint. Artifact downloads always require admitted HTTPS
 origins and public destinations. Redirects and ambient HTTP proxies are disabled.
-Removing this policy disables signed-catalog access; existing Host-trusted Bundle
-entries retain their existing mechanism. It does not uninstall running plugins.
+Removing this override restores the distribution default, if one was embedded.
+Without either source, existing Host-trusted Bundle entries remain available.
+This does not uninstall running plugins.
 
 A failed candidate keeps the previous active Generation, but does not restore the
 desired filesystem publication automatically. Inspect the receipt and review a
