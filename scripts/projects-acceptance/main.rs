@@ -2,7 +2,7 @@ use lenso_app_plan::{
     AppComposition, CapabilityBinding, CapabilityEndpointPlan, CapabilityRequirementPlan,
     PluginInstancePlan,
 };
-use lenso_auth_account_plugin::{assertion_public_key, AccountAuthConfig, AccountAuthOperator};
+use lenso_auth_account_plugin::{AccountAuthConfig, AccountAuthOperator, assertion_public_key};
 use lenso_capability_auth as auth;
 use lenso_capability_auth_delegation as delegation;
 use lenso_capability_credential_issuer as issuer;
@@ -19,7 +19,7 @@ use lenso_native_adapter::{
     NativePluginFactory, NativePluginFactoryContext, NativePluginInstance, NativePluginRegistry,
 };
 use lenso_runner::TokioDriver;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use std::{collections::BTreeMap, rc::Rc, time::Duration};
 const CALLER_PACKAGE_ID: &str = "test.auth-caller";
@@ -215,15 +215,15 @@ async fn start(url: &str, prefix: &str) -> NativeApp {
         instance(
             "password",
             lenso_auth_password_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"schema":format!("{prefix}_password"),"database_url_secret":"auth/database-url","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:create_project", "lenso.projects@1:get_project", "lenso.projects@1:list_projects", "lenso.projects@1:update_project", "lenso.projects@1:archive_project", "lenso.projects@1:create_issue", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:update_issue", "lenso.projects@1:move_issue", "lenso.projects@1:archive_issue", "lenso.projects@1:put_external_link", "lenso.projects@1:list_activity", "lenso.projects-admin@1:put_team", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:set_team_member", "lenso.projects-admin@1:put_workflow_state", "lenso.projects-admin@1:get_workflow_state", "lenso.projects-admin@1:reorder_workflow_states", "lenso.projects-admin@1:archive_workflow_state", "lenso.projects-admin@1:delete_workflow_state", "lenso.projects-admin@1:list_workflow_states", "lenso.projects-admin@1:put_project_status", "lenso.projects-admin@1:get_project_status", "lenso.projects-admin@1:reorder_project_statuses", "lenso.projects-admin@1:archive_project_status", "lenso.projects-admin@1:delete_project_status", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:put_label", "lenso.projects-admin@1:list_labels", "lenso.projects-admin@1:put_cycle", "lenso.projects-admin@1:list_cycles", "lenso.projects-admin@1:put_milestone", "lenso.projects-admin@1:list_milestones", "lenso.projects-collaboration@1:add_comment", "lenso.projects-collaboration@1:update_comment", "lenso.projects-collaboration@1:delete_comment", "lenso.projects-collaboration@1:list_comments", "lenso.projects-collaboration@1:create_project_update", "lenso.projects-collaboration@1:list_project_updates", "lenso.projects-collaboration@1:add_issue_relation", "lenso.projects-collaboration@1:remove_issue_relation", "lenso.access-control-admin@1:bootstrap_scope", "lenso.access-control-admin@1:create_role", "lenso.access-control-admin@1:set_role_permissions", "lenso.access-control-admin@1:delete_role", "lenso.access-control-admin@1:assign_role", "lenso.access-control-admin@1:revoke_role"],"session_ttl_seconds":7200,"max_failures":5,"failure_window_seconds":60}),
+            &json!({"schema":format!("{prefix}_password"),"database_url_secret":"auth/database-url","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:create_project", "lenso.projects@1:get_project", "lenso.projects@1:list_projects", "lenso.projects@1:update_project", "lenso.projects@1:archive_project", "lenso.projects@1:create_issue", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:update_issue", "lenso.projects-collaboration@1:get_issue_assignee", "lenso.projects-collaboration@1:set_issue_assignee", "lenso.projects@1:move_issue", "lenso.projects@1:archive_issue", "lenso.projects@1:put_external_link", "lenso.projects@1:list_activity", "lenso.projects-admin@1:put_team", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:set_team_member", "lenso.projects-admin@1:put_workflow_state", "lenso.projects-admin@1:get_workflow_state", "lenso.projects-admin@1:reorder_workflow_states", "lenso.projects-admin@1:archive_workflow_state", "lenso.projects-admin@1:delete_workflow_state", "lenso.projects-admin@1:list_workflow_states", "lenso.projects-admin@1:put_project_status", "lenso.projects-admin@1:get_project_status", "lenso.projects-admin@1:reorder_project_statuses", "lenso.projects-admin@1:archive_project_status", "lenso.projects-admin@1:delete_project_status", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:put_label", "lenso.projects-admin@1:list_labels", "lenso.projects-admin@1:put_cycle", "lenso.projects-admin@1:list_cycles", "lenso.projects-admin@1:put_milestone", "lenso.projects-admin@1:list_milestones", "lenso.projects-collaboration@1:add_comment", "lenso.projects-collaboration@1:update_comment", "lenso.projects-collaboration@1:delete_comment", "lenso.projects-collaboration@1:list_comments", "lenso.projects-collaboration@1:create_project_update", "lenso.projects-collaboration@1:list_project_updates", "lenso.projects-collaboration@1:add_issue_relation", "lenso.projects-collaboration@1:remove_issue_relation", "lenso.access-control-admin@1:bootstrap_scope", "lenso.access-control-admin@1:create_role", "lenso.access-control-admin@1:set_role_permissions", "lenso.access-control-admin@1:delete_role", "lenso.access-control-admin@1:assign_role", "lenso.access-control-admin@1:revoke_role"],"session_ttl_seconds":7200,"max_failures":5,"failure_window_seconds":60}),
         ),
         instance(
             "consent",
             lenso_auth_agent_connection_plugin::PLUGIN_DESCRIPTOR_JSON,
-            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects@1:create_project", "lenso.projects@1:create_issue", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
+            &json!({"origin":ORIGIN,"label":"Projects acceptance","login_path":"/login","audience":["lenso.agent.tool-provider@2:catalog", "lenso.agent.tool-provider@2:execute", "lenso.projects@1:get_issue", "lenso.projects@1:list_issues", "lenso.projects@1:list_projects", "lenso.projects@1:list_issue_workflow_states", "lenso.projects@1:update_issue", "lenso.projects-collaboration@1:get_issue_assignee", "lenso.projects-collaboration@1:set_issue_assignee", "lenso.projects@1:create_project", "lenso.projects@1:create_issue", "lenso.projects@1:get_project", "lenso.projects@1:list_activity", "lenso.projects-admin@1:list_teams", "lenso.projects-admin@1:list_project_statuses", "lenso.projects-admin@1:list_workflow_states"],"grant_ttl_seconds":3600}),
         ),
         organization(
-            json!({"schema":format!("{prefix}_organization"),"database_url_secret":"auth/database-url","admin_callers":["caller"],"directory_callers":["caller"],"membership_admin_callers":["caller"]}),
+            json!({"schema":format!("{prefix}_organization"),"database_url_secret":"auth/database-url","admin_callers":["caller"],"directory_callers":["caller","projects-web"],"membership_admin_callers":["caller","projects-web"]}),
         ),
         instance(
             "acl",
@@ -730,6 +730,7 @@ async fn dispatch(
         ("POST", "/auth/agent/connection/poll") => ("caller", "auth.agent-connection.poll"),
         ("GET", "/auth/agent/authorize") => ("caller", "auth.agent-connection.authorize"),
         ("POST", "/auth/agent/approve") => ("caller", "auth.agent-connection.approve"),
+        ("GET", "/api/projects/workspaces") => ("projects-web-caller", "projects.web.workspaces"),
         ("POST", "/api/projects") => ("projects-web-caller", "projects.web.projects.create"),
         ("GET", path) if path.starts_with("/api/projects/") && path.ends_with("/issues") => {
             ("projects-web-caller", "projects.web.issues.list")
@@ -763,6 +764,18 @@ async fn dispatch(
         ("GET", "/projects/assets/app.js") => ("projects-web-caller", "projects.web.js"),
         ("GET", path) if path.starts_with("/api/issues/") && path.ends_with("/activity") => {
             ("projects-web-caller", "projects.web.issues.activity")
+        }
+        ("GET", path) if path.ends_with("/assignees") && path.starts_with("/api/issues/") => {
+            ("projects-web-caller", "projects.web.issues.assignees")
+        }
+        ("GET", path) if path.ends_with("/assignee") && path.starts_with("/api/issues/") => {
+            ("projects-web-caller", "projects.web.issues.assignee")
+        }
+        ("PATCH", path) if path.ends_with("/assignee") && path.starts_with("/api/issues/") => {
+            ("projects-web-caller", "projects.web.issues.assign")
+        }
+        ("PATCH", path) if path.starts_with("/api/issues/") => {
+            ("projects-web-caller", "projects.web.issues.update")
         }
         ("GET", path) if path.starts_with("/api/issues/") => {
             ("projects-web-caller", "projects.web.issues.detail")
@@ -822,6 +835,27 @@ async fn dispatch(
                             .trim_start_matches("/api/issues/")
                             .trim_end_matches("/activity")
                             .into(),
+                    }]
+                } else if matches!(
+                    route,
+                    "projects.web.issues.assignee"
+                        | "projects.web.issues.assign"
+                        | "projects.web.issues.assignees"
+                ) {
+                    vec![http::HandleRequestPathParametersItem {
+                        name: "issue_id".into(),
+                        value: request
+                            .path
+                            .trim_start_matches("/api/issues/")
+                            .split('/')
+                            .next()
+                            .unwrap_or_default()
+                            .into(),
+                    }]
+                } else if route == "projects.web.issues.update" {
+                    vec![http::HandleRequestPathParametersItem {
+                        name: "issue_id".into(),
+                        value: request.path.trim_start_matches("/api/issues/").into(),
                     }]
                 } else if route == "projects.web.issues.detail" {
                     vec![http::HandleRequestPathParametersItem {

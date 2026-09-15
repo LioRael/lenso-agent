@@ -1,0 +1,14 @@
+{
+  "name": "Echo remote acceptance Agent",
+  "catalogs": [
+    {
+      "catalog_id": "publisher-cloudflare-proof",
+      "key_id": "publisher-proof-key",
+      "public_key_hex": "8d47ca04c5564c517371edc4540ee0945e4b15c3843b6a04a753d11b257b27c9",
+      "snapshot_url": "https://lenso-marketplace-publisher-proof.lenso.workers.dev/api/marketplace/v1/snapshot"
+    }
+  ],
+  "artifact_origins": [
+    "https://lenso-marketplace-publisher-proof.lenso.workers.dev"
+  ]
+}

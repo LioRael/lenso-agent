@@ -1,0 +1,43 @@
+name: Remote Marketplace acceptance
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/marketplace-remote.yml'
+      - 'apps/lenso-agent-web/src/plugin_control/marketplace/tests/remote_acceptance.rs'
+      - 'apps/lenso-agent-web/tests/fixtures/marketplace-remote-policy.json'
+
+permissions:
+  contents: read
+
+jobs:
+  echo:
+    name: Remote Echo installation and restart
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Require the published artifact architecture
+        run: test "$(uname -m)" = arm64
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: nightly-2026-07-10
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          shared-key: remote-marketplace-macos
+      - name: Download, install, execute and restart using Console Agent tools
+        env:
+          LENSO_REMOTE_PROOF_RECEIPT: ${{ runner.temp }}/remote-marketplace-receipt.json
+        run: >-
+          cargo test --locked -p lenso-agent-web --lib
+          remote_marketplace_installation_survives_process_restart -- --ignored --nocapture
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: remote-marketplace-receipt
+          path: ${{ runner.temp }}/remote-marketplace-receipt.json
+          if-no-files-found: error

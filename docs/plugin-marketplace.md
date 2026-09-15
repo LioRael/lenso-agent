@@ -95,3 +95,37 @@ approval and tool grants. It reads signed metadata over HTTP and uses preverifie
 archive cache fixtures. CLI HTTPS tests separately cover real transport, TLS,
 redirect rejection and immutable identity. Neither test establishes public
 artifact hosting or registry publication.
+
+## Public Echo acceptance
+
+The opt-in `Remote Marketplace acceptance` workflow runs on macOS arm64 against
+`publisher-cloudflare-proof`. It uses the committed public test policy and exact
+reviewed Echo 0.1.1 archive digest. It needs no publisher credentials, signing key,
+model account or local network configuration. This is test deployment acceptance,
+not an official Marketplace default or an Agent distribution release.
+
+The test starts with an empty temporary Agent Home, fetches current signed metadata
+and downloads the archive through the real target-owned HTTPS transport. It calls
+Console tools to check, install and observe activation, verifies duplicate apply
+is idempotent, and calls Echo. A second OS process reopens the same Home and checks
+the retained installation operation and Echo execution. Only Cargo compilation
+artifacts are cached; the test never seeds the Agent artifact cache.
+
+The workflow uploads a JSON receipt after both processes succeed. Expired metadata,
+changed archive identity or unavailable hosting fails acceptance. Renew the test
+publication through its existing publisher authority before rerunning an expired
+catalog; do not disable validity checks. Run the workflow manually after changes to
+installation or deployment. Its narrow PR trigger qualifies edits to the acceptance
+itself without making every product PR depend on the test deployment.
+
+## Managed Console Agent installation
+
+The default SQLite-backed Console Agent supports the same Marketplace tools as
+the built-in local Plugin Root authority. SQLite journals the reviewed root
+revision before atomic package publication and reconciles an interrupted commit
+on reopening. Installation does not bypass managed configuration. Unknown or
+remote configuration authorities remain explicitly unsupported by this local
+publisher. See [ADR 0111](adr/0111-managed-marketplace-publication.md).
+
+The remote Echo acceptance produces separate local and SQLite receipts, each
+covering a fresh artifact download, tool invocation and an OS-process restart.
