@@ -68,6 +68,8 @@ jobs:
           printf 'publish=%s\n' "${publish}" >>"${GITHUB_OUTPUT}"
 
   build:
+    env:
+      LENSO_OFFICIAL_MARKETPLACE_POLICY: ${{ vars.LENSO_OFFICIAL_MARKETPLACE_POLICY }}
     name: Build ${{ matrix.release-target }}
     needs: prepare
     runs-on: ${{ matrix.os }}
@@ -140,6 +142,7 @@ jobs:
         run: |
           target="target/${{ matrix.rust-target }}/release"
           "${target}/lenso-agent" --version
+          python3 scripts/smoke-tui-startup.py "${target}/lenso-agent"
           "${target}/lenso-agent" run --help
           "${target}/lenso-agent" acp --version
           "${target}/lenso-agent-cli" --version
@@ -159,6 +162,11 @@ jobs:
               "${target}/${binary}" \
               dist
           done
+      - name: Report terminal installation size
+        run: >-
+          python3 scripts/report-release-size.py
+          "target/${{ matrix.rust-target }}/release"
+          --output "dist/terminal-size-${{ matrix.release-target }}.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: lenso-agent-${{ matrix.release-target }}
@@ -192,7 +200,7 @@ jobs:
             --output dist/agent.json
           cp scripts/install.sh packaging/acp-registry/icon.svg LICENSE THIRD_PARTY_NOTICES.md dist/
           cd dist
-          sha256sum ./*.tar.gz install.sh agent.json icon.svg >SHA256SUMS
+          sha256sum ./*.tar.gz terminal-size-*.json install.sh agent.json icon.svg >SHA256SUMS
       - name: Clean-room install, upgrade, doctor, and uninstall
         run: |
           install_root="$(mktemp -d)"

@@ -1,0 +1,23 @@
+[package]
+name = "lenso-marketplace-proof"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "lenso.marketplace.proof"
+root-slot = "tool-providers"
+
+[package.metadata.lenso-cli]
+runtime = "process"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lenso = { package = "lenso-plugin-sdk", version = "=0.4.5" }
+lenso-agent-tool-sdk = "=0.3.3"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+
+[workspace]

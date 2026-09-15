@@ -34,6 +34,15 @@ struct ConsolePluginToolsConfig {
 
 #[derive(JsonSchema, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
+struct InstallationArguments {
+    #[schemars(length(min = 1, max = 64))]
+    agent_id: String,
+    #[schemars(length(min = 71, max = 71))]
+    proposal_digest: String,
+}
+
+#[derive(JsonSchema, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct TargetArguments {
     #[schemars(length(min = 1, max = 64))]
     agent_id: String,
@@ -390,8 +399,28 @@ struct ConsolePluginTools {
 #[lenso_agent_tool_sdk::tool_provider]
 impl ConsolePluginTools {
     #[tool(
+        name = "get_plugin_installation",
+        description = "Read a retained installation outcome using the reviewed proposal digest. Only succeeded proves runtime activation; this read never repeats installation.",
+        execution = "parallel_safe"
+    )]
+    async fn get_plugin_installation(
+        &self,
+        arguments: InstallationArguments,
+    ) -> Result<ExecuteResponse, ExecuteError> {
+        let response = self
+            .target
+            .installation(target_contract::InstallationRequest {
+                agent_id: arguments.agent_id,
+                proposal_digest: arguments.proposal_digest,
+            })
+            .await
+            .map_err(map_installation_error)?;
+        self.json_response("get_plugin_installation", &response)
+    }
+
+    #[tool(
         name = "list_available_plugins",
-        description = "List only Plugin Bundles explicitly trusted by one exact target Agent Host; paths and package bytes are never exposed.",
+        description = "Search exact releases from the selected target’s trusted catalogs. Use the returned catalog entry ID and revision for installation checks.",
         execution = "parallel_safe"
     )]
     async fn list_available_plugins(
@@ -432,7 +461,7 @@ impl ConsolePluginTools {
 
     #[tool(
         name = "apply_plugin_install",
-        description = "Publish one reviewed Plugin installation after exact catalog-entry, revision, and proposal-digest checks.",
+        description = "Publish one reviewed Plugin installation. Publication is not runtime readiness: use get_plugin_installation with the same proposal digest. Repeating a signed-catalog proposal returns the retained operation.",
         execution = "exclusive"
     )]
     async fn apply_plugin_install(
@@ -1265,6 +1294,12 @@ fn execution_failed(reason_code: &str, message: &str) -> ExecuteError {
         },
     }
 }
+
+lifecycle_error_mapper!(
+    map_installation_error,
+    PluginManagementTargetInstallationInvocationError,
+    InstallationError
+);
 
 #[cfg(test)]
 mod tests {

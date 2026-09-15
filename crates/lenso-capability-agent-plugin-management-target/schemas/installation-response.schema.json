@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["agent_id", "operation_id", "status", "detail", "candidate_revision"],
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "operation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "status": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
+    },
+    "detail": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "candidate_revision": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71
+    }
+  },
+  "additionalProperties": false,
+  "title": "InstallationResponse"
+}

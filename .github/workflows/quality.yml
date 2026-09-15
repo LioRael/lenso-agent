@@ -93,3 +93,25 @@ jobs:
         run: cargo install lenso-contract-codegen --version '=0.9.0' --locked
       - name: Check generated contracts
         run: lenso-contract-codegen workspace check --manifest-path Cargo.toml
+
+  marketplace-installation:
+    name: Console marketplace tool acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: nightly-2026-07-10
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Install the released fixture authoring CLI
+        run: cargo install lenso-cli --version 0.5.2 --locked
+      - name: Pack real Process releases
+        run: CARGO=cargo python3 apps/lenso-agent-web/tests/fixtures/marketplace-proof/build-variants.py "$RUNNER_TEMP/marketplace-proof"
+      - name: Install, invoke, upgrade, recover, reject and remove through Console tools
+        env:
+          LENSO_MARKETPLACE_ARCHIVE: ${{ runner.temp }}/marketplace-proof/proof-0.1.0.lenso-plugin
+          LENSO_MARKETPLACE_UPDATE_ARCHIVE: ${{ runner.temp }}/marketplace-proof/proof-0.2.0.lenso-plugin
+          LENSO_MARKETPLACE_FAILURE_ARCHIVE: ${{ runner.temp }}/marketplace-proof/proof-0.3.0.lenso-plugin
+        run: cargo test --locked -p lenso-agent-web --lib console_tools_install_signed_release_and_observe_runtime -- --ignored

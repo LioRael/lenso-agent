@@ -10,12 +10,11 @@ use std::{
 };
 
 fn fixture(script: &str) -> tempfile::TempDir {
-    let root = tempfile::tempdir().unwrap();
-    fs::copy(
-        env!("CARGO_BIN_EXE_lenso-agent"),
-        root.path().join("lenso-agent"),
-    )
-    .unwrap();
+    let binary = std::path::Path::new(env!("CARGO_BIN_EXE_lenso-agent"));
+    // Keep the immutable executable on the same filesystem and link it instead
+    // of opening a copied executable for writing while parallel tests spawn.
+    let root = tempfile::tempdir_in(binary.parent().unwrap()).unwrap();
+    fs::hard_link(binary, root.path().join("lenso-agent")).unwrap();
     for name in ["lenso-agent-cli", "lenso-agent-acp"] {
         let path = root.path().join(name);
         fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
