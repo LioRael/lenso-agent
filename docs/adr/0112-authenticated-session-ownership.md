@@ -1,4 +1,4 @@
-# ADR 0110: Authenticated Session ownership
+# ADR 0112: Authenticated Session ownership
 
 Status: Accepted
 
