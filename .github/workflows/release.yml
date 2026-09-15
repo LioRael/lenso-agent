@@ -68,6 +68,8 @@ jobs:
           printf 'publish=%s\n' "${publish}" >>"${GITHUB_OUTPUT}"
 
   build:
+    env:
+      LENSO_OFFICIAL_MARKETPLACE_POLICY: ${{ vars.LENSO_OFFICIAL_MARKETPLACE_POLICY }}
     name: Build ${{ matrix.release-target }}
     needs: prepare
     runs-on: ${{ matrix.os }}

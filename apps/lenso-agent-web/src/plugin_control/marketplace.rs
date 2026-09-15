@@ -35,6 +35,42 @@ struct CatalogTrust {
     snapshot_url: Option<String>,
 }
 
+// Public trust metadata is supplied by the release builder, never by a model
+// argument or an ambient environment variable at Agent runtime.
+const OFFICIAL_POLICY: Option<&str> = option_env!("LENSO_OFFICIAL_MARKETPLACE_POLICY");
+
+impl Policy {
+    fn load(home: &std::path::Path, bundled: Option<&str>) -> Result<Option<Self>> {
+        let config = home.join(".lenso/marketplace-policy.json");
+        let bytes = match fs::metadata(&config) {
+            Ok(metadata) => {
+                ensure!(metadata.len() <= 32768, "Marketplace policy exceeds bounds");
+                // An explicit operator policy remains authoritative, including
+                // errors. Do not silently substitute a different source.
+                fs::read(config)?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let Some(bundled) = bundled.filter(|value| !value.trim().is_empty()) else {
+                    return Ok(None);
+                };
+                bundled.as_bytes().to_vec()
+            }
+            Err(error) => return Err(error.into()),
+        };
+        ensure!(bytes.len() <= 32768, "Marketplace policy exceeds bounds");
+        let policy: Self = serde_json::from_slice(&bytes)?;
+        ensure!(
+            !policy.name.trim().is_empty()
+                && policy.name.len() <= 160
+                && !policy.catalogs.is_empty()
+                && policy.catalogs.len() <= 16,
+            "invalid Marketplace policy"
+        );
+        PluginArchiveDownloadPolicy::new(&policy.artifact_origins)?;
+        Ok(Some(policy))
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Proposal {
@@ -101,22 +137,8 @@ impl Store {
             control.configuration_authority_is_builtin_local,
             "selected authority does not admit Marketplace installation"
         );
-        let config = control
-            .authority_home
-            .join(".lenso/marketplace-policy.json");
-        ensure!(
-            fs::metadata(&config)?.len() <= 32768,
-            "Marketplace policy exceeds bounds"
-        );
-        let policy: Policy = serde_json::from_slice(&fs::read(config)?)?;
-        ensure!(
-            !policy.name.trim().is_empty()
-                && policy.name.len() <= 160
-                && !policy.catalogs.is_empty()
-                && policy.catalogs.len() <= 16,
-            "invalid Marketplace policy"
-        );
-        PluginArchiveDownloadPolicy::new(&policy.artifact_origins)?;
+        let policy = Policy::load(&control.authority_home, OFFICIAL_POLICY)?
+            .context("Marketplace is not configured in this Agent distribution")?;
         let root = control.authority_home.join(".lenso/marketplace");
         fs::create_dir_all(root.join("artifacts"))?;
         #[cfg(unix)]
@@ -777,10 +799,9 @@ pub(super) fn entries(
     control: &PluginControl,
     query: &str,
 ) -> Result<Vec<super::TrustedPluginCatalogEntry>, String> {
-    if !control
-        .authority_home
-        .join(".lenso/marketplace-policy.json")
-        .exists()
+    if Policy::load(&control.authority_home, OFFICIAL_POLICY)
+        .map_err(|error| error.to_string())?
+        .is_none()
     {
         return Ok(Vec::new());
     }
@@ -960,6 +981,59 @@ pub(super) async fn status_tool(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    fn bundled_policy() -> String {
+        serde_json::json!({
+            "name": "Official Marketplace",
+            "catalogs": [{"catalog_id":"official", "key_id":"release", "public_key_hex":"00".repeat(32), "snapshot_url":"https://marketplace.example/api/marketplace/v1/snapshot"}],
+            "artifact_origins":["https://marketplace.example"]
+        }).to_string()
+    }
+
+    #[test]
+    fn bundled_marketplace_requires_no_user_policy_file() {
+        let root = tempfile::tempdir().unwrap();
+        let policy = Policy::load(root.path(), Some(&bundled_policy()))
+            .unwrap()
+            .unwrap();
+        assert_eq!(policy.catalogs[0].catalog_id, "official");
+        assert!(!root.path().join(".lenso").exists());
+        assert!(Policy::load(root.path(), None).unwrap().is_none());
+        assert!(Policy::load(root.path(), Some("")).unwrap().is_none());
+    }
+
+    #[test]
+    fn explicit_operator_policy_is_not_replaced_by_bundled_default() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir(root.path().join(".lenso")).unwrap();
+        let path = root.path().join(".lenso/marketplace-policy.json");
+        let custom = bundled_policy().replace("official", "private");
+        fs::write(&path, custom).unwrap();
+        assert_eq!(
+            Policy::load(root.path(), Some(&bundled_policy()))
+                .unwrap()
+                .unwrap()
+                .catalogs[0]
+                .catalog_id,
+            "private"
+        );
+        fs::write(&path, "invalid json").unwrap();
+        assert!(Policy::load(root.path(), Some(&bundled_policy())).is_err());
+    }
+
+    #[test]
+    fn invalid_bundled_marketplace_is_rejected() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(Policy::load(root.path(), Some("not json")).is_err());
+        assert!(Policy::load(root.path(), Some(&"x".repeat(32769))).is_err());
+        assert!(
+            Policy::load(
+                root.path(),
+                Some(&bundled_policy().replace("https://marketplace.example", "http://localhost"))
+            )
+            .is_err()
+        );
+    }
 
     // The former HTTP-only proof missed the Host bridge rejecting local Console
     // catalog calls. Exercise the public tool provider and its real target wiring.
