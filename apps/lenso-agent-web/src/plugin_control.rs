@@ -52,6 +52,8 @@ pub(super) struct PluginControl {
     selection_authority: Option<Arc<dyn PluginSelectionAuthority>>,
     configuration_history: Option<Arc<dyn PluginConfigurationHistoryAuthority>>,
     configuration_authority_is_builtin_local: bool,
+    configuration_store:
+        Option<Arc<crate::configuration_store::SqlitePluginConfigurationAuthority>>,
     mutation: Arc<Mutex<()>>,
     profile: Option<String>,
     managed_profile: Option<Arc<Mutex<Option<String>>>>,
@@ -285,7 +287,7 @@ impl PluginControl {
         plugin_id: &str,
         expected_revision: &PluginRootRevision,
     ) -> Result<PluginRemovalProposalResponse, String> {
-        if !self.configuration_authority_is_builtin_local {
+        if !self.configuration_authority_is_builtin_local && self.configuration_store.is_none() {
             return Err(
                 "the selected Plugin package authority does not support direct removal".to_owned(),
             );
@@ -349,7 +351,21 @@ impl PluginControl {
                 "Plugin removal proposal no longer matches the reviewed proposal".to_owned(),
             );
         }
-        let committed = self.remove_unlocked(plugin_id)?;
+        let committed = if let Some(authority) = &self.configuration_store {
+            authority
+                .publish_package_change(
+                    &uuid::Uuid::new_v4().to_string(),
+                    &proposal.base_revision,
+                    &proposal.candidate_revision,
+                    || {
+                        self.remove_managed_package(&proposal)
+                            .map_err(anyhow::Error::msg)
+                    },
+                )
+                .map_err(|error| format!("{error:#}"))?
+        } else {
+            self.remove_unlocked(plugin_id)?
+        };
         if committed.desired.plugin_root_revision() != proposal.candidate_revision {
             return Err(
                 "removed Plugin Root does not match the reviewed candidate revision".to_owned(),
@@ -365,6 +381,55 @@ impl PluginControl {
             revision: proposal.candidate_revision,
             schema: "lenso.agent.plugin-removal-publication.v1",
         })
+    }
+
+    fn remove_managed_package(
+        &self,
+        proposal: &PluginRemovalProposalResponse,
+    ) -> Result<CommittedPluginMutation, String> {
+        let linearization =
+            PluginMutationLinearization::acquire(&self.app_root, &self.authority_home)?;
+        let staged = StagedHome::new(&self.app_root)?;
+        let base = lenso_app_authoring::inspect_plugin_root(&staged.home)
+            .map_err(|error| error.to_string())?;
+        if base.revision().as_str() != proposal.base_revision {
+            return Err("Plugin Root changed after removal review".into());
+        }
+        fs::remove_dir_all(staged.home.join("plugins").join(&proposal.package_id))
+            .map_err(|error| error.to_string())?;
+        self.validate_staged(&staged)?;
+        let candidate = lenso_agent_host::snapshot_desired_plugin_root_for_home(
+            &staged.home,
+            &self.authority_home,
+            self.snapshot_profile().as_deref(),
+        )?;
+        if candidate.plugin_root_revision() != proposal.candidate_revision {
+            return Err("Plugin removal candidate changed after review".into());
+        }
+        let plugin = self.app_root.join("plugins").join(&proposal.package_id);
+        let trash = self.app_root.join(".lenso/trash").join(format!(
+            "{}-{}",
+            proposal.package_id,
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(trash.parent().expect("trash has a parent"))
+            .map_err(|error| error.to_string())?;
+        fs::rename(&plugin, &trash).map_err(|error| error.to_string())?;
+        match self.snapshot_committed() {
+            Ok(desired) if desired.plugin_root_revision() == proposal.candidate_revision => {
+                Ok(CommittedPluginMutation {
+                    desired,
+                    linearization,
+                })
+            }
+            result => {
+                fs::rename(&trash, &plugin)
+                    .map_err(|error| format!("restore failed Plugin removal: {error}"))?;
+                Err(result
+                    .err()
+                    .unwrap_or_else(|| "Plugin removal revision mismatch".into()))
+            }
+        }
     }
 
     pub(super) fn resolve(
@@ -449,11 +514,20 @@ impl PluginControl {
             selection_authority: selection,
             configuration_history: history,
             configuration_authority_is_builtin_local: configuration_is_builtin_local,
+            configuration_store: None,
             mutation: Arc::new(Mutex::new(())),
             managed_profile: None,
             profile,
             trusted_bundles,
         }
+    }
+
+    pub(super) fn with_configuration_store(
+        mut self,
+        store: Arc<crate::configuration_store::SqlitePluginConfigurationAuthority>,
+    ) -> Self {
+        self.configuration_store = Some(store);
+        self
     }
 
     pub(super) fn with_managed_profile(mut self, profile: Option<String>) -> Self {
