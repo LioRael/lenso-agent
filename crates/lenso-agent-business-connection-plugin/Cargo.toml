@@ -13,6 +13,7 @@ root-slot = "tool-providers"
 [dependencies]
 lenso.workspace = true
 lenso-kernel.workspace = true
+lenso-capability-agent-prompt-provider = { path = "../lenso-capability-agent-prompt-provider" }
 lenso-capability-agent-auth-connection = { path = "../lenso-capability-agent-auth-connection" }
 lenso-capability-agent-turn-binding = { path = "../lenso-capability-agent-turn-binding" }
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }

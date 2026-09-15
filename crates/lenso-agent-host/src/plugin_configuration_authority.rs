@@ -22,6 +22,14 @@ const CONSOLE_AGENT_ID: &str = "console";
 /// return `TargetNotFound` or `Unsupported` rather than falling back to the local
 /// Console authority.
 pub trait PluginManagementTarget: std::fmt::Debug + Send + Sync + 'static {
+    fn installation(
+        &self,
+        _request: target_contract::InstallationRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetInstallation>
+    {
+        Box::pin(async { Ok(Err(target_contract::InstallationError::Unsupported)) })
+    }
+
     fn catalog(
         &self,
         request: target_contract::CatalogRequest,
@@ -147,12 +155,24 @@ struct ManagementTargetProvider {
 }
 
 impl target_contract::PluginManagementTargetProvider for ManagementTargetProvider {
+    fn installation(
+        &self,
+        _context: InvocationContext,
+        request: target_contract::InstallationRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetInstallation>
+    {
+        match self.external.as_ref() {
+            Some(target) => target.installation(request),
+            None => Box::pin(async { Ok(Err(target_contract::InstallationError::Unsupported)) }),
+        }
+    }
+
     fn catalog(
         &self,
         _context: InvocationContext,
         request: target_contract::CatalogRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetCatalog> {
-        if request.agent_id != CONSOLE_AGENT_ID {
+        if request.agent_id != CONSOLE_AGENT_ID || self.external.is_some() {
             return match self.external.as_ref() {
                 Some(target) => target.catalog(request),
                 None => Box::pin(async { Ok(Err(target_contract::CatalogError::TargetNotFound)) }),
@@ -261,7 +281,7 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
         request: target_contract::ProposeInstallRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeInstall>
     {
-        if request.agent_id != CONSOLE_AGENT_ID {
+        if request.agent_id != CONSOLE_AGENT_ID || self.external.is_some() {
             return match self.external.as_ref() {
                 Some(target) => target.propose_install(request),
                 None => Box::pin(async {
@@ -278,7 +298,7 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
         request: target_contract::PublishInstallRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishInstall>
     {
-        if request.agent_id != CONSOLE_AGENT_ID {
+        if request.agent_id != CONSOLE_AGENT_ID || self.external.is_some() {
             return match self.external.as_ref() {
                 Some(target) => target.publish_install(request),
                 None => Box::pin(async {
@@ -295,7 +315,7 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
         request: target_contract::ProposeRemovalRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetProposeRemoval>
     {
-        if request.agent_id != CONSOLE_AGENT_ID {
+        if request.agent_id != CONSOLE_AGENT_ID || self.external.is_some() {
             return match self.external.as_ref() {
                 Some(target) => target.propose_removal(request),
                 None => Box::pin(async {
@@ -312,7 +332,7 @@ impl target_contract::PluginManagementTargetProvider for ManagementTargetProvide
         request: target_contract::PublishRemovalRequest,
     ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetPublishRemoval>
     {
-        if request.agent_id != CONSOLE_AGENT_ID {
+        if request.agent_id != CONSOLE_AGENT_ID || self.external.is_some() {
             return match self.external.as_ref() {
                 Some(target) => target.publish_removal(request),
                 None => Box::pin(async {
@@ -435,6 +455,7 @@ pub(crate) fn bridge_descriptor() -> PluginDescriptor {
                 target_contract::CATALOG_OPERATION,
                 target_contract::HISTORY_OPERATION,
                 target_contract::INSPECT_OPERATION,
+                target_contract::INSTALLATION_OPERATION,
                 target_contract::PROPOSE_OPERATION,
                 target_contract::PROPOSE_INSTALL_OPERATION,
                 target_contract::PROPOSE_REMOVAL_OPERATION,

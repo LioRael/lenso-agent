@@ -102,3 +102,12 @@ commands:
 - `plugin verify`; and
 - Store, Receipt, Active Set, Controller, Supervisor, or Generation as concepts
   the ordinary Plugin user must learn.
+
+## Terminal entrypoint
+
+`lenso-agent` is the public terminal command: no subcommand starts the TUI;
+`run` selects a headless task; management commands and `acp` select their
+respective process-owning surfaces. Dispatch happens before Host/runtime startup
+and uses exact sibling executable paths. CLI and TUI retain independent Host
+Catalogs and Plugin registrations. `lenso-agent-cli` remains a compatibility
+entrypoint. Package managers install the required companions together.

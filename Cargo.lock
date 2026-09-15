@@ -474,6 +474,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64ct"
+version = "1.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
 name = "basic-toml"
 version = "0.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1132,6 +1138,7 @@ dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
  "curve25519-dalek-derive",
+ "digest 0.10.7",
  "fiat-crypto",
  "rustc_version",
  "subtle",
@@ -1381,6 +1388,30 @@ name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0881ea181b1df73ff77ffaaf9c7544ecc11e82fba9b5f27b262a3c73a332555"
+
+[[package]]
+name = "ed25519"
+version = "2.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
+dependencies = [
+ "pkcs8",
+ "signature",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "serde",
+ "sha2 0.10.9",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "either"
@@ -2923,7 +2954,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-acp"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "agent-client-protocol",
  "clap",
@@ -3041,6 +3072,7 @@ dependencies = [
  "lenso",
  "lenso-app-plan",
  "lenso-capability-agent-auth-connection",
+ "lenso-capability-agent-prompt-provider",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-agent-turn-binding",
  "lenso-kernel",
@@ -3082,7 +3114,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-cli"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "lenso-agent-approval-hook-plugin",
  "lenso-agent-auth-openai-codex-plugin",
@@ -3901,7 +3933,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-tui"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "clap",
  "crossterm",
@@ -3982,13 +4014,15 @@ dependencies = [
 
 [[package]]
 name = "lenso-agent-web"
-version = "0.1.10"
+version = "0.1.12"
 dependencies = [
  "anyhow",
  "axum",
  "clap",
+ "ed25519-dalek",
  "fs2",
  "futures",
+ "hex",
  "lenso",
  "lenso-agent-console-plugins",
  "lenso-agent-default-plugins",
@@ -4011,12 +4045,14 @@ dependencies = [
  "lenso-capability-terminal-command",
  "lenso-cli",
  "lenso-kernel",
+ "lenso-plugin-bundle",
  "lenso-plugin-control-plane",
  "lenso-terminal-cli-surface",
  "lenso-terminal-command-plugin",
  "lenso-terminal-web-plugin",
  "reqwest",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4802,10 +4838,12 @@ dependencies = [
 [[package]]
 name = "lenso-cli"
 version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74e35db74171a80c45d81ef3fea55500c9d8a35dae2fca72b61a8b773e90e799"
+source = "git+https://github.com/LioRael/lenso-cli.git?rev=3b1c3948d65f716b480fb11b45a52835c8ae8c39#3b1c3948d65f716b480fb11b45a52835c8ae8c39"
 dependencies = [
  "anyhow",
+ "base64",
+ "ed25519-dalek",
+ "hex",
  "jsonschema 0.47.0",
  "lenso-app-plan",
  "lenso-plugin-bundle",
@@ -4817,6 +4855,7 @@ dependencies = [
  "tempfile",
  "toml 0.9.12+spec-1.1.0",
  "ureq",
+ "url",
  "uuid",
  "winsafe",
  "zip 2.4.2",
@@ -4966,8 +5005,7 @@ checksum = "8f24f444677f5b9857d4aa6f2ca90002243eb756a7f153bb721206f88abe6b07"
 [[package]]
 name = "lenso-plugin-bundle"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "019b52e7b1bb825570513e55fe6edcec80e67641319ac35e6a27c3f20ed93a29"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=a78f1f399825f152708ad091cf6196e5670383f5#a78f1f399825f152708ad091cf6196e5670383f5"
 dependencies = [
  "hex",
  "lenso-app-plan",
@@ -5010,8 +5048,7 @@ dependencies = [
 [[package]]
 name = "lenso-process-adapter"
 version = "0.3.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2596990918eba99a8f124a849a668a1ed9fc5cca2c1ea47e352ce062bb2b9b65"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=a78f1f399825f152708ad091cf6196e5670383f5#a78f1f399825f152708ad091cf6196e5670383f5"
 dependencies = [
  "base64",
  "futures",
@@ -5041,8 +5078,7 @@ dependencies = [
 [[package]]
 name = "lenso-process-sdk"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccc827f3483326f2829429e8c811e7bb97f3190ce50b0dbfa84cea67411b62f8"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=a78f1f399825f152708ad091cf6196e5670383f5#a78f1f399825f152708ad091cf6196e5670383f5"
 dependencies = [
  "lenso-process-protocol",
  "serde",
@@ -5111,8 +5147,7 @@ dependencies = [
 [[package]]
 name = "lenso-runtime-codec"
 version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1890cbb0b2cd544d4d412fc1330ad6a0760bb2b16b6ac46e26a50f6a98c910b7"
+source = "git+https://github.com/LioRael/lenso-runtime-rust.git?rev=a78f1f399825f152708ad091cf6196e5670383f5#a78f1f399825f152708ad091cf6196e5670383f5"
 dependencies = [
  "futures",
  "hex",
@@ -5834,6 +5869,16 @@ dependencies = [
  "atomic-waker",
  "fastrand",
  "futures-io",
+]
+
+[[package]]
+name = "pkcs8"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
+dependencies = [
+ "der",
+ "spki",
 ]
 
 [[package]]
@@ -7058,6 +7103,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "signature"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
+dependencies = [
+ "rand_core 0.6.4",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7118,6 +7172,16 @@ dependencies = [
  "log",
  "rand 0.8.8",
  "sha1 0.10.7",
+]
+
+[[package]]
+name = "spki"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
+dependencies = [
+ "base64ct",
+ "der",
 ]
 
 [[package]]

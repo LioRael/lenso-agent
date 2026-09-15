@@ -1,3 +1,5 @@
+mod marketplace;
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -67,14 +69,23 @@ pub(super) struct PluginControlAuthorities {
 pub(super) struct RoutedPluginManagementTarget {
     external: Option<Arc<dyn PluginManagementTarget>>,
     local: Option<PluginControl>,
+    runtime: Arc<std::sync::OnceLock<std::sync::Weak<WebRuntime>>>,
 }
 
 impl RoutedPluginManagementTarget {
+    pub(super) fn bind_runtime(&self, runtime: &Arc<WebRuntime>) {
+        let _ = self.runtime.set(Arc::downgrade(runtime));
+    }
+
     pub(super) fn new(
         local: Option<PluginControl>,
         external: Option<Arc<dyn PluginManagementTarget>>,
     ) -> Self {
-        Self { external, local }
+        Self {
+            external,
+            local,
+            runtime: Arc::default(),
+        }
     }
 }
 
@@ -137,6 +148,10 @@ impl PluginControl {
                 });
             }
         }
+        entries.extend(marketplace::entries(self, query)?);
+        if entries.len() > 256 {
+            return Err("too many catalog entries; narrow the search".into());
+        }
         Ok(TrustedPluginCatalogResponse {
             authority: Self::lifecycle_authority(),
             entries,
@@ -151,6 +166,9 @@ impl PluginControl {
         catalog_entry_id: &str,
         expected_revision: &PluginRootRevision,
     ) -> Result<PluginInstallProposalResponse, String> {
+        if catalog_entry_id.starts_with("market:") {
+            return marketplace::propose_tool(self, catalog_entry_id, expected_revision.as_str());
+        }
         let _guard = self
             .mutation
             .lock()
@@ -1194,6 +1212,25 @@ macro_rules! forward_external {
 }
 
 impl PluginManagementTarget for RoutedPluginManagementTarget {
+    fn installation(
+        &self,
+        request: target_contract::InstallationRequest,
+    ) -> lenso_kernel::NativeRequestFuture<target_contract::PluginManagementTargetInstallation>
+    {
+        if request.agent_id != "console" {
+            return forward_external!(self, request, installation, InstallationError);
+        }
+        let runtime = self.runtime.get().and_then(std::sync::Weak::upgrade);
+        Box::pin(async move {
+            let runtime = runtime.ok_or_else(|| lenso_kernel::RuntimeFailure::PluginFailure {
+                detail: "target runtime is unavailable".into(),
+            })?;
+            Ok(marketplace::status_tool((*runtime).clone(), request)
+                .await
+                .map_err(|_| target_contract::InstallationError::PublicationNotFound))
+        })
+    }
+
     fn history(
         &self,
         request: target_contract::HistoryRequest,
@@ -1249,26 +1286,35 @@ impl PluginManagementTarget for RoutedPluginManagementTarget {
         let Some(control) = self.local.as_ref() else {
             return Box::pin(async { Ok(Err(target_contract::CatalogError::Unsupported)) });
         };
-        let result = control
-            .trusted_catalog(&request.query)
-            .map(|catalog| target_contract::CatalogResponse {
-                agent_id: request.agent_id,
-                authority: lifecycle_authority_contract(catalog.authority),
-                entries: catalog
-                    .entries
-                    .into_iter()
-                    .map(|entry| target_contract::CatalogEntry {
-                        catalog_entry_id: entry.catalog_entry_id,
-                        package_id: entry.package_id,
-                        package_revision: entry.package_revision,
-                        source_digest: entry.source_digest,
+        let control = control.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let result = control
+                    .trusted_catalog(&request.query)
+                    .map(|catalog| target_contract::CatalogResponse {
+                        agent_id: request.agent_id,
+                        authority: lifecycle_authority_contract(catalog.authority),
+                        entries: catalog
+                            .entries
+                            .into_iter()
+                            .map(|entry| target_contract::CatalogEntry {
+                                catalog_entry_id: entry.catalog_entry_id,
+                                package_id: entry.package_id,
+                                package_revision: entry.package_revision,
+                                source_digest: entry.source_digest,
+                            })
+                            .collect(),
+                        query: catalog.query,
+                        revision: catalog.revision,
                     })
-                    .collect(),
-                query: catalog.query,
-                revision: catalog.revision,
+                    .map_err(|_| target_contract::CatalogError::Unsupported);
+                Ok(result)
             })
-            .map_err(|_| target_contract::CatalogError::Unsupported);
-        Box::pin(async move { Ok(result) })
+            .await
+            .map_err(|error| lenso_kernel::RuntimeFailure::PluginFailure {
+                detail: error.to_string(),
+            })?
+        })
     }
 
     fn propose_install(
@@ -1282,35 +1328,44 @@ impl PluginManagementTarget for RoutedPluginManagementTarget {
         let Some(control) = self.local.as_ref() else {
             return Box::pin(async { Ok(Err(target_contract::ProposeInstallError::Unsupported)) });
         };
-        let result = request
-            .expected_revision
-            .parse::<PluginRootRevision>()
-            .map_err(|_| target_contract::ProposeInstallError::InvalidRequest)
-            .and_then(|revision| {
-                control
-                    .propose_installation(&request.catalog_entry_id, &revision)
-                    .map_err(|error| {
-                        if error.contains("revision changed") {
-                            target_contract::ProposeInstallError::Conflict
-                        } else if error.contains("not found") {
-                            target_contract::ProposeInstallError::PluginNotFound
-                        } else {
-                            target_contract::ProposeInstallError::Unsupported
-                        }
+        let control = control.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let result = request
+                    .expected_revision
+                    .parse::<PluginRootRevision>()
+                    .map_err(|_| target_contract::ProposeInstallError::InvalidRequest)
+                    .and_then(|revision| {
+                        control
+                            .propose_installation(&request.catalog_entry_id, &revision)
+                            .map_err(|error| {
+                                if error.contains("revision changed") {
+                                    target_contract::ProposeInstallError::Conflict
+                                } else if error.contains("not found") {
+                                    target_contract::ProposeInstallError::PluginNotFound
+                                } else {
+                                    target_contract::ProposeInstallError::Unsupported
+                                }
+                            })
                     })
+                    .map(|proposal| target_contract::InstallProposalResponse {
+                        agent_id: request.agent_id,
+                        authority: lifecycle_authority_contract(proposal.authority),
+                        base_revision: proposal.base_revision,
+                        catalog_entry_id: proposal.catalog_entry_id,
+                        candidate_revision: proposal.candidate_revision,
+                        package_id: proposal.package_id,
+                        package_revision: proposal.package_revision,
+                        proposal_digest: proposal.proposal_digest,
+                        source_digest: proposal.source_digest,
+                    });
+                Ok(result)
             })
-            .map(|proposal| target_contract::InstallProposalResponse {
-                agent_id: request.agent_id,
-                authority: lifecycle_authority_contract(proposal.authority),
-                base_revision: proposal.base_revision,
-                catalog_entry_id: proposal.catalog_entry_id,
-                candidate_revision: proposal.candidate_revision,
-                package_id: proposal.package_id,
-                package_revision: proposal.package_revision,
-                proposal_digest: proposal.proposal_digest,
-                source_digest: proposal.source_digest,
-            });
-        Box::pin(async move { Ok(result) })
+            .await
+            .map_err(|error| lenso_kernel::RuntimeFailure::PluginFailure {
+                detail: error.to_string(),
+            })?
+        })
     }
 
     fn publish_install(
@@ -1320,6 +1375,24 @@ impl PluginManagementTarget for RoutedPluginManagementTarget {
     {
         if request.agent_id != "console" {
             return forward_external!(self, request, publish_install, PublishInstallError);
+        }
+        if request.catalog_entry_id.starts_with("market:") {
+            let runtime = self.runtime.get().and_then(std::sync::Weak::upgrade);
+            return Box::pin(async move {
+                let runtime =
+                    runtime.ok_or_else(|| lenso_kernel::RuntimeFailure::PluginFailure {
+                        detail: "target runtime is unavailable".into(),
+                    })?;
+                Ok(marketplace::publish_tool((*runtime).clone(), request)
+                    .await
+                    .map_err(|error| {
+                        if error.contains("expired") || error.contains("changed") {
+                            target_contract::PublishInstallError::Conflict
+                        } else {
+                            target_contract::PublishInstallError::ProposalMismatch
+                        }
+                    }))
+            });
         }
         let Some(control) = self.local.as_ref() else {
             return Box::pin(async { Ok(Err(target_contract::PublishInstallError::Unsupported)) });
@@ -1462,6 +1535,11 @@ fn validate_managed_app_root(app_root: &Path) -> Result<(), String> {
 }
 
 fn digest_file(path: &Path) -> Result<String, String> {
+    if path.is_dir() {
+        return lenso_plugin_bundle::verify_bundle_directory(path)
+            .map(|bundle| bundle.manifest_digest)
+            .map_err(|error| format!("failed to verify trusted Plugin Bundle: {error}"));
+    }
     let bytes = fs::read(path).map_err(|error| {
         format!(
             "failed to read trusted Plugin Bundle {}: {error}",
@@ -2759,6 +2837,13 @@ async fn plugin_operation(
     AxumPath(operation_id): AxumPath<String>,
 ) -> Result<Json<PluginOperationResponse>, ApiProblem> {
     runtime.authorize_control(&headers)?;
+    read_plugin_operation(runtime, operation_id).await
+}
+
+async fn read_plugin_operation(
+    runtime: WebRuntime,
+    operation_id: String,
+) -> Result<Json<PluginOperationResponse>, ApiProblem> {
     if uuid::Uuid::parse_str(&operation_id).is_err() {
         return Err(ApiProblem::bad_request("Plugin operation ID is invalid"));
     }
@@ -3427,6 +3512,41 @@ mod tests {
     use super::*;
     use crate::plugin_control_api::fixture_desired_selection;
     use lenso_app_authoring::LocalPluginRootAuthority;
+
+    #[test]
+    fn trusted_bundle_directory_digest_verifies_artifact_integrity() {
+        use lenso_app_plan::{ExecutionClassId, authoring::PluginContract};
+        use lenso_plugin_bundle::{
+            SourcePluginImplementation, SourcePluginReleaseBuild,
+            build_source_plugin_release_bundle,
+        };
+
+        let root = tempfile::tempdir().unwrap();
+        let artifact = root.path().join("plugin.js");
+        fs::write(&artifact, "export default {};").unwrap();
+        let output = root.path().join("bundle");
+        let verified = build_source_plugin_release_bundle(&SourcePluginReleaseBuild {
+            contract: PluginContract::new("example.echo", "1.0.0", "tool-providers")
+                .with_authoring_version(2),
+            implementations: vec![SourcePluginImplementation {
+                id: "bun".into(),
+                host_targets: vec!["*".into()],
+                artifact,
+                bundle_path: "implementations/bun/plugin.js".into(),
+                media_type: "application/javascript".into(),
+                target: "javascript-bun".into(),
+                entrypoint: "plugin.js".into(),
+                execution_class: ExecutionClassId::bun_child_process(),
+                runtime_profile: lenso_app_plan::PLUGIN_AUTHORING_V2_RUNTIME_PROFILE.into(),
+            }],
+            output: output.clone(),
+        })
+        .unwrap();
+        assert_eq!(digest_file(&output).unwrap(), verified.manifest_digest);
+
+        fs::write(output.join("implementations/bun/plugin.js"), "tampered").unwrap();
+        assert!(digest_file(&output).is_err());
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)] // One golden keeps the whole HTTP contract visually adjacent.

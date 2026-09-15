@@ -565,3 +565,110 @@ async fn git_domain_failure_preserves_generation_and_next_turn() {
     drop(server);
     drop(provider);
 }
+
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)]
+async fn expired_catalog_does_not_crash_web_and_recovers_without_restart() {
+    use sha2::{Digest as _, Sha256};
+    let _server_test = WEB_SERVER_TEST.lock().await;
+    let root = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let provider_address = listener.local_addr().unwrap();
+    write_direct_configuration(root.path(), provider_address);
+    let online = Arc::new(AtomicBool::new(false));
+    let server_online = online.clone();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server_stopped = stopped.clone();
+    let thread = thread::spawn(move || {
+        while !server_stopped.load(Ordering::Relaxed) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    if !server_online.load(Ordering::Relaxed) {
+                        continue;
+                    }
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut bytes = [0; 8192];
+                    let _ = stream.read(&mut bytes);
+                    let body = direct_catalog_response();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("catalog accept: {error}"),
+            }
+        }
+    });
+    let _provider = CatalogServerGuard {
+        address: provider_address,
+        stopped,
+        thread: Some(thread),
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let base_url = format!("http://{provider_address}");
+    let mut hash = Sha256::new();
+    hash.update(base_url.as_bytes());
+    hash.update([0]);
+    hash.update(b"catalog-fixture-account");
+    let cache = root
+        .path()
+        .join("runtime/model-catalog/openai-codex-direct.json");
+    fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    fs::write(&cache, serde_json::to_vec(&serde_json::json!({
+        "schema": "lenso.agent.model-catalog-cache.v1",
+        "source_key": format!("sha256:{:x}", hash.finalize()),
+        "fetched_at_unix_seconds": now - 278_935,
+        "revision": "fixture-expired",
+        "etag": null,
+        "response": serde_json::from_str::<serde_json::Value>(&direct_catalog_response()).unwrap()
+    })).unwrap()).unwrap();
+    let address = available_address();
+    let mut server = ChildGuard(
+        Command::new(env!("CARGO_BIN_EXE_lenso-agent-web"))
+            .args(["--listen", &address.to_string(), "--plugin-control"])
+            .env("LENSO_AGENT_CONTROL_TOKEN", "catalog-recovery-fixture")
+            .env("LENSO_AGENT_HOME", root.path())
+            .env_remove("LENSO_AGENT_PROFILE")
+            .current_dir(root.path())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let client = reqwest::Client::new();
+    wait_until_ready(&client, address, &mut server.0).await;
+    let models = format!("http://{address}/api/console/v1/agent/models");
+    let unavailable = client.get(&models).send().await.unwrap();
+    assert!(
+        !unavailable.status().is_success(),
+        "Expired model facts must not be selectable"
+    );
+    let retained: serde_json::Value = serde_json::from_slice(&fs::read(&cache).unwrap()).unwrap();
+    assert_eq!(retained["fetched_at_unix_seconds"], now - 278_935);
+    online.store(true, Ordering::Relaxed);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        assert!(server.0.try_wait().unwrap().is_none());
+        let response = client.get(&models).send().await.unwrap();
+        if response.status().is_success() {
+            assert!(response.text().await.unwrap().contains("gpt-5.6-luna"));
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Catalog must recover without restarting Web"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

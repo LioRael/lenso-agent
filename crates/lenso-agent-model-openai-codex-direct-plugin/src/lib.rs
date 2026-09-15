@@ -394,15 +394,15 @@ impl ModelProvider for DirectModel {
 }
 
 impl DirectModel {
-    // Authentication is user state, not a prerequisite for serving the login UI.
+    // Authentication and upstream availability must not prevent serving the recovery UI.
     // Keep this Generation unavailable for inference until a live account supplies
     // its catalog; never reuse another account's cached catalog to bypass login.
-    fn wait_for_login(&self) -> Result<(), RuntimeFailure> {
+    fn wait_for_catalog(&self) -> Result<(), RuntimeFailure> {
         let plugin = self.clone();
         let cancellation = self
             .tasks
             .cancellation()
-            .map_err(|_| protocol_failure("catalog login recovery is unavailable"))?;
+            .map_err(|_| protocol_failure("catalog recovery is unavailable"))?;
         let publisher = self
             .config
             .catalog_snapshot_path
@@ -440,7 +440,7 @@ impl DirectModel {
                 loaded = true;
                 if plugin.config.catalog_refresh_seconds == 0 { break; }
             }
-        }).map_err(|_| protocol_failure("catalog login recovery failed to start"))?;
+        }).map_err(|_| protocol_failure("catalog recovery failed to start"))?;
         Ok(())
     }
 
@@ -623,7 +623,7 @@ impl Lifecycle for DirectModel {
                 auth_contract::AccessError::NotAuthenticated
                 | auth_contract::AccessError::RefreshRejected,
             )) => {
-                return self.wait_for_login();
+                return self.wait_for_catalog();
             }
             Err(error) => {
                 return Err(RuntimeFailure::PluginFailure {
@@ -631,9 +631,17 @@ impl Lifecycle for DirectModel {
                 });
             }
         };
-        let (acquired, revalidate_immediately) = self
+        let (acquired, revalidate_immediately) = match self
             .initial_catalog(&credential.access_token, &credential.account_id)
-            .await?;
+            .await
+        {
+            Ok(catalog) => catalog,
+            Err(error) if self.config.catalog_refresh_seconds > 0 => {
+                eprintln!("Model catalog unavailable; retrying in the background: {error:?}");
+                return self.wait_for_catalog();
+            }
+            Err(error) => return Err(error),
+        };
         let publisher = self
             .config
             .catalog_snapshot_path

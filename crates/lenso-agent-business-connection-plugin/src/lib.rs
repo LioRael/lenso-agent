@@ -1,9 +1,11 @@
 //! Owns business grants; no credential crosses the `AuthConnection` surface.
+mod assignment;
 mod login;
 mod presentation;
 mod state;
 use lenso::ManagedTasks;
 use lenso_capability_agent_auth_connection as auth;
+use lenso_capability_agent_prompt_provider as prompts;
 use lenso_capability_agent_tool_provider as tools;
 use lenso_capability_agent_turn_binding as binding;
 use lenso_kernel::{InvocationContext, RuntimeFailure};
@@ -82,8 +84,28 @@ async fn response<T: serde::de::DeserializeOwned>(
     }
     serde_json::from_slice(&bytes).map_err(|_| failure())
 }
-#[lenso::provides(auth::AuthConnection, binding::TurnBinding, tools::ToolProvider)]
+#[lenso::provides(
+    auth::AuthConnection,
+    binding::TurnBinding,
+    tools::ToolProvider,
+    prompts::PromptProvider
+)]
 impl BusinessConnection {
+    async fn contribute(
+        &self,
+        _context: InvocationContext,
+        _request: prompts::ContributeRequest,
+    ) -> Result<Result<prompts::ContributeResponse, prompts::ContributeError>, RuntimeFailure> {
+        Ok(Ok(prompts::ContributeResponse {
+            contributions: vec![prompts::ContributeResponseContributionsItem {
+                id: "projects-business-workflow".into(),
+                kind: prompts::ContributeResponseContributionsItemKind::Instruction,
+                version: "1".into(),
+                content: "For Projects business tasks, use the supplied Projects tools, not browser guesses. Resolve 'assign to me' with projects_assign_issue_to_me; never infer the connected user's identity. After completing an Issue task, include a Markdown link to that Issue. Copy the exact current-page URL supplied by the user, or an exact _links URL returned by projects_get_issue or projects_update_issue. Never invent a hostname, workspace slug, or Issue URL. If a link is requested and no verified URL is available, read the Issue again. Preserve unrelated fields and handle revision conflicts explicitly.".into(),
+            }],
+        }))
+    }
+
     async fn status(
         &self,
         _context: InvocationContext,
@@ -232,10 +254,11 @@ impl BusinessConnection {
         _request: tools::CatalogRequest,
     ) -> Result<Result<tools::CatalogResponse, tools::CatalogError>, RuntimeFailure> {
         let cancellation = context.cancellation();
-        let catalog = tokio::select! {
+        let mut catalog: tools::CatalogResponse = tokio::select! {
             () = cancellation.cancelled() => return Err(failure()),
             result = async { response(client()?.get(format!("{}/projects/agent/manifest", self.config.origin)).send().await.map_err(|_| failure())?, None).await } => result?,
         };
+        assignment::extend_catalog(&mut catalog);
         Ok(Ok(catalog))
     }
     async fn execute(
@@ -249,6 +272,10 @@ impl BusinessConnection {
         if !request.name.starts_with("projects_") {
             return Ok(Err(tools::ExecuteError::NotFound));
         }
+        let request = match assignment::resolve(request, grant.subject.as_deref()) {
+            Ok(request) => request,
+            Err(error) => return Ok(Err(error)),
+        };
         let cancellation = context.cancellation();
         let result = tokio::select! {
             () = cancellation.cancelled() => return Err(failure()),
