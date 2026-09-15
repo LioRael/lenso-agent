@@ -134,7 +134,8 @@ struct Store {
 impl Store {
     fn open(control: &PluginControl) -> Result<Self> {
         ensure!(
-            control.configuration_authority_is_builtin_local,
+            control.configuration_authority_is_builtin_local
+                || control.configuration_store.is_some(),
             "selected authority does not admit Marketplace installation"
         );
         let policy = Policy::load(&control.authority_home, OFFICIAL_POLICY)?
@@ -435,84 +436,97 @@ fn commit(control: &PluginControl, proposal: &Proposal) -> Result<CommittedPlugi
             .mutation
             .lock()
             .map_err(|_| anyhow::anyhow!("target lock poisoned"))?;
-        let linearization =
-            PluginMutationLinearization::acquire(&control.app_root, &control.authority_home)
-                .map_err(anyhow::Error::msg)?;
-        ensure!(
-            locked_revision(control)? == proposal.base_revision,
-            "target changed after review; prepare again"
-        );
-        ensure!(now() < proposal.expires_at, "installation proposal expired");
-        let mut store = Store::open(control)?;
-        ensure!(
-            store.target_id == proposal.target_id,
-            "installation target changed"
-        );
-        let envelope: String = store.connection.query_row(
-            "SELECT envelope FROM catalogs WHERE id=?1",
-            [&proposal.catalog_id],
-            |r| r.get(0),
-        )?;
-        let verified = store.accept(&proposal.catalog_id, &envelope)?;
-        let release = verified.select(
-            &proposal.release.plugin_id,
-            &proposal.release.version,
-            now(),
-        )?;
-        ensure!(
-            release.artifact == proposal.release.artifact,
-            "reviewed release changed"
-        );
-        let archive = store.archive(release)?;
-        let (staged, desired) = stage(control, &archive, proposal)?;
-        ensure!(
-            desired.plugin_root_revision() == proposal.candidate_revision,
-            "candidate differs from reviewed proposal"
-        );
-        let source = staged
-            .home
-            .join("plugins")
-            .join(&proposal.release.plugin_id);
-        let destination = control
-            .app_root
-            .join("plugins")
-            .join(&proposal.release.plugin_id);
-        fs::create_dir_all(destination.parent().context("missing Plugin Root")?)?;
-        #[cfg(any(target_os = "linux", target_vendor = "apple"))]
-        {
-            use rustix::fs::{CWD, RenameFlags, renameat_with};
-            let flags = if proposal.previous_version.is_some() {
-                RenameFlags::EXCHANGE
-            } else {
-                RenameFlags::NOREPLACE
-            };
-            renameat_with(CWD, &source, CWD, &destination, flags)?;
-            match control.snapshot_committed() {
-                Ok(committed)
-                    if committed.plugin_root_revision() == proposal.candidate_revision =>
-                {
-                    Ok(CommittedPluginMutation {
-                        desired: committed,
-                        linearization,
-                    })
-                }
-                result => {
-                    if proposal.previous_version.is_some() {
-                        renameat_with(CWD, &source, CWD, &destination, RenameFlags::EXCHANGE)?;
-                    } else {
-                        fs::rename(&destination, &source)?;
-                    }
-                    Err(anyhow::anyhow!(
-                        "candidate publication did not produce reviewed revision: {}",
-                        result.err().unwrap_or_else(|| "revision mismatch".into())
-                    ))
-                }
-            }
+        if let Some(authority) = &control.configuration_store {
+            authority.publish_package_change(
+                &proposal.id,
+                &proposal.base_revision,
+                &proposal.candidate_revision,
+                || commit_package(control, proposal),
+            )
+        } else {
+            commit_package(control, proposal)
         }
-        #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
-        anyhow::bail!("atomic Marketplace installation is unavailable on this platform");
     })()
     .map_err(|error| format!("{error:#}"))
+}
+
+// The returned fence remains held until the managed authority has recorded the
+// candidate revision and the caller registers its Generation operation.
+fn commit_package(control: &PluginControl, proposal: &Proposal) -> Result<CommittedPluginMutation> {
+    let linearization =
+        PluginMutationLinearization::acquire(&control.app_root, &control.authority_home)
+            .map_err(anyhow::Error::msg)?;
+    ensure!(
+        locked_revision(control)? == proposal.base_revision,
+        "target changed after review; prepare again"
+    );
+    ensure!(now() < proposal.expires_at, "installation proposal expired");
+    let mut store = Store::open(control)?;
+    ensure!(
+        store.target_id == proposal.target_id,
+        "installation target changed"
+    );
+    let envelope: String = store.connection.query_row(
+        "SELECT envelope FROM catalogs WHERE id=?1",
+        [&proposal.catalog_id],
+        |r| r.get(0),
+    )?;
+    let verified = store.accept(&proposal.catalog_id, &envelope)?;
+    let release = verified.select(
+        &proposal.release.plugin_id,
+        &proposal.release.version,
+        now(),
+    )?;
+    ensure!(
+        release.artifact == proposal.release.artifact,
+        "reviewed release changed"
+    );
+    let archive = store.archive(release)?;
+    let (staged, desired) = stage(control, &archive, proposal)?;
+    ensure!(
+        desired.plugin_root_revision() == proposal.candidate_revision,
+        "candidate differs from reviewed proposal"
+    );
+    let source = staged
+        .home
+        .join("plugins")
+        .join(&proposal.release.plugin_id);
+    let destination = control
+        .app_root
+        .join("plugins")
+        .join(&proposal.release.plugin_id);
+    fs::create_dir_all(destination.parent().context("missing Plugin Root")?)?;
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    {
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
+        let flags = if proposal.previous_version.is_some() {
+            RenameFlags::EXCHANGE
+        } else {
+            RenameFlags::NOREPLACE
+        };
+        renameat_with(CWD, &source, CWD, &destination, flags)?;
+        match control.snapshot_committed() {
+            Ok(committed) if committed.plugin_root_revision() == proposal.candidate_revision => {
+                Ok(CommittedPluginMutation {
+                    desired: committed,
+                    linearization,
+                })
+            }
+            result => {
+                if proposal.previous_version.is_some() {
+                    renameat_with(CWD, &source, CWD, &destination, RenameFlags::EXCHANGE)?;
+                } else {
+                    fs::rename(&destination, &source)?;
+                }
+                Err(anyhow::anyhow!(
+                    "candidate publication did not produce reviewed revision: {}",
+                    result.err().unwrap_or_else(|| "revision mismatch".into())
+                ))
+            }
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    anyhow::bail!("atomic Marketplace installation is unavailable on this platform");
 }
 
 fn problem(error: impl std::fmt::Display) -> ApiProblem {
@@ -1042,6 +1056,16 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "requires real Process archives in LENSO_MARKETPLACE_*_ARCHIVE"]
     async fn console_tools_install_signed_release_and_observe_runtime() {
+        console_tools_install_for_authority(false).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[ignore = "requires real Process archives in LENSO_MARKETPLACE_*_ARCHIVE"]
+    async fn console_tools_install_signed_release_and_observe_runtime_sqlite() {
+        console_tools_install_for_authority(true).await;
+    }
+
+    async fn console_tools_install_for_authority(sqlite: bool) {
         let root = tempfile::tempdir().unwrap();
         crate::configure_test_fixture_model(root.path());
         let approval = root
@@ -1059,6 +1083,13 @@ mod tests {
             config.control = crate::AgentWebControl::HostAuthorized;
             config.plugin_control = true;
             config.tool_policy = Some(root.path().join("tool-policy.json"));
+            if sqlite {
+                config.plugin_configuration_store =
+                    Some(crate::PluginConfigurationStoreConfig::new(
+                        root.path().join("configuration.sqlite3"),
+                        "test/console",
+                    ));
+            }
             config
         };
         tokio::task::LocalSet::new().run_until(async {
@@ -1124,6 +1155,11 @@ mod tests {
             tool(&runtime,"apply_plugin_removal",serde_json::json!({"agent_id":"console","plugin_id":"lenso.marketplace.proof","expected_revision":inspected["revision"],"proposal_digest":removal["proposal_digest"]})).await;
             assert!(previous_version(&control,"lenso.marketplace.proof").unwrap().is_none());
             server.abort();
+            surface.shutdown().await.unwrap();
+            let surface = crate::AgentWebSurface::start(configuration()).await.unwrap();
+            let control = surface.runtime.plugin_control().unwrap();
+            assert!(previous_version(&control,"lenso.marketplace.proof").unwrap().is_none());
+            assert!(control.configuration_authority.inspect().is_ok());
             surface.shutdown().await.unwrap();
         }).await;
     }

@@ -1,3 +1,4 @@
+mod package_publication;
 mod profile_import;
 pub(crate) mod profiles;
 
@@ -18,7 +19,8 @@ use lenso_app_authoring::{
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
-const STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v3";
+const STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v4";
+const PACKAGE_PREDECESSOR_SCHEMA: &str = "lenso.plugin-configuration-store.v3";
 const PREVIOUS_STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v2";
 const LEGACY_STORE_SCHEMA: &str = "lenso.plugin-configuration-store.v1";
 
@@ -136,6 +138,7 @@ impl SqlitePluginConfigurationAuthority {
     }
 
     fn reconcile(&self, connection: &mut Connection) -> anyhow::Result<PluginRootAuthoringState> {
+        self.recover_package_changes(connection)?;
         self.recover_profile_drafts(connection)?;
         self.recover_profile_imports(connection)?;
         let materialized = self.local.inspect()?;
@@ -780,6 +783,7 @@ fn open_database(path: &Path) -> anyhow::Result<Connection> {
 }
 
 fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result<()> {
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS package_publications (id TEXT PRIMARY KEY, base_revision TEXT NOT NULL, candidate_revision TEXT NOT NULL, phase TEXT NOT NULL CHECK (phase IN ('materializing', 'published', 'aborted')))")?;
     connection.execute_batch("CREATE TABLE IF NOT EXISTS profile_drafts (name TEXT PRIMARY KEY, source TEXT NOT NULL, materialized TEXT, previous_materialized TEXT, materializing INTEGER NOT NULL DEFAULT 0)")?;
     connection.execute_batch("CREATE TABLE IF NOT EXISTS profile_imports (id TEXT PRIMARY KEY, base_revision TEXT NOT NULL, candidate_revision TEXT NOT NULL, files TEXT NOT NULL, phase TEXT NOT NULL)")?;
     connection.execute_batch(
@@ -852,6 +856,11 @@ fn initialize_schema(connection: &Connection, reference: &str) -> anyhow::Result
             connection.execute(
                 "UPDATE authority_state SET schema = ?1 WHERE singleton = 1 AND schema = ?2",
                 params![STORE_SCHEMA, schema],
+            )?;
+        } else if schema == PACKAGE_PREDECESSOR_SCHEMA {
+            connection.execute(
+                "UPDATE authority_state SET schema = ?1 WHERE singleton = 1",
+                [STORE_SCHEMA],
             )?;
         } else if schema != STORE_SCHEMA {
             bail!("unsupported Plugin configuration store schema {schema}");
@@ -1133,6 +1142,112 @@ mod tests {
         authority
             .propose(&base, "example.agent", "default", toml)
             .unwrap()
+    }
+
+    #[test]
+    fn package_publication_recovers_both_sides_of_atomic_materialization() {
+        for materialized in [false, true] {
+            let root = fixture_root();
+            let database = root.path().join("configuration.sqlite3");
+            let authority = open_authority(&root, &database);
+            let proposal = proposal(&authority, b"greeting = \"installed\"\n");
+            let base = proposal.base_revision().as_str();
+            let candidate = proposal.candidate_revision().as_str();
+            // Simulate a process stopping before/after the filesystem commit,
+            // with no successful SQLite finalization.
+            let result: anyhow::Result<()> =
+                authority.publish_package_change("package", base, candidate, || {
+                    if materialized {
+                        authority.local.publish(&proposal)?;
+                    }
+                    bail!("injected interruption")
+                });
+            assert!(result.is_err());
+            drop(authority);
+            let recovered = open_authority(&root, &database);
+            assert_eq!(
+                recovered.inspect().unwrap().revision().as_str(),
+                if materialized { candidate } else { base }
+            );
+            let phase: String = open_database(&database)
+                .unwrap()
+                .query_row(
+                    "SELECT phase FROM package_publications WHERE id = 'package'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(phase, if materialized { "published" } else { "aborted" });
+        }
+    }
+
+    #[test]
+    fn package_recovery_preserves_unexplained_edits_and_rejects_stale_publication() {
+        let root = fixture_root();
+        let database = root.path().join("configuration.sqlite3");
+        let authority = open_authority(&root, &database);
+        let reviewed = proposal(&authority, b"greeting = \"reviewed\"\n");
+        let other = proposal(&authority, b"greeting = \"external\"\n");
+        let stale: anyhow::Result<()> =
+            authority
+                .publish_package_change("stale", "wrong", "wrong", || panic!("must not publish"));
+        assert!(stale.is_err());
+        let interrupted: anyhow::Result<()> = authority.publish_package_change(
+            "package",
+            reviewed.base_revision().as_str(),
+            reviewed.candidate_revision().as_str(),
+            || {
+                authority.local.publish(&other)?;
+                bail!("interrupted with unexplained root")
+            },
+        );
+        assert!(interrupted.is_err());
+        drop(authority);
+        let error = SqlitePluginConfigurationAuthority::open(
+            root.path(),
+            PluginConfigurationStoreConfig::new(&database, "tenant/app"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unexplained"), "{error:#}");
+        assert_eq!(
+            LocalPluginRootAuthority::new(root.path())
+                .inspect()
+                .unwrap()
+                .revision(),
+            other.candidate_revision()
+        );
+    }
+
+    #[test]
+    fn package_journal_upgrades_v3_store_without_changing_desired_root() {
+        let root = fixture_root();
+        let database = root.path().join("configuration.sqlite3");
+        let authority = open_authority(&root, &database);
+        let base = authority.inspect().unwrap().revision().clone();
+        drop(authority);
+        let connection = open_database(&database).unwrap();
+        connection
+            .execute(
+                "UPDATE authority_state SET schema = ?1",
+                [PACKAGE_PREDECESSOR_SCHEMA],
+            )
+            .unwrap();
+        connection
+            .execute_batch("DROP TABLE package_publications")
+            .unwrap();
+        drop(connection);
+        assert_eq!(
+            open_authority(&root, &database)
+                .inspect()
+                .unwrap()
+                .revision(),
+            &base
+        );
+        let schema: String = open_database(&database)
+            .unwrap()
+            .query_row("SELECT schema FROM authority_state", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(schema, STORE_SCHEMA);
     }
 
     #[test]

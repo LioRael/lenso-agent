@@ -117,3 +117,15 @@ publication through its existing publisher authority before rerunning an expired
 catalog; do not disable validity checks. Run the workflow manually after changes to
 installation or deployment. Its narrow PR trigger qualifies edits to the acceptance
 itself without making every product PR depend on the test deployment.
+
+## Managed Console Agent installation
+
+The default SQLite-backed Console Agent supports the same Marketplace tools as
+the built-in local Plugin Root authority. SQLite journals the reviewed root
+revision before atomic package publication and reconciles an interrupted commit
+on reopening. Installation does not bypass managed configuration. Unknown or
+remote configuration authorities remain explicitly unsupported by this local
+publisher. See [ADR 0111](adr/0111-managed-marketplace-publication.md).
+
+The remote Echo acceptance produces separate local and SQLite receipts, each
+covering a fresh artifact download, tool invocation and an OS-process restart.

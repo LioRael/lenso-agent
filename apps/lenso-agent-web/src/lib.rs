@@ -978,8 +978,10 @@ impl AgentWebSurface {
             },
         )?;
         let plugin_control = plugin_control.map(|control| {
-            if sqlite_profiles.is_some() {
-                control.with_managed_profile(profile.clone())
+            if let Some(store) = &sqlite_profiles {
+                control
+                    .with_managed_profile(profile.clone())
+                    .with_configuration_store(Arc::clone(store))
             } else {
                 control
             }

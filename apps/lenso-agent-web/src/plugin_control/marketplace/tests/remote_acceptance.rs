@@ -16,12 +16,26 @@ fn remote_marketplace_installation_survives_process_restart() {
         (std::env::consts::OS, std::env::consts::ARCH),
         ("macos", "aarch64")
     );
+    let receipts = ["local", "sqlite"].map(remote_install_for_authority);
+    let receipt = serde_json::json!({
+        "schema": "lenso.marketplace.remote-acceptance.v2",
+        "authorities": receipts,
+    });
+    let encoded = serde_json::to_string_pretty(&receipt).unwrap();
+    if let Ok(path) = std::env::var("LENSO_REMOTE_PROOF_RECEIPT") {
+        fs::write(path, &encoded).unwrap();
+    }
+    println!("{encoded}");
+}
+
+fn remote_install_for_authority(authority: &str) -> Value {
     let root = tempfile::tempdir().unwrap();
     for phase in ["install", "restart"] {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", PROCESS_TEST, "--ignored", "--nocapture"])
             .env("LENSO_REMOTE_PROOF_HOME", root.path())
             .env("LENSO_REMOTE_PROOF_PHASE", phase)
+            .env("LENSO_REMOTE_PROOF_AUTHORITY", authority)
             .output()
             .unwrap();
         assert!(
@@ -41,17 +55,12 @@ fn remote_marketplace_installation_survives_process_restart() {
         installed["installation"]["operation_id"],
         restarted["installation"]["operation_id"]
     );
-    let receipt = serde_json::json!({
-        "schema": "lenso.marketplace.remote-acceptance.v1",
+    serde_json::json!({
+        "authority": authority,
         "plugin_id": PLUGIN, "version": VERSION, "artifact_digest": ARCHIVE_DIGEST,
         "empty_home": true, "artifact_cache_seeded": false,
         "install": installed, "restart": restarted
-    });
-    let encoded = serde_json::to_string_pretty(&receipt).unwrap();
-    if let Ok(path) = std::env::var("LENSO_REMOTE_PROOF_RECEIPT") {
-        fs::write(path, &encoded).unwrap();
-    }
-    println!("{encoded}");
+    })
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -77,6 +86,19 @@ async fn remote_marketplace_process() {
     config.control = crate::AgentWebControl::HostAuthorized;
     config.plugin_control = true;
     config.tool_policy = Some(root.join("tool-policy.json"));
+    match std::env::var("LENSO_REMOTE_PROOF_AUTHORITY")
+        .unwrap()
+        .as_str()
+    {
+        "sqlite" => {
+            config.plugin_configuration_store = Some(crate::PluginConfigurationStoreConfig::new(
+                root.join("configuration.sqlite3"),
+                "test/console",
+            ));
+        }
+        "local" => {}
+        _ => panic!("unsupported acceptance authority"),
+    }
     tokio::task::LocalSet::new()
         .run_until(async {
             tokio::time::timeout(Duration::from_secs(240), async {
