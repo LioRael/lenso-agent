@@ -1,14 +1,14 @@
 {
-  "name": "Echo remote acceptance Agent",
+  "name": "Official Lenso Marketplace Echo acceptance Agent",
   "catalogs": [
     {
-      "catalog_id": "publisher-cloudflare-proof",
-      "key_id": "publisher-proof-key",
-      "public_key_hex": "8d47ca04c5564c517371edc4540ee0945e4b15c3843b6a04a753d11b257b27c9",
-      "snapshot_url": "https://lenso-marketplace-publisher-proof.lenso.workers.dev/api/marketplace/v1/snapshot"
+      "catalog_id": "lenso-official",
+      "key_id": "lenso-marketplace-2026",
+      "public_key_hex": "8b6c3a8138ebe65697b94a393d4b132c4b65c68d9e68522595f1ef66d107f82f",
+      "snapshot_url": "https://marketplace.lenso.dev/api/marketplace/v1/snapshot"
     }
   ],
   "artifact_origins": [
-    "https://lenso-marketplace-publisher-proof.lenso.workers.dev"
+    "https://marketplace.lenso.dev"
   ]
 }
