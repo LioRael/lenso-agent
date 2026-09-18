@@ -3,9 +3,9 @@ use super::*;
 
 const POLICY: &str = include_str!("../../../../tests/fixtures/marketplace-remote-policy.json");
 const PLUGIN: &str = "lenso.marketplace.echo";
-const VERSION: &str = "0.1.2";
+const VERSION: &str = "0.1.3";
 const ARCHIVE_DIGEST: &str =
-    "sha256:584927811d7034cc5b94d5b95161694d3abad1abcfa849f9624c028817f1d5bf";
+    "sha256:0b877ae5a8c00590d12137a2d17ed9068ddfc77c29d648bfc84c1a31630cb74b";
 const PROCESS_TEST: &str =
     "plugin_control::marketplace::tests::remote_acceptance::remote_marketplace_process";
 

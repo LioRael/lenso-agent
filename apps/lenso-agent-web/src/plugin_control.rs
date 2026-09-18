@@ -1381,10 +1381,7 @@ impl PluginManagementTarget for RoutedPluginManagementTarget {
                         query: catalog.query,
                         revision: catalog.revision,
                     })
-                    .map_err(|error| {
-                        eprintln!("marketplace trusted_catalog error: {error}");
-                        target_contract::CatalogError::Unsupported
-                    });
+                    .map_err(|_| target_contract::CatalogError::Unsupported);
                 Ok(result)
             })
             .await
@@ -1416,7 +1413,6 @@ impl PluginManagementTarget for RoutedPluginManagementTarget {
                         control
                             .propose_installation(&request.catalog_entry_id, &revision)
                             .map_err(|error| {
-                                eprintln!("marketplace propose_installation error: {error}");
                                 if error.contains("revision changed") {
                                     target_contract::ProposeInstallError::Conflict
                                 } else if error.contains("not found") {

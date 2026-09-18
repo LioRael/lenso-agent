@@ -5,10 +5,10 @@
       "catalog_id": "lenso-official",
       "key_id": "lenso-marketplace-2026",
       "public_key_hex": "8b6c3a8138ebe65697b94a393d4b132c4b65c68d9e68522595f1ef66d107f82f",
-      "snapshot_url": "https://marketplace.lenso.dev/api/marketplace/v1/snapshot"
+      "snapshot_url": "https://lenso-marketplace.lenso.workers.dev/api/marketplace/v1/snapshot"
     }
   ],
   "artifact_origins": [
-    "https://marketplace.lenso.dev"
+    "https://lenso-marketplace.lenso.workers.dev"
   ]
 }
