@@ -133,3 +133,4 @@ reasons on their own.
 - [0108 — Pin native Tool targets at Turn admission](0108-pin-native-tool-targets-at-turn-admission.md)
 
 - [0112 — Authenticated Session ownership](0112-authenticated-session-ownership.md)
+- [0113 — Compose App-authored Agent DX through verified deployment resources](0113-compose-app-authored-agent-dx.md)

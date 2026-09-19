@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod app_deployment;
 mod authority;
 mod directories;
 pub mod generation;
@@ -20,6 +21,10 @@ mod runtime_state;
 mod test_support;
 mod tool_target;
 
+pub use app_deployment::{
+    APP_DEPLOYMENT_SCHEMA, AppDeploymentApplied, AppDeploymentInspection, apply_app_deployments,
+    inspect_app_deployments,
+};
 pub use directories::{
     AGENT_HOME_ENV, AgentDirectories, ensure_unmanaged_plugin_root, protect_managed_plugin_root,
 };

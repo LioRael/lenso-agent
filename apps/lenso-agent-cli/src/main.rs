@@ -66,6 +66,7 @@ enum CliCommand {
     Profiles(ProfileCommand),
     Contexts { profile: Option<String> },
     Models { profile: Option<String> },
+    Dx(DxCommand),
 }
 
 #[derive(Debug)]
@@ -86,6 +87,12 @@ enum AuthCommand {
     Login { device_auth: bool },
     Status,
     Logout,
+}
+
+#[derive(Debug)]
+enum DxCommand {
+    Check { from: PathBuf },
+    Apply { from: PathBuf },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -124,6 +131,7 @@ async fn run() -> Result<(), String> {
         CliCommand::Profiles(command) => return run_profile(&command).await,
         CliCommand::Contexts { profile } => return run_contexts(profile).await,
         CliCommand::Models { profile } => return run_models(profile).await,
+        CliCommand::Dx(command) => return run_dx(&command),
     };
     let profile = selected_profile(args.plan.clone(), args.profile.clone());
     let host = AgentHost::builder()
@@ -349,7 +357,46 @@ fn parse_command(raw: Vec<String>) -> Result<CliCommand, String> {
     if raw.first().is_some_and(|value| value == "models") {
         return parse_models(&raw[1..]);
     }
+    if raw.first().is_some_and(|value| value == "dx") {
+        return parse_dx(&raw[1..]).map(CliCommand::Dx);
+    }
     parse_run_args(raw)
+}
+
+fn parse_dx(arguments: &[String]) -> Result<DxCommand, String> {
+    match arguments {
+        [command, flag, from] if command == "check" && flag == "--from" => Ok(DxCommand::Check {
+            from: PathBuf::from(from),
+        }),
+        [command, flag, from] if command == "apply" && flag == "--from" => Ok(DxCommand::Apply {
+            from: PathBuf::from(from),
+        }),
+        _ => Err("usage: lenso-agent dx <check|apply> --from <app-dist>".to_owned()),
+    }
+}
+
+fn run_dx(command: &DxCommand) -> Result<(), String> {
+    match command {
+        DxCommand::Check { from } => {
+            let deployments = lenso_agent_host::inspect_app_deployments(from)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&deployments)
+                    .map_err(|error| format!("failed to encode Agent DX inspection: {error}"))?
+            );
+            Ok(())
+        }
+        DxCommand::Apply { from } => {
+            let home = AgentDirectories::resolve()?.home().to_path_buf();
+            let deployments = lenso_agent_host::apply_app_deployments(from, &home)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&deployments)
+                    .map_err(|error| format!("failed to encode Agent DX receipt: {error}"))?
+            );
+            Ok(())
+        }
+    }
 }
 
 fn parse_doctor(arguments: &[String]) -> Result<CliCommand, String> {
@@ -563,7 +610,7 @@ fn required_value(
 }
 
 fn run_usage() -> String {
-    "usage: lenso-agent run <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent <contexts|models> [--profile <name>]\n       lenso-agent doctor [--json]\n       lenso-agent runtime status [--root <runtime-root>]\n       lenso-agent <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
+    "usage: lenso-agent run <prompt> [--profile <name>] [--session <id>] [--allow-tool <name> ... | --no-tools]\n       [--context-prompt <source/name> [--context-arguments <json>]]\n       [--context-resource <source=URI> ...]\n       lenso-agent <contexts|models> [--profile <name>]\n       lenso-agent doctor [--json]\n       lenso-agent runtime status [--root <runtime-root>]\n       lenso-agent dx <check|apply> --from <app-dist>\n       lenso-agent <generations|sessions|approvals|profiles|auth> ...\n\nInstall the official coding and read-only planning Profiles with `lenso-agent profiles install coding`.\nThe Host reads Plugin configuration and Profiles from `LENSO_AGENT_HOME`, defaulting to `~/.lenso/agent`; the current directory remains the Workspace. Run `lenso plugins` from the Agent Home. `lenso-agent dx check` only verifies an App distribution; `dx apply` explicitly imports its verified Agent contribution.\n\nAdvanced: --prompt <text> and --plan <path> remain available for automation and exact Plan replay.".to_owned()
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -1168,6 +1215,35 @@ mod profile_tests {
             }) if profile == "code"
         ));
         assert!(parse_command(vec!["models".to_owned(), "--profile".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn dx_commands_are_explicit_and_bypass_terminal_surface_composition() {
+        assert!(matches!(
+            parse_command(vec![
+                "dx".to_owned(),
+                "check".to_owned(),
+                "--from".to_owned(),
+                "dist".to_owned(),
+            ]),
+            Ok(CliCommand::Dx(DxCommand::Check { from })) if from == PathBuf::from("dist")
+        ));
+        assert!(matches!(
+            parse_command(vec![
+                "dx".to_owned(),
+                "apply".to_owned(),
+                "--from".to_owned(),
+                "dist".to_owned(),
+            ]),
+            Ok(CliCommand::Dx(DxCommand::Apply { from })) if from == PathBuf::from("dist")
+        ));
+        assert!(parse_command(vec!["dx".to_owned(), "check".to_owned()]).is_err());
+        assert!(!terminal::should_try_composed_surface(&[
+            "dx".to_owned(),
+            "check".to_owned(),
+            "--from".to_owned(),
+            "dist".to_owned(),
+        ]));
     }
 
     #[test]
