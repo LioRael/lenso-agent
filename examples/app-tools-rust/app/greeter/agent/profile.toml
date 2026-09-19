@@ -1,0 +1,6 @@
+description = "A fixture-backed Rust Tool Provider selected by an explicit Agent Profile."
+instances = ["lenso.agent.model.fixture/model"]
+allowed_tools = ["greet"]
+
+[lenso]
+profile = "greeter"

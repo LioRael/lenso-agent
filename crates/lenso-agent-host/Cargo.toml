@@ -67,6 +67,7 @@ sha2.workspace = true
 tokio.workspace = true
 toml.workspace = true
 time.workspace = true
+tempfile.workspace = true
 uuid.workspace = true
 zip.workspace = true
 
@@ -74,7 +75,6 @@ zip.workspace = true
 lenso-agent-web-plugin = { path = "../lenso-agent-web-plugin" }
 lenso-agent-cli-plugin = { path = "../lenso-agent-cli-plugin" }
 lenso-agent-default-plugins = { path = "../lenso-agent-default-plugins" }
-tempfile.workspace = true
 
 [lints]
 workspace = true

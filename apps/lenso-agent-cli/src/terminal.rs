@@ -134,6 +134,7 @@ pub(super) fn should_try_composed_surface(raw: &[String]) -> bool {
             | "profiles"
             | "contexts"
             | "models"
+            | "dx"
             | "--app"
     ) {
         return false;
