@@ -5,3 +5,5 @@ lenso-cli = { git = "https://github.com/LioRael/lenso-cli.git", rev = "3b1c3948d
 lenso-plugin-bundle = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a78f1f399825f152708ad091cf6196e5670383f5" }
 lenso-process-adapter = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a78f1f399825f152708ad091cf6196e5670383f5" }
 lenso-runtime-codec = { git = "https://github.com/LioRael/lenso-runtime-rust.git", rev = "a78f1f399825f152708ad091cf6196e5670383f5" }
+# Immutable Bun startup fix; replace with its released minimum before registry publication.
+lenso-bun-adapter = { git = "https://github.com/LioRael/lenso-bun-adapter.git", rev = "381eda435d21a1f01351b094372f0d36e13bc43d" }

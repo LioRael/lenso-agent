@@ -3,3 +3,9 @@
 .lenso/
 *.log
 .DS_Store
+
+# Local Engine App authoring examples
+examples/app-tools/.lenso/
+examples/app-tools/dist/
+examples/app-tools-rust/.lenso/
+examples/app-tools-rust/dist/

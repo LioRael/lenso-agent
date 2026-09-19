@@ -1,0 +1,1 @@
+{"compilerOptions":{"strict":true,"noEmit":true,"module":"Preserve","moduleResolution":"bundler","allowImportingTsExtensions":true,"types":["bun"]},"include":["plugin.ts"]}

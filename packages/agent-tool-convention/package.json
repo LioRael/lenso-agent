@@ -1,0 +1,38 @@
+{
+  "name": "@lenso/agent-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@lenso/bun-plugin": "0.4.1",
+    "@lenso/contract-runtime": "0.3.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "@types/bun": "1.4.0",
+    "typescript-ast": "npm:typescript@5.9.3"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "lenso": {
+    "pluginId": "lenso.agent.tool-conventions",
+    "rootSlot": "authoring-support",
+    "runtime": "bun",
+    "source": "plugin.ts",
+    "conventions": [
+      {
+        "id": "lenso.agent.tools",
+        "entries": [
+          "agent"
+        ],
+        "compiler": {
+          "program": "bun",
+          "args": [
+            "compiler.mjs"
+          ]
+        }
+      }
+    ]
+  }
+}

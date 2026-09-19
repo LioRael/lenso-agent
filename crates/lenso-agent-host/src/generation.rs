@@ -220,11 +220,11 @@ impl CatalogFactory for AgentCatalogFactory {
             .iter()
             .any(|instance| instance.execution_class().as_str() == BUN_EXECUTION_CLASS)
         {
-            catalog = catalog.with_adapter(bun_adapter()).map_err(|error| {
-                ControlPlaneError::HostFailure {
+            catalog = catalog
+                .with_adapter(bun_adapter().with_artifacts(generation.artifacts.clone()))
+                .map_err(|error| ControlPlaneError::HostFailure {
                     detail: error.to_string(),
-                }
-            })?;
+                })?;
         }
         Ok(catalog)
     }
@@ -233,21 +233,37 @@ impl CatalogFactory for AgentCatalogFactory {
 fn bun_adapter() -> BunAdapter {
     BunAdapter::production("bun")
         .with_codec(BunJsonCodec(AgentJsonCodec))
+        .with_authoring_codec(AgentJsonCodec)
         .with_codec(BunJsonCodec(ContextCompactionJsonCodec))
+        .with_authoring_codec(ContextCompactionJsonCodec)
         .with_codec(BunJsonCodec(ContextSourceJsonCodec))
+        .with_authoring_codec(ContextSourceJsonCodec)
         .with_codec(BunJsonCodec(MemoryJsonCodec))
+        .with_authoring_codec(MemoryJsonCodec)
         .with_codec(BunJsonCodec(HttpFetchJsonCodec))
+        .with_authoring_codec(HttpFetchJsonCodec)
         .with_codec(BunJsonCodec(LifecycleJsonCodec))
+        .with_authoring_codec(LifecycleJsonCodec)
         .with_codec(BunJsonCodec(ModelJsonCodec))
+        .with_authoring_codec(ModelJsonCodec)
         .with_codec(BunJsonCodec(PromptJsonCodec))
+        .with_authoring_codec(PromptJsonCodec)
         .with_codec(BunJsonCodec(SessionJsonCodec))
+        .with_authoring_codec(SessionJsonCodec)
         .with_codec(BunJsonCodec(SessionPresentationJsonCodec))
+        .with_authoring_codec(SessionPresentationJsonCodec)
         .with_codec(BunJsonCodec(ToolHookJsonCodec))
+        .with_authoring_codec(ToolHookJsonCodec)
         .with_codec(BunJsonCodec(ToolProviderJsonCodec))
+        .with_authoring_codec(ToolProviderJsonCodec)
         .with_codec(BunJsonCodec(TurnInputJsonCodec))
+        .with_authoring_codec(TurnInputJsonCodec)
         .with_codec(BunJsonCodec(ToolsJsonCodec))
+        .with_authoring_codec(ToolsJsonCodec)
         .with_codec(BunJsonCodec(UserInteractionJsonCodec))
+        .with_authoring_codec(UserInteractionJsonCodec)
         .with_codec(BunJsonCodec(WorkspaceReadJsonCodec))
+        .with_authoring_codec(WorkspaceReadJsonCodec)
 }
 
 #[derive(Debug)]
