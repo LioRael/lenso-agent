@@ -9,3 +9,6 @@ examples/app-tools/.lenso/
 examples/app-tools/dist/
 examples/app-tools-rust/.lenso/
 examples/app-tools-rust/dist/
+
+# Dependencies of independently built surface packages
+**/node_modules/
