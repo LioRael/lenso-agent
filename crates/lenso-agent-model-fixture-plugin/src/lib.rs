@@ -453,6 +453,25 @@ fn default_fixture_response(
     current_user: &str,
     tool_results: &[&CompleteMessageInput],
 ) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
+    if current_user == "Invoke the convention greet tool."
+        || current_user == "Attempt the denied convention greet tool."
+    {
+        if tool_results.is_empty() {
+            if current_user == "Invoke the convention greet tool."
+                && !request.tools.iter().any(|tool| tool.name == "greet")
+            {
+                return Err(ModelCompleteInvocationError::Domain(
+                    CompleteError::InvalidRequest,
+                ));
+            }
+            return Ok(named_tool_request(
+                "convention-greet",
+                "greet",
+                r#"{"name":"Ada"}"#,
+            ));
+        }
+        return Ok(summary_response(&tool_results[0].content));
+    }
     if let Some(url) = current_user
         .strip_prefix("Use the network Plugin to fetch ")
         .and_then(|value| value.strip_suffix('.'))

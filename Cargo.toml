@@ -133,7 +133,7 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 lenso-capability-secrets = "0.1.4"
 lenso-app-authoring = { package = "lenso-cli", version = "0.5.2", default-features = false }
 lenso-app-plan = "0.4.1"
-lenso-bun-adapter = "0.1.10"
+lenso-bun-adapter = "0.1.11"
 lenso = "0.5.17"
 lenso-contract-authoring = "0.1.1"
 lenso-contract-codegen = "=0.9.0"
