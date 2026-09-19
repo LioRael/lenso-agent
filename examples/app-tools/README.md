@@ -19,5 +19,5 @@ calls an external model nor sends messages outside the process.
 
 This proof found and fixes missing Bun V2 artifact/codec admission in Agent's
 catalog factory and a nested-Tokio startup RPC defect in the Bun Adapter. The
-Cargo patch pins the reviewed Adapter fix by immutable Git revision until its
-registry release is available. A clean checkout needs no sibling worktree.
+Host now requires the published Bun Adapter 0.1.11 containing that fix.
+A clean checkout needs no sibling worktree or Adapter Git patch.
