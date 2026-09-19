@@ -5,7 +5,8 @@ or contracts. Create a new ADR only for a hard-to-reverse choice that changes a
 cross-repository contract, durable data or wire format, security or authority
 boundary, public compatibility policy, or foundational ownership direction.
 Ordinary feature behavior, implementation sequence, test evidence, and release
-proof belong in code, tests, pull requests, and current architecture pages.
+proof belong in code, tests, the [contribution guide](CONTRIBUTING.md), and
+current architecture pages.
 
 - Treat Lenso Agent as one Host plus a visible `plugins/` Plugin Root. Do
   not add Agent concepts, Plugin discovery, package installation, or graph

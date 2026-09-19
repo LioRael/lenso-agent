@@ -7,6 +7,7 @@ Start with the included coding Profiles, then choose the models, tools, memory,
 and interfaces that fit your workflow.
 
 [Get started](#quick-start) · [Documentation](docs/README.md) ·
+[Contributing](CONTRIBUTING.md) ·
 [Releases](https://github.com/LioRael/lenso-agent/releases) ·
 [Build a Plugin](docs/tutorials/10-minute-tool-provider.md)
 
@@ -134,6 +135,7 @@ Plugin authoring and package management use the separate
 - [Add a command to the CLI and terminal UI](docs/tutorials/add-terminal-command-provider.md)
 - [Architecture and source development](docs/architecture/host-internals.md)
 - [Full documentation map](docs/README.md)
+- [Contribute changes and review delivery](CONTRIBUTING.md)
 
 ## License
 

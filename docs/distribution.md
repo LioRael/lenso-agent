@@ -36,3 +36,9 @@ Publishing a native release does not by itself publish either downstream package
 The npm workflow uses its existing OIDC Trusted Publishers; Homebrew updates
 use the tap repository's own GitHub token. No shared cross-repository release
 token is required. A successful build or merged PR is not publication proof.
+
+## Contribution and workflow trigger policy
+
+Repository contributions use the [tool-independent contribution guide](../CONTRIBUTING.md) and an immutable revision handoff; a pull request is not required. The general `quality` workflow is candidate-first: it runs on `delta/verify/**` pushes (or explicit dispatch), not on ordinary `main` pushes or prose edits.
+
+The expensive external checks remain scoped: remote Marketplace and Projects delegated-user acceptance retain their relevant path triggers and manual dispatch, while the reconciler benchmark remains manual. These workflows are not weakened or silently included in routine documentation validation. Release workflows remain tag/manual and retain their package, pin, OIDC, and product-identity boundaries.
