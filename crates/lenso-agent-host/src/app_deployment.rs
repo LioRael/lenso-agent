@@ -8,6 +8,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Write as FmtWrite,
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Component, Path, PathBuf},
@@ -663,10 +664,11 @@ fn valid_plugin_id(value: &str) -> bool {
 }
 
 fn hash(bytes: &[u8]) -> String {
-    let digest: String = Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
+    let bytes = Sha256::digest(bytes);
+    let mut digest = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
     format!("sha256:{digest}")
 }
 

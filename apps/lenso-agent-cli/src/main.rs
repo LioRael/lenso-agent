@@ -1226,7 +1226,7 @@ mod profile_tests {
                 "--from".to_owned(),
                 "dist".to_owned(),
             ]),
-            Ok(CliCommand::Dx(DxCommand::Check { from })) if from == PathBuf::from("dist")
+            Ok(CliCommand::Dx(DxCommand::Check { from })) if from.as_path() == Path::new("dist")
         ));
         assert!(matches!(
             parse_command(vec![
@@ -1235,7 +1235,7 @@ mod profile_tests {
                 "--from".to_owned(),
                 "dist".to_owned(),
             ]),
-            Ok(CliCommand::Dx(DxCommand::Apply { from })) if from == PathBuf::from("dist")
+            Ok(CliCommand::Dx(DxCommand::Apply { from })) if from.as_path() == Path::new("dist")
         ));
         assert!(parse_command(vec!["dx".to_owned(), "check".to_owned()]).is_err());
         assert!(!terminal::should_try_composed_surface(&[
