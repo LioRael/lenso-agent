@@ -8,6 +8,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use lenso::prelude::*;
@@ -58,12 +59,18 @@ impl StateTaskProvider {
         let path = self.storage_path();
         match fs::read(&path) {
             Ok(bytes) => {
-                serde_json::from_slice(&bytes).map_err(|error| RuntimeFailure::PluginFailure {
-                    detail: format!(
-                        "external durable-state fixture cannot decode {}: {error}",
-                        path.display()
-                    ),
-                })
+                let mut store: Store = serde_json::from_slice(&bytes).map_err(|error| {
+                    RuntimeFailure::PluginFailure {
+                        detail: format!(
+                            "external durable-state fixture cannot decode {}: {error}",
+                            path.display()
+                        ),
+                    }
+                })?;
+                if settle_task_policy(&mut store) {
+                    self.persist(&store)?;
+                }
+                Ok(store)
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
             Err(error) => Err(RuntimeFailure::PluginFailure {
@@ -251,6 +258,15 @@ impl StateTaskProvider {
                 durable::StartError::IdempotencyConflict,
             ));
         }
+        if let Some(Some(parent_id)) = &request.parent_task_id {
+            let parent = store
+                .tasks
+                .get(parent_id)
+                .ok_or_else(|| PluginError::domain(durable::StartError::InvalidTask))?;
+            if parent.owner_instance != owner || !task_is_active(parent) {
+                return Err(PluginError::domain(durable::StartError::InvalidTask));
+            }
+        }
         let uncertain = request.workflow_kind.contains("uncertain");
         let task = durable::TaskSnapshot {
             task_id: request.task_id.clone(),
@@ -268,10 +284,14 @@ impl StateTaskProvider {
             deadline_unix_ms: request.deadline_unix_ms,
             terminal_reason_code: None,
         };
+        durable::validate_snapshot(&task)
+            .map_err(|_| PluginError::domain(durable::StartError::InvalidTask))?;
         store
             .start_ids
             .insert(request.idempotency_key, task.task_id.clone());
         store.tasks.insert(task.task_id.clone(), task.clone());
+        settle_task_policy(&mut store);
+        let task = store.tasks[&task.task_id].clone();
         self.persist(&store).map_err(PluginError::runtime)?;
         Ok(durable::StartResponse {
             task,
@@ -377,6 +397,7 @@ impl StateTaskProvider {
             task.revision = next_revision(&task.revision);
             task.terminal_reason_code = Some(Some(request.reason_code));
             store.tasks.insert(task.task_id.clone(), task.clone());
+            settle_task_policy(&mut store);
             self.persist(&store).map_err(PluginError::runtime)?;
         }
         Ok(durable::CancelResponse {
@@ -494,6 +515,73 @@ impl StateTaskProvider {
             })?;
         Ok(stream)
     }
+}
+
+fn task_is_active(task: &durable::TaskSnapshot) -> bool {
+    matches!(
+        task.status,
+        durable::TaskStatus::Ready
+            | durable::TaskStatus::Running
+            | durable::TaskStatus::WaitingForSignal
+    )
+}
+
+// This fixture settles deadlines at every admission/read, including restart.
+// It does not promise a background timer while its process is stopped.
+fn settle_task_policy(store: &mut Store) -> bool {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock after epoch")
+        .as_millis();
+    let mut changed = false;
+    for task in store.tasks.values_mut() {
+        if task_is_active(task)
+            && task
+                .deadline_unix_ms
+                .as_ref()
+                .and_then(Option::as_ref)
+                .and_then(|value| value.parse::<u128>().ok())
+                .is_some_and(|deadline| deadline <= now)
+        {
+            task.status = durable::TaskStatus::TimedOut;
+            task.revision = next_revision(&task.revision);
+            task.terminal_reason_code = Some(Some("deadline_elapsed".to_owned()));
+            changed = true;
+        }
+    }
+    loop {
+        let cancelled_parents: BTreeSet<_> = store
+            .tasks
+            .values()
+            .filter(|task| {
+                matches!(
+                    task.status,
+                    durable::TaskStatus::Cancelled | durable::TaskStatus::TimedOut
+                )
+            })
+            .map(|task| task.task_id.clone())
+            .collect();
+        let mut propagated = false;
+        for task in store.tasks.values_mut() {
+            if task_is_active(task)
+                && task
+                    .parent_task_id
+                    .as_ref()
+                    .and_then(Option::as_ref)
+                    .is_some_and(|parent| cancelled_parents.contains(parent))
+            {
+                task.status = durable::TaskStatus::Cancelled;
+                task.revision = next_revision(&task.revision);
+                task.terminal_reason_code = Some(Some("parent_stopped".to_owned()));
+                propagated = true;
+            }
+        }
+        if !propagated {
+            break;
+        }
+        changed = true;
+    }
+    changed
 }
 
 fn next_revision(value: &str) -> String {

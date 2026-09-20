@@ -34,4 +34,17 @@ from the fixture's ancestors. The source manifests deliberately name released
 crate versions. The verifier replaces those versions with sibling source paths
 only in its temporary copy, so this is **not** evidence that released packages
 or a clean consumer installation have been qualified. That remains the V10
-package-boundary proof.
+package-boundary proof for the source-local command above.
+
+For a clean native consumer using published crates.io artifacts, run:
+
+```sh
+python3 examples/external-task-board-capability/verify-registry.py
+```
+
+This verifier copies only the external App into a temporary directory, uses
+the committed `runner/Cargo.lock` with `--locked`, rejects non-registry Lenso
+dependencies, and runs the same Provider/Consumer lifecycle tests. It prints
+the exact package versions and sources. Python 3.9 or later is required.
+This is trusted-native registry qualification; it does not qualify the newly
+added Agent contracts, Host imports in another Adapter, or an isolation target.

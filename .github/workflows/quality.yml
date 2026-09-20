@@ -110,6 +110,12 @@ jobs:
         run: cargo install lenso-contract-codegen --version '=0.9.0' --locked
       - name: Check generated contracts
         run: lenso-contract-codegen workspace check --manifest-path Cargo.toml
+      - name: Verify independent registry consumer
+        run: python3 examples/external-task-board-capability/verify-registry.py
+      - name: Verify prepared durable SDK artifacts
+        run: |
+          cargo package -p lenso-capability-agent-durable-task -p lenso-capability-agent-extension-state
+          python3 examples/external-agent-durable-state/verify-artifacts.py --artifacts-dir target/package
 
   marketplace-installation:
     name: Console marketplace tool acceptance

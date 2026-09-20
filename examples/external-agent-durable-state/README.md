@@ -37,6 +37,30 @@ recovery changes it to `UpgradeRequired` with one revision increment. Repeating
 the check is idempotent, and a stale approval cannot resume the blocked task.
 This tests state compatibility, not installation of a second binary artifact.
 
+The child-policy phase cancels a parent and verifies that children and
+grandchildren remain cancelled after restart. Deadlines are settled before
+every public read or mutation, including restart, and expired tasks reject
+late approvals. This fixture has no background timer while stopped. Removal
+preserves the whole task tree; it cancels live transport work and leaves
+durable tasks for explicit recovery when their owner is selected again.
+Completed or uncertain-effect children are preserved for inspection, never
+rewritten as if their external effects had been undone.
+
 This is V05/V06 and native V09 source/local evidence. The verifier patches only its temporary
 copy to sibling source paths. It does not qualify released artifacts or a clean
 published install (V10).
+
+For release preparation, package the two SDK contracts and consume their
+versioned `.crate` archives from an independent directory:
+
+```sh
+cargo package -p lenso-capability-agent-durable-task -p lenso-capability-agent-extension-state
+python3 examples/external-agent-durable-state/verify-artifacts.py --artifacts-dir target/package
+```
+
+This verifier unpacks the archives, replaces only the external example's direct
+SDK dependencies with those unpacked packages, and resolves all other Lenso
+dependencies from crates.io. It uses no Cargo patches or sibling source paths.
+It prints archive digests and the consumer lock digest. This proves prepared
+artifact consumption; it does not publish a package or establish registry
+availability. The SDKs remain excluded from automatic publication.

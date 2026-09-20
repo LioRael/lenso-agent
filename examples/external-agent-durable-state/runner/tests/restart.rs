@@ -27,4 +27,5 @@ fn external_plugin_state_survives_real_process_restarts() {
     phase(binary, "uncertain", &store);
     phase(binary, "remove", &store);
     phase(binary, "upgrade", &store);
+    phase(binary, "child-policy", &store);
 }

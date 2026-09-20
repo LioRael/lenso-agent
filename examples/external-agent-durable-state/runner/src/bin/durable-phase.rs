@@ -89,10 +89,95 @@ async fn main() {
                 "uncertain" => uncertain(storage_path).await,
                 "remove" => remove(storage_path).await,
                 "upgrade" => upgrade(storage_path).await,
+                "child-policy" => child_policy(storage_path).await,
                 other => panic!("unknown durable fixture phase: {other}"),
             }
         })
         .await;
+}
+
+async fn child_policy(storage_path: &str) {
+    let app = start_app(storage_path).await;
+    let start = app
+        .handle::<durable::DurableTaskStart>(CALLER_INSTANCE)
+        .unwrap();
+    for (id, parent, deadline) in [
+        ("parent", None, None),
+        ("child", Some("parent"), None),
+        ("grandchild", Some("child"), None),
+        ("expired", None, Some("1")),
+    ] {
+        start
+            .invoke(
+                durable::START_OPERATION,
+                durable::StartRequest {
+                    task_id: id.to_owned(),
+                    idempotency_key: format!("start-{id}"),
+                    workflow_kind: "example.approval@1".to_owned(),
+                    state_version: "1".to_owned(),
+                    state_json: "{}".try_into().unwrap(),
+                    parent_task_id: parent.map(|value| Some(value.to_owned())),
+                    deadline_unix_ms: deadline.map(|value| Some(value.to_owned())),
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+    }
+    app.handle::<durable::DurableTaskCancel>(CALLER_INSTANCE)
+        .unwrap()
+        .invoke(
+            durable::CANCEL_OPERATION,
+            durable::CancelRequest {
+                task_id: "parent".to_owned(),
+                reason_code: "user_cancelled".to_owned(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    shutdown(app).await;
+    let restarted = start_app(storage_path).await;
+    for id in ["parent", "child", "grandchild", "expired"] {
+        let observed = restarted
+            .handle::<durable::DurableTaskObserve>(CALLER_INSTANCE)
+            .unwrap()
+            .invoke(
+                durable::OBSERVE_OPERATION,
+                durable::ObserveRequest {
+                    task_id: id.to_owned(),
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .task;
+        assert_eq!(
+            observed.status,
+            if id == "expired" {
+                durable::TaskStatus::TimedOut
+            } else {
+                durable::TaskStatus::Cancelled
+            }
+        );
+        let stale = restarted
+            .handle::<durable::DurableTaskSignal>(CALLER_INSTANCE)
+            .unwrap()
+            .invoke(
+                durable::SIGNAL_OPERATION,
+                durable::SignalRequest {
+                    task_id: id.to_owned(),
+                    signal_id: format!("late-{id}"),
+                    expected_revision: "1".to_owned(),
+                    kind: "approval_granted".to_owned(),
+                    payload_json: "{}".try_into().unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(stale.is_err(), "stopped task accepted a stale approval");
+    }
+    shutdown(restarted).await;
 }
 
 async fn start(storage_path: &str) {

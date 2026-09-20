@@ -63,14 +63,14 @@ than modifying the framework during the consumer run.
 | --- | --- | --- |
 | V01 blank Foundation and explicit dialogue | **Source-local pass** | `cargo test -p lenso-agent-foundation`, `cargo test -p lenso-agent-dialogue-starter`, and `cargo test -p lenso-agent-dialogue` |
 | V02 Bun Tool + Rust Tool + Profile-only contribution | **Source-local external pass** | [app-agent-composition](../../examples/app-agent-composition/verify-foundation.py) with a supplied Engine Host and Agent CLI |
-| V03 external Capability Provider + Consumer | **Source-local external pass** | [external-task-board-capability](../../examples/external-task-board-capability/verify-foundation.py) with a supplied Engine Host |
+| V03 external Capability Provider + Consumer | **Source-local and registry native external pass** | [source verifier](../../examples/external-task-board-capability/verify-foundation.py) with an Engine Host; [registry verifier](../../examples/external-task-board-capability/verify-registry.py) uses a committed lockfile, only crates.io framework dependencies, and no source patches |
 | V04 external Loop plus ordered processors | **Source-local external pass** | [external-agent-processing](../../examples/external-agent-processing/verify-foundation.py) |
 | V05 extension state, safe unknown presentation | **Source-local external pass** | [external-agent-durable-state](../../examples/external-agent-durable-state/verify-foundation.py) |
 | V06 restartable approval task | **Source-local external pass** | [external-agent-durable-state](../../examples/external-agent-durable-state/verify-foundation.py) uses separate operating-system processes for start, recover, signal, and recovery-after-signal |
 | V07 bounded duplex interaction | **Source-local external pass** | [external-agent-interaction](../../examples/external-agent-interaction/verify-foundation.py) |
 | V08 dynamic tenant Tool authority | **Source-local external pass** | [external-agent-dynamic-authority](../../examples/external-agent-dynamic-authority/verify-foundation.py) |
 | V09 disable/remove, active-work drain, and upgrade | **Native source-local lifecycle pass; artifact upgrade not qualified** | The durable-state fixture closes admission, rejects retained handles, settles an active stream with `Unavailable`, releases its lease and shuts down cleanly. A new composition omits both Plugins. Durable bytes survive removal; restart can inspect them, incompatible state blocks recovery, and stale approval cannot resume it. This does not prove replacement by a different distributed executable. |
-| V10 exact released artifacts in a clean consumer | **Not yet proven** | Every current fixture relies on temporary source patches. No package version, target artifact, or clean install is recorded as release evidence. |
+| V10 exact artifacts in a clean consumer | **Native Task Board registry path passed; new Agent release still pending** | The registry verifier uses a temporary independent App and locked published packages. New Agent SDK archives have a separate prepared-artifact verifier; neither path claims isolated-target qualification or publication of the new Agent contracts. |
 
 Run V04–V08 from an Agent checkout with explicit source roots:
 
@@ -107,14 +107,27 @@ The external durable-state fixture now checks upgrade-state revision changes:
 the first incompatible recovery increments the revision, while repeated checks
 leave it stable. Its removal policy preserves durable facts and cancels live
 transport work; removal never implies rollback of an external effect.
+The child-policy phase also proves parent cancellation propagates through
+children and grandchildren, persists across restart, and rejects late approval.
+Expired deadlines are settled on admission/read and cannot resume a task.
+
+The clean native Task Board test now passes with its committed registry lock
+and no patches. Prepared Durable Task and Extension State `0.1.0` SDK archives
+also pass the complete external restart fixture after unpacking outside the
+repository, with all other framework dependencies resolved from crates.io.
+Five SDK packages (Model, Durable Task, Extension State, Interaction, Dynamic
+Authority) passed `cargo package` verification. Turn Processing still needs
+Model publication first. None of these package builds publishes a registry
+entry or proves a sandbox target.
 
 Target qualification is blocked independently of those native tests. The Bun
 Adapter target branch requires `lenso-app-plan = "^0.4.4"`, which could not be
 resolved from crates.io on 2026-09-21. Do not silently replace that dependency
 with a sibling checkout and record the result as released-package evidence.
-The five new Agent Capability crates currently inherit `publish = false` from
-the workspace. Their public distribution/version selection must be completed
-before V10 can use them from a clean external consumer.
+The new Agent Capability crates inherit `publish = false` from the workspace.
+Registry publication remains separately authorized. Turn Processing requires
+the new Model contract package to be published first; its Cargo dependency now
+names the matching version as well as the development path.
 
 - Trusted native Plugins remain trusted code. These Capability contracts do not
   claim to sandbox a Plugin that has direct process or credential authority.
@@ -127,6 +140,6 @@ before V10 can use them from a clean external consumer.
   than a retry instruction.
 - Console's fallback is a safe shell state for a missing Workspace requirement.
   It does not execute unknown extension payloads or provide a general task UI.
-- V10 still requires exact published versions, a clean directory, a selected
-  target artifact, target-adapter conformance, and an installation proof. Those
-  facts must be recorded separately from the source/local evidence above.
+- The registry verifier qualifies the existing native SDK closure only. The
+  new Agent SDK release and isolated-target closure remain separate; a native
+  archive test cannot substitute for target-adapter conformance.
