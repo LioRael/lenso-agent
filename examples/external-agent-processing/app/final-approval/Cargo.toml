@@ -1,0 +1,16 @@
+[package]
+name = "external-final-approval"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.final-approval"
+root-slot = "tool-hooks"
+
+[dependencies]
+lenso = "0.5.21"
+lenso-capability-agent-tool-hook = "0.1.0"
+serde = { version = "1", features = ["derive"] }
+
+[workspace]

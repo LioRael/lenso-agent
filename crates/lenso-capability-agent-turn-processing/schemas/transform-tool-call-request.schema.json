@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["turn_id", "tool_call_id", "tool_name", "arguments_json"],
+  "properties": {
+    "turn_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tool_call_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "tool_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "arguments_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    }
+  },
+  "additionalProperties": false,
+  "description": "A narrow, pre-authorization Tool argument transformation. It cannot change\nthe selected Tool name. Every emitted argument value is normalized and\nschema-validated by the Tool aggregate before final authorization runs.",
+  "title": "TransformToolCallRequest"
+}

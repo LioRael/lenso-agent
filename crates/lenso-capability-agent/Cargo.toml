@@ -15,8 +15,12 @@ output = "src/generated.rs"
 
 [dependencies]
 futures.workspace = true
+lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }
+lenso-capability-agent-model-selection = { path = "../lenso-capability-agent-model-selection" }
+lenso-capability-agent-tools = { path = "../lenso-capability-agent-tools" }
 lenso-contract-runtime.workspace = true
 lenso-guest-sdk.workspace = true
+lenso.workspace = true
 lenso-kernel.workspace = true
 lenso-plugin-authoring.workspace = true
 lenso-runtime-codec.workspace = true

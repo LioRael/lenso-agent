@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "unsupported_protocol" },
+    { "const": "resume_unsupported" },
+    { "const": "invalid_frame" },
+    { "const": "interrupted" },
+    { "const": "capacity_exceeded" },
+    { "const": "output_limit_exceeded" }
+  ]
+}

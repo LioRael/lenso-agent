@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["selection_id", "requested_resources", "context_json"],
+  "properties": {
+    "selection_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "requested_resources": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/ResourceIdentity"
+      }
+    },
+    "context_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 16384,
+      "description": "Bounded non-authoritative request metadata. The Provider uses a trusted\nHost identity assertion, not this JSON, to choose a tenant or subject."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ResourceIdentity": {
+      "type": "object",
+      "required": ["kind", "name", "provider_instance", "revision"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "provider_instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192,
+          "description": "Exact version or schema digest selected by the already immutable Plan."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "SelectRequest"
+}

@@ -22,7 +22,6 @@ use lenso_agent_host::{
     Profile, ProviderModelCatalog, WebSurface,
     generation::{AgentApp, RenameSessionFailure},
 };
-use lenso_agent_loop_plugin::RunScope;
 use lenso_agent_session_inspection::{
     InspectedSession, InspectedSessionEvent, Trajectory, project_trajectory,
 };
@@ -43,6 +42,7 @@ use lenso_capability_agent_session::{
 use lenso_capability_agent_session_control::CompactSessionResponse;
 use lenso_capability_agent_task_supervisor::SnapshotResponse as TaskSnapshotResponse;
 pub use lenso_capability_agent_tools::CatalogResponseToolsItemExecution as AgentToolExecutionClass;
+use lenso_capability_agent_tools::RunScope;
 use lenso_capability_agent_tools::{
     CatalogResponseToolsItem, ExecuteError as AgentToolExecuteError,
     ExecuteRequest as AgentToolExecuteCapabilityRequest,
@@ -3632,7 +3632,7 @@ async fn invoke_turn(
         .is_some_and(|input| input != &request.input)
     {
         context
-            .with_typed_extension(&lenso_agent_loop_plugin::TurnInputPresentation {
+            .with_typed_extension(&lenso_capability_agent_turn_input::TurnInputPresentation {
                 input: request.approval_user_request.clone().unwrap_or_default(),
             })
             .map_err(|error| format!("failed to preserve user input: {error}"))?

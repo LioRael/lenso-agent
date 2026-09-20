@@ -1,10 +1,11 @@
 //! Explicit deployment of Agent DX resources emitted by an App build.
 //!
 //! File conventions can produce a candidate Tool Provider and an optional
-//! Profile source, but this module is the only place that imports those bytes
-//! into an Agent Home. It verifies the immutable distribution, stages the
-//! complete candidate, and asks the ordinary Host resolver to admit it before
-//! publishing any visible Plugin Root or Profile file.
+//! Profile source, or a Profile-only composition. This module is the only
+//! place that imports those bytes into an Agent Home. It verifies the immutable
+//! distribution, stages every actual Plugin candidate, and asks the ordinary
+//! Host resolver to admit the resulting Profile before publishing visible
+//! Plugin Root or Profile files.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,6 +26,10 @@ use crate::{
 
 /// Schema emitted by the optional Agent convention support package.
 pub const APP_DEPLOYMENT_SCHEMA: &str = "lenso.agent.deployment@1";
+/// Profile-only deployment resources have no Plugin or Bundle and therefore
+/// use a separate schema rather than weakening the established v1 identity
+/// contract for Tool Provider contributions.
+pub const PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA: &str = "lenso.agent.deployment@2";
 const APP_RESOURCES_SCHEMA: &str = "lenso.app-resources.v1";
 const MAX_RESOURCE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_ARCHIVE_FILES: usize = 4_096;
@@ -35,18 +40,30 @@ const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 /// or granted to a model.
 #[derive(Clone, Debug, Serialize)]
 pub struct AppDeploymentInspection {
-    pub plugin_id: String,
-    pub instance: String,
+    /// Resource-only contributions have no Plugin identity. The Engine-assigned
+    /// contribution identity makes their source inventory auditable without
+    /// representing them as installed Plugins.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contribution_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
     pub profile: Option<String>,
     pub resource_path: PathBuf,
-    pub bundle_path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bundle_path: Option<PathBuf>,
 }
 
 /// Receipt for one explicit local Agent Home publication.
 #[derive(Clone, Debug, Serialize)]
 pub struct AppDeploymentApplied {
-    pub plugin_id: String,
-    pub instance: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contribution_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plugin_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
     pub profile: Option<String>,
 }
 
@@ -72,13 +89,34 @@ struct BundleEntry {
     manifest_digest: String,
 }
 
+#[derive(Clone, Debug)]
+struct DeploymentDocument {
+    contribution_id: String,
+    plugin: Option<DeploymentPlugin>,
+    profile: Option<DeploymentProfile>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DeploymentDocument {
+struct PluginDeploymentDocument {
     schema: String,
     plugin: DeploymentPlugin,
     #[serde(default)]
     profile: Option<DeploymentProfile>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileOnlyDeploymentDocument {
+    schema: String,
+    contribution: DeploymentContribution,
+    profile: DeploymentProfile,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeploymentContribution {
+    id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -101,8 +139,13 @@ struct DeploymentProfile {
 struct LoadedDeployment {
     document: DeploymentDocument,
     resource_path: PathBuf,
-    bundle_path: PathBuf,
-    bundle_manifest_digest: String,
+    bundle: Option<LoadedBundle>,
+}
+
+#[derive(Clone, Debug)]
+struct LoadedBundle {
+    path: PathBuf,
+    manifest_digest: String,
 }
 
 /// Reads and verifies the Agent deployment resources in an App distribution
@@ -113,12 +156,25 @@ pub fn inspect_app_deployments(
     load_deployments(distribution).map(|deployments| {
         deployments
             .into_iter()
-            .map(|deployment| AppDeploymentInspection {
-                plugin_id: deployment.document.plugin.id,
-                instance: deployment.document.plugin.instance,
-                profile: deployment.document.profile.map(|profile| profile.name),
-                resource_path: deployment.resource_path,
-                bundle_path: deployment.bundle_path,
+            .map(|deployment| {
+                let document = deployment.document;
+                let contribution_id = document
+                    .plugin
+                    .is_none()
+                    .then_some(document.contribution_id.clone());
+                let plugin_id = document.plugin.as_ref().map(|plugin| plugin.id.clone());
+                let instance = document
+                    .plugin
+                    .as_ref()
+                    .map(|plugin| plugin.instance.clone());
+                AppDeploymentInspection {
+                    contribution_id,
+                    plugin_id,
+                    instance,
+                    profile: document.profile.map(|profile| profile.name),
+                    resource_path: deployment.resource_path,
+                    bundle_path: deployment.bundle.map(|bundle| bundle.path),
+                }
             })
             .collect()
     })
@@ -144,20 +200,35 @@ pub fn apply_app_deployments(
     let profiles = stage.path().join("profiles");
     let mut applied = Vec::with_capacity(deployments.len());
     for deployment in &deployments {
-        stage_bundle(deployment, &plugins)?;
+        if deployment.document.plugin.is_some() {
+            stage_bundle(deployment, &plugins)?;
+        }
         let profile = deployment
             .document
             .profile
             .as_ref()
-            .map(|profile| render_profile(profile, &deployment.document.plugin))
+            .map(|profile| render_profile(profile, deployment.document.plugin.as_ref()))
             .transpose()?;
         if let Some((name, document)) = &profile {
             fs::write(profiles.join(format!("{name}.toml")), document)
                 .map_err(|error| format!("failed to stage Agent Profile `{name}`: {error}"))?;
         }
         applied.push(AppDeploymentApplied {
-            plugin_id: deployment.document.plugin.id.clone(),
-            instance: deployment.document.plugin.instance.clone(),
+            contribution_id: deployment
+                .document
+                .plugin
+                .is_none()
+                .then_some(deployment.document.contribution_id.clone()),
+            plugin_id: deployment
+                .document
+                .plugin
+                .as_ref()
+                .map(|plugin| plugin.id.clone()),
+            instance: deployment
+                .document
+                .plugin
+                .as_ref()
+                .map(|plugin| plugin.instance.clone()),
             profile: profile.map(|(name, _)| name),
         });
     }
@@ -172,20 +243,21 @@ pub fn apply_app_deployments(
     }
 
     for receipt in &applied {
-        let staged_plugin = plugins.join(&receipt.plugin_id);
-        let target = home.join("plugins").join(&receipt.plugin_id);
-        let parent = target
-            .parent()
-            .ok_or_else(|| format!("Plugin target has no parent: {}", target.display()))?;
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
-        fs::rename(&staged_plugin, &target).map_err(|error| {
-            format!(
-                "failed to publish Agent Plugin {} into {}: {error}",
-                receipt.plugin_id,
-                target.display()
-            )
-        })?;
+        if let Some(plugin_id) = &receipt.plugin_id {
+            let staged_plugin = plugins.join(plugin_id);
+            let target = home.join("plugins").join(plugin_id);
+            let parent = target
+                .parent()
+                .ok_or_else(|| format!("Plugin target has no parent: {}", target.display()))?;
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+            fs::rename(&staged_plugin, &target).map_err(|error| {
+                format!(
+                    "failed to publish Agent Plugin {plugin_id} into {}: {error}",
+                    target.display()
+                )
+            })?;
+        }
         if let Some(profile) = &receipt.profile {
             let staged_profile = profiles.join(format!("{profile}.toml"));
             let target = home.join("profiles").join(format!("{profile}.toml"));
@@ -230,13 +302,12 @@ fn load_deployments(distribution: &Path) -> Result<Vec<LoadedDeployment>, String
     }
 
     let mut deployments = Vec::new();
-    let mut plugin_ids = BTreeSet::new();
+    let mut contribution_ids = BTreeSet::new();
     let mut profile_names = BTreeSet::new();
-    for resource in resources
-        .resources
-        .into_iter()
-        .filter(|resource| resource.schema == APP_DEPLOYMENT_SCHEMA)
-    {
+    for resource in resources.resources.into_iter().filter(|resource| {
+        resource.schema == APP_DEPLOYMENT_SCHEMA
+            || resource.schema == PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA
+    }) {
         let resource_path = resolve_regular_file(&distribution, &resource.path)?;
         let bytes = fs::read(&resource_path)
             .map_err(|error| format!("failed to read {}: {error}", resource_path.display()))?;
@@ -252,45 +323,52 @@ fn load_deployments(distribution: &Path) -> Result<Vec<LoadedDeployment>, String
                 resource.path
             ));
         }
-        let document: DeploymentDocument = serde_json::from_slice(&bytes).map_err(|error| {
+        let document = decode_deployment(&resource.schema, &bytes).map_err(|error| {
             format!(
                 "invalid Agent deployment resource {}: {error}",
                 resource.path
             )
         })?;
-        if document.schema != APP_DEPLOYMENT_SCHEMA {
-            return Err(format!(
-                "Agent deployment resource has an unsupported schema: {}",
-                resource.path
-            ));
-        }
         validate_deployment(&document)?;
         if let Some(profile) = &document.profile {
-            render_profile(profile, &document.plugin)?;
+            render_profile(profile, document.plugin.as_ref())?;
         }
-        if resource.owner != document.plugin.id {
-            return Err("Agent deployment resource owner does not match its Plugin".to_owned());
+        if resource.owner != document.contribution_id {
+            return Err(
+                "Agent deployment resource owner does not match its contribution identity"
+                    .to_owned(),
+            );
         }
-        if !plugin_ids.insert(document.plugin.id.clone()) {
-            return Err("App distribution declares an Agent Plugin more than once".to_owned());
+        if !contribution_ids.insert(document.contribution_id.clone()) {
+            return Err(
+                "App distribution declares an Agent contribution more than once".to_owned(),
+            );
         }
         if let Some(profile) = &document.profile
             && !profile_names.insert(profile.name.clone())
         {
             return Err("App distribution declares an Agent Profile more than once".to_owned());
         }
-        let bundle = bundles_by_plugin.get(&document.plugin.id).ok_or_else(|| {
-            format!(
-                "Agent deployment has no matching Plugin Bundle: {}",
-                document.plugin.id
-            )
-        })?;
-        let bundle_path = resolve_regular_file(&distribution, &bundle.path)?;
+        let bundle = document
+            .plugin
+            .as_ref()
+            .map(|plugin| -> Result<LoadedBundle, String> {
+                let bundle = bundles_by_plugin.get(&plugin.id).ok_or_else(|| {
+                    format!(
+                        "Agent deployment has no matching Plugin Bundle: {}",
+                        plugin.id
+                    )
+                })?;
+                Ok(LoadedBundle {
+                    path: resolve_regular_file(&distribution, &bundle.path)?,
+                    manifest_digest: bundle.manifest_digest.clone(),
+                })
+            })
+            .transpose()?;
         deployments.push(LoadedDeployment {
             document,
             resource_path: PathBuf::from(resource.path),
-            bundle_path,
-            bundle_manifest_digest: bundle.manifest_digest.clone(),
+            bundle,
         });
     }
     if deployments.is_empty() {
@@ -299,9 +377,53 @@ fn load_deployments(distribution: &Path) -> Result<Vec<LoadedDeployment>, String
     Ok(deployments)
 }
 
+fn decode_deployment(schema: &str, bytes: &[u8]) -> Result<DeploymentDocument, String> {
+    match schema {
+        APP_DEPLOYMENT_SCHEMA => {
+            let document: PluginDeploymentDocument = serde_json::from_slice(bytes)
+                .map_err(|error| format!("parse v1 Tool Provider deployment: {error}"))?;
+            if document.schema != APP_DEPLOYMENT_SCHEMA {
+                return Err(
+                    "v1 deployment payload schema does not match its resource inventory".to_owned(),
+                );
+            }
+            Ok(DeploymentDocument {
+                contribution_id: document.plugin.id.clone(),
+                plugin: Some(document.plugin),
+                profile: document.profile,
+            })
+        }
+        PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA => {
+            let document: ProfileOnlyDeploymentDocument = serde_json::from_slice(bytes)
+                .map_err(|error| format!("parse v2 Profile-only deployment: {error}"))?;
+            if document.schema != PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA {
+                return Err(
+                    "v2 deployment payload schema does not match its resource inventory".to_owned(),
+                );
+            }
+            Ok(DeploymentDocument {
+                contribution_id: document.contribution.id,
+                plugin: None,
+                profile: Some(document.profile),
+            })
+        }
+        _ => Err(format!(
+            "unsupported Agent deployment resource schema: {schema}"
+        )),
+    }
+}
+
 fn validate_deployment(deployment: &DeploymentDocument) -> Result<(), String> {
-    if !valid_plugin_id(&deployment.plugin.id) || deployment.plugin.instance != "default" {
+    if !valid_plugin_id(&deployment.contribution_id) {
+        return Err("Agent deployment has an invalid contribution identity".to_owned());
+    }
+    if let Some(plugin) = &deployment.plugin
+        && (!valid_plugin_id(&plugin.id) || plugin.instance != "default")
+    {
         return Err("Agent deployment has an invalid Plugin identity or instance".to_owned());
+    }
+    if deployment.plugin.is_none() && deployment.profile.is_none() {
+        return Err("Agent deployment must contain a Plugin or a Profile".to_owned());
     }
     if let Some(profile) = &deployment.profile {
         validate_profile_name(&profile.name)?;
@@ -321,7 +443,7 @@ fn validate_deployment(deployment: &DeploymentDocument) -> Result<(), String> {
 
 fn render_profile(
     source: &DeploymentProfile,
-    plugin: &DeploymentPlugin,
+    plugin: Option<&DeploymentPlugin>,
 ) -> Result<(String, String), String> {
     validate_profile_name(&source.name)?;
     let mut document: toml::Value = toml::from_str(&source.source_toml)
@@ -376,16 +498,18 @@ fn render_profile(
             toml::Value::String(instructions.clone()),
         );
     }
-    let generated_instance = format!("{}/{}", plugin.id, plugin.instance);
-    let instances = table
-        .get_mut("instances")
-        .and_then(toml::Value::as_array_mut)
-        .expect("validated Agent Profile instances remain an array");
-    if !instances
-        .iter()
-        .any(|instance| instance.as_str() == Some(generated_instance.as_str()))
-    {
-        instances.push(toml::Value::String(generated_instance));
+    if let Some(plugin) = plugin {
+        let generated_instance = format!("{}/{}", plugin.id, plugin.instance);
+        let instances = table
+            .get_mut("instances")
+            .and_then(toml::Value::as_array_mut)
+            .expect("validated Agent Profile instances remain an array");
+        if !instances
+            .iter()
+            .any(|instance| instance.as_str() == Some(generated_instance.as_str()))
+        {
+            instances.push(toml::Value::String(generated_instance));
+        }
     }
     toml::to_string_pretty(&document)
         .map(|document| (source.name.clone(), document))
@@ -394,12 +518,14 @@ fn render_profile(
 
 fn ensure_targets_are_new(home: &Path, deployments: &[LoadedDeployment]) -> Result<(), String> {
     for deployment in deployments {
-        let plugin = home.join("plugins").join(&deployment.document.plugin.id);
-        if plugin.try_exists().map_err(|error| error.to_string())? {
-            return Err(format!(
-                "refusing to overwrite existing Agent Plugin directory: {}",
-                plugin.display()
-            ));
+        if let Some(plugin) = &deployment.document.plugin {
+            let path = home.join("plugins").join(&plugin.id);
+            if path.try_exists().map_err(|error| error.to_string())? {
+                return Err(format!(
+                    "refusing to overwrite existing Agent Plugin directory: {}",
+                    path.display()
+                ));
+            }
         }
         if let Some(profile) = &deployment.document.profile {
             let path = home.join("profiles").join(format!("{}.toml", profile.name));
@@ -442,15 +568,23 @@ fn stage_home(home: &Path) -> Result<tempfile::TempDir, String> {
 }
 
 fn stage_bundle(deployment: &LoadedDeployment, plugins: &Path) -> Result<(), String> {
-    let plugin_directory = plugins.join(&deployment.document.plugin.id);
+    let plugin = deployment
+        .document
+        .plugin
+        .as_ref()
+        .ok_or_else(|| "Profile-only deployment has no Plugin Bundle to stage".to_owned())?;
+    let bundle_source = deployment
+        .bundle
+        .as_ref()
+        .ok_or_else(|| "Agent deployment has no matching Plugin Bundle".to_owned())?;
+    let plugin_directory = plugins.join(&plugin.id);
     fs::create_dir(&plugin_directory)
         .map_err(|error| format!("failed to stage Agent Plugin directory: {error}"))?;
     let bundle = plugin_directory.join("plugin.lenso-plugin");
-    extract_bundle(&deployment.bundle_path, &bundle)?;
+    extract_bundle(&bundle_source.path, &bundle)?;
     let verified = lenso_plugin_bundle::verify_bundle_directory(&bundle)
         .map_err(|error| format!("failed to verify Agent Plugin Bundle: {error}"))?;
-    if verified.plugin_id != deployment.document.plugin.id
-        || verified.manifest_digest != deployment.bundle_manifest_digest
+    if verified.plugin_id != plugin.id || verified.manifest_digest != bundle_source.manifest_digest
     {
         return Err("Agent Plugin Bundle identity does not match the App distribution".to_owned());
     }
@@ -689,7 +823,7 @@ mod tests {
             id: "example.orders".to_owned(),
             instance: "default".to_owned(),
         };
-        let (name, rendered) = render_profile(&profile, &plugin).unwrap();
+        let (name, rendered) = render_profile(&profile, Some(&plugin)).unwrap();
         assert_eq!(name, "orders");
         assert!(rendered.contains("example.orders/default"));
         assert!(rendered.contains("Follow the order rules."));
@@ -699,7 +833,66 @@ mod tests {
             source_toml: "instances = []\n\n[lenso]\nprofile = \"orders\"\n".to_owned(),
             ..profile
         };
-        assert!(render_profile(&missing_policy, &plugin).is_err());
+        assert!(render_profile(&missing_policy, Some(&plugin)).is_err());
+    }
+
+    #[test]
+    fn profile_only_resources_need_no_bundle_and_preserve_declared_instances() {
+        let temporary = tempfile::tempdir().unwrap();
+        let distribution = temporary.path().join("distribution");
+        let owner = "example.assistant";
+        let relative = format!("resources/{owner}/lenso-agent-deployment.json");
+        let source = "instances = [\"lenso.agent.loop/agent\"]\nallowed_tools = []\n\n[lenso]\nprofile = \"assistant\"\n";
+        let deployment = serde_json::json!({
+            "schema": PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA,
+            "contribution": {"id": owner},
+            "profile": {
+                "name": "assistant",
+                "source_toml": source,
+                "instructions": "Answer only from the approved records.\n",
+            },
+        });
+        let bytes = serde_json::to_vec(&deployment).unwrap();
+        let path = distribution.join(&relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, &bytes).unwrap();
+        fs::write(
+            distribution.join("resources.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema": APP_RESOURCES_SCHEMA,
+                "resources": [{
+                    "owner": owner,
+                    "schema": PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA,
+                    "path": relative,
+                    "sha256": hash(&bytes),
+                    "size": bytes.len(),
+                }],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(distribution.join("bundles.json"), "[]").unwrap();
+
+        let inspected = inspect_app_deployments(&distribution).unwrap();
+        assert_eq!(inspected.len(), 1);
+        assert_eq!(inspected[0].contribution_id.as_deref(), Some(owner));
+        assert!(inspected[0].plugin_id.is_none());
+        assert!(inspected[0].instance.is_none());
+        assert!(inspected[0].bundle_path.is_none());
+        assert_eq!(inspected[0].profile.as_deref(), Some("assistant"));
+
+        let profile = DeploymentProfile {
+            name: "assistant".to_owned(),
+            source_toml: source.to_owned(),
+            instructions: Some("Answer only from the approved records.\n".to_owned()),
+        };
+        let (_, rendered) = render_profile(&profile, None).unwrap();
+        let rendered: toml::Value = toml::from_str(&rendered).unwrap();
+        assert_eq!(
+            rendered["instances"].as_array().unwrap(),
+            &[toml::Value::String("lenso.agent.loop/agent".to_owned())]
+        );
+        assert!(!rendered.to_string().contains("example.assistant/default"));
     }
 
     #[cfg(unix)]

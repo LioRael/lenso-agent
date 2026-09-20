@@ -1,0 +1,18 @@
+[package]
+name = "external-inspect-model"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.inspect-model"
+root-slot = "models"
+
+[dependencies]
+futures = "0.3"
+lenso = "0.5.21"
+lenso-capability-agent-model = "0.1.0"
+lenso-kernel = "0.3.9"
+serde = { version = "1", features = ["derive"] }
+
+[workspace]

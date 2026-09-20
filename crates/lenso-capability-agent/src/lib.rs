@@ -1,5 +1,12 @@
 //! Portable Agent turn Capability.
 
+mod extensions;
+
+pub use extensions::{
+    AGENT_BEHAVIOR_PROVENANCE_EXTENSION, AgentBehaviorProvenance, SessionProfile,
+    TurnGenerationProvenance, inspect_turn_generation_provenance,
+};
+
 include!("generated.rs");
 
 impl RunTurnResponse {

@@ -16,12 +16,12 @@ use lenso_agent_cli_plugin as _;
 use lenso_agent_host::{
     AgentDirectories, AgentHost, HeadlessSurface, Profile, generation, provenance,
 };
-use lenso_agent_loop_plugin::RunScope;
 use lenso_agent_session_terminal_plugin as _;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
 use lenso_capability_agent_context_source::{
     ContextRole, ReadResourceRequest, RenderPromptRequest,
 };
+use lenso_capability_agent_tools::RunScope;
 use lenso_kernel::StreamEvent;
 use lenso_terminal_cli_plugin as _;
 use lenso_terminal_command_plugin as _;

@@ -1,0 +1,50 @@
+{
+  "id": "lenso.agent.durable-task@1",
+  "version": "1.0.0",
+  "portable": false,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "start",
+      "interaction": "request",
+      "request_schema": "schemas/start-request.schema.json",
+      "response_schema": "schemas/start-response.schema.json",
+      "domain_error_schema": "schemas/start-error.schema.json"
+    },
+    {
+      "name": "observe",
+      "interaction": "request",
+      "request_schema": "schemas/observe-request.schema.json",
+      "response_schema": "schemas/observe-response.schema.json",
+      "domain_error_schema": "schemas/observe-error.schema.json"
+    },
+    {
+      "name": "signal",
+      "interaction": "request",
+      "request_schema": "schemas/signal-request.schema.json",
+      "response_schema": "schemas/signal-response.schema.json",
+      "domain_error_schema": "schemas/signal-error.schema.json"
+    },
+    {
+      "name": "cancel",
+      "interaction": "request",
+      "request_schema": "schemas/cancel-request.schema.json",
+      "response_schema": "schemas/cancel-response.schema.json",
+      "domain_error_schema": "schemas/cancel-error.schema.json"
+    },
+    {
+      "name": "recover",
+      "interaction": "request",
+      "request_schema": "schemas/recover-request.schema.json",
+      "response_schema": "schemas/recover-response.schema.json",
+      "domain_error_schema": "schemas/recover-error.schema.json"
+    },
+    {
+      "name": "wait",
+      "interaction": "stream",
+      "request_schema": "schemas/wait-open.schema.json",
+      "response_schema": "schemas/wait-message.schema.json",
+      "domain_error_schema": "schemas/wait-error.schema.json"
+    }
+  ]
+}

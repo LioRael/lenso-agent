@@ -5,13 +5,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lenso_agent_loop_plugin::inspect_turn_generation_provenance;
 use lenso_agent_session_file_plugin::{FileSessionImporter, FileSessionInspector};
 use lenso_agent_session_inspection::{
     EvaluationCriteria, SessionArchive, SessionImporter, SessionInspector, evaluate_trajectory,
     inspect_turn_started, project_otlp_trace, project_trajectory,
 };
 use lenso_agent_session_sqlite_plugin::{SqliteSessionImporter, SqliteSessionInspector};
+use lenso_capability_agent::inspect_turn_generation_provenance;
 use lenso_plugin_control_plane::{AppGenerationSpec, CanonicalDocument};
 
 use crate::{

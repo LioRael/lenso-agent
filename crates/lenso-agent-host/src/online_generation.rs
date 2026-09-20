@@ -489,10 +489,10 @@ impl OnlineGenerationTracker {
     pub(crate) fn retained_profile(
         &self,
         digest: &str,
-    ) -> Option<lenso_agent_loop_plugin::SessionProfile> {
+    ) -> Option<lenso_capability_agent::SessionProfile> {
         self.retained
             .get(digest)
-            .map(|selection| lenso_agent_loop_plugin::SessionProfile {
+            .map(|selection| lenso_capability_agent::SessionProfile {
                 name: selection.profile_name.clone(),
             })
     }

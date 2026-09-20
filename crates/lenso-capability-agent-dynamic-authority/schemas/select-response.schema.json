@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot_id", "policy_revision", "authority_instance", "granted_resources", "expires_at_unix_ms"],
+  "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "policy_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "authority_instance": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "granted_resources": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/ResourceIdentity"
+      }
+    },
+    "expires_at_unix_ms": {
+      "type": "string",
+      "format": "uint64",
+      "description": "Unix milliseconds as a decimal u64. A Provider may choose a short\nlifetime; it must still check revocation during `revalidate`."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ResourceIdentity": {
+      "type": "object",
+      "required": ["kind", "name", "provider_instance", "revision"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "provider_instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192,
+          "description": "Exact version or schema digest selected by the already immutable Plan."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "SelectResponse"
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["presentation", "transformation_id", "transformation_version"],
+  "properties": {
+    "presentation": {
+      "type": "string",
+      "maxLength": 1048576
+    },
+    "transformation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "transformation_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "additionalProperties": false,
+  "title": "ProjectToolResultResponse"
+}

@@ -12,8 +12,8 @@ use lenso_agent_native_support::FiniteOutputStream;
 use lenso_capability_agent_model::{
     self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlStatus, CatalogFreshness,
     CatalogInputModality, CatalogModel, CatalogModelLimits, CatalogProvenance, CatalogRequest,
-    CatalogResponse, CatalogSource, CatalogWireProtocol, CompleteError, CompleteMessage,
-    CompleteMessageInput, CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
+    CatalogResponse, CatalogSource, CompleteError, CompleteMessage, CompleteMessageInput,
+    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
     ModelCompleteInvocationError, ModelProvider,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
@@ -81,7 +81,7 @@ impl ModelProvider for FixtureModel {
                 parallel_tool_calls: true,
                 reasoning: unsupported_control(),
                 service_tiers: unsupported_control(),
-                wire_protocol: CatalogWireProtocol::Fixture,
+                wire_protocol: "fixture".to_owned(),
                 compaction_compatibility: "generic-text-v1".to_owned(),
             })
             .collect();

@@ -1,0 +1,15 @@
+{
+  "id": "external.task-board-audit@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "audit",
+      "interaction": "request",
+      "request_schema": "schemas/audit-request.schema.json",
+      "response_schema": "schemas/audit-response.schema.json",
+      "domain_error_schema": "schemas/audit-error.schema.json"
+    }
+  ]
+}

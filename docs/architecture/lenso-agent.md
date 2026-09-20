@@ -1,5 +1,10 @@
 # Lenso Agent architecture
 
+The graph below describes the established coding-oriented compatibility Host.
+The source-level [blank Foundation](../tutorials/build-an-agent-foundation.md)
+does not link or select this graph by default; it publishes only a
+product-neutral catalog for an explicit composition to resolve.
+
 ## User outcome
 
 A developer can start a useful Agent with no App file, add or configure one

@@ -1,0 +1,15 @@
+{
+  "id": "lenso.agent.interaction@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "connect",
+      "interaction": "stream",
+      "request_schema": "schemas/connect-open.schema.json",
+      "response_schema": "schemas/connect-message.schema.json",
+      "domain_error_schema": "schemas/connect-error.schema.json"
+    }
+  ]
+}

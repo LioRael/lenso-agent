@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["turn_id", "fact", "presentation"],
+  "properties": {
+    "turn_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "fact": {
+      "$ref": "#/$defs/ToolResultFact"
+    },
+    "presentation": {
+      "type": "string",
+      "maxLength": 1048576
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ToolResultFact": {
+      "type": "object",
+      "required": [
+        "tool_call_id",
+        "tool_name",
+        "arguments_json",
+        "outcome",
+        "content",
+        "metadata_json",
+        "provider_code"
+      ],
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "tool_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "arguments_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 262144
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolResultOutcome"
+        },
+        "content": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "metadata_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536
+        },
+        "provider_code": {
+          "type": "string",
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false,
+      "description": "Immutable factual Tool execution data. Result projectors receive it for\nrendering only and cannot replace any stored outcome or metadata."
+    },
+    "ToolResultOutcome": {
+      "type": "string",
+      "enum": ["success", "domain_error", "runtime_failure"]
+    }
+  },
+  "description": "A model-visible projection of one immutable Tool result.",
+  "title": "ProjectToolResultRequest"
+}

@@ -1,5 +1,9 @@
 //! Validated Agent Tool catalog and execution Capability.
 
+mod run_scope;
+
+pub use run_scope::{RUN_SCOPE_EXTENSION, RunScope};
+
 include!("generated.rs");
 
 /// Versioned Tool-result metadata fact indicating that execution completed

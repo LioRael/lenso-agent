@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["snapshot_id", "policy_revision", "resource"],
+  "properties": {
+    "snapshot_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "policy_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "resource": {
+      "$ref": "#/$defs/ResourceIdentity"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ResourceIdentity": {
+      "type": "object",
+      "required": ["kind", "name", "provider_instance", "revision"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "provider_instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192,
+          "description": "Exact version or schema digest selected by the already immutable Plan."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "RevalidateRequest"
+}

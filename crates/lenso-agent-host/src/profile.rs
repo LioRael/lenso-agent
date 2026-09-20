@@ -98,7 +98,7 @@ fn apply(
         return Err("Profile instructions exceed 64 KiB".into());
     }
     if let Some(tools) = &document.allowed_tools {
-        lenso_agent_loop_plugin::RunScope::new(tools.clone())?;
+        lenso_capability_agent_tools::RunScope::new(tools.clone())?;
     }
     let root_instances = root
         .instances()

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "protocol",
+    "sequence",
+    "direction",
+    "kind",
+    "correlation_id",
+    "payload_json"
+  ],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "sequence": {
+      "type": "string",
+      "format": "uint64",
+      "description": "Independent, strictly increasing decimal sequence in each direction."
+    },
+    "direction": {
+      "$ref": "#/$defs/FrameDirection"
+    },
+    "kind": {
+      "$ref": "#/$defs/FrameKind"
+    },
+    "correlation_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "payload_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536,
+      "description": "A structured, bounded frame. It may contain fake audio sample metadata\nor binary references, but not an unbounded Base64 transcript blob."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "FrameDirection": {
+      "type": "string",
+      "enum": ["client_to_agent", "agent_to_client"]
+    },
+    "FrameKind": {
+      "type": "string",
+      "enum": ["input", "output", "interrupt", "acknowledgement", "notice"]
+    }
+  },
+  "title": "InteractionFrame"
+}

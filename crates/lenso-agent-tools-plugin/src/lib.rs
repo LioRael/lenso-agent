@@ -3,6 +3,8 @@
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use lenso::prelude::*;
+use lenso_agent_native_support::ToolTaskOwner;
+use lenso_capability_agent_dynamic_authority as authority_contract;
 use lenso_capability_agent_tool_hook as hook_contract;
 use lenso_capability_agent_tool_progress as progress_contract;
 use lenso_capability_agent_tool_provider as provider_contract;
@@ -14,17 +16,36 @@ use lenso_capability_agent_tools::{
     ExecuteStreamResponseContentType, ExecuteStreamResponseKind, ToolsCatalog, ToolsExecute,
     ToolsExecuteStreamInvocationError, ToolsProvider,
 };
+use lenso_capability_agent_turn_processing as processing_contract;
 use lenso_kernel::{InvocationContext, NativeStreamSession, RuntimeFailure, StreamEvent};
+use sha2::{Digest as _, Sha256};
 
 #[lenso::plugin(lifecycle)]
 #[derive(Clone, Debug)]
 struct ToolsPlugin {
+    /// Final runtime authorization for a Host-issued dynamic resource snapshot.
+    /// A missing sealed snapshot preserves static Plan behavior; a present one
+    /// fails closed unless exactly one selected policy Provider revalidates it.
+    authorities: ManyPort<authority_contract::DynamicAuthorityClient>,
     hooks: ManyPort<hook_contract::ToolHookClient>,
     providers: ManyPort<provider_contract::ToolProviderClient>,
     progress_providers: ManyPort<progress_contract::ToolProgressClient>,
+    /// Ordered, Plan-bound argument processors run before final Tool Hooks.
+    ///
+    /// This is intentionally a narrow extension point: processors can only
+    /// replace the canonical argument JSON. They never choose a Tool, bypass
+    /// schema validation, or observe a Hook approval for different arguments.
+    processors: ManyPort<processing_contract::TurnProcessingClient>,
     state: Rc<RefCell<Option<ToolRuntimeState>>>,
     #[tasks]
     tasks: ManagedTasks,
+}
+
+/// Explicitly retains this optional aggregate Plugin in a statically linked Host.
+///
+/// Hosts choose the call site; the package never self-installs a Tool runtime.
+pub fn link() {
+    __lenso_link_tools_plugin();
 }
 
 #[derive(Debug)]
@@ -32,6 +53,8 @@ struct ToolRuntimeState {
     catalog: Vec<CatalogResponseToolsItem>,
     routes: BTreeMap<String, usize>,
     progress_routes: BTreeMap<String, usize>,
+    resource_identities: BTreeMap<String, authority_contract::ResourceIdentity>,
+    schemas: BTreeMap<String, serde_json::Value>,
 }
 
 #[lenso::provides(tools_contract::Tools)]
@@ -54,29 +77,56 @@ impl ToolsProvider for ToolsPlugin {
         Box::pin(futures::future::ready(result.map(Ok)))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "ordered transformation, authorization, invocation and settlement form one execution boundary"
+    )]
     fn execute(
         &self,
         context: InvocationContext,
         request: ExecuteRequest,
     ) -> lenso_kernel::NativeRequestFuture<ToolsExecute> {
-        let route = self
-            .state
-            .borrow()
-            .as_ref()
-            .and_then(|state| state.routes.get(&request.name).copied());
-        let Some(index) = route else {
+        let route = self.state.borrow().as_ref().and_then(|state| {
+            Some((
+                state.routes.get(&request.name).copied()?,
+                state.schemas.get(&request.name).cloned()?,
+                state.resource_identities.get(&request.name).cloned()?,
+            ))
+        });
+        let Some((index, schema, resource_identity)) = route else {
             return Box::pin(futures::future::ready(Ok(Err(ExecuteError::UnknownTool))));
         };
-        let Ok(arguments_json) =
-            hook_contract::normalize_arguments(request.arguments_json.as_str())
-        else {
-            return Box::pin(futures::future::ready(Ok(Err(
-                ExecuteError::InvalidArguments,
-            ))));
-        };
         let providers = self.providers.clone();
+        let authorities = self.authorities.clone();
         let hooks = self.hooks.clone();
+        let processors = self.processors.clone();
         Box::pin(async move {
+            let Ok(arguments_json) =
+                processing_contract::canonical_json(request.arguments_json.as_str())
+            else {
+                return Ok(Err(ExecuteError::InvalidArguments));
+            };
+            // A processor is allowed to repair an otherwise schema-invalid
+            // call, so only JSON validity is checked here. The final value is
+            // schema-validated below, immediately before authorization.
+            let (turn_id, tool_call_id) = processing_call_identity(&context)?;
+            let transformed = processing_contract::apply_tool_call_processors(
+                &processors,
+                &context,
+                processing_contract::TransformToolCallRequest {
+                    turn_id,
+                    tool_call_id,
+                    tool_name: request.name.clone(),
+                    arguments_json: arguments_json
+                        .try_into()
+                        .expect("canonical Tool arguments must remain JSON"),
+                },
+            )
+            .await?;
+            let arguments_json = transformed.value.arguments_json.as_str().to_owned();
+            if !arguments_match_schema(&schema, &arguments_json)? {
+                return Ok(Err(ExecuteError::InvalidArguments));
+            }
             let execution = hook_contract::start_hooks(
                 &hooks,
                 &context,
@@ -101,6 +151,21 @@ impl ToolsProvider for ToolsPlugin {
                     &block.details_json,
                 )));
             }
+            let authority = revalidate_after_hooks(
+                &authorities,
+                &context,
+                &hooks,
+                &execution,
+                resource_identity,
+            )
+            .await?;
+            if let authority_contract::ToolAuthorityState::Denied {
+                reason_code,
+                message,
+            } = authority
+            {
+                return Ok(Err(dynamic_authority_error(&reason_code, &message)));
+            }
             let result = providers[index]
                 .execute_with_context(
                     context.clone(),
@@ -113,7 +178,9 @@ impl ToolsProvider for ToolsPlugin {
                 )
                 .await;
             match result {
-                Ok(response) => {
+                Ok(mut response) => {
+                    response.metadata_json =
+                        attach_processing_trace(response.metadata_json, &transformed.trace)?;
                     hook_contract::finish_hooks(
                         &hooks,
                         &context,
@@ -157,6 +224,10 @@ impl ToolsProvider for ToolsPlugin {
         })
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "stream admission preserves the same ordered execution boundary as request admission"
+    )]
     fn execute_stream(
         &self,
         context: InvocationContext,
@@ -165,21 +236,16 @@ impl ToolsProvider for ToolsPlugin {
         'static,
         Result<Box<dyn NativeStreamSession>, ToolsExecuteStreamInvocationError>,
     > {
-        let route = self
-            .state
-            .borrow()
-            .as_ref()
-            .and_then(|state| state.routes.get(&request.name).copied());
-        let Some(provider_index) = route else {
+        let route = self.state.borrow().as_ref().and_then(|state| {
+            Some((
+                state.routes.get(&request.name).copied()?,
+                state.schemas.get(&request.name).cloned()?,
+                state.resource_identities.get(&request.name).cloned()?,
+            ))
+        });
+        let Some((provider_index, schema, resource_identity)) = route else {
             return Box::pin(futures::future::ready(Err(
                 ToolsExecuteStreamInvocationError::Domain(ExecuteStreamError::UnknownTool),
-            )));
-        };
-        let Ok(arguments_json) =
-            hook_contract::normalize_arguments(request.arguments_json.as_str())
-        else {
-            return Box::pin(futures::future::ready(Err(
-                ToolsExecuteStreamInvocationError::Domain(ExecuteStreamError::InvalidArguments),
             )));
         };
         let progress_index = self
@@ -189,9 +255,43 @@ impl ToolsProvider for ToolsPlugin {
             .and_then(|state| state.progress_routes.get(&request.name).copied());
         let providers = self.providers.clone();
         let progress_providers = self.progress_providers.clone();
+        let authorities = self.authorities.clone();
         let hooks = self.hooks.clone();
+        let processors = self.processors.clone();
         let tasks = self.tasks.clone();
         Box::pin(async move {
+            let arguments_json = processing_contract::canonical_json(
+                request.arguments_json.as_str(),
+            )
+            .map_err(|_| {
+                ToolsExecuteStreamInvocationError::Domain(ExecuteStreamError::InvalidArguments)
+            })?;
+            // As in the request/reply operation, validate the provider schema
+            // only after all ordered argument transformations have completed.
+            let (turn_id, tool_call_id) = processing_call_identity(&context)
+                .map_err(ToolsExecuteStreamInvocationError::Runtime)?;
+            let transformed = processing_contract::apply_tool_call_processors(
+                &processors,
+                &context,
+                processing_contract::TransformToolCallRequest {
+                    turn_id,
+                    tool_call_id,
+                    tool_name: request.name.clone(),
+                    arguments_json: arguments_json
+                        .try_into()
+                        .expect("canonical Tool arguments must remain JSON"),
+                },
+            )
+            .await
+            .map_err(ToolsExecuteStreamInvocationError::Runtime)?;
+            let arguments_json = transformed.value.arguments_json.as_str().to_owned();
+            if !arguments_match_schema(&schema, &arguments_json)
+                .map_err(ToolsExecuteStreamInvocationError::Runtime)?
+            {
+                return Err(ToolsExecuteStreamInvocationError::Domain(
+                    ExecuteStreamError::InvalidArguments,
+                ));
+            }
             let execution = hook_contract::start_hooks(
                 &hooks,
                 &context,
@@ -216,6 +316,24 @@ impl ToolsProvider for ToolsPlugin {
                     stream_tool_error(block.provider_code, &block.message, &block.details_json),
                 ));
             }
+            let authority = revalidate_after_hooks(
+                &authorities,
+                &context,
+                &hooks,
+                &execution,
+                resource_identity,
+            )
+            .await
+            .map_err(ToolsExecuteStreamInvocationError::Runtime)?;
+            if let authority_contract::ToolAuthorityState::Denied {
+                reason_code,
+                message,
+            } = authority
+            {
+                return Err(ToolsExecuteStreamInvocationError::Domain(
+                    dynamic_authority_stream_error(&reason_code, &message),
+                ));
+            }
             let request = ExecuteStreamRequest {
                 name: request.name,
                 arguments_json: arguments_json
@@ -235,6 +353,7 @@ impl ToolsProvider for ToolsPlugin {
                         progress_index,
                         context,
                         request,
+                        transformed.trace,
                         channel,
                     )
                     .await;
@@ -263,6 +382,8 @@ impl Lifecycle for ToolsPlugin {
         let mut catalog = Vec::new();
         let mut routes = BTreeMap::new();
         let mut progress_routes = BTreeMap::new();
+        let mut resource_identities = BTreeMap::new();
+        let mut schemas = BTreeMap::new();
         for (index, provider) in self.providers.iter().enumerate() {
             let response = provider
                 .catalog(provider_contract::CatalogRequest {})
@@ -289,6 +410,21 @@ impl Lifecycle for ToolsPlugin {
                         detail: format!("duplicate Tool name `{}`", tool.name),
                     });
                 }
+                let schema = parse_tool_schema(&tool.name, tool.input_schema_json.as_str())?;
+                let schema_digest = format!(
+                    "sha256:{:x}",
+                    Sha256::digest(tool.input_schema_json.as_str())
+                );
+                resource_identities.insert(
+                    tool.name.clone(),
+                    authority_contract::ResourceIdentity {
+                        kind: "tool".to_owned(),
+                        name: tool.name.clone(),
+                        provider_instance: provider.provider_instance().to_owned(),
+                        revision: schema_digest,
+                    },
+                );
+                schemas.insert(tool.name.clone(), schema);
                 catalog.push(CatalogResponseToolsItem {
                     name: tool.name,
                     description: tool.description,
@@ -332,6 +468,8 @@ impl Lifecycle for ToolsPlugin {
             catalog,
             routes,
             progress_routes,
+            resource_identities,
+            schemas,
         }));
         Ok(())
     }
@@ -347,24 +485,42 @@ async fn produce_execute_stream(
     progress_index: Option<usize>,
     context: InvocationContext,
     request: ExecuteStreamRequest,
+    processing_trace: Vec<processing_contract::TransformationTrace>,
     mut channel: ProviderStreamChannel<tools_contract::ToolsExecuteStream>,
 ) {
-    let result = if let Some(progress_index) = progress_index {
-        proxy_progress_provider(
-            &progress_providers[progress_index],
-            context.clone(),
-            request,
-            &mut channel,
-        )
-        .await
-    } else {
-        execute_legacy_provider(
-            &providers[provider_index],
-            context.clone(),
-            request,
-            &mut channel,
-        )
-        .await
+    // `execute_stream` has all request data in its open payload. Its input
+    // direction is therefore only a readiness barrier: retaining it until the
+    // caller half-closes prevents a fast provider from racing the consumer's
+    // close and makes the stream contract identical for built-in and external
+    // Agent strategies.
+    let result = match channel.receive().await {
+        Ok(StreamInput::PeerHalfClosed) => {
+            if let Some(progress_index) = progress_index {
+                proxy_progress_provider(
+                    &progress_providers[progress_index],
+                    context.clone(),
+                    request,
+                    &processing_trace,
+                    &mut channel,
+                )
+                .await
+            } else {
+                execute_legacy_provider(
+                    &providers[provider_index],
+                    context.clone(),
+                    request,
+                    &processing_trace,
+                    &mut channel,
+                )
+                .await
+            }
+        }
+        Ok(StreamInput::Message(_)) => {
+            Err(PluginError::runtime(RuntimeFailure::ProtocolViolation {
+                capability: tools_contract::CAPABILITY_ID,
+            }))
+        }
+        Err(error) => Err(PluginError::runtime(error)),
     };
     let hook_result = match &result {
         Ok(terminal) => {
@@ -422,6 +578,7 @@ async fn proxy_progress_provider(
     provider: &progress_contract::ToolProgressClient,
     context: InvocationContext,
     request: ExecuteStreamRequest,
+    processing_trace: &[processing_contract::TransformationTrace],
     channel: &mut ProviderStreamChannel<tools_contract::ToolsExecuteStream>,
 ) -> PluginResult<ExecuteTerminal, ExecuteStreamError> {
     let stream = provider
@@ -444,6 +601,7 @@ async fn proxy_progress_provider(
                 }));
             }
             StreamEvent::Message(message) => {
+                let mut metadata_json = message.metadata_json;
                 let kind = match message.kind {
                     progress_contract::ExecuteProgressKind::Stdout => {
                         ExecuteStreamResponseKind::Stdout
@@ -452,9 +610,11 @@ async fn proxy_progress_provider(
                         ExecuteStreamResponseKind::Stderr
                     }
                     progress_contract::ExecuteProgressKind::Completed => {
+                        metadata_json = attach_processing_trace(metadata_json, processing_trace)
+                            .map_err(PluginError::runtime)?;
                         completed = Some(ExecuteTerminal {
                             content: message.content.clone(),
-                            metadata_json: message.metadata_json.as_str().to_owned(),
+                            metadata_json: metadata_json.as_str().to_owned(),
                         });
                         ExecuteStreamResponseKind::Completed
                     }
@@ -464,8 +624,8 @@ async fn proxy_progress_provider(
                         kind,
                         content_type: ExecuteStreamResponseContentType::Text,
                         content: message.content,
-                        content_blocks: parse_content_blocks(message.metadata_json.as_str()),
-                        metadata_json: message.metadata_json,
+                        content_blocks: parse_content_blocks(metadata_json.as_str()),
+                        metadata_json,
                     })
                     .await
                     .map_err(PluginError::runtime)?;
@@ -490,9 +650,10 @@ async fn execute_legacy_provider(
     provider: &provider_contract::ToolProviderClient,
     context: InvocationContext,
     request: ExecuteStreamRequest,
+    processing_trace: &[processing_contract::TransformationTrace],
     channel: &mut ProviderStreamChannel<tools_contract::ToolsExecuteStream>,
 ) -> PluginResult<ExecuteTerminal, ExecuteStreamError> {
-    let response = provider
+    let mut response = provider
         .execute_with_context(
             context,
             provider_contract::ExecuteRequest {
@@ -509,6 +670,8 @@ async fn execute_legacy_provider(
                 PluginError::runtime(error)
             }
         })?;
+    response.metadata_json = attach_processing_trace(response.metadata_json, processing_trace)
+        .map_err(PluginError::runtime)?;
     let content_blocks = response
         .content_blocks
         .clone()
@@ -622,6 +785,61 @@ fn stream_tool_error(code: &str, message: &str, details_json: &str) -> ExecuteSt
     }
 }
 
+/// Maps a final dynamic selection rejection to the existing public Tool error
+/// shape. The structured reason is evidence, not executable authority.
+// Approval can suspend execution. Revalidate after it returns, so revocation
+// during that wait cannot become an approved side effect. Settle started hooks
+// even when the policy rejects or cannot be reached.
+async fn revalidate_after_hooks(
+    authorities: &ManyPort<authority_contract::DynamicAuthorityClient>,
+    context: &InvocationContext,
+    hooks: &ManyPort<hook_contract::ToolHookClient>,
+    execution: &hook_contract::HookExecution,
+    resource: authority_contract::ResourceIdentity,
+) -> Result<authority_contract::ToolAuthorityState, RuntimeFailure> {
+    let result =
+        authority_contract::revalidate_tool_authority(authorities, context, resource).await;
+    let terminal = match &result {
+        Ok(authority_contract::ToolAuthorityState::Denied { .. }) => Some((
+            hook_contract::HookTerminal::DomainError,
+            "dynamic_authorization_denied",
+        )),
+        Err(_) => Some((
+            hook_contract::HookTerminal::RuntimeFailure,
+            "runtime_failure",
+        )),
+        _ => None,
+    };
+    if let Some((terminal, code)) = terminal {
+        hook_contract::finish_hooks(hooks, context, execution, terminal, "", "{}", code).await?;
+    }
+    result
+}
+
+fn dynamic_authority_error(reason_code: &str, message: &str) -> ExecuteError {
+    tool_error(
+        "dynamic_authorization_denied",
+        message,
+        &serde_json::json!({
+            "schema": "lenso.agent.dynamic-authority.denial@1",
+            "reason_code": reason_code,
+        })
+        .to_string(),
+    )
+}
+
+fn dynamic_authority_stream_error(reason_code: &str, message: &str) -> ExecuteStreamError {
+    stream_tool_error(
+        "dynamic_authorization_denied",
+        message,
+        &serde_json::json!({
+            "schema": "lenso.agent.dynamic-authority.denial@1",
+            "reason_code": reason_code,
+        })
+        .to_string(),
+    )
+}
+
 fn valid_model_tool_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     matches!(bytes.first(), Some(b'a'..=b'z'))
@@ -629,6 +847,130 @@ fn valid_model_tool_name(name: &str) -> bool {
         && bytes[1..]
             .iter()
             .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'_'))
+}
+
+const TURN_PROCESSING_METADATA_KEY: &str = "lenso.agent.turn-processing@1";
+
+/// Uses the Loop's durable Tool-call identity when it is present, while
+/// retaining a stable correlation identity for direct Tools consumers.
+fn processing_call_identity(
+    context: &InvocationContext,
+) -> Result<(String, String), RuntimeFailure> {
+    match context
+        .typed_extension::<ToolTaskOwner>()
+        .map_err(|error| RuntimeFailure::PluginFailure {
+            detail: format!("Tool task ownership extension was malformed: {error}"),
+        })? {
+        Some(owner) => Ok((owner.turn_id, owner.tool_call_id)),
+        None => Ok((
+            format!("request-{}", context.request_id()),
+            format!("tool-{}", context.request_id()),
+        )),
+    }
+}
+
+/// Parses and preflights one provider-advertised schema during activation.
+///
+/// Tool schemas are Plan input. Rejecting external references here prevents a
+/// later Tool invocation from turning schema validation into an ambient file
+/// or network lookup.
+fn parse_tool_schema(name: &str, schema_json: &str) -> Result<serde_json::Value, RuntimeFailure> {
+    let schema = serde_json::from_str::<serde_json::Value>(schema_json).map_err(|error| {
+        RuntimeFailure::InvalidResolvedPlan {
+            detail: format!("Tool `{name}` returned invalid input schema JSON: {error}"),
+        }
+    })?;
+    if schema_has_external_reference(&schema) {
+        return Err(RuntimeFailure::InvalidResolvedPlan {
+            detail: format!(
+                "Tool `{name}` input schema contains an external $ref; only document-local references are supported"
+            ),
+        });
+    }
+    jsonschema::validator_for(&schema).map_err(|error| RuntimeFailure::InvalidResolvedPlan {
+        detail: format!("Tool `{name}` returned an invalid input schema: {error}"),
+    })?;
+    Ok(schema)
+}
+
+fn schema_has_external_reference(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values.iter().any(schema_has_external_reference),
+        serde_json::Value::Object(object) => object.iter().any(|(key, value)| {
+            (key == "$ref"
+                && value
+                    .as_str()
+                    .is_some_and(|reference| !reference.starts_with('#')))
+                || schema_has_external_reference(value)
+        }),
+        _ => false,
+    }
+}
+
+/// Validates the exact canonical argument value at the authority boundary.
+/// A processor may transform a valid value into an invalid one, so this check
+/// intentionally runs both before and after the ordered processor chain.
+fn arguments_match_schema(
+    schema: &serde_json::Value,
+    arguments_json: &str,
+) -> Result<bool, RuntimeFailure> {
+    let arguments = serde_json::from_str::<serde_json::Value>(arguments_json).map_err(|error| {
+        RuntimeFailure::PluginFailure {
+            detail: format!("canonical Tool arguments became invalid JSON: {error}"),
+        }
+    })?;
+    let validator =
+        jsonschema::validator_for(schema).map_err(|error| RuntimeFailure::Internal {
+            detail: format!("prevalidated Tool schema no longer compiles: {error}"),
+        })?;
+    Ok(validator.is_valid(&arguments))
+}
+
+/// Adds processor provenance without overwriting factual provider metadata.
+///
+/// The aggregate owns this response envelope. A provider that uses a
+/// non-object metadata value cannot supply a safe namespace for Plan evidence,
+/// so the invocation fails closed when a processor was selected.
+fn attach_processing_trace(
+    metadata_json: processing_contract::RawJson,
+    trace: &[processing_contract::TransformationTrace],
+) -> Result<processing_contract::RawJson, RuntimeFailure> {
+    if trace.is_empty() {
+        return Ok(metadata_json);
+    }
+    let mut metadata =
+        serde_json::from_str::<serde_json::Value>(metadata_json.as_str()).map_err(|error| {
+            RuntimeFailure::PluginFailure {
+                detail: format!("Tool Provider returned invalid metadata JSON: {error}"),
+            }
+        })?;
+    let object = metadata
+        .as_object_mut()
+        .ok_or_else(|| RuntimeFailure::PluginFailure {
+            detail: "Tool Provider metadata must be a JSON object when Turn Processing is selected"
+                .to_owned(),
+        })?;
+    if object.contains_key(TURN_PROCESSING_METADATA_KEY) {
+        return Err(RuntimeFailure::PluginFailure {
+            detail: format!(
+                "Tool Provider metadata reserves `{TURN_PROCESSING_METADATA_KEY}` for aggregate evidence"
+            ),
+        });
+    }
+    object.insert(
+        TURN_PROCESSING_METADATA_KEY.to_owned(),
+        serde_json::to_value(trace).map_err(|error| RuntimeFailure::Internal {
+            detail: format!("failed to encode Tool processing evidence: {error}"),
+        })?,
+    );
+    serde_json::to_string(&metadata)
+        .map_err(|error| RuntimeFailure::Internal {
+            detail: format!("failed to serialize Tool processing metadata: {error}"),
+        })?
+        .try_into()
+        .map_err(|_| RuntimeFailure::Internal {
+            detail: "aggregate-generated Tool metadata was not valid JSON".to_owned(),
+        })
 }
 
 fn convert_execute_response(response: provider_contract::ExecuteResponse) -> ExecuteResponse {

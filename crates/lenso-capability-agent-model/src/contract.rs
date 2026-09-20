@@ -67,7 +67,12 @@ pub struct CatalogModel {
     pub parallel_tool_calls: bool,
     pub reasoning: CatalogControl,
     pub service_tiers: CatalogControl,
-    pub wire_protocol: CatalogWireProtocol,
+    /// A bounded, versioned Provider-owned wire identity. The three built-in
+    /// identities retain their existing string values, while an independent
+    /// Provider can name its own transport without claiming an official
+    /// protocol family.
+    #[schemars(length(min = 1, max = 128))]
+    pub wire_protocol: String,
     #[schemars(length(min = 1, max = 128))]
     pub compaction_compatibility: String,
 }
@@ -145,14 +150,6 @@ pub struct CatalogControlOption {
     pub name: String,
     #[schemars(length(max = 1_024))]
     pub description: String,
-}
-
-#[derive(lenso::JsonSchema, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CatalogWireProtocol {
-    Fixture,
-    OpenaiResponses,
-    OpenaiChatCompletions,
 }
 
 #[derive(lenso::DomainError)]
@@ -295,7 +292,7 @@ pub struct ProviderFailurePayload {
 #[lenso::capability(
     id = "lenso.agent.model",
     major = 4,
-    version = "4.2.0",
+    version = "4.3.0",
     portable = true,
     cross_lane_transfer = false
 )]

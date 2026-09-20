@@ -1,0 +1,23 @@
+[package]
+name = "external-task-board-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+external-task-board = { package = "external-task-board-contract", path = "../contracts/external.task-board" }
+external-task-board-report = { package = "external-task-board-report-contract", path = "../contracts/external.task-board-report" }
+external-task-board-audit = { package = "external-task-board-audit-contract", path = "../contracts/external.task-board-audit" }
+external-task-board-provider = { path = "../app/task-board-provider" }
+external-task-board-report-plugin = { package = "external-task-board-report", path = "../app/task-board-report" }
+external-task-board-caller = { path = "../app/task-board-caller" }
+lenso-app-plan = "0.4.3"
+lenso-kernel = "0.3.9"
+lenso-native-adapter = "0.3.14"
+lenso-runner = "0.2.14"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[workspace]
+
+# LENSO_LOCAL_PATCHES

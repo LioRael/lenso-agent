@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task"],
+  "properties": {
+    "task": {
+      "$ref": "#/$defs/TaskSnapshot"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "TaskSnapshot": {
+      "type": "object",
+      "required": [
+        "task_id",
+        "owner_instance",
+        "workflow_kind",
+        "state_version",
+        "revision",
+        "status",
+        "state_json"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "owner_instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Derived by the selected Provider from the resolved caller identity."
+        },
+        "workflow_kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192
+        },
+        "state_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "revision": {
+          "type": "string",
+          "format": "uint64"
+        },
+        "status": {
+          "$ref": "#/$defs/TaskStatus"
+        },
+        "state_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 65536
+        },
+        "parent_task_id": {
+          "type": ["string", "null"],
+          "maxLength": 128
+        },
+        "deadline_unix_ms": {
+          "type": ["string", "null"],
+          "format": "uint64"
+        },
+        "terminal_reason_code": {
+          "type": ["string", "null"],
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "TaskStatus": {
+      "type": "string",
+      "enum": ["ready", "waiting_for_signal", "running", "completed", "cancelled", "timed_out", "uncertain_external_effect", "upgrade_required"]
+    }
+  },
+  "title": "TaskUpdate"
+}

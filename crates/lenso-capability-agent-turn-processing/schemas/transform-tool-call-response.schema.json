@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["arguments_json", "transformation_id", "transformation_version"],
+  "properties": {
+    "arguments_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 262144
+    },
+    "transformation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "transformation_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    }
+  },
+  "additionalProperties": false,
+  "title": "TransformToolCallResponse"
+}

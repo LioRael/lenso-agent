@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "namespace",
+    "schema_version",
+    "event_id",
+    "sequence",
+    "idempotency_key",
+    "association",
+    "payload_json",
+    "presentation",
+    "recovery_required"
+  ],
+  "properties": {
+    "namespace": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "schema_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "sequence": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "description": "A decimal monotonic sequence chosen by the owning Plugin for this\nassociation. The Provider checks collisions and ordering."
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "association": {
+      "$ref": "#/$defs/ExtensionAssociation"
+    },
+    "payload_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536,
+      "description": "Bounded JSON facts only. Credentials, private reasoning, and rendered\nHTML/JavaScript are outside this contract."
+    },
+    "presentation": {
+      "$ref": "#/$defs/SafePresentation"
+    },
+    "recovery_required": {
+      "type": "boolean",
+      "description": "Unknown records with this flag block a recovery attempt rather than\nbeing silently skipped after a Plugin upgrade or removal."
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "ExtensionAssociation": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "task_id": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "SafePresentation": {
+      "type": "object",
+      "required": ["kind", "title", "summary", "attributes_json"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 192,
+          "description": "A trusted presentation type selected by an already installed package.\nIt is descriptive data only; it is never a code-loading instruction."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "attributes_json": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 16384,
+          "description": "A bounded JSON object for safe, text-only inspection metadata."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "title": "AppendRequest"
+}

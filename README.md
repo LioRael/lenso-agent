@@ -1,6 +1,7 @@
 # Lenso Agent
 
-**An open-source coding agent for your terminal and browser, built around replaceable Plugins.**
+**An open-source Agent composition and runtime base, with an optional coding
+distribution for your terminal and browser.**
 
 Explore a codebase, plan a change, edit files, and run checks in your workspace.
 Start with the included coding Profiles, then choose the models, tools, memory,
@@ -9,7 +10,28 @@ and interfaces that fit your workflow.
 [Get started](#quick-start) · [Documentation](docs/README.md) ·
 [Contributing](CONTRIBUTING.md) ·
 [Releases](https://github.com/LioRael/lenso-agent/releases) ·
+[Build your Agent](docs/tutorials/build-an-agent-foundation.md) ·
 [Build a Plugin](docs/tutorials/10-minute-tool-provider.md)
+
+## Build your Agent
+
+The released `lenso-agent` commands below remain the coding-oriented
+compatibility distribution. Source authors can instead begin with a blank,
+product-neutral Foundation and select a composition explicitly:
+
+```sh
+mkdir support-agent
+cargo run -p lenso-agent-foundation -- init --root support-agent
+cargo run -p lenso-agent-foundation -- check --root support-agent --json
+
+cargo run -p lenso-agent-dialogue -- run "Answer directly: selected dialogue starter"
+```
+
+The Foundation has no implicit Model, Loop, Tool Provider, memory store,
+instruction, or surface. The dialogue starter is a separately selected,
+fixture-backed non-coding composition. See [Build an Agent from the
+Foundation](docs/tutorials/build-an-agent-foundation.md) for local `agent/`
+conventions and the full Capability/Plugin authoring path.
 
 ## Quick start
 
@@ -108,8 +130,10 @@ lenso-agent run --profile plan "Summarize this workspace README."
 ## Make it yours
 
 Plugins let you change more than the tool list: swap the model provider,
-session storage, memory, or agent loop, and select different combinations with
-named Profiles. Configuration lives in ordinary files under your Agent Home.
+session storage, memory, or Agent Loop, and select different combinations with
+named Profiles. An `agent/` directory is a convenience path for local Tools and
+Profile-only composition; full Plugins can define their own versioned
+Capabilities. Configuration lives in ordinary files under your Agent Home.
 
 Connect external tools through **MCP**, add reusable **Skills**, or write your
 own **Tool Plugin**. Start with the [configuration guide](docs/configuration.md)
@@ -130,6 +154,7 @@ Plugin authoring and package management use the separate
 
 - [Install, upgrade, and uninstall](docs/installation.md)
 - [Configure Profiles, models, MCP, memory, and Plugins](docs/configuration.md)
+- [Build an Agent from the Foundation](docs/tutorials/build-an-agent-foundation.md)
 - [Connect editors, Web APIs, and chat channels](docs/integrations.md)
 - [Build your first Tool Plugin](docs/tutorials/10-minute-tool-provider.md)
 - [Add a command to the CLI and terminal UI](docs/tutorials/add-terminal-command-provider.md)

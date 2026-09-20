@@ -70,247 +70,33 @@ use lenso_capability_agent_tools::{
 use lenso_capability_agent_turn_input::{
     self as turn_input_capability, SubmitError, SubmitRequest, SubmitResponse,
 };
+use lenso_capability_agent_turn_processing as processing_capability;
 use lenso_kernel::{InvocationContext, RuntimeFailure, StreamEvent};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+pub use lenso_capability_agent::{
+    AGENT_BEHAVIOR_PROVENANCE_EXTENSION, AgentBehaviorProvenance, SessionProfile,
+    TurnGenerationProvenance, inspect_turn_generation_provenance,
+};
+pub use lenso_capability_agent_model::{
+    ModelCapabilities, ModelCatalogFreshness, ModelCatalogProvenance, ModelCatalogSource,
+    ModelControlOption, ModelInputModality, ModelLimits, ModelReasoningControl,
+    ModelServiceTierControl, ModelWireProtocol, RESOLVED_TURN_PROFILE_EXTENSION,
+    ResolvedTurnProfile,
+};
+pub use lenso_capability_agent_model_selection::{
+    ModelSelectionEvidence, TURN_MODEL_SELECTION_EXTENSION, TurnModelSelection,
+};
+pub use lenso_capability_agent_tools::{RUN_SCOPE_EXTENSION, RunScope};
+pub use lenso_capability_agent_turn_input::TurnInputPresentation;
+
 /// Host-issued Invocation Context key for the leased App Generation identity.
 pub const GENERATION_SPEC_DIGEST_EXTENSION: &str = "lenso.app.generation-spec-digest@1";
-/// Host-issued Invocation Context key for one Turn's narrowed Tool authority.
-pub const RUN_SCOPE_EXTENSION: &str = "lenso.agent.run-scope@1";
-/// Host-issued Invocation Context key for the surface-neutral Agent dependency closure.
-pub const AGENT_BEHAVIOR_PROVENANCE_EXTENSION: &str = "lenso.agent.behavior-provenance@1";
-/// Host-issued Invocation Context key for the exact Provider/model profile of one Turn.
-pub const RESOLVED_TURN_PROFILE_EXTENSION: &str = "lenso.agent.resolved-turn-profile@1";
-/// Host-issued selection intent narrowed to model profiles admitted by one Generation.
-pub const TURN_MODEL_SELECTION_EXTENSION: &str = "lenso.agent.turn-model-selection@1";
 const TOOL_SEARCH_NAME: &str = "tool_search";
 const DEFERRED_MCP_TOOL_THRESHOLD: usize = 16;
 const DEFERRED_TOOL_SEARCH_RESULTS: usize = 8;
 const DEFAULT_ARTIFACT_SPILL_THRESHOLD_BYTES: u64 = 262_144;
-
-/// Model limits known to the active Host. `None` is unknown, not unlimited.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelLimits {
-    pub context_window_tokens: Option<u64>,
-    pub max_input_tokens: Option<u64>,
-    pub max_output_tokens: Option<u64>,
-}
-
-/// Input forms accepted by one Provider/model path.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelInputModality {
-    Text,
-    Image,
-    Audio,
-}
-
-/// One Provider-authored option for a portable Model control.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelControlOption {
-    pub id: String,
-    pub name: String,
-    pub description: String,
-}
-
-/// Whether and how one model accepts a reasoning selection.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
-pub enum ModelReasoningControl {
-    Unknown,
-    Unsupported,
-    Selectable {
-        efforts: Vec<String>,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        options: Vec<ModelControlOption>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        default: Option<String>,
-    },
-    Toggle {
-        default_enabled: bool,
-        options: Vec<ModelControlOption>,
-    },
-    BudgetTokens {
-        minimum: u64,
-        maximum: u64,
-        default: u64,
-    },
-}
-
-/// Whether and how one model accepts a provider service/speed tier.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields, rename_all = "snake_case", tag = "kind")]
-pub enum ModelServiceTierControl {
-    Unknown,
-    Unsupported,
-    Selectable { tiers: Vec<String> },
-}
-
-/// Model features implemented by the exact Provider/model path.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelCapabilities {
-    pub input_modalities: Vec<ModelInputModality>,
-    pub text_output: bool,
-    pub tool_calls: bool,
-    pub parallel_tool_calls: bool,
-    pub reasoning: ModelReasoningControl,
-    pub service_tiers: ModelServiceTierControl,
-}
-
-/// Provider wire protocol used for one model path.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelWireProtocol {
-    Fixture,
-    OpenaiResponses,
-    OpenaiChatCompletions,
-}
-
-/// How the selected Provider acquired and validated one frozen model catalog.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelCatalogProvenance {
-    pub source: ModelCatalogSource,
-    pub freshness: ModelCatalogFreshness,
-    pub fetched_at_unix_seconds: Option<u64>,
-    pub validated_at_unix_seconds: Option<u64>,
-    pub revision: Option<String>,
-    pub max_stale_seconds: Option<u64>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelCatalogSource {
-    Live,
-    Cache,
-    Configured,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelCatalogFreshness {
-    Fresh,
-    Revalidated,
-    Stale,
-}
-
-/// Exact inference profile resolved from one active Generation.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResolvedTurnProfile {
-    pub catalog_revision: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub catalog_provenance: Option<ModelCatalogProvenance>,
-    pub provider_id: String,
-    pub provider_instance: String,
-    pub model: String,
-    pub reasoning_effort: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_enabled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_budget_tokens: Option<u64>,
-    pub service_tier: Option<String>,
-    pub limits: ModelLimits,
-    pub capabilities: ModelCapabilities,
-    pub wire_protocol: ModelWireProtocol,
-    pub compaction_compatibility: String,
-}
-
-impl TypedExtension for ResolvedTurnProfile {
-    const KEY: &'static str = RESOLVED_TURN_PROFILE_EXTENSION;
-}
-
-/// Authoring Profile selected by the Host for this immutable Turn lease.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SessionProfile {
-    pub name: Option<String>,
-}
-
-impl TypedExtension for SessionProfile {
-    const KEY: &'static str = "lenso.agent.session-profile@1";
-}
-
-/// One dynamic policy request plus the exact model profiles it may select.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TurnModelSelection {
-    pub policy: String,
-    pub candidates: Vec<ResolvedTurnProfile>,
-}
-
-impl TypedExtension for TurnModelSelection {
-    const KEY: &'static str = TURN_MODEL_SELECTION_EXTENSION;
-}
-
-/// Original surface text when the Host has added explicit context to model input.
-/// This affects history presentation only; replay continues to use the full input.
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct TurnInputPresentation {
-    pub input: String,
-}
-impl TypedExtension for TurnInputPresentation {
-    const KEY: &'static str = "lenso.agent.turn-input-presentation.v1";
-}
-
-/// One immutable Turn-local authority scope. Names must come from the Plan-bound Tool catalog.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunScope {
-    /// Exact Tool names admitted for this Turn. An empty set disables Tools.
-    pub allowed_tools: BTreeSet<String>,
-}
-
-impl RunScope {
-    /// Creates a deterministic scope from requested Tool names.
-    pub fn new(tools: impl IntoIterator<Item = impl Into<String>>) -> Result<Self, String> {
-        let mut allowed_tools = BTreeSet::new();
-        for tool in tools {
-            let tool = tool.into();
-            if tool.is_empty() || tool.len() > 128 {
-                return Err("Run Scope contains an invalid Tool name".to_owned());
-            }
-            allowed_tools.insert(tool);
-        }
-        Ok(Self { allowed_tools })
-    }
-
-    /// Attaches this scope to one root Invocation Context.
-    pub fn attach(self, context: InvocationContext) -> Result<InvocationContext, String> {
-        context
-            .with_typed_extension(&self)
-            .map_err(|error| format!("failed to attach Run Scope: {error}"))
-    }
-}
-
-impl TypedExtension for RunScope {
-    const KEY: &'static str = RUN_SCOPE_EXTENSION;
-}
-
-/// Surface-neutral identity of the immutable Agent behavior selected for one Turn.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct AgentBehaviorProvenance {
-    pub digest: String,
-}
-
-impl AgentBehaviorProvenance {
-    pub fn new(digest: String) -> Result<Self, String> {
-        if !canonical_sha256_digest(&digest) {
-            return Err("Agent behavior digest is not canonical SHA-256".to_owned());
-        }
-        Ok(Self { digest })
-    }
-}
-
-impl TypedExtension for AgentBehaviorProvenance {
-    const KEY: &'static str = AGENT_BEHAVIOR_PROVENANCE_EXTENSION;
-}
 
 type TurnFailure = PluginError<RunTurnError>;
 const RECOVERY_EVENT_LIMIT: u64 = 512;
@@ -336,83 +122,6 @@ struct SystemInstructionRevision {
     previous_digest: String,
     reason: String,
     instruction: InstalledSystemInstruction,
-}
-
-/// One validated Turn-to-Generation provenance reference.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TurnGenerationProvenance {
-    /// Durable Session revision of the `turn_started` event.
-    pub revision: u64,
-    /// Stable Turn identity.
-    pub turn_id: String,
-    /// Exact content-addressed App Generation Spec digest.
-    pub generation_spec_digest: String,
-    /// Surface-neutral digest of the selected Agent dependency closure, when recorded.
-    pub agent_behavior_digest: Option<String>,
-    /// Exact Provider/model profile resolved for the Turn, when recorded.
-    pub resolved_turn_profile: Option<ResolvedTurnProfile>,
-    /// Dynamic selection decision that produced the resolved profile, when used.
-    pub model_selection: Option<ModelSelectionEvidence>,
-}
-
-/// Durable evidence explaining one dynamic model decision.
-#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelSelectionEvidence {
-    pub policy: String,
-    pub strategy: String,
-    pub reason_code: String,
-}
-
-/// Interpret one `turn_started` payload owned by this Agent Loop.
-pub fn inspect_turn_generation_provenance(
-    revision: u64,
-    turn_id: Option<&str>,
-    payload_json: &str,
-) -> Result<TurnGenerationProvenance, String> {
-    #[derive(serde::Deserialize)]
-    #[serde(deny_unknown_fields)]
-    struct TurnStartedPayload {
-        #[serde(default, rename = "attachments")]
-        _attachments: Option<serde_json::Value>,
-        #[serde(default, rename = "display_input")]
-        _display_input: Option<String>,
-        generation_spec_digest: String,
-        #[serde(default)]
-        agent_behavior_digest: Option<String>,
-        input: String,
-        #[serde(default)]
-        run_scope: Option<RunScope>,
-        #[serde(default)]
-        resolved_turn_profile: Option<ResolvedTurnProfile>,
-        #[serde(default)]
-        model_selection: Option<ModelSelectionEvidence>,
-    }
-    let payload = serde_json::from_str::<TurnStartedPayload>(payload_json)
-        .map_err(|error| format!("Turn provenance payload is invalid: {error}"))?;
-    let _ = payload.input;
-    let _ = payload.run_scope;
-    if !canonical_sha256_digest(&payload.generation_spec_digest) {
-        return Err("Turn Generation Spec digest is invalid".to_owned());
-    }
-    if payload
-        .agent_behavior_digest
-        .as_deref()
-        .is_some_and(|digest| !canonical_sha256_digest(digest))
-    {
-        return Err("Turn Agent behavior digest is invalid".to_owned());
-    }
-    Ok(TurnGenerationProvenance {
-        revision,
-        turn_id: turn_id
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "Turn provenance has no Turn ID".to_owned())?
-            .to_owned(),
-        generation_spec_digest: payload.generation_spec_digest,
-        agent_behavior_digest: payload.agent_behavior_digest,
-        resolved_turn_profile: payload.resolved_turn_profile,
-        model_selection: payload.model_selection,
-    })
 }
 
 fn canonical_sha256_digest(value: &str) -> bool {
@@ -560,6 +269,10 @@ struct AgentLoop {
     memory: Port<memory_capability::MemoryClient>,
     lifecycle: ManyPort<lifecycle_capability::LifecycleClient>,
     turn_binding: ManyPort<lenso_capability_agent_turn_binding::TurnBindingClient>,
+    /// Optional, ordered presentation/argument processors selected by this
+    /// Agent's Resolved Plan. Their authority is narrow and typed by
+    /// `lenso.agent.turn-processing@1`.
+    processors: ManyPort<processing_capability::TurnProcessingClient>,
     artifact: Port<artifact_capability::ArtifactClient>,
     #[tasks]
     tasks: ManagedTasks,
@@ -1783,8 +1496,24 @@ async fn execute_steps(
         messages[turn_input_message_index]
             .content
             .clone_from(&effective_turn_input);
-        let message_count = messages.len();
-        let tool_count = tools.len();
+        let (reasoning_effort, reasoning_enabled, reasoning_budget_tokens) =
+            complete_reasoning_selection(resolved_turn_profile);
+        let mut model_request = CompleteOpen {
+            continuation_scope: Some(turn_id.to_owned()),
+            model: resolved_turn_profile.model.clone(),
+            reasoning_effort,
+            reasoning_enabled,
+            reasoning_budget_tokens,
+            service_tier: resolved_turn_profile.service_tier.clone(),
+            messages: messages.clone(),
+            tools: tools.clone(),
+            temperature: 0.0,
+            max_output_tokens: budget.remaining_output_tokens,
+        };
+        let model_processing =
+            project_model_request(clients, context, turn_id, &mut model_request).await?;
+        let message_count = model_request.messages.len();
+        let tool_count = model_request.tools.len();
         *revision = append_events(
             clients,
             context,
@@ -1804,26 +1533,15 @@ async fn execute_steps(
                     "max_output_tokens": budget.remaining_output_tokens,
                     "additional_inputs": additional_inputs,
                     "prompt_contributions": prompt_contributions,
-                    "system_instruction_digest": system_instruction_digest
+                    "system_instruction_digest": system_instruction_digest,
+                    "turn_processing": {
+                        "model_request": model_processing
+                    }
                 }),
             )?],
         )
         .await?;
         acknowledge_pending_turn_inputs(pending_inputs, revision);
-        let (reasoning_effort, reasoning_enabled, reasoning_budget_tokens) =
-            complete_reasoning_selection(resolved_turn_profile);
-        let mut model_request = CompleteOpen {
-            continuation_scope: Some(turn_id.to_owned()),
-            model: resolved_turn_profile.model.clone(),
-            reasoning_effort,
-            reasoning_enabled,
-            reasoning_budget_tokens,
-            service_tier: resolved_turn_profile.service_tier.clone(),
-            messages: messages.clone(),
-            tools: tools.clone(),
-            temperature: 0.0,
-            max_output_tokens: budget.remaining_output_tokens,
-        };
         let completion = match stream_model(
             clients,
             context,
@@ -1851,6 +1569,32 @@ async fn execute_steps(
                 };
                 messages = compacted;
                 model_request.messages.clone_from(&messages);
+                model_request.tools.clone_from(&tools);
+                let retry_processing =
+                    project_model_request(clients, context, turn_id, &mut model_request).await?;
+                *revision = append_events(
+                    clients,
+                    context,
+                    session_id,
+                    revision.clone(),
+                    vec![session_event(
+                        AppendSessionRequestEventsItemKind::ModelRequested,
+                        Some(turn_id),
+                        &serde_json::json!({
+                            "step": model_step,
+                            "segment": budget.segment,
+                            "segment_step": budget.segment_steps,
+                            "model": resolved_turn_profile.model,
+                            "message_count": model_request.messages.len(),
+                            "tool_count": model_request.tools.len(),
+                            "retry": "context_overflow",
+                            "turn_processing": {
+                                "model_request": retry_processing
+                            }
+                        }),
+                    )?],
+                )
+                .await?;
                 stream_model(
                     clients,
                     context,
@@ -2211,6 +1955,70 @@ fn tool_call_waves(
     waves
 }
 
+/// Projects only the model-visible portion of one Complete request. The
+/// immutable provider/model choice and execution controls stay on
+/// `CompleteOpen`; processors receive no handles that could change them.
+async fn project_model_request(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    turn_id: &str,
+    model_request: &mut CompleteOpen,
+) -> Result<Vec<processing_capability::TransformationTrace>, TurnFailure> {
+    let processed = processing_capability::apply_model_request_processors(
+        &clients.processors,
+        context,
+        processing_capability::model_request_from_model(
+            turn_id,
+            &model_request.messages,
+            &model_request.tools,
+        ),
+    )
+    .await
+    .map_err(PluginError::runtime)?;
+    let (messages, tools) = processing_capability::model_request_to_model(&processed.value)
+        .map_err(PluginError::runtime)?;
+    model_request.messages = messages;
+    model_request.tools = tools;
+    Ok(processed.trace)
+}
+
+/// Runs model-facing Tool-result projection against an immutable fact. The
+/// caller persists and emits the fact before propagating a projection failure,
+/// so a failed presentation stage cannot erase completed Tool evidence.
+async fn project_tool_result_presentation(
+    clients: &AgentLoop,
+    context: &InvocationContext,
+    turn_id: &str,
+    fact: processing_capability::ToolResultFact,
+    presentation: String,
+) -> Result<
+    processing_capability::AppliedProcessing<processing_capability::ProjectToolResultRequest>,
+    TurnFailure,
+> {
+    processing_capability::apply_tool_result_processors(
+        &clients.processors,
+        context,
+        processing_capability::ProjectToolResultRequest {
+            turn_id: turn_id.to_owned(),
+            fact,
+            presentation,
+        },
+    )
+    .await
+    .map_err(PluginError::runtime)
+}
+
+fn tool_stream_error_code(error: &tools_capability::ExecuteStreamError) -> String {
+    match error {
+        tools_capability::ExecuteStreamError::InvalidArguments => "invalid_arguments".to_owned(),
+        tools_capability::ExecuteStreamError::UnknownTool => "unknown_tool".to_owned(),
+        tools_capability::ExecuteStreamError::ToolError { payload } => {
+            payload.provider_code.clone()
+        }
+        tools_capability::ExecuteStreamError::Unknown(unknown) => unknown.code.clone(),
+    }
+}
+
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -2316,6 +2124,22 @@ async fn execute_tool_wave(
                 completed_user_interaction |= tools_capability::metadata_completes_user_interaction(
                     tool_result.metadata_json.as_str(),
                 );
+                let projected = project_tool_result_presentation(
+                    clients,
+                    context,
+                    turn_id,
+                    processing_capability::ToolResultFact {
+                        tool_call_id: tool_call.tool_call_id.clone(),
+                        tool_name: tool_call.tool_name.clone(),
+                        arguments_json: tool_call.arguments_json.clone(),
+                        outcome: processing_capability::ToolResultOutcome::Success,
+                        content: tool_result.content.clone(),
+                        metadata_json: tool_result.metadata_json.clone(),
+                        provider_code: String::new(),
+                    },
+                    model_tool_result_content(&tool_result),
+                )
+                .await;
                 *revision = append_events(
                     clients,
                     context,
@@ -2332,7 +2156,18 @@ async fn execute_tool_wave(
                             "content_blocks": bounded_tool_content_blocks(&tool_result),
                             "metadata_json": tool_result.metadata_json,
                             "duration_ms": duration_ms,
-                            "status": "completed"
+                            "status": "completed",
+                            "turn_processing": {
+                                "tool_result": projected
+                                    .as_ref()
+                                    .ok()
+                                    .map(|applied| &applied.trace),
+                                "model_presentation_status": if projected.is_ok() {
+                                    "ready"
+                                } else {
+                                    "failed"
+                                }
+                            }
                         }),
                     )?],
                 )
@@ -2350,11 +2185,12 @@ async fn execute_tool_wave(
                     context.request_id(),
                 )
                 .await?;
+                let projected = projected?;
                 messages.push(assistant_tool_message(&tool_call));
                 messages.push(CompleteMessageInput {
                     images: None,
                     role: CompleteMessageRole::Tool,
-                    content: model_tool_result_content(&tool_result),
+                    content: projected.value.presentation,
                     tool_call_id: Some(tool_call.tool_call_id),
                     tool_name: None,
                     arguments_json: None,
@@ -2362,6 +2198,29 @@ async fn execute_tool_wave(
             }
             Err(error) => {
                 let error_detail = bounded_tool_stream_error(&error);
+                let projected = match &error {
+                    ToolsExecuteStreamInvocationError::Domain(domain) => Some(
+                        project_tool_result_presentation(
+                            clients,
+                            context,
+                            turn_id,
+                            processing_capability::ToolResultFact {
+                                tool_call_id: tool_call.tool_call_id.clone(),
+                                tool_name: tool_call.tool_name.clone(),
+                                arguments_json: tool_call.arguments_json.clone(),
+                                outcome: processing_capability::ToolResultOutcome::DomainError,
+                                content: error_detail.clone(),
+                                metadata_json: "{}"
+                                    .try_into()
+                                    .expect("literal Tool error metadata is JSON"),
+                                provider_code: tool_stream_error_code(domain),
+                            },
+                            format!("Tool failed: {error_detail}"),
+                        )
+                        .await,
+                    ),
+                    ToolsExecuteStreamInvocationError::Runtime(_) => None,
+                };
                 *revision = append_events(
                     clients,
                     context,
@@ -2375,7 +2234,23 @@ async fn execute_tool_wave(
                             "name": tool_call.tool_name,
                             "duration_ms": duration_ms,
                             "status": "failed",
-                            "error": error_detail
+                            "error": error_detail,
+                            "turn_processing": {
+                                "tool_result": projected
+                                    .as_ref()
+                                    .and_then(|result| result.as_ref().ok())
+                                    .map(|applied| &applied.trace),
+                                "model_presentation_status": if projected
+                                    .as_ref()
+                                    .is_some_and(Result::is_ok)
+                                {
+                                    "ready"
+                                } else if projected.is_some() {
+                                    "failed"
+                                } else {
+                                    "not_applicable"
+                                }
+                            }
                         }),
                     )?],
                 )
@@ -2399,11 +2274,20 @@ async fn execute_tool_wave(
                         // non-zero Git exits) are Tool results, not fatal Plugin
                         // failures. Preserve the Generation and let the model
                         // respond within the existing step and Tool limits.
+                        let projected = match projected {
+                            Some(projected) => projected?,
+                            None => {
+                                return Err(PluginError::runtime(RuntimeFailure::Internal {
+                                    detail: "domain Tool result lost its presentation projection"
+                                        .to_owned(),
+                                }));
+                            }
+                        };
                         messages.push(assistant_tool_message(&tool_call));
                         messages.push(CompleteMessageInput {
                             images: None,
                             role: CompleteMessageRole::Tool,
-                            content: format!("Tool failed: {error_detail}"),
+                            content: projected.value.presentation,
                             tool_call_id: Some(tool_call.tool_call_id),
                             tool_name: None,
                             arguments_json: None,
@@ -4752,7 +4636,11 @@ mod tests {
         let requirements = descriptor["required_capabilities"]
             .as_array()
             .expect("requirements must be an array");
-        assert_eq!(requirements.len(), 11);
+        assert_eq!(requirements.len(), 12);
+        assert!(requirements.iter().any(|requirement| {
+            requirement["capability_id"] == "lenso.agent.turn-processing@1"
+                && requirement["cardinality"] == "many"
+        }));
         assert!(requirements.iter().any(|requirement| {
             requirement["capability_id"] == "lenso.agent.artifact@1"
                 && requirement["cardinality"] == "one"
@@ -4768,6 +4656,7 @@ mod tests {
                                 | "lenso.agent.lifecycle@1"
                                 | "lenso.agent.session-presentation@1"
                                 | "lenso.agent.model-selection@1"
+                                | "lenso.agent.turn-processing@1"
                         )
                     )
                 })

@@ -1,0 +1,23 @@
+[package]
+name = "external-task-board-contract"
+version = "1.0.0"
+edition = "2024"
+[workspace]
+[package.metadata.lenso.contract]
+source = "src/contract.rs"
+descriptor = "capability.json"
+projection = "rust-runtime"
+output = "src/generated.rs"
+[dependencies]
+futures = "0.3"
+lenso-kernel = "0.3.5"
+lenso-contract-runtime = "0.2.0"
+lenso-plugin-authoring = "0.2.0"
+lenso-guest-sdk = "0.5.0"
+lenso-runtime-codec = "0.4.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+[build-dependencies]
+lenso-contract-authoring = "=0.1.1"
+lenso-contract-codegen = "=0.9.0"
+schemars = "1.2"

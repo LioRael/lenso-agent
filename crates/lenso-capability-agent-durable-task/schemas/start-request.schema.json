@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task_id", "idempotency_key", "workflow_kind", "state_version", "state_json"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "workflow_kind": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    },
+    "state_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "state_json": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536
+    },
+    "parent_task_id": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "deadline_unix_ms": {
+      "type": ["string", "null"],
+      "format": "uint64"
+    }
+  },
+  "additionalProperties": false,
+  "title": "StartRequest"
+}

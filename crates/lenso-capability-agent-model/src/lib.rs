@@ -5,6 +5,15 @@
     reason = "generated portable model feature flags are independent Provider facts"
 )]
 
+mod turn_profile;
+
+pub use turn_profile::{
+    ModelCapabilities, ModelCatalogFreshness, ModelCatalogProvenance, ModelCatalogSource,
+    ModelControlOption, ModelInputModality, ModelLimits, ModelReasoningControl,
+    ModelServiceTierControl, ModelWireProtocol, RESOLVED_TURN_PROFILE_EXTENSION,
+    ResolvedTurnProfile,
+};
+
 #[allow(dead_code)]
 mod contract;
 

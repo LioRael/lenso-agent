@@ -1,0 +1,16 @@
+[package]
+name = "external-authority-caller"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.authority-caller"
+root-slot = "tool-callers"
+
+[dependencies]
+lenso = "0.5.21"
+lenso-capability-agent-dynamic-authority = "0.1.0"
+lenso-capability-agent-tools = "0.1.0"
+
+[workspace]

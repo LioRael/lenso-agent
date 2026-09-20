@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_task" },
+    { "const": "not_found" },
+    { "const": "owner_mismatch" },
+    { "const": "idempotency_conflict" },
+    { "const": "stale_signal" },
+    { "const": "task_cancelled" },
+    { "const": "task_terminal" },
+    { "const": "upgrade_required" },
+    { "const": "uncertain_external_effect" },
+    { "const": "output_limit_exceeded" }
+  ]
+}

@@ -1,20 +1,27 @@
 # Optional Agent convention
 
 Adopt this local support package with `lenso app add <package-directory>`.
-A selected `agent/` contains one `tools.ts` or `tools.rs`. It can also contain
-an optional `profile.toml` and `instructions.md`:
+A selected `agent/` contributes either one `tools.ts` or `tools.rs`, an explicit
+`profile.toml`, or both. `instructions.md` is a Profile input, never a standalone
+Agent or permission grant:
 
 ```text
 app/orders/agent/
 ├── tools.ts              # or tools.rs
 ├── profile.toml          # selects an explicit Agent Profile name and policy
 └── instructions.md       # optional source for that Profile's instructions
+
+app/assistant/agent/
+├── profile.toml          # a Profile-only composition is valid
+└── instructions.md
 ```
 
 `profile.toml` uses ordinary Agent Profile fields, then ends with an
 authoring-only `[lenso]` name declaration. It must explicitly declare
-`instances` and `allowed_tools`; the compiler adds only the generated Tool
-Provider instance.
+`instances` and `allowed_tools`. When the same directory contributes a Tool,
+the compiler adds only that generated Tool Provider instance. A Profile-only
+directory leaves its declared `instances` unchanged, so it can select existing
+configured capabilities without creating a placeholder Provider.
 `instructions.md` requires this Profile and cannot silently replace inline
 Profile instructions. Private dependencies belong to `agent/package.json` or
 `agent/Cargo.toml`; inactive surfaces are not installed or compiled. TypeScript
@@ -34,14 +41,21 @@ allowed_tools = ["greet"]
 profile = "orders"
 ```
 
-The build publishes a hashed `lenso.agent.deployment@1` resource alongside the
-ordinary `lenso.agent.tool-provider@2` Bundle. Inspect it with
-`lenso-agent dx check --from dist`; import it explicitly with
-`lenso-agent dx apply --from dist`. The Agent stages and resolves the candidate
-through its existing Host Profile and Plugin Root before publishing it. The
-Provider is installed as disabled in the default Agent; only the generated
-Profile selects it. A tools-only contribution stays disabled until the user
-selects it through ordinary Agent configuration. This does not launch an Agent
-or grant model permission. An App Agent's existing Tool runtime, Profiles and
-explicit tool policy own availability and execution authorization. Console needs
-neither this support nor an Agent to run.
+Tool contributions publish a hashed `lenso.agent.deployment@1` resource beside
+the ordinary `lenso.agent.tool-provider@2` Bundle. A Profile-only contribution
+publishes `lenso.agent.deployment@2` through the Engine's generic
+resource-only convention output: it has no Bundle, Plugin Root directory,
+runtime artifact, or language dependency installation. Inspect either form
+with `lenso-agent dx check --from dist`; import it explicitly with
+`lenso-agent dx apply --from dist`.
+
+The Agent stages and resolves the resulting Profile through its existing Host
+Profile and Plugin Root before publishing it. A Tool Provider is installed as
+disabled in the default Agent; only an explicit Profile can select it. A
+tools-only contribution stays disabled until the user selects it through the
+ordinary Agent configuration lifecycle. A Profile-only contribution never
+activates a Tool by virtue of its directory or ancestry. None of these build or
+import steps launches an Agent or grants model permission. An App Agent's
+existing Tool runtime, Profiles, and explicit tool policy own availability and
+execution authorization. Console needs neither this support nor an Agent to
+run.

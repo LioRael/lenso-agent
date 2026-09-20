@@ -2,6 +2,7 @@
 
 Start with the job you need to complete:
 
+- Tutorial: [build an Agent from the blank Foundation](tutorials/build-an-agent-foundation.md).
 - Tutorial: [build and add a Tool Plugin in 10 minutes](tutorials/10-minute-tool-provider.md).
 - Tutorial: [add one Plugin command to the CLI and TUI](tutorials/add-terminal-command-provider.md).
 - How-to: [install, verify, upgrade, and remove Lenso Agent](installation.md).
@@ -11,6 +12,7 @@ Start with the job you need to complete:
 - Reference: [Capability contracts](contracts.md), [control-plane glossary](glossary.md), and [ADR index](adr/README.md).
 - Explanation: [Lenso Agent v1 architecture](architecture/lenso-agent.md),
   [Host implementation and operations](architecture/host-internals.md),
+  [Agent Foundation extension audit](architecture/agent-foundation-audit.md),
   [terminal and chat surface Plugin cards](architecture/terminal-surface-plugin-cards.md),
   and the focused Plugin cards under `architecture/`.
 

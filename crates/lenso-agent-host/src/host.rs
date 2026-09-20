@@ -1,4 +1,4 @@
-use std::{fmt::Debug, path::PathBuf, sync::Arc};
+use std::{fmt::Debug, fs, path::PathBuf, sync::Arc};
 
 use lenso_app_authoring::{PluginConfigurationAuthority, PluginSelectionAuthority};
 
@@ -324,15 +324,25 @@ impl<S: AgentSurface> ConfiguredAgentHost<S> {
     /// Resolves the selected Profile and starts one immutable App Generation.
     pub async fn run(self, profile: Profile) -> Result<AgentApp, String> {
         let (plan, profile_name) = match profile {
-            Profile::Default => (None, None),
-            Profile::Named(name) => (None, Some(name)),
-            Profile::ResolvedPlan(path) => (Some(path), None),
+            Profile::Default => (
+                plan_bytes_for_profile_in(&self.directories, None, None)
+                    .map_err(|error| format!("App resolution failed: {error}"))?,
+                None,
+            ),
+            Profile::Named(name) => (
+                plan_bytes_for_profile_in(&self.directories, None, Some(&name))
+                    .map_err(|error| format!("App resolution failed: {error}"))?,
+                Some(name),
+            ),
+            Profile::ResolvedPlan(path) => (
+                fs::read(&path).map_err(|error| {
+                    format!("App resolution failed to read {}: {error}", path.display())
+                })?,
+                None,
+            ),
         };
-        let bytes =
-            plan_bytes_for_profile_in(&self.directories, plan.as_deref(), profile_name.as_deref())
-                .map_err(|error| format!("App resolution failed: {error}"))?;
         AgentApp::start_with_runtime_state_profile_and_host_build(
-            &bytes,
+            &plan,
             &self.directories.runtime(),
             self.directories.session_database(),
             self.surface.kind(),

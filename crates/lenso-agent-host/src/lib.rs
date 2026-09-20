@@ -22,8 +22,8 @@ mod test_support;
 mod tool_target;
 
 pub use app_deployment::{
-    APP_DEPLOYMENT_SCHEMA, AppDeploymentApplied, AppDeploymentInspection, apply_app_deployments,
-    inspect_app_deployments,
+    APP_DEPLOYMENT_SCHEMA, AppDeploymentApplied, AppDeploymentInspection,
+    PROFILE_ONLY_APP_DEPLOYMENT_SCHEMA, apply_app_deployments, inspect_app_deployments,
 };
 pub use directories::{
     AGENT_HOME_ENV, AgentDirectories, ensure_unmanaged_plugin_root, protect_managed_plugin_root,
@@ -33,7 +33,7 @@ pub use host::{
     ConfiguredAgentHost, DiscordSurface, HeadlessSurface, Profile, TelegramSurface, TuiSurface,
     WebSurface,
 };
-pub use lenso_agent_loop_plugin::TurnModelSelection;
+pub use lenso_capability_agent_model_selection::TurnModelSelection;
 pub use official_prompts::migrate_legacy_official_files;
 pub use plugin_configuration_authority::PluginManagementTarget;
 pub use tool_target::AgentToolTarget;

@@ -1,0 +1,29 @@
+{
+  "id": "lenso.agent.turn-processing@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "project_model_request",
+      "interaction": "request",
+      "request_schema": "schemas/project-model-request-request.schema.json",
+      "response_schema": "schemas/project-model-request-response.schema.json",
+      "domain_error_schema": "schemas/project-model-request-error.schema.json"
+    },
+    {
+      "name": "transform_tool_call",
+      "interaction": "request",
+      "request_schema": "schemas/transform-tool-call-request.schema.json",
+      "response_schema": "schemas/transform-tool-call-response.schema.json",
+      "domain_error_schema": "schemas/transform-tool-call-error.schema.json"
+    },
+    {
+      "name": "project_tool_result",
+      "interaction": "request",
+      "request_schema": "schemas/project-tool-result-request.schema.json",
+      "response_schema": "schemas/project-tool-result-response.schema.json",
+      "domain_error_schema": "schemas/project-tool-result-error.schema.json"
+    }
+  ]
+}

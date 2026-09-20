@@ -158,7 +158,10 @@
           "$ref": "#/$defs/CatalogControl"
         },
         "wire_protocol": {
-          "$ref": "#/$defs/CatalogWireProtocol"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "A bounded, versioned Provider-owned wire identity. The three built-in\nidentities retain their existing string values, while an independent\nProvider can name its own transport without claiming an official\nprotocol family."
         },
         "compaction_compatibility": {
           "type": "string",
@@ -238,10 +241,6 @@
         }
       },
       "additionalProperties": false
-    },
-    "CatalogWireProtocol": {
-      "type": "string",
-      "enum": ["fixture", "openai_responses", "openai_chat_completions"]
     }
   },
   "title": "CatalogResponse"

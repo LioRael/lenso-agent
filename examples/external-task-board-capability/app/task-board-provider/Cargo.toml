@@ -1,0 +1,16 @@
+[package]
+name = "external-task-board-provider"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.external-task-board-provider"
+root-slot = "task-boards"
+
+[dependencies]
+external-task-board = { package = "external-task-board-contract", path = "../../contracts/external.task-board" }
+lenso = "0.5.21"
+serde = { version = "1", features = ["derive"] }
+
+[workspace]

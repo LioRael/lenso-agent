@@ -1,0 +1,16 @@
+[package]
+name = "external-task-board-caller"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.external-task-board-caller"
+root-slot = "task-board-callers"
+
+[dependencies]
+external-task-board-report = { package = "external-task-board-report-contract", path = "../../contracts/external.task-board-report" }
+external-task-board-audit = { package = "external-task-board-audit-contract", path = "../../contracts/external.task-board-audit" }
+lenso = "0.5.21"
+
+[workspace]

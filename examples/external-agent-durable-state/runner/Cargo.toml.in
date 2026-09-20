@@ -1,0 +1,22 @@
+[package]
+name = "external-agent-durable-state-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+external-state-task-caller = { path = "../app/state-task-caller" }
+external-state-task-provider = { path = "../app/state-task-provider" }
+lenso-app-plan = "0.4.3"
+lenso-capability-agent-durable-task = "0.1.0"
+lenso-capability-agent-extension-state = "0.1.0"
+lenso-kernel = "0.3.9"
+lenso-native-adapter = "0.3.14"
+lenso-runner = "0.2.14"
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[workspace]
+
+# LENSO_LOCAL_PATCHES

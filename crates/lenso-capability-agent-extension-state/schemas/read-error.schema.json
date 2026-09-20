@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_record" },
+    { "const": "owner_unavailable" },
+    { "const": "sequence_conflict" },
+    { "const": "idempotency_conflict" },
+    { "const": "unavailable" }
+  ]
+}

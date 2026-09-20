@@ -1,0 +1,6 @@
+description = "A Profile-only assistant with no App Tool grant."
+instances = ["lenso.agent.model.fixture/model"]
+allowed_tools = []
+
+[lenso]
+profile = "assistant"

@@ -134,3 +134,5 @@ reasons on their own.
 
 - [0112 — Authenticated Session ownership](0112-authenticated-session-ownership.md)
 - [0113 — Compose App-authored Agent DX through verified deployment resources](0113-compose-app-authored-agent-dx.md)
+- [0114 — Separate the blank Agent foundation from the legacy Host](0114-separate-blank-agent-foundation-from-the-legacy-host.md)
+- [0115 — Own public Agent turn contracts in Capability crates](0115-public-agent-turn-contract-ownership.md)

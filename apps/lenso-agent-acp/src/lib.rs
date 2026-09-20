@@ -28,10 +28,10 @@ use lenso_agent_auth_openai_codex_plugin::{
 use lenso_agent_host::{
     AcpSurface, AgentDirectories, AgentHost, Profile, generation::TurnGeneration,
 };
-use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{
     RUN_TURN_OPERATION, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
 };
+use lenso_capability_agent_tools::RunScope;
 use lenso_capability_agent_user_interaction::{InteractionAnswer, PendingInteraction};
 use lenso_kernel::{CancellationToken, StreamEvent};
 use tokio::sync::{mpsc, oneshot};

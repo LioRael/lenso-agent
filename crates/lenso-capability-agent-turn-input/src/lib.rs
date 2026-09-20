@@ -2,6 +2,9 @@
 
 #[allow(dead_code)]
 mod contract;
+mod presentation;
+
+pub use presentation::TurnInputPresentation;
 
 include!("generated.rs");
 

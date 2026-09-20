@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    { "const": "invalid_selection" },
+    { "const": "unauthorized" },
+    { "const": "snapshot_expired" },
+    { "const": "snapshot_unknown" },
+    { "const": "revoked" }
+  ]
+}

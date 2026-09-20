@@ -1,0 +1,30 @@
+[package]
+name = "external-agent-processing-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+external-alternate-agent-loop = { path = "../app/alternate-loop" }
+external-agent-caller = { path = "../app/agent-caller" }
+external-final-approval = { path = "../app/final-approval" }
+external-inspect-model = { path = "../app/inspect-model" }
+external-secret-tool = { path = "../app/secret-tool" }
+external-turn-processor = { path = "../app/turn-processor" }
+lenso-agent-tools-plugin = "0.2.0"
+lenso-app-plan = "0.4.3"
+lenso-capability-agent = "0.1.0"
+lenso-capability-agent-model = "0.1.0"
+lenso-capability-agent-tool-hook = "0.1.0"
+lenso-capability-agent-tool-provider = "0.2.2"
+lenso-capability-agent-tools = "0.1.0"
+lenso-capability-agent-turn-processing = "0.1.0"
+lenso-kernel = "0.3.9"
+lenso-native-adapter = "0.3.14"
+lenso-runner = "0.2.14"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[workspace]
+
+# LENSO_LOCAL_PATCHES

@@ -1,0 +1,27 @@
+[package]
+name = "lenso-agent-foundation"
+version = "0.1.0"
+description = "Blank, explicit-composition authoring entry for Lenso Agent."
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "lenso-agent-foundation"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+lenso-app-authoring.workspace = true
+lenso-app-plan.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

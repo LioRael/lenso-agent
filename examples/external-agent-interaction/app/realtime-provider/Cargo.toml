@@ -1,0 +1,15 @@
+[package]
+name = "external-realtime-provider"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.realtime-provider"
+root-slot = "interaction-providers"
+
+[dependencies]
+lenso = "0.5.21"
+lenso-capability-agent-interaction = "0.1.0"
+
+[workspace]

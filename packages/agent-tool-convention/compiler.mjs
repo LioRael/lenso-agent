@@ -5,12 +5,21 @@ const request = JSON.parse(await Bun.stdin.text());
 if(request.schema !== "lenso.convention-compile.v1") throw new Error("Unsupported convention request");
 const root=request.entry, output=request.output;
 const entries=["tools.ts","tools.rs"].filter(name=>fs.existsSync(path.join(root,name)));
-if(entries.length!==1) throw new Error("agent/ requires exactly one tools.ts or tools.rs");
-const entry=path.join(root,entries[0]);
-if(!fs.lstatSync(entry).isFile()) throw new Error("Tool entry must be a regular file");
-const deployment=readDeployment(root,request);
+if(entries.length>1) throw new Error("agent/ cannot contain both tools.ts and tools.rs");
+const hasTools=entries.length===1;
+const entry=hasTools ? path.join(root,entries[0]) : null;
+if(entry&&!fs.lstatSync(entry).isFile()) throw new Error("Tool entry must be a regular file");
+const deployment=readDeployment(root,request,hasTools);
 fs.writeFileSync(path.join(output,"lenso-agent-deployment.json"),JSON.stringify(deployment,null,2));
-if(entries[0]==="tools.rs") {
+if(!hasTools) {
+ // A Profile-only composition is data, not a disabled or empty Tool Provider.
+ // The Engine's generic resource-only result keeps it out of the App's Plugin
+ // resolver, Bundles inventory, and language dependency installation path.
+ fs.writeFileSync(path.join(output,"lenso.convention-resources.json"),JSON.stringify({
+  schema:"lenso.convention-resources.v1",
+  resources:[{path:"lenso-agent-deployment.json",schema:"lenso.agent.deployment@2"}],
+ },null,2));
+} else if(entries[0]==="tools.rs") {
  // Rust authors retain the ordinary Plugin/Tool Provider macros. The portable
  // facade lets the Engine lower the same source to both Wasm and Process
  // bundles, so an App build never needs to link an authored Tool into its Host.
@@ -58,7 +67,7 @@ if(entries[0]==="tools.rs") {
 }
 process.stdout.write(JSON.stringify({schema:"lenso.convention-compiled.v1"}));
 
-function readDeployment(root,request) {
+function readDeployment(root,request,hasTools) {
  const profilePath=path.join(root,"profile.toml");
  const instructionsPath=path.join(root,"instructions.md");
  const hasProfile=fs.existsSync(profilePath),hasInstructions=fs.existsSync(instructionsPath);
@@ -83,6 +92,10 @@ function readDeployment(root,request) {
    if(instructions.trim()==="") throw new Error("Agent instructions must not be blank");
    profile.instructions=instructions;
   }
+ }
+ if(!hasTools) {
+  if(!profile) throw new Error("agent/ requires tools.ts, tools.rs, or profile.toml");
+  return {schema:"lenso.agent.deployment@2",contribution:{id:request.plugin_id},profile};
  }
  return {schema:"lenso.agent.deployment@1",plugin:{id:request.plugin_id,instance:"default"},profile};
 }

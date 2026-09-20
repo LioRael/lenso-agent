@@ -1,0 +1,19 @@
+[package]
+name = "external-agent-interaction-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+external-realtime-caller = { path = "../app/realtime-caller" }
+external-realtime-provider = { path = "../app/realtime-provider" }
+lenso-app-plan = "0.4.3"
+lenso-capability-agent-interaction = "0.1.0"
+lenso-kernel = "0.3.9"
+lenso-native-adapter = "0.3.14"
+lenso-runner = "0.2.14"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[workspace]
+
+# LENSO_LOCAL_PATCHES

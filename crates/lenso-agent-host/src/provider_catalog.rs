@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-pub use lenso_agent_loop_plugin::{
+use lenso_app_plan::{ResolvedAppPlan, authoring::HostCatalog};
+use lenso_capability_agent_model as model_contract;
+pub use lenso_capability_agent_model::{
     ModelCapabilities, ModelCatalogFreshness, ModelCatalogProvenance, ModelCatalogSource,
     ModelControlOption, ModelInputModality, ModelLimits, ModelReasoningControl,
     ModelServiceTierControl, ModelWireProtocol, ResolvedTurnProfile,
 };
-use lenso_app_plan::{ResolvedAppPlan, authoring::HostCatalog};
-use lenso_capability_agent_model as model_contract;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -113,7 +113,7 @@ impl ProviderModelCatalog {
             service_tier,
             limits: model.limits.clone(),
             capabilities: model.capabilities.clone(),
-            wire_protocol: model.wire_protocol,
+            wire_protocol: model.wire_protocol.clone(),
             compaction_compatibility: model.compaction_compatibility.clone(),
         })
     }
@@ -563,7 +563,7 @@ fn resolved_turn_profile(
         service_tier,
         limits: model.limits.clone(),
         capabilities: model.capabilities.clone(),
-        wire_protocol: model.wire_protocol,
+        wire_protocol: model.wire_protocol.clone(),
         compaction_compatibility: model.compaction_compatibility.clone(),
     }))
 }
@@ -837,15 +837,8 @@ fn project_model(
                 }
             },
         },
-        wire_protocol: match model.wire_protocol {
-            model_contract::CatalogWireProtocol::Fixture => ModelWireProtocol::Fixture,
-            model_contract::CatalogWireProtocol::OpenaiResponses => {
-                ModelWireProtocol::OpenaiResponses
-            }
-            model_contract::CatalogWireProtocol::OpenaiChatCompletions => {
-                ModelWireProtocol::OpenaiChatCompletions
-            }
-        },
+        wire_protocol: ModelWireProtocol::from_id(model.wire_protocol.clone())
+            .map_err(|error| format!("Model Provider returned invalid wire protocol: {error}"))?,
         compaction_compatibility: model.compaction_compatibility.clone(),
     })
 }
@@ -1030,7 +1023,8 @@ fn configured_model(
         wire_protocol: match plugin_id {
             CODEX_DIRECT_PLUGIN => ModelWireProtocol::OpenaiResponses,
             OPENAI_COMPATIBLE_PLUGIN => ModelWireProtocol::OpenaiChatCompletions,
-            _ => ModelWireProtocol::Fixture,
+            _ => ModelWireProtocol::other("lenso.configured-model@1")
+                .expect("the configured-model identity is a valid bounded protocol identity"),
         },
         compaction_compatibility: "generic-text-v1".to_owned(),
         id,
@@ -1117,6 +1111,61 @@ mod tests {
         }
     }
 
+    fn provider_catalog_model(wire_protocol: &str) -> model_contract::CatalogModel {
+        let unsupported = model_contract::CatalogControl {
+            status: model_contract::CatalogControlStatus::Unsupported,
+            mode: None,
+            options: Vec::new(),
+            default: None,
+            budget_tokens: None,
+        };
+        model_contract::CatalogModel {
+            id: "third-party-model".to_owned(),
+            display_name: "Third-party Model".to_owned(),
+            description: "A model supplied by an independent Provider.".to_owned(),
+            hidden: false,
+            limits: model_contract::CatalogModelLimits {
+                context_window_tokens: None,
+                max_input_tokens: None,
+                max_output_tokens: None,
+            },
+            input_modalities: vec![model_contract::CatalogInputModality::Text],
+            text_output: true,
+            tool_calls: true,
+            parallel_tool_calls: false,
+            reasoning: unsupported.clone(),
+            service_tiers: unsupported,
+            wire_protocol: wire_protocol.to_owned(),
+            compaction_compatibility: "generic-text-v1".to_owned(),
+        }
+    }
+
+    #[test]
+    fn provider_catalog_preserves_a_third_party_wire_identity() {
+        let model = project_model(
+            &provider_catalog_model("example.vendor.model-wire@1"),
+            Some("third-party-model"),
+        )
+        .unwrap();
+
+        assert!(model.selected);
+        assert_eq!(model.wire_protocol.as_str(), "example.vendor.model-wire@1");
+    }
+
+    #[test]
+    fn provider_catalog_rejects_an_invalid_third_party_wire_identity() {
+        let error = project_model(
+            &provider_catalog_model("example vendor model wire"),
+            Some("third-party-model"),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Model Provider returned invalid wire protocol: Model wire protocol identity is invalid"
+        );
+    }
+
     fn model_with_reasoning(reasoning: ModelReasoningControl) -> ModelCatalogEntry {
         ModelCatalogEntry {
             id: "reasoning-model".to_owned(),
@@ -1158,7 +1207,7 @@ mod tests {
             service_tier: None,
             limits: model.limits.clone(),
             capabilities: model.capabilities.clone(),
-            wire_protocol: model.wire_protocol,
+            wire_protocol: model.wire_protocol.clone(),
             compaction_compatibility: model.compaction_compatibility.clone(),
         };
         ProviderModelCatalog {

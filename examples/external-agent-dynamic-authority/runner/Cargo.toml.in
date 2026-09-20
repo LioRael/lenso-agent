@@ -1,0 +1,27 @@
+[package]
+name = "external-agent-dynamic-authority-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+external-authority-caller = { path = "../app/authority-caller" }
+external-policy-tool = { path = "../app/policy-tool" }
+external-tenant-policy = { path = "../app/tenant-policy" }
+lenso-agent-tools-plugin = "0.2.0"
+lenso-app-plan = "0.4.3"
+lenso-capability-agent-dynamic-authority = "0.1.0"
+lenso-capability-agent-tool-hook = "0.1.0"
+lenso-capability-agent-tool-provider = "0.2.2"
+lenso-capability-agent-tools = "0.1.0"
+lenso-kernel = "0.3.9"
+lenso-native-adapter = "0.3.14"
+lenso-runner = "0.2.14"
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[workspace]
+
+# LENSO_LOCAL_PATCHES

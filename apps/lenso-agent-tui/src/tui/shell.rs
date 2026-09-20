@@ -12,13 +12,13 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use futures::StreamExt;
-use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{
     Agent, RUN_TURN_OPERATION, RunTurnError, RunTurnRequest, RunTurnResponse, RunTurnResponseKind,
 };
 use lenso_capability_agent_context_source::{
     ContextRole, ReadResourceRequest, RenderPromptRequest,
 };
+use lenso_capability_agent_tools::RunScope;
 use lenso_capability_agent_user_interaction::{
     InteractionAnswer, InteractionQuestion, PendingInteraction,
 };

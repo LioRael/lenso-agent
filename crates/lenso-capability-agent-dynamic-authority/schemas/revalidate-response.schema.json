@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["decision", "reason_code", "message", "observed_policy_revision"],
+  "properties": {
+    "decision": {
+      "$ref": "#/$defs/AuthorityDecision"
+    },
+    "reason_code": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "message": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "observed_policy_revision": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "AuthorityDecision": {
+      "type": "string",
+      "enum": ["allow", "deny"]
+    }
+  },
+  "title": "RevalidateResponse"
+}

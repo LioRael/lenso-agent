@@ -1,7 +1,6 @@
 use lenso::CtxExt;
 pub mod auth_connections;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
-use lenso_agent_loop_plugin::{AgentBehaviorProvenance, TurnModelSelection};
 use lenso_agent_native_support::WorkspaceScope;
 use lenso_app_authoring::{PluginConfigurationAuthority, PluginSelectionAuthority};
 use lenso_app_plan::{
@@ -12,7 +11,10 @@ use lenso_app_plan::{
     },
 };
 use lenso_bun_adapter::{BunAdapter, BunCapabilityCodec};
-use lenso_capability_agent::{Agent, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID};
+use lenso_capability_agent::{
+    Agent, AgentBehaviorProvenance, AgentJsonCodec, CAPABILITY_ID as AGENT_CAPABILITY_ID,
+    SessionProfile,
+};
 use lenso_capability_agent_artifact::ArtifactJsonCodec;
 use lenso_capability_agent_context_compaction::ContextCompactionJsonCodec;
 use lenso_capability_agent_context_source::{
@@ -31,7 +33,7 @@ use lenso_capability_agent_model::{
     ModelCatalog, ModelJsonCodec,
 };
 use lenso_capability_agent_model_selection::{
-    CAPABILITY_ID as MODEL_SELECTION_CAPABILITY_ID, ModelSelectionJsonCodec,
+    CAPABILITY_ID as MODEL_SELECTION_CAPABILITY_ID, ModelSelectionJsonCodec, TurnModelSelection,
 };
 use lenso_capability_agent_oauth_access::OauthAccessJsonCodec;
 use lenso_capability_agent_prompt::PromptJsonCodec;
@@ -626,10 +628,7 @@ impl AgentApp {
         Ok((plan, root))
     }
 
-    fn retained_session_profile(
-        &self,
-        digest: &str,
-    ) -> Result<lenso_agent_loop_plugin::SessionProfile, String> {
+    fn retained_session_profile(&self, digest: &str) -> Result<SessionProfile, String> {
         self.online_generation
             .borrow()
             .retained_profile(digest)
@@ -1698,7 +1697,7 @@ pub struct TurnGeneration {
     session_control: Option<Rc<NativeRequestHandle<SessionControl>>>,
     has_model_selection: bool,
     behavior_digest: String,
-    session_profile: lenso_agent_loop_plugin::SessionProfile,
+    session_profile: SessionProfile,
     resolved_turn_profile: crate::ResolvedTurnProfile,
     model_catalog: crate::ProviderModelCatalog,
 }

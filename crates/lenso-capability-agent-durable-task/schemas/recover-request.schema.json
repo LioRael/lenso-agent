@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["task_id", "supported_state_versions", "recoverer_artifact"],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "supported_state_versions": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string"
+      },
+      "description": "Explicit serializable state versions understood by the new Plugin\nartifact. Unsupported durable state must be surfaced, not skipped.",
+      "minItems": 1
+    },
+    "recoverer_artifact": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192
+    }
+  },
+  "additionalProperties": false,
+  "title": "RecoverRequest"
+}

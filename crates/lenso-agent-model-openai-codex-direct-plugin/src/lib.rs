@@ -27,9 +27,9 @@ use lenso_capability_agent_model::{
     self as model_contract, CAPABILITY_ID, CatalogControl, CatalogControlMode,
     CatalogControlOption, CatalogControlStatus, CatalogFreshness, CatalogInputModality,
     CatalogModel, CatalogModelLimits, CatalogProvenance, CatalogRequest, CatalogResponse,
-    CatalogSource, CatalogWireProtocol, CompleteError, CompleteMessage, CompleteMessageInput,
-    CompleteMessageKind, CompleteMessageRole, CompleteOpen, ModelCatalog,
-    ModelCompleteInvocationError, ModelProvider, ProviderFailurePayload,
+    CatalogSource, CompleteError, CompleteMessage, CompleteMessageInput, CompleteMessageKind,
+    CompleteMessageRole, CompleteOpen, ModelCatalog, ModelCompleteInvocationError, ModelProvider,
+    ProviderFailurePayload,
 };
 use lenso_kernel::{InvocationContext, NativeStreamItem, NativeStreamSession, RuntimeFailure};
 use reqwest::{StatusCode, header};
@@ -1097,7 +1097,7 @@ fn project_codex_model(model: CodexModel) -> Result<CatalogModel, RuntimeFailure
         parallel_tool_calls: model.supports_parallel_tool_calls,
         reasoning,
         service_tiers,
-        wire_protocol: CatalogWireProtocol::OpenaiResponses,
+        wire_protocol: "openai_responses".to_owned(),
         compaction_compatibility,
     })
 }

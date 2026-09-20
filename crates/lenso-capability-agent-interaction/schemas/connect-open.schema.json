@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["protocol", "interaction_id", "max_pending_frames"],
+  "properties": {
+    "protocol": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 192,
+      "description": "Application-defined protocol identifier, for example\n`example.realtime-audio@1`."
+    },
+    "interaction_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "resume_from": {
+      "type": ["string", "null"],
+      "minLength": 1,
+      "maxLength": 4096,
+      "description": "An opaque Provider cursor. Providers that do not support resumption\nmust reject this at open rather than silently creating a fresh session."
+    },
+    "max_pending_frames": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 128,
+      "description": "Required bounded flow policy negotiated by the caller and Provider."
+    }
+  },
+  "additionalProperties": false,
+  "title": "ConnectOpen"
+}

@@ -1,0 +1,15 @@
+{
+  "id": "external.task-board@1",
+  "version": "1.0.0",
+  "portable": true,
+  "cross_lane_transfer": false,
+  "operations": [
+    {
+      "name": "execute",
+      "interaction": "request",
+      "request_schema": "schemas/execute-request.schema.json",
+      "response_schema": "schemas/execute-response.schema.json",
+      "domain_error_schema": "schemas/execute-error.schema.json"
+    }
+  ]
+}

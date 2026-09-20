@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use lenso_agent_loop_plugin::RunScope;
 use lenso_capability_agent::{RUN_TURN_OPERATION, RunTurnRequest};
+use lenso_capability_agent_tools::RunScope;
 use lenso_kernel::StreamEvent;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
