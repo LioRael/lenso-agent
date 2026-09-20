@@ -16,6 +16,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  quality:
+    name: quality
+    if: ${{ always() }}
+    needs: [static, tests, contracts, marketplace-installation]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every candidate gate
+        env:
+          RESULTS: ${{ toJSON(needs.*.result) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          results = json.loads(os.environ["RESULTS"])
+          assert len(results) == 4 and all(result == "success" for result in results), results
+          PY
+
   static:
     name: Format, check, and lint
     runs-on: ubuntu-latest
