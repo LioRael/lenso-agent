@@ -1078,6 +1078,12 @@ mod profile_tests {
     }
 
     #[test]
+    fn outcome_evaluation_bypasses_the_composed_terminal_surface() {
+        let raw = vec!["sessions".to_owned(), "evaluate-outcome".to_owned()];
+        assert!(!crate::terminal::should_try_composed_surface(&raw));
+    }
+
+    #[test]
     fn coding_install_preserves_custom_managed_plugin_root() {
         let home = tempfile::tempdir().unwrap();
         lenso_agent_host::protect_managed_plugin_root(home.path()).unwrap();

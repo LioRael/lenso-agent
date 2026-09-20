@@ -7,8 +7,9 @@ use std::{
 
 use lenso_agent_session_file_plugin::{FileSessionImporter, FileSessionInspector};
 use lenso_agent_session_inspection::{
-    EvaluationCriteria, SessionArchive, SessionImporter, SessionInspector, evaluate_trajectory,
-    inspect_turn_started, project_otlp_trace, project_trajectory,
+    EvaluationCriteria, OutcomeEvaluationCriteria, OutcomeEvidence, SessionArchive,
+    SessionImporter, SessionInspector, evaluate_outcome, evaluate_trajectory, inspect_turn_started,
+    project_otlp_trace, project_trajectory,
 };
 use lenso_agent_session_sqlite_plugin::{SqliteSessionImporter, SqliteSessionInspector};
 use lenso_capability_agent::inspect_turn_generation_provenance;
@@ -77,6 +78,12 @@ pub enum SessionCommand {
         session_id: String,
         store: SessionStore,
         criteria: Option<PathBuf>,
+    },
+    EvaluateOutcome {
+        session_id: String,
+        store: SessionStore,
+        criteria: PathBuf,
+        evidence: PathBuf,
     },
     Otlp {
         session_id: String,
@@ -169,6 +176,7 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     let mut runtime_root_explicit = false;
     let mut archive = None;
     let mut criteria = None;
+    let mut evidence = None;
     let mut output = None;
     let mut endpoint = None;
     let mut service_name = "lenso-agent".to_owned();
@@ -195,6 +203,9 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
             "--criteria" => {
                 criteria = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
             }
+            "--evidence" => {
+                evidence = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
+            }
             "--output" => {
                 output = Some(PathBuf::from(arguments.next().ok_or_else(session_usage)?));
             }
@@ -212,17 +223,32 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
     }
     let store = database.map_or(SessionStore::File(directory), SessionStore::Sqlite);
     match command.as_str() {
-        "provenance" if archive.is_none() => Ok(SessionCommand::Provenance {
-            session_id: session_id.ok_or_else(session_usage)?,
-            store,
-            runtime_root,
-        }),
-        "export" if archive.is_some() && !runtime_root_explicit => Ok(SessionCommand::Export {
-            session_id,
-            store,
-            archive: archive.expect("checked"),
-        }),
-        "import" if archive.is_some() && session_id.is_none() && !runtime_root_explicit => {
+        "provenance" if archive.is_none() && criteria.is_none() && evidence.is_none() => {
+            Ok(SessionCommand::Provenance {
+                session_id: session_id.ok_or_else(session_usage)?,
+                store,
+                runtime_root,
+            })
+        }
+        "export"
+            if archive.is_some()
+                && criteria.is_none()
+                && evidence.is_none()
+                && !runtime_root_explicit =>
+        {
+            Ok(SessionCommand::Export {
+                session_id,
+                store,
+                archive: archive.expect("checked"),
+            })
+        }
+        "import"
+            if archive.is_some()
+                && session_id.is_none()
+                && criteria.is_none()
+                && evidence.is_none()
+                && !runtime_root_explicit =>
+        {
             Ok(SessionCommand::Import {
                 archive: archive.expect("checked"),
                 store,
@@ -231,6 +257,7 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
         "replay"
             if archive.is_none()
                 && criteria.is_none()
+                && evidence.is_none()
                 && output.is_none()
                 && endpoint.is_none()
                 && !runtime_root_explicit =>
@@ -242,6 +269,7 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
         }
         "evaluate"
             if archive.is_none()
+                && evidence.is_none()
                 && output.is_none()
                 && endpoint.is_none()
                 && !runtime_root_explicit =>
@@ -252,9 +280,23 @@ pub fn parse_session_command(arguments: &[String]) -> Result<SessionCommand, Str
                 criteria,
             })
         }
+        "evaluate-outcome"
+            if archive.is_none()
+                && output.is_none()
+                && endpoint.is_none()
+                && !runtime_root_explicit =>
+        {
+            Ok(SessionCommand::EvaluateOutcome {
+                session_id: session_id.ok_or_else(session_usage)?,
+                store,
+                criteria: criteria.ok_or_else(session_usage)?,
+                evidence: evidence.ok_or_else(session_usage)?,
+            })
+        }
         "otlp"
             if archive.is_none()
                 && criteria.is_none()
+                && evidence.is_none()
                 && (output.is_some() || endpoint.is_some())
                 && !runtime_root_explicit =>
         {
@@ -689,6 +731,29 @@ pub async fn run_session(command: SessionCommand) -> Result<(), String> {
                 Err("Session evaluation failed".to_owned())
             }
         }
+        SessionCommand::EvaluateOutcome {
+            session_id,
+            store,
+            criteria,
+            evidence,
+        } => {
+            let session = session_inspector(&store).inspect_one(&session_id)?;
+            let trajectory = project_trajectory(&session)?;
+            let criteria: OutcomeEvaluationCriteria =
+                read_json_file(&criteria, "outcome evaluation criteria")?;
+            let evidence: OutcomeEvidence = read_json_file(&evidence, "outcome evidence")?;
+            let report = evaluate_outcome(&trajectory, &criteria, &evidence)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report)
+                    .map_err(|error| format!("failed to encode outcome evaluation: {error}"))?
+            );
+            if report.passed {
+                Ok(())
+            } else {
+                Err("Outcome evaluation failed".to_owned())
+            }
+        }
         SessionCommand::Otlp {
             session_id,
             store,
@@ -831,5 +896,5 @@ fn generation_usage() -> String {
 }
 
 fn session_usage() -> String {
-    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]\n       lenso-agent-cli sessions replay --session <id> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions evaluate --session <id> [--criteria <json-path>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions otlp --session <id> [--service-name <name>] <--output <json-path>|--endpoint <url>|both> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions export --archive <json-path> [--session <id>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions import --archive <json-path> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions migrate [--session <id>] <--from-directory <path>|--from-database <path>> <--to-directory <path>|--to-database <path>>".to_owned()
+    "usage: lenso-agent-cli sessions provenance --session <id> [--directory <session-directory>|--database <sqlite-path>] [--runtime-root <plugin-root>]\n       lenso-agent-cli sessions replay --session <id> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions evaluate --session <id> [--criteria <json-path>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions evaluate-outcome --session <id> --criteria <json-path> --evidence <json-path> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions otlp --session <id> [--service-name <name>] <--output <json-path>|--endpoint <url>|both> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions export --archive <json-path> [--session <id>] [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions import --archive <json-path> [--directory <session-directory>|--database <sqlite-path>]\n       lenso-agent-cli sessions migrate [--session <id>] <--from-directory <path>|--from-database <path>> <--to-directory <path>|--to-database <path>>".to_owned()
 }

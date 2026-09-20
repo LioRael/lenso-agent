@@ -143,7 +143,14 @@ pub(super) fn should_try_composed_surface(raw: &[String]) -> bool {
         return !raw.get(1).is_some_and(|command| {
             matches!(
                 command.as_str(),
-                "provenance" | "export" | "import" | "migrate" | "replay" | "evaluate" | "otlp"
+                "provenance"
+                    | "export"
+                    | "import"
+                    | "migrate"
+                    | "replay"
+                    | "evaluate"
+                    | "evaluate-outcome"
+                    | "otlp"
             )
         });
     }

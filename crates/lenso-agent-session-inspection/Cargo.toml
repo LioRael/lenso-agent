@@ -14,5 +14,8 @@ serde_json.workspace = true
 sha2.workspace = true
 time = { workspace = true, features = ["parsing"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

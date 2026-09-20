@@ -7,7 +7,10 @@ use std::{
 };
 
 use lenso_agent_cli_plugin as _;
-use lenso_agent_session_inspection::SessionInspector;
+use lenso_agent_session_inspection::{
+    AnalysisCriteria, AnalysisEvidence, OutcomeEvaluationCriteria, OutcomeEvidence,
+    OutcomeTaskKind, SessionInspector, TrajectoryStatus, WorkspaceCriteria, WorkspaceSnapshot,
+};
 use lenso_plugin_control_plane::sha256_digest;
 
 #[path = "../../../tests/support/mod.rs"]
@@ -62,6 +65,28 @@ fn run_derived(root: &Path, prompt: &str, session: Option<&str>) -> std::process
         command.args(["--session", session]);
     }
     command.output().unwrap()
+}
+
+fn run_outcome_evaluation(
+    workspace: &Path,
+    home: &Path,
+    session_id: &str,
+    criteria: &Path,
+    evidence: &Path,
+) -> std::process::Output {
+    command_with_home(workspace, home)
+        .args([
+            "sessions",
+            "evaluate-outcome",
+            "--session",
+            session_id,
+            "--criteria",
+            criteria.to_str().unwrap(),
+            "--evidence",
+            evidence.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap()
 }
 
 fn run_configured_derived(
@@ -1131,6 +1156,124 @@ fn session_facts_support_replay_evaluation_and_otlp_export() {
     let request = collector.join().unwrap();
     assert!(request.starts_with("POST /v1/traces HTTP/1.1"));
     assert!(request.contains("resourceSpans"));
+}
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one end-to-end fixture captures durable Session facts, evaluates outcome evidence, and proves reporting remains read-only"
+)]
+fn outcome_evaluation_command_reports_workspace_and_analysis_evidence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let workspace = temporary.path().join("workspace");
+    let home = temporary.path().join("agent-home");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(&home).unwrap();
+    fs::write(workspace.join("README.md"), "# Outcome Fixture\n").unwrap();
+    let before = WorkspaceSnapshot::capture(&workspace).unwrap();
+
+    configure_fixture_app(&home);
+    let run = command_with_home(&workspace, &home)
+        .arg("Answer directly: hello")
+        .output()
+        .unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let session_id = String::from_utf8(run.stderr)
+        .unwrap()
+        .trim()
+        .strip_prefix("session: ")
+        .unwrap()
+        .to_owned();
+    let trajectory_revision = stored_session(&home)["revision"].as_u64().unwrap();
+    let after = WorkspaceSnapshot::capture(&workspace).unwrap();
+    let expected_workspace = after.clone();
+
+    let criteria_path = temporary.path().join("criteria.json");
+    let evidence_path = temporary.path().join("evidence.json");
+    let criteria = OutcomeEvaluationCriteria {
+        schema: OutcomeEvaluationCriteria::SCHEMA.to_owned(),
+        task_kind: OutcomeTaskKind::ReadOnlyAnalysis,
+        terminal_outcome: TrajectoryStatus::Completed,
+        workspace: WorkspaceCriteria::exact_changes(Vec::new()),
+        tests: Vec::new(),
+        analysis: Some(AnalysisCriteria {
+            required_finding_ids: std::collections::BTreeSet::from(["answer.direct".to_owned()]),
+            reject_unexpected_findings: true,
+        }),
+        approval: None,
+    };
+    let evidence = OutcomeEvidence {
+        schema: OutcomeEvidence::SCHEMA.to_owned(),
+        session_id: session_id.clone(),
+        trajectory_revision,
+        workspace_before: Some(before),
+        workspace_after: Some(after),
+        tests: Vec::new(),
+        analysis: Some(AnalysisEvidence {
+            finding_ids: std::collections::BTreeSet::from(["answer.direct".to_owned()]),
+        }),
+        approval_flows: Vec::new(),
+    };
+    fs::write(
+        &criteria_path,
+        serde_json::to_vec_pretty(&criteria).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &evidence_path,
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
+
+    let evaluation = run_outcome_evaluation(
+        &workspace,
+        &home,
+        &session_id,
+        &criteria_path,
+        &evidence_path,
+    );
+    assert!(
+        evaluation.status.success(),
+        "{}",
+        String::from_utf8_lossy(&evaluation.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&evaluation.stdout).unwrap();
+    assert_eq!(report["schema"], "lenso.agent.outcome-evaluation@1");
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["workspaceState"]["status"], "passed");
+    assert_eq!(report["analysis"]["status"], "passed");
+
+    let failing_evidence_path = temporary.path().join("failing-evidence.json");
+    let failing_evidence = OutcomeEvidence {
+        analysis: None,
+        ..evidence
+    };
+    fs::write(
+        &failing_evidence_path,
+        serde_json::to_vec_pretty(&failing_evidence).unwrap(),
+    )
+    .unwrap();
+    let failing = run_outcome_evaluation(
+        &workspace,
+        &home,
+        &session_id,
+        &criteria_path,
+        &failing_evidence_path,
+    );
+    assert!(!failing.status.success());
+    let failing_report: serde_json::Value = serde_json::from_slice(&failing.stdout).unwrap();
+    assert_eq!(failing_report["passed"], false);
+    assert_eq!(failing_report["analysis"]["status"], "failed");
+    assert!(String::from_utf8_lossy(&failing.stderr).contains("Outcome evaluation failed"));
+    assert_eq!(
+        WorkspaceSnapshot::capture(&workspace).unwrap(),
+        expected_workspace,
+        "outcome reporting is read-only and never reruns a Tool or test command"
+    );
 }
 
 #[test]

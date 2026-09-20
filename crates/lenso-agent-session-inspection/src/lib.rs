@@ -4,14 +4,27 @@ use std::collections::BTreeSet;
 
 mod evaluation;
 mod otlp;
+mod outcome;
 mod trajectory;
+mod workspace;
 
 pub use evaluation::{EvaluationCheck, EvaluationCriteria, EvaluationReport, evaluate_trajectory};
 pub use otlp::project_otlp_trace;
+pub use outcome::{
+    AnalysisCriteria, AnalysisEvidence, ApprovalAttemptEvidence, ApprovalDecision,
+    ApprovalFlowCriteria, ApprovalFlowEvidence, EffectState, OutcomeDimension,
+    OutcomeDimensionStatus, OutcomeEvaluationCriteria, OutcomeEvaluationReport, OutcomeEvidence,
+    OutcomeTaskKind, OutcomeTrajectoryEvidence, TestExpectation, TestResultEvidence,
+    TestResultStatus, WorkspaceCriteria, evaluate_outcome,
+};
 
 pub use trajectory::{
     Trajectory, TrajectoryDetail, TrajectoryKind, TrajectoryRecord, TrajectoryStatus,
     TrajectorySummary, project_trajectory,
+};
+pub use workspace::{
+    WorkspaceCaptureLimits, WorkspaceDelta, WorkspaceFile, WorkspaceSnapshot, validate_digest,
+    validate_workspace_path,
 };
 
 /// One normalized event read from a durable Session Adapter.

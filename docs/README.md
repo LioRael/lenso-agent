@@ -13,6 +13,7 @@ Start with the job you need to complete:
 - Explanation: [Lenso Agent v1 architecture](architecture/lenso-agent.md),
   [Host implementation and operations](architecture/host-internals.md),
   [Agent Foundation extension audit](architecture/agent-foundation-audit.md),
+  [outcome-oriented evaluation](architecture/outcome-oriented-evaluation.md),
   [terminal and chat surface Plugin cards](architecture/terminal-surface-plugin-cards.md),
   and the focused Plugin cards under `architecture/`.
 
