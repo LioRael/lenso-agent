@@ -15,6 +15,25 @@ use lenso::prelude::*;
 use lenso_capability_agent_durable_task as durable;
 use lenso_capability_agent_extension_state as extension;
 
+/// Fixture artifact identity compiled into each separately built Provider.
+pub fn artifact_version() -> &'static str {
+    if cfg!(feature = "incompatible") {
+        "3.0.0"
+    } else if cfg!(feature = "upgraded") {
+        "2.0.0"
+    } else {
+        "1.0.0"
+    }
+}
+
+fn supported_state_version() -> &'static str {
+    if cfg!(feature = "incompatible") {
+        "2"
+    } else {
+        "1"
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, PluginConfig)]
 #[serde(deny_unknown_fields)]
 struct StateTaskConfig {
@@ -354,10 +373,15 @@ impl StateTaskProvider {
             .map_err(|_| PluginError::domain(durable::SignalError::InvalidTask))?;
         let mut resumed = task;
         resumed.status = durable::TaskStatus::Ready;
-        resumed.revision = "2".to_owned();
-        resumed.state_json = r#"{"step":"approval_granted"}"#
-            .try_into()
-            .expect("fixture state is JSON");
+        resumed.revision = next_revision(&resumed.revision);
+        resumed.state_json = if cfg!(feature = "upgraded") {
+            // v2 adds execution provenance while still accepting v1 snapshots.
+            r#"{"step":"approval_granted","handled_by":"2.0.0"}"#
+        } else {
+            r#"{"step":"approval_granted"}"#
+        }
+        .try_into()
+        .expect("fixture state is JSON");
         store.signals.insert(request.signal_id);
         store.tasks.insert(resumed.task_id.clone(), resumed.clone());
         self.persist(&store).map_err(PluginError::runtime)?;
@@ -423,7 +447,15 @@ impl StateTaskProvider {
         if task.owner_instance != owner {
             return Err(PluginError::domain(durable::RecoverError::OwnerMismatch));
         }
-        let assessment = durable::assess_recovery(&task, &request.supported_state_versions);
+        // Recovery must also respect the installed implementation, not only a
+        // caller's claim that it understands an arbitrary state version.
+        let supported: Vec<_> = request
+            .supported_state_versions
+            .iter()
+            .filter(|version| version.as_str() == supported_state_version())
+            .cloned()
+            .collect();
+        let assessment = durable::assess_recovery(&task, &supported);
         if assessment == durable::RecoveryAssessment::BlockedUpgrade
             && task.status != durable::TaskStatus::UpgradeRequired
         {

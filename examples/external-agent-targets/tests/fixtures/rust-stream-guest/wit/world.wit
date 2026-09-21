@@ -1,0 +1,11 @@
+package lenso:runtime@1.0.0;
+
+world plugin {
+  export describe: func() -> string;
+  export invoke: func(capability: string, operation: string, request-json: string) -> result<string, string>;
+  export stream-open: func(capability: string, operation: string, request-json: string) -> result<u64, string>;
+  export stream-send: func(stream-id: u64, message-json: string) -> result<_, string>;
+  export stream-receive: func(stream-id: u64) -> result<string, string>;
+  export stream-close-send: func(stream-id: u64) -> result<_, string>;
+  export stream-cancel: func(stream-id: u64);
+}

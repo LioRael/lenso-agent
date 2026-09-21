@@ -81,6 +81,8 @@ async fn main() {
             let store = arguments.next().map(PathBuf::from).expect("store path");
             let storage_path = store.to_str().expect("UTF-8 store path");
             match phase.as_str() {
+                "artifact" => println!("{}", provider_plugin::artifact_version()),
+                "binary-recovery" => binary_recovery(storage_path).await,
                 "start" => start(storage_path).await,
                 "recover-wait" => recover_wait(storage_path).await,
                 "signal" => signal(storage_path).await,
@@ -315,6 +317,11 @@ async fn signal(storage_path: &str) {
         .unwrap()
         .unwrap();
     assert_eq!(accepted.task.status, durable::TaskStatus::Ready);
+    if cfg!(feature = "upgraded") {
+        let state: serde_json::Value =
+            serde_json::from_str(accepted.task.state_json.as_str()).unwrap();
+        assert_eq!(state["handled_by"], "2.0.0");
+    }
     assert!(
         tasks
             .invoke(durable::SIGNAL_OPERATION, signal)
@@ -497,7 +504,12 @@ async fn upgrade(storage_path: &str) {
         .unwrap();
     let request = durable::RecoverRequest {
         task_id: "approval-1".to_owned(),
-        supported_state_versions: vec!["2".to_owned()],
+        supported_state_versions: if cfg!(feature = "incompatible") {
+            // Even a caller claiming v1 support cannot override the new binary.
+            vec!["1".to_owned(), "2".to_owned()]
+        } else {
+            vec!["2".to_owned()]
+        },
         recoverer_artifact: "example.approval-workflow@2.0.0".to_owned(),
     };
     let blocked = recover
@@ -594,4 +606,32 @@ async fn uncertain(storage_path: &str) {
         durable::RecoveryAction::BlockedUncertainExternalEffect
     );
     shutdown(app).await;
+}
+
+async fn binary_recovery(storage_path: &str) {
+    assert_eq!(provider_plugin::artifact_version(), "2.0.0");
+    let bytes_before = std::fs::read(storage_path).unwrap();
+    recover_wait(storage_path).await;
+    let app = start_app(storage_path).await;
+    let recovered = app
+        .handle::<durable::DurableTaskRecover>(CALLER_INSTANCE)
+        .unwrap()
+        .invoke(
+            durable::RECOVER_OPERATION,
+            durable::RecoverRequest {
+                task_id: "uncertain-1".to_owned(),
+                supported_state_versions: vec!["1".to_owned()],
+                recoverer_artifact: "example.approval-workflow@2.0.0".to_owned(),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recovered.action,
+        durable::RecoveryAction::BlockedUncertainExternalEffect
+    );
+    assert_eq!(recovered.task.revision, "1");
+    shutdown(app).await;
+    assert_eq!(std::fs::read(storage_path).unwrap(), bytes_before);
 }

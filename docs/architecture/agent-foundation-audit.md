@@ -55,9 +55,9 @@ chooses a Provider, changes a Plan, or starts a Host.
 
 ## Reproducible external-consumer evidence
 
-All scripts below copy an external fixture to a temporary directory and patch
-only that copy to local sibling sources. They exercise public contracts rather
-than modifying the framework during the consumer run.
+Source verifiers copy external fixtures to temporary directories and patch only
+those copies. Registry and target verifiers instead require published packages
+and reject Git or sibling dependencies. Both exercise public contracts.
 
 | Matrix item | State | Reproduction |
 | --- | --- | --- |
@@ -69,8 +69,9 @@ than modifying the framework during the consumer run.
 | V06 restartable approval task | **Source-local external pass** | [external-agent-durable-state](../../examples/external-agent-durable-state/verify-foundation.py) uses separate operating-system processes for start, recover, signal, and recovery-after-signal |
 | V07 bounded duplex interaction | **Source-local external pass** | [external-agent-interaction](../../examples/external-agent-interaction/verify-foundation.py) |
 | V08 dynamic tenant Tool authority | **Source-local external pass** | [external-agent-dynamic-authority](../../examples/external-agent-dynamic-authority/verify-foundation.py) |
-| V09 disable/remove, active-work drain, and upgrade | **Native source-local lifecycle pass; artifact upgrade not qualified** | The durable-state fixture closes admission, rejects retained handles, settles an active stream with `Unavailable`, releases its lease and shuts down cleanly. A new composition omits both Plugins. Durable bytes survive removal; restart can inspect them, incompatible state blocks recovery, and stale approval cannot resume it. This does not prove replacement by a different distributed executable. |
-| V10 exact artifacts in a clean consumer | **Native Task Board registry path passed; new Agent release still pending** | The registry verifier uses a temporary independent App and locked published packages. New Agent SDK archives have a separate prepared-artifact verifier; neither path claims isolated-target qualification or publication of the new Agent contracts. |
+| V09 disable/remove, active-work drain, and upgrade | **Native lifecycle and distinct-binary upgrade pass** | The durable-state fixture closes admission, rejects retained handles, settles an active stream with `Unavailable`, releases its lease and shuts down cleanly. A new composition omits both Plugins. Durable bytes survive removal; restart can inspect them, incompatible state blocks recovery, and stale approval cannot resume it. The [binary upgrade verifier](../../examples/external-agent-durable-state/verify-binary-upgrade.py) builds and hashes three different Provider executables against published packages; a compatible upgrade preserves state byte-for-byte, while an incompatible one rejects caller-claimed compatibility and invalidates old approvals. |
+| AG-10 real imports, isolation and unsupported interactions | **Released Wasm profile pass** | Bound Host requests/events succeed; raw forged bindings, undeclared operations and interaction mismatches fail. Host file/environment/network access is unavailable in the guest. Unsupported authoring v2 imports fail before artifact loading. Streams and cancellation run through the real Adapter. |
+| V10 exact artifacts in a clean consumer | **Published Foundation SDK and Wasm target consumers pass** | All six Foundation SDKs are published as `0.1.0`; the [SDK verifier](../../scripts/verify-foundation-sdk-registry.py) consumes them outside the checkout. The [target verifier](../../examples/external-agent-targets/verify.py) uses locked published Adapter/Guest SDK dependencies and real compiled Wasm guests. |
 
 Run V04–V08 from an Agent checkout with explicit source roots:
 
@@ -111,23 +112,24 @@ The child-policy phase also proves parent cancellation propagates through
 children and grandchildren, persists across restart, and rejects late approval.
 Expired deadlines are settled on admission/read and cannot resume a task.
 
-The clean native Task Board test now passes with its committed registry lock
-and no patches. Prepared Durable Task and Extension State `0.1.0` SDK archives
-also pass the complete external restart fixture after unpacking outside the
-repository, with all other framework dependencies resolved from crates.io.
-Five SDK packages (Model, Durable Task, Extension State, Interaction, Dynamic
-Authority) passed `cargo package` verification. Turn Processing still needs
-Model publication first. None of these package builds publishes a registry
-entry or proves a sandbox target.
+All six Foundation SDK crates are published at `0.1.0`. The registry-only
+consumer checks their sources and runs the full durable lifecycle fixture.
+The binary-upgrade verifier installs separately built Provider versions 1, 2,
+and 3 as independent executables and verifies different SHA-256 digests.
+Version 2 retains v1 state and uncertain-effect facts across repeated process
+restarts. Version 3 supports only state v2: even a caller claiming v1 support
+cannot make it resume v1 state. The original payload remains inspectable;
+recovery marks the task upgrade-required and rejects stale approval.
+This is native Provider replacement in an external Host, not an Agent package
+manager hot-upgrade or automatic schema migration.
 
-Target qualification is blocked independently of those native tests. The Bun
-Adapter target branch requires `lenso-app-plan = "^0.4.4"`, which could not be
-resolved from crates.io on 2026-09-21. Do not silently replace that dependency
-with a sibling checkout and record the result as released-package evidence.
-The new Agent Capability crates inherit `publish = false` from the workspace.
-Registry publication remains separately authorized. Turn Processing requires
-the new Model contract package to be published first; its Cargo dependency now
-names the matching version as well as the development path.
+The isolated target qualification uses published Wasm Component Adapter 0.2.12
+and Guest SDK 0.5.0. It tests the supported v1 Host-import profile and
+v2 dependency-free profile; v2 imports are explicitly rejected. There is no
+native fallback. This closes the required single-target execution proof without
+claiming all SDKs are portable or depending on unpublished Bun target changes.
+See the [qualification scope](../../examples/external-agent-targets/README.md)
+for reproduced authorization boundaries and limits.
 
 - Trusted native Plugins remain trusted code. These Capability contracts do not
   claim to sandbox a Plugin that has direct process or credential authority.
@@ -140,6 +142,5 @@ names the matching version as well as the development path.
   than a retry instruction.
 - Console's fallback is a safe shell state for a missing Workspace requirement.
   It does not execute unknown extension payloads or provide a general task UI.
-- The registry verifier qualifies the existing native SDK closure only. The
-  new Agent SDK release and isolated-target closure remain separate; a native
-  archive test cannot substitute for target-adapter conformance.
+- Native SDK lifecycle and isolated Wasm execution are separate proofs. Durable
+  Task is native-only; the Wasm fixture does not change its portability contract.

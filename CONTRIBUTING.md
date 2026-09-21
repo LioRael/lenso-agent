@@ -47,7 +47,7 @@ authorization, or the candidate gate.
 ## Workflow boundaries
 
 `.github/workflows/quality.yml` runs the named static, tests, contracts, and
-marketplace-installation jobs only for candidate `delta/verify/**` pushes or
+marketplace-installation and foundation-targets jobs only for candidate `delta/verify/**` pushes or
 an explicit diagnostic dispatch. The expensive external workflows retain their
 narrow lifecycle: `marketplace-remote.yml` and `projects-acceptance.yml` run
 for their relevant pull-request paths or explicit dispatch, while

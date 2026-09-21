@@ -19,7 +19,7 @@ jobs:
   quality:
     name: quality
     if: ${{ always() }}
-    needs: [static, tests, contracts, marketplace-installation]
+    needs: [static, tests, contracts, marketplace-installation, foundation-targets]
     runs-on: ubuntu-latest
     steps:
       - name: Require every candidate gate
@@ -30,7 +30,7 @@ jobs:
           import json
           import os
           results = json.loads(os.environ["RESULTS"])
-          assert len(results) == 4 and all(result == "success" for result in results), results
+          assert len(results) == 5 and all(result == "success" for result in results), results
           PY
 
   static:
@@ -116,6 +116,23 @@ jobs:
         run: |
           cargo package -p lenso-capability-agent-durable-task -p lenso-capability-agent-extension-state
           python3 examples/external-agent-durable-state/verify-artifacts.py --artifacts-dir target/package
+
+  foundation-targets:
+    name: Foundation execution and binary upgrade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: nightly-2026-07-10
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+      - name: Verify released Wasm imports and isolation
+        run: python3 examples/external-agent-targets/verify.py
+      - name: Verify durable recovery across different binaries
+        run: python3 examples/external-agent-durable-state/verify-binary-upgrade.py
 
   marketplace-installation:
     name: Console marketplace tool acceptance

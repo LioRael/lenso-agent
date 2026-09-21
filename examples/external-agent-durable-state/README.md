@@ -64,3 +64,15 @@ dependencies from crates.io. It uses no Cargo patches or sibling source paths.
 It prints archive digests and the consumer lock digest. This proves prepared
 artifact consumption; it does not publish a package or establish registry
 availability. The SDKs remain excluded from automatic publication.
+
+## Upgrade between real binaries
+
+Run `python3 examples/external-agent-durable-state/verify-binary-upgrade.py`.
+The verifier builds three distinct native Provider executables in a clean
+registry-only consumer and checks their artifact versions and SHA-256 hashes.
+A compatible v2 Provider recovers the v1 store without changing its bytes,
+including uncertain external effects. An incompatible v3 Provider refuses v1
+state even if the caller claims it supports v1; retained payloads stay readable
+and old approval cannot resume the task. These are fixture releases, not
+published SDK versions. No migration or package-manager hot replacement is
+implied. The file store remains a single-writer test Provider.
