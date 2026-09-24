@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
+import sys
+import tomllib
 from urllib.request import Request, urlopen
 
 
@@ -15,6 +19,7 @@ PACKAGES = (
     "lenso-agent-tool-sdk-macros",
     "lenso-agent-tool-sdk",
 )
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_git(*arguments: str, environment: dict[str, str] | None = None) -> str:
@@ -58,8 +63,7 @@ def require_pinned_main(
         raise RuntimeError("GitHub API repository identity differs from the workflow repository")
 
 
-def main() -> None:
-    environment = os.environ
+def check_live_main(environment: Mapping[str, str]) -> None:
     if (
         environment["GITHUB_EVENT_NAME"] != "workflow_dispatch"
         or environment["GITHUB_REF"] != "refs/heads/main"
@@ -106,11 +110,46 @@ def main() -> None:
         branch_api["commit"]["sha"], repository, environment["GITHUB_REPOSITORY_ID"], repository_api,
     )
     print("PASS: checkout, origin/main, and GitHub API main match the reviewed SHA")
+
+
+def package_label(package: str) -> str:
+    manifest = tomllib.loads((ROOT / "crates" / package / "Cargo.toml").read_text())
+    return f"{package} {manifest['package']['version']}"
+
+
+def report_stop(completed: list[str], next_package: str, attempted: bool) -> None:
+    previous = ", ".join(package_label(package) for package in completed) or "none"
+    state = "upload may have completed" if attempted else "upload not attempted"
+    heading = "PARTIAL PUBLICATION" if completed else (
+        "PUBLICATION STATUS UNKNOWN" if attempted else "PUBLICATION STOPPED"
+    )
+    print(
+        f"{heading}: {package_label(next_package)} ({state}); "
+        f"prior successful commands: {previous}. Inspect exact registry versions "
+        "before any manual resume; no automatic retry.",
+        file=sys.stderr,
+    )
+
+
+def main() -> None:
+    environment = os.environ
     cargo_environment = {key: value for key, value in environment.items() if key != "GH_TOKEN"}
-    command = ["cargo", "publish", "--locked"]
+    completed: list[str] = []
     for package in PACKAGES:
-        command.extend(("-p", package))
-    subprocess.run(command, check=True, env=cargo_environment)
+        try:
+            check_live_main(environment)
+        except Exception:
+            report_stop(completed, package, attempted=False)
+            raise
+        try:
+            subprocess.run(
+                ["cargo", "publish", "--locked", "-p", package],
+                check=True, env=cargo_environment,
+            )
+        except Exception:
+            report_stop(completed, package, attempted=True)
+            raise
+        completed.append(package)
 
 
 if __name__ == "__main__":

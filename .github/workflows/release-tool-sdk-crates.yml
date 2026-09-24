@@ -16,6 +16,7 @@ on:
       - "scripts/verify-tool-provider-registry-package.py"
       - "scripts/verify-tool-sdk-release.py"
       - "scripts/publish-tool-sdk-checked.py"
+      - "scripts/test-publish-tool-sdk-checked.py"
   workflow_dispatch:
     inputs:
       revision:
@@ -77,6 +78,8 @@ jobs:
               if os.environ["REQUESTED_PUBLISH"] == "true":
                   assert ref == "refs/heads/main", "Publishing must run from main"
           PYTHON
+      - name: Test fail-closed publish gate
+        run: python3 scripts/test-publish-tool-sdk-checked.py
       - name: Test Tool authoring and contract
         run: cargo test --locked -p lenso-capability-agent-tool-provider -p lenso-agent-tool-sdk -p lenso-agent-tool-sdk-macros
       - name: Verify closed publishable cohort

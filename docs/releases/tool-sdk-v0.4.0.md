@@ -27,18 +27,21 @@ diagnostic `publish: false` dispatch accepts a candidate ref only when
 Publication requires a separate `release-tool-sdk-crates.yml` dispatch from
 `main` with the full 40-character reviewed commit as `revision`, version
 `0.4.0`, and `publish: true`. The workflow rejects a dispatch if `main` has
-moved past that revision. Immediately before upload, the publish step also
-requires live `origin/main` and the GitHub API's `main` to match the checked-out
-SHA and repository identity. Re-review and re-verify if `main` has advanced. The
-workflow publishes the closed cohort in dependency order; Provider 0.3.0 and
-macros 0.4.0 must both precede SDK 0.4.0. Configure Trusted Publishing for all
-three crates to trust this workflow. The publish job then downloads each exact
+moved past that revision. Immediately before each package upload, the publish
+step requires live `origin/main` and the GitHub API's `main` to match the
+checked-out SHA and repository identity. Re-review and re-verify if `main` has
+advanced. The workflow publishes Provider 0.3.0, macros 0.4.0, then SDK 0.4.0
+with separate commands. Configure Trusted Publishing for all three crates to
+trust this workflow. The publish job then downloads each exact
 crate, checks its Cargo VCS commit against the dispatched SHA and its checksum
 against a fresh crates.io lockfile, and compiles a new external consumer with
 exact version pins and no path or Git patches. Only a successful readback and
-consumer check establish registry visibility. Cargo publication is
-not atomic: after a timeout or partial failure, inspect each exact registry
-version before deciding whether and how to resume; do not blindly redispatch.
+consumer check establish registry visibility. Coordinate a short period in
+which `main` stays fixed while publishing. The ref check and an individual
+upload are not atomic; a change during one upload may still allow that upload
+to finish, but the next package is not attempted if the next check fails.
+After a timeout or partial failure, inspect each exact registry version before
+deciding whether and how to resume; do not blindly redispatch.
 A passing local package test, candidate CI, or publication dispatch alone is
 not registry visibility proof.
 
