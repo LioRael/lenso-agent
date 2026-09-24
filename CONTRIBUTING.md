@@ -29,7 +29,8 @@ publish, deploy, or disclose secrets merely to review a contribution.
 
 The normal delivery proof is candidate-first. A maintainer rebases or imports
 the reviewed change onto the current `origin/main`, records the full base and
-candidate SHAs, and pushes one unique `delta/verify/lenso-agent/<attempt>` ref.
+candidate SHAs, and pushes one unique `delta/verify/lenso-agent/<attempt>` or
+`codex/verify/lenso-agent/<attempt>` ref.
 The `quality` workflow must be triggered by that candidate push and its
 `quality` job must succeed for the exact candidate SHA and attempt. A successful
 local check or manually dispatched run is not a substitute. After confirming
@@ -46,13 +47,19 @@ authorization, or the candidate gate.
 
 ## Workflow boundaries
 
-`.github/workflows/quality.yml` runs the named static, tests, contracts, and
-marketplace-installation and foundation-targets jobs only for candidate `delta/verify/**` pushes or
-an explicit diagnostic dispatch. The expensive external workflows retain their
+`.github/workflows/quality.yml` runs the named static, tests, contracts,
+marketplace-installation, and foundation-targets jobs only for candidate
+`delta/verify/**` or `codex/verify/**` pushes, or an explicit diagnostic
+dispatch. The expensive external workflows retain their
 narrow lifecycle: `marketplace-remote.yml` and `projects-acceptance.yml` run
 for their relevant pull-request paths or explicit dispatch, while
 `reconcile-benchmark.yml` is explicit-dispatch only. Prose-only edits do not
 start those external acceptance or benchmark jobs.
+
+Tool Provider or Rust Tool SDK candidates also run the dedicated
+`release-tool-sdk-crates.yml` verification job on the same candidate SHA. Check
+that both it and the required `quality` jobs succeeded before landing; a manual
+dispatch may diagnose a candidate but does not replace the push run.
 
 Release workflows remain separate. Tag/manual release workflows, package
 selection, pinned actions, OIDC, and product identity checks are unchanged.

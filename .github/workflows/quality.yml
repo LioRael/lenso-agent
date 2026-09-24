@@ -2,7 +2,7 @@ name: quality
 
 on:
   push:
-    branches: ["delta/verify/**"]
+    branches: ["delta/verify/**", "codex/verify/**"]
   workflow_dispatch:
 
 permissions:

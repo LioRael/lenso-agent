@@ -4,10 +4,20 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release-tool-sdk-crates.yml"
+  push:
+    branches: ["delta/verify/**", "codex/verify/**"]
+    paths:
+      - ".github/workflows/release-tool-sdk-crates.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "crates/lenso-capability-agent-tool-provider/**"
+      - "crates/lenso-agent-tool-sdk-macros/**"
+      - "crates/lenso-agent-tool-sdk/**"
+      - "scripts/verify-tool-provider-registry-package.py"
   workflow_dispatch:
     inputs:
       revision:
-        description: Exact reviewed main commit SHA
+        description: Exact checked-out commit SHA; main is required to publish
         required: true
         type: string
       version:
@@ -43,6 +53,7 @@ jobs:
         env:
           REQUESTED_REVISION: ${{ inputs.revision }}
           REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_PUBLISH: ${{ inputs.publish }}
         run: |
           python3 - <<'PYTHON'
           import os, pathlib, tomllib
@@ -56,8 +67,13 @@ jobs:
           requested = os.environ["REQUESTED_VERSION"]
           if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
               assert requested == version, "Requested version does not match manifests"
-              assert os.environ["GITHUB_REF"] == "refs/heads/main", "Release must run from main"
-              assert os.environ["REQUESTED_REVISION"] == os.environ["GITHUB_SHA"], "Requested revision does not match the checked-out main commit"
+              ref = os.environ["GITHUB_REF"]
+              assert ref == "refs/heads/main" or ref.startswith(
+                  ("refs/heads/delta/verify/", "refs/heads/codex/verify/")
+              ), "Verification must run from main or a candidate ref"
+              assert os.environ["REQUESTED_REVISION"] == os.environ["GITHUB_SHA"], "Requested revision does not match the checked-out commit"
+              if os.environ["REQUESTED_PUBLISH"] == "true":
+                  assert ref == "refs/heads/main", "Publishing must run from main"
           PYTHON
       - name: Test Tool authoring and contract
         run: cargo test --locked -p lenso-capability-agent-tool-provider -p lenso-agent-tool-sdk -p lenso-agent-tool-sdk-macros
