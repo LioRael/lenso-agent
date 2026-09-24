@@ -48,8 +48,14 @@ with tempfile.TemporaryDirectory(prefix="lenso-tool-provider-registry-") as temp
     codec = [entry for entry in packages if entry["name"] == "lenso-runtime-codec"]
     if len(codec) != 1 or codec[0]["version"] != "0.4.1":
         raise SystemExit("registry Codec 0.4.1 was not selected exactly")
+    roots = [
+        entry for entry in packages
+        if (entry["name"], entry["version"]) == (manifest["package"]["name"], version)
+    ]
+    if len(roots) != 1 or roots[0].get("source") is not None:
+        raise SystemExit("package-only verification has no unique local root")
     if any(
-        not entry.get("source", "registry+").startswith("registry+")
+        entry is not roots[0] and not entry.get("source", "").startswith("registry+")
         for entry in packages
     ):
         raise SystemExit("package-only verification resolved a non-registry dependency")

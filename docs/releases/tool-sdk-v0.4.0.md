@@ -19,20 +19,26 @@ Push the reviewed commit to a unique `delta/verify/**` or `codex/verify/**`
 candidate ref. The repository `quality` workflow and the dedicated
 `release-tool-sdk-crates.yml` verification run for the same SHA. Confirm both
 successful runs before landing that exact commit. The dedicated workflow tests
-and packages the closed cohort, then compiles the packaged Provider against
-registry-only Codec 0.4.1. A diagnostic `publish: false` dispatch accepts a
-candidate ref only when `revision` matches its checked-out SHA.
+and packages the closed cohort, checks all three normalized archive manifests,
+then compiles the packaged Provider against registry-only Codec 0.4.1. A
+diagnostic `publish: false` dispatch accepts a candidate ref only when
+`revision` matches its checked-out SHA.
 
 Publication requires a separate `release-tool-sdk-crates.yml` dispatch from
 `main` with the full 40-character reviewed commit as `revision`, version
 `0.4.0`, and `publish: true`. The workflow rejects a dispatch if `main` has
 moved past that revision. Re-review and re-verify if `main` has advanced. The
-workflow publishes Provider 0.3.0, macros 0.4.0, then SDK 0.4.0.
-Configure Trusted Publishing for all three crates to trust this workflow.
-Read back each exact crate from the registry and compile an external consumer
-without path or Git patches before claiming the release complete. A passing
-local package test, candidate CI, or publication dispatch is not registry
-visibility proof.
+workflow publishes the closed cohort in dependency order; Provider 0.3.0 and
+macros 0.4.0 must both precede SDK 0.4.0. Configure Trusted Publishing for all
+three crates to trust this workflow. The publish job then downloads each exact
+crate, checks its Cargo VCS commit against the dispatched SHA and its checksum
+against a fresh crates.io lockfile, and compiles a new external consumer with
+exact version pins and no path or Git patches. Only a successful readback and
+consumer check establish registry visibility. Cargo publication is
+not atomic: after a timeout or partial failure, inspect each exact registry
+version before deciding whether and how to resume; do not blindly redispatch.
+A passing local package test, candidate CI, or publication dispatch alone is
+not registry visibility proof.
 
 The current development workspace still patches Codec to a Git revision, so
 Cargo's automatically included package lock records that source. The
