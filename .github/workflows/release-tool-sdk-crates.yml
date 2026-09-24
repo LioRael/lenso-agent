@@ -6,12 +6,16 @@ on:
       - ".github/workflows/release-tool-sdk-crates.yml"
   workflow_dispatch:
     inputs:
+      revision:
+        description: Exact reviewed main commit SHA
+        required: true
+        type: string
       version:
         description: Exact SDK and macro version; Provider version comes from the SDK dependency
         required: true
         type: string
       publish:
-        description: Publish both packages to crates.io
+        description: Publish all three packages to crates.io
         required: true
         default: false
         type: boolean
@@ -37,6 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       - name: Validate release versions
         env:
+          REQUESTED_REVISION: ${{ inputs.revision }}
           REQUESTED_VERSION: ${{ inputs.version }}
         run: |
           python3 - <<'PYTHON'
@@ -52,6 +57,7 @@ jobs:
           if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
               assert requested == version, "Requested version does not match manifests"
               assert os.environ["GITHUB_REF"] == "refs/heads/main", "Release must run from main"
+              assert os.environ["REQUESTED_REVISION"] == os.environ["GITHUB_SHA"], "Requested revision does not match the checked-out main commit"
           PYTHON
       - name: Test Tool authoring and contract
         run: cargo test --locked -p lenso-capability-agent-tool-provider -p lenso-agent-tool-sdk -p lenso-agent-tool-sdk-macros

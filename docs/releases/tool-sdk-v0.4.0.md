@@ -15,11 +15,14 @@ requires `lenso-agent-tool-sdk-macros` 0.4.0. Previously published Tool SDK
 which exercise that released baseline intentionally retain their 0.2.2
 requirements until the new cohort is visible in the registry.
 
-Before publication, run `release-tool-sdk-crates.yml` from the exact reviewed
-`main` commit with version `0.4.0` and `publish: false`. The workflow tests and
-packages the closed cohort, then compiles the packaged Provider against
-registry-only Codec 0.4.1. Publication requires a separate dispatch with
-`publish: true`; it publishes Provider 0.3.0, macros 0.4.0, then SDK 0.4.0.
+Before publication, run `release-tool-sdk-crates.yml` from `main` with the full
+40-character reviewed commit as required `revision`, version `0.4.0`, and
+`publish: false`. The workflow rejects a dispatch if `main` has moved past that
+revision. It tests and packages the closed cohort, then compiles the packaged
+Provider against registry-only Codec 0.4.1. Publication requires a separate
+dispatch with the same reviewed `revision` and `publish: true`; re-review and
+re-verify if `main` has advanced. The workflow publishes Provider 0.3.0,
+macros 0.4.0, then SDK 0.4.0.
 Configure Trusted Publishing for all three crates to trust this workflow.
 Read back each exact crate from the registry and compile an external consumer
 without path or Git patches before claiming the release complete. A passing
