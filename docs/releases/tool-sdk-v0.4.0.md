@@ -27,7 +27,9 @@ diagnostic `publish: false` dispatch accepts a candidate ref only when
 Publication requires a separate `release-tool-sdk-crates.yml` dispatch from
 `main` with the full 40-character reviewed commit as `revision`, version
 `0.4.0`, and `publish: true`. The workflow rejects a dispatch if `main` has
-moved past that revision. Re-review and re-verify if `main` has advanced. The
+moved past that revision. Immediately before upload, the publish step also
+requires live `origin/main` and the GitHub API's `main` to match the checked-out
+SHA and repository identity. Re-review and re-verify if `main` has advanced. The
 workflow publishes the closed cohort in dependency order; Provider 0.3.0 and
 macros 0.4.0 must both precede SDK 0.4.0. Configure Trusted Publishing for all
 three crates to trust this workflow. The publish job then downloads each exact
