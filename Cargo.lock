@@ -4816,7 +4816,7 @@ dependencies = [
 
 [[package]]
 name = "lenso-capability-agent-tool-provider"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
