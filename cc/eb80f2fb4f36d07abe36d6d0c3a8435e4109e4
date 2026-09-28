@@ -1,0 +1,19 @@
+apps/lenso-agent-channel/src/bin/lenso-agent-telegram.rs
+  s_7d146975368699::t_5d991448f5167b 58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cceb80f2fb4f36d07abe36d6d0c3a8435e4109e4",
+  "prompts": {},
+  "sessions": {
+    "s_7d146975368699": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c54a-381f-7362-9b4d-95aea89e2437",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
