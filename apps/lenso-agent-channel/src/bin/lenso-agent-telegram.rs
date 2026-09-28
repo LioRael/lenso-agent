@@ -55,7 +55,7 @@ struct Args {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> ExitCode {
     let local = tokio::task::LocalSet::new();
-    match local.run_until(run(Args::parse())).await {
+    match Box::pin(local.run_until(run(Args::parse()))).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error}");
