@@ -1,0 +1,38 @@
+scripts/test-publish-tool-sdk-checked.py
+  s_7d146975368699::t_46d6478ad59e86 102,105-107,136
+  s_7d146975368699::t_04e20bb42e404f 1,31,42-43,108,111-116,124-127,129,131,137
+  s_7d146975368699::t_416ae618798cde 81-82,119-122
+scripts/verify-tool-sdk-release.py
+  s_7d146975368699::t_416ae618798cde 92,110-111,193,204-207
+  s_7d146975368699::t_99f8f7c2a25a50 1,132-140,143-145,147,150-153,156-157,173,175,177,182,184-185,187,192,194,202,208
+docs/releases/tool-provider-v0.3.0.md
+  s_7d146975368699::t_1b55019cf060dd 14-19,30-34,47-48
+  s_7d146975368699::t_d85f4adbeca909 1,12-13,21-22,25-26,35-43,49
+.github/workflows/release-tool-sdk-crates.yml
+  s_7d146975368699::t_5ee5d955b41ee0 1,26,28-32,34,36,40,66,82,84-85,123,127,131-136,138-141
+  s_7d146975368699::t_dc05cb53aba092 129
+  s_7d146975368699::t_f0381865fe6370 27,33,83,137
+  s_7d146975368699::t_2b420804aae7c7 98
+scripts/publish-tool-sdk-checked.py
+  s_7d146975368699::t_aee1ebcb3e00c4 118,120-124
+  s_7d146975368699::t_0c6f535820980e 1,17-21,23-24,143-149,157
+  s_7d146975368699::t_f0381865fe6370 22,151-155
+CONTRIBUTING.md
+  s_7d146975368699::t_d85f4adbeca909 59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b89504c9ac9ca733e70e220b98095d57c3924e1c",
+  "prompts": {},
+  "sessions": {
+    "s_7d146975368699": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c54a-381f-7362-9b4d-95aea89e2437",
+        "model": "gpt-6-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
