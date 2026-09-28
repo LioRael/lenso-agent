@@ -56,7 +56,7 @@ for their relevant pull-request paths or explicit dispatch, while
 `reconcile-benchmark.yml` is explicit-dispatch only. Prose-only edits do not
 start those external acceptance or benchmark jobs.
 
-Tool Provider or Rust Tool SDK candidates also run the dedicated
+Tool Provider compatibility candidates also run the dedicated
 `release-tool-sdk-crates.yml` verification job on the same candidate SHA. Check
 that both it and the required `quality` jobs succeeded before landing; a manual
 dispatch may diagnose a candidate but does not replace the push run.

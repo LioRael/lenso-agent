@@ -1,4 +1,4 @@
-"""Verify the Tool SDK cohort's package archives and published registry bytes."""
+"""Verify source cohort archives and the selected published Tool package set."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def verify_local_archives(versions: dict[str, str], revision: str) -> None:
         verify_archive(name, version, archive.read_bytes(), versions, revision)
 
 
-def verify_download(name: str, version: str, versions: dict[str, str], revision: str) -> str:
+def verify_download(name: str, version: str, versions: dict[str, str], revision: str | None) -> str:
     url = f"https://crates.io/api/v1/crates/{name}/{version}/download"
     request = Request(url, headers={"User-Agent": "lenso-tool-sdk-release-verifier/1"})
     for attempt in range(12):
@@ -107,7 +107,8 @@ def verify_download(name: str, version: str, versions: dict[str, str], revision:
                 raise RuntimeError(f"{name} {version}: published archive is unexpectedly large")
             verify_archive(name, version, published, versions, revision)
             checksum = hashlib.sha256(published).hexdigest()
-            print(f"PASS: {name} {version} archive is downloadable with the selected Git commit")
+            suffix = " with the selected Git commit" if revision is not None else ""
+            print(f"PASS: {name} {version} archive is downloadable{suffix}")
             return checksum
         time.sleep(5)
     raise RuntimeError(f"{name} {version}: registry readback timed out")
@@ -128,19 +129,32 @@ def verify_registry_checksums(
 
 
 def verify_consumer(versions: dict[str, str], checksums: dict[str, str]) -> None:
-    with tempfile.TemporaryDirectory(prefix="lenso-tool-sdk-registry-") as temporary:
+    selected_versions = {name: versions[name] for name in checksums}
+    provider_only = set(selected_versions) == {PROVIDER}
+    if not provider_only and set(selected_versions) != {PROVIDER, MACROS, SDK}:
+        raise RuntimeError("unsupported Tool release set")
+    consumer_name = (
+        "lenso-tool-provider-registry-smoke" if provider_only
+        else "lenso-tool-sdk-registry-smoke"
+    )
+    with tempfile.TemporaryDirectory(prefix=f"{consumer_name}-") as temporary:
         root = Path(temporary)
         (root / "src").mkdir()
-        dependencies = "\n".join(f'{name} = "={version}"' for name, version in versions.items())
+        dependencies = "\n".join(
+            f'{name} = "={version}"' for name, version in selected_versions.items()
+        )
         (root / "Cargo.toml").write_text(
-            '[package]\nname = "lenso-tool-sdk-registry-smoke"\nversion = "0.0.0"\n'
+            f'[package]\nname = "{consumer_name}"\nversion = "0.0.0"\n'
             'edition = "2024"\n\n[dependencies]\n' + dependencies + "\n"
         )
+        if provider_only:
+            surface = "lenso_capability_agent_tool_provider"
+        else:
+            surface = "lenso_agent_tool_sdk::prelude::tool_provider_contract"
         (root / "src/main.rs").write_text(
             "fn main() {\n"
-            "    let _ = std::any::type_name::<\n"
-            "        lenso_agent_tool_sdk::prelude::tool_provider_contract::ToolProviderJsonCodec\n"
-            "    >();\n"
+            f"    let _ = std::any::type_name::<{surface}::ToolProviderJsonCodec>();\n"
+            f"    let _ = std::any::type_name::<{surface}::ToolProviderClient>();\n"
             "}\n"
         )
         environment = {key: value for key, value in os.environ.items() if not key.startswith("CARGO_")}
@@ -156,26 +170,28 @@ def verify_consumer(versions: dict[str, str], checksums: dict[str, str]) -> None
 
         cargo("generate-lockfile")
         lock = tomllib.loads((root / "Cargo.lock").read_text())
-        verify_registry_checksums(lock["package"], versions, checksums)
+        verify_registry_checksums(lock["package"], selected_versions, checksums)
         metadata = json.loads(cargo("metadata", "--locked", "--format-version", "1", capture=True))
-        selected: dict[str, set[str]] = {name: set() for name in versions}
+        selected: dict[str, set[str]] = {name: set() for name in selected_versions}
         for package in metadata["packages"]:
-            if package["name"] == "lenso-tool-sdk-registry-smoke":
+            if package["name"] == consumer_name:
                 if package["source"] is not None:
                     raise RuntimeError("external consumer has a non-local root")
             elif package["source"] != CRATES_IO_SOURCE:
                 raise RuntimeError(f"external consumer resolved non-crates.io package: {package['name']}")
-            if package["name"] in versions:
+            if package["name"] in selected:
                 selected[package["name"]].add(package["version"])
-        if selected != {name: {version} for name, version in versions.items()}:
-            raise RuntimeError(f"external consumer resolved the wrong cohort: {selected}")
+        if selected != {name: {version} for name, version in selected_versions.items()}:
+            raise RuntimeError(f"external consumer resolved the wrong Tool set: {selected}")
         cargo("check", "--locked")
-    print("PASS: all three exact versions compile in an unpatched crates.io consumer")
+    print("PASS: the exact Tool set compiles in an unpatched crates.io consumer")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("phase", choices=("package", "published"))
+    parser.add_argument(
+        "phase", choices=("package", "published-provider", "published-sdk-only", "published-sdk-cohort")
+    )
     args = parser.parse_args()
     versions = cohort_versions()
     revision = selected_revision()
@@ -183,9 +199,13 @@ def main() -> None:
         verify_local_archives(versions, revision)
         print("PASS: all three normalized cohort archives have the expected versions")
     else:
+        names = (PROVIDER,) if args.phase == "published-provider" else (PROVIDER, MACROS, SDK)
         checksums = {
-            name: verify_download(name, version, versions, revision)
-            for name, version in versions.items()
+            name: verify_download(
+                name, versions[name], versions,
+                None if args.phase == "published-sdk-only" and name == PROVIDER else revision,
+            )
+            for name in names
         }
         verify_consumer(versions, checksums)
 

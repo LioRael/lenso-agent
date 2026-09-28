@@ -1,4 +1,4 @@
-"""Offline fail-closed checks for the Tool SDK publish boundary."""
+"""Offline fail-closed checks for the selected Tool release boundary."""
 
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ class PublishGateTests(unittest.TestCase):
     def exercise(
         self, *, remote_heads=(SHA,), api_heads=(SHA,), cargo_failure=None,
         env_changes=None, origin=None, repo_id=123, api_failure=False,
+        release_set="provider-only",
     ):
         environment = {
             "GITHUB_EVENT_NAME": "workflow_dispatch",
@@ -38,6 +39,8 @@ class PublishGateTests(unittest.TestCase):
             "GITHUB_API_URL": "https://api.github.com",
             "GITHUB_SHA": SHA,
             "REQUESTED_REVISION": SHA,
+            "RELEASE_SET": release_set,
+            "REQUESTED_VERSION": "0.3.0" if release_set == "provider-only" else "0.4.0",
             "GH_TOKEN": "fake-token",
             "CARGO_REGISTRY_TOKEN": "fake-cargo-token",
         }
@@ -75,6 +78,8 @@ class PublishGateTests(unittest.TestCase):
             raise AssertionError(path)
 
         def cargo(command, **_kwargs):
+            if command[:2] == ["cargo", "info"]:
+                return
             uploads.append(command)
             if cargo_failure == len(uploads):
                 raise subprocess.CalledProcessError(1, command)
@@ -94,37 +99,42 @@ class PublishGateTests(unittest.TestCase):
                 return uploads, output.getvalue(), error
         return uploads, output.getvalue(), None
 
-    def test_all_three_are_checked_and_published_separately(self):
+    def test_only_the_provider_is_checked_and_published(self):
         uploads, _, error = self.exercise()
         self.assertIsNone(error)
-        self.assertEqual([command[-1] for command in uploads], list(gate.PACKAGES))
+        self.assertEqual(
+            [command[-1] for command in uploads],
+            ["lenso-capability-agent-tool-provider"],
+        )
         self.assertTrue(all(command[:4] == ["cargo", "publish", "--locked", "-p"] for command in uploads))
 
-    def test_main_advances_after_provider_and_macros_is_not_attempted(self):
+    def test_explicit_sdk_cohort_keeps_dependency_order(self):
+        uploads, _, error = self.exercise(release_set="sdk-cohort")
+        self.assertIsNone(error)
+        self.assertEqual(
+            [command[-1] for command in uploads],
+            [gate.PROVIDER, gate.MACROS, gate.SDK],
+        )
+
+    def test_explicit_sdk_only_does_not_reupload_provider(self):
+        uploads, _, error = self.exercise(release_set="sdk-only")
+        self.assertIsNone(error)
+        self.assertEqual([command[-1] for command in uploads], [gate.MACROS, gate.SDK])
+
+    def test_sdk_cohort_stops_if_main_moves_after_provider(self):
         uploads, output, error = self.exercise(
-            remote_heads=(SHA, OTHER_SHA), api_heads=(SHA, OTHER_SHA)
+            release_set="sdk-cohort", remote_heads=(SHA, OTHER_SHA)
         )
         self.assertIsInstance(error, RuntimeError)
-        self.assertEqual([command[-1] for command in uploads], [gate.PACKAGES[0]])
+        self.assertEqual([command[-1] for command in uploads], [gate.PROVIDER])
         self.assertIn("PARTIAL PUBLICATION", output)
         self.assertIn("lenso-agent-tool-sdk-macros 0.4.0 (upload not attempted)", output)
-        self.assertIn("no automatic retry", output)
-
-    def test_api_main_advances_after_provider(self):
-        uploads, output, error = self.exercise(api_heads=(SHA, OTHER_SHA))
-        self.assertIsInstance(error, RuntimeError)
-        self.assertEqual([command[-1] for command in uploads], [gate.PACKAGES[0]])
-        self.assertIn("PARTIAL PUBLICATION", output)
-
-    def test_repository_identity_changes_after_provider(self):
-        uploads, output, error = self.exercise(repo_id=(123, 999))
-        self.assertIsInstance(error, RuntimeError)
-        self.assertEqual([command[-1] for command in uploads], [gate.PACKAGES[0]])
-        self.assertIn("PARTIAL PUBLICATION", output)
 
     def test_initial_mismatches_fail_before_any_upload(self):
         cases = (
             {"env_changes": {"REQUESTED_REVISION": "$(echo unsafe)"}},
+            {"env_changes": {"REQUESTED_VERSION": "0.4.0"}},
+            {"env_changes": {"RELEASE_SET": "unknown"}},
             {"env_changes": {"GITHUB_SHA": OTHER_SHA}},
             {"origin": "https://github.com/other/repo.git"},
             {"remote_heads": (OTHER_SHA,)},

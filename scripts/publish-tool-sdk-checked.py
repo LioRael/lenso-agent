@@ -1,4 +1,4 @@
-"""Publish the Tool SDK cohort only while the reviewed SHA is still main."""
+"""Publish the explicitly selected Tool cohort while the reviewed SHA is main."""
 
 from __future__ import annotations
 
@@ -14,11 +14,14 @@ import tomllib
 from urllib.request import Request, urlopen
 
 
-PACKAGES = (
-    "lenso-capability-agent-tool-provider",
-    "lenso-agent-tool-sdk-macros",
-    "lenso-agent-tool-sdk",
-)
+PROVIDER = "lenso-capability-agent-tool-provider"
+MACROS = "lenso-agent-tool-sdk-macros"
+SDK = "lenso-agent-tool-sdk"
+PACKAGE_SETS = {
+    "provider-only": (PROVIDER,),
+    "sdk-only": (MACROS, SDK),
+    "sdk-cohort": (PROVIDER, MACROS, SDK),
+}
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -112,9 +115,13 @@ def check_live_main(environment: Mapping[str, str]) -> None:
     print("PASS: checkout, origin/main, and GitHub API main match the reviewed SHA")
 
 
-def package_label(package: str) -> str:
+def package_version(package: str) -> str:
     manifest = tomllib.loads((ROOT / "crates" / package / "Cargo.toml").read_text())
-    return f"{package} {manifest['package']['version']}"
+    return manifest["package"]["version"]
+
+
+def package_label(package: str) -> str:
+    return f"{package} {package_version(package)}"
 
 
 def report_stop(completed: list[str], next_package: str, attempted: bool) -> None:
@@ -133,9 +140,21 @@ def report_stop(completed: list[str], next_package: str, attempted: bool) -> Non
 
 def main() -> None:
     environment = os.environ
+    release_set = environment["RELEASE_SET"]
+    if release_set not in PACKAGE_SETS:
+        raise RuntimeError("unknown Tool release set")
+    packages = PACKAGE_SETS[release_set]
+    selected = PROVIDER if release_set == "provider-only" else SDK
+    if environment["REQUESTED_VERSION"] != package_version(selected):
+        raise RuntimeError("requested version differs from the selected source manifest")
     cargo_environment = {key: value for key, value in environment.items() if key != "GH_TOKEN"}
+    if release_set == "sdk-only":
+        subprocess.run(
+            ["cargo", "info", "--registry", "crates-io", f"{PROVIDER}@{package_version(PROVIDER)}"],
+            check=True, env=cargo_environment,
+        )
     completed: list[str] = []
-    for package in PACKAGES:
+    for package in packages:
         try:
             check_live_main(environment)
         except Exception:
