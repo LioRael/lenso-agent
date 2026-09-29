@@ -1,0 +1,139 @@
+Cargo.toml
+  s_f4202e28c6b5b1::t_cd5ce2d66da64a 17,143-146,148,150-151,154,158-159,165
+crates/lenso-agent-management-tools-plugin/Cargo.toml
+  s_f4202e28c6b5b1::t_cd5ce2d66da64a 1-25
+  s_f4202e28c6b5b1::t_881e2c9a033fec 26-31
+crates/lenso-agent-management-tools-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_cd5ce2d66da64a 1-108
+  s_f4202e28c6b5b1::t_0ddcc8702b904f 109-215
+.github/workflows/quality.yml
+  s_f4202e28c6b5b1::t_11a43d65835d89 93-96,114,153
+.gitignore
+  s_f4202e28c6b5b1::t_d2578b34758920 15-17
+Cargo.lock
+  s_f4202e28c6b5b1::t_add8e499a31a92 230,241,793-802,1369,1529,1612-1621,1954-1959,2834-2835,2839,2844,2870,2940,2942,3149,3406,3451,3465,3555-3571,3579,3995,4128,4284,4286,4290,4300-4301,4319,4334,4336,4353,4355,4384,4386,4402,4404,4420,4422,4438,4440,4456,4458,4475,4490,4492,4507,4509,4526,4528,4545,4547,4564,4566,4583,4585,4602,4604,4620,4622,4638,4640,4667,4692,4694,4709,4711,4728,4730,4746,4748,4763,4765,4781,4783,4798,4800,4816,4818,4834,4849,4851,4868,4870,4888,4890,4907,4909,4926,4940,4942,4968-4985,5044,5046,5061,5063,5074,5076,5080,5134-5146,5161,5163,5174-5199,5212,5214,5232,5234,5248,5250,5284-5322,5325,5327,5335,5370,5372,5393,5395,5407,5409,5423,5425,5588,5590,5596,6434,6730,6902,6982,7453,7581-7591,7605,7608,8610,8992-9001
+crates/lenso-agent-management-tools-plugin/src/tests.rs
+  s_f4202e28c6b5b1::t_5c47390c05f49e 1-225
+crates/lenso-capability-agent-auth-connection/src/generated.rs
+  s_f4202e28c6b5b1::t_fe90ad1e0e68d9 136,185
+crates/lenso-capability-agent-auth-openai-codex/src/generated.rs
+  s_f4202e28c6b5b1::t_7d724e31891303 46
+crates/lenso-capability-agent-context-source/src/generated.rs
+  s_f4202e28c6b5b1::t_f52a9994ecb619 144
+crates/lenso-capability-agent-lifecycle/src/generated.rs
+  s_f4202e28c6b5b1::t_4f8fbf06fa1d18 87
+crates/lenso-capability-agent-model/src/generated.rs
+  s_f4202e28c6b5b1::t_6bf5eb4ebc8bb3 47
+crates/lenso-capability-agent-plugin-configuration/src/generated.rs
+  s_f4202e28c6b5b1::t_2fc7a8e2dec320 48
+crates/lenso-capability-agent-process/src/generated.rs
+  s_f4202e28c6b5b1::t_965730c054316f 48
+crates/lenso-capability-agent-prompt-provider/src/generated.rs
+  s_f4202e28c6b5b1::t_e0360c6d4aa670 46
+crates/lenso-capability-agent-prompt/src/generated.rs
+  s_f4202e28c6b5b1::t_1010b0776ab221 46
+crates/lenso-capability-agent-task-supervisor/src/generated.rs
+  s_f4202e28c6b5b1::t_4b0c19ff73ef4a 46
+crates/lenso-capability-agent-tool-hook/src/generated.rs
+  s_f4202e28c6b5b1::t_33ae715c1a51ed 85
+crates/lenso-capability-agent-tool-progress/src/generated.rs
+  s_f4202e28c6b5b1::t_d9ec204968af8f 112
+crates/lenso-capability-agent-tool-provider/src/generated.rs
+  s_f4202e28c6b5b1::t_43c615cfcd41a5 47
+crates/lenso-capability-agent-tool-target/src/generated.rs
+  s_f4202e28c6b5b1::t_aa181b1791704d 47
+crates/lenso-capability-agent-tools/src/generated.rs
+  s_f4202e28c6b5b1::t_a1cc1a0df58ad9 48
+crates/lenso-capability-agent-turn-binding/src/generated.rs
+  s_f4202e28c6b5b1::t_43c0a076cb7c3e 53
+crates/lenso-capability-agent-user-interaction/src/generated.rs
+  s_f4202e28c6b5b1::t_98b27b7ba49a30 73,150
+crates/lenso-capability-tui-panel/src/generated.rs
+  s_f4202e28c6b5b1::t_819eeddd162158 46
+crates/lenso-capability-tui-suggestion/src/generated.rs
+  s_f4202e28c6b5b1::t_e1540da0334c24 46
+docs/management-tools.md
+  s_f4202e28c6b5b1::t_92e9164d390ba8 1-17
+examples/external-agent-durable-state/app/state-task-caller/Cargo.toml
+  s_f4202e28c6b5b1::t_ad22e41854ee05 12
+examples/external-agent-durable-state/app/state-task-provider/Cargo.toml
+  s_f4202e28c6b5b1::t_6b36279b67b334 12
+examples/external-agent-dynamic-authority/app/authority-caller/Cargo.toml
+  s_f4202e28c6b5b1::t_a3d6bc21ff11e4 12
+examples/external-agent-dynamic-authority/app/policy-tool/Cargo.toml
+  s_f4202e28c6b5b1::t_e9cc9b4b3ef710 12
+examples/external-agent-dynamic-authority/app/tenant-policy/Cargo.toml
+  s_f4202e28c6b5b1::t_e265ec18b27b27 12
+examples/external-agent-interaction/app/realtime-caller/Cargo.toml
+  s_f4202e28c6b5b1::t_43acafa71dbf4f 12
+examples/external-agent-interaction/app/realtime-provider/Cargo.toml
+  s_f4202e28c6b5b1::t_bcfe019b2b8c82 12
+examples/external-agent-processing/app/agent-caller/Cargo.toml
+  s_f4202e28c6b5b1::t_c7b9aea012a5b6 12
+examples/external-agent-processing/app/alternate-loop/Cargo.toml
+  s_f4202e28c6b5b1::t_a2d28ef1c7a169 13
+examples/external-agent-processing/app/final-approval/Cargo.toml
+  s_f4202e28c6b5b1::t_fab923a46712c7 12
+examples/external-agent-processing/app/inspect-model/Cargo.toml
+  s_f4202e28c6b5b1::t_f7b66d45b08969 13
+examples/external-agent-processing/app/secret-tool/Cargo.toml
+  s_f4202e28c6b5b1::t_11b50f19341fb2 12
+examples/external-agent-processing/app/turn-processor/Cargo.toml
+  s_f4202e28c6b5b1::t_01b3f3f0cd4325 12
+examples/external-agent-targets/Cargo.toml
+  s_f4202e28c6b5b1::t_da75aad34ab111 10,13,15
+examples/external-agent-targets/tests/fixtures/rust-guest/Cargo.toml
+  s_f4202e28c6b5b1::t_3b04a1d1933ecb 15
+examples/external-agent-targets/tests/fixtures/rust-host-import-guest/Cargo.toml
+  s_f4202e28c6b5b1::t_3eca483608f791 11
+examples/external-agent-targets/tests/fixtures/rust-stream-guest/Cargo.toml
+  s_f4202e28c6b5b1::t_788e81ddb8b71c 11
+examples/external-task-board-capability/app/task-board-caller/Cargo.toml
+  s_f4202e28c6b5b1::t_6b168f52cb23ed 14
+examples/external-task-board-capability/app/task-board-provider/Cargo.toml
+  s_f4202e28c6b5b1::t_9223ed313c3b2e 13
+examples/external-task-board-capability/app/task-board-report/Cargo.toml
+  s_f4202e28c6b5b1::t_970475f176024c 15
+examples/external-task-board-capability/contracts/external.task-board-audit/Cargo.toml
+  s_f4202e28c6b5b1::t_a2df85a04da489 16-17,22
+examples/external-task-board-capability/contracts/external.task-board-report/Cargo.toml
+  s_f4202e28c6b5b1::t_3b2fcd8edd272f 16-17,22
+examples/external-task-board-capability/contracts/external.task-board/Cargo.toml
+  s_f4202e28c6b5b1::t_7d879d04278acb 16-17,22
+packages/agent-tool-convention/bun.lock
+  s_f4202e28c6b5b1::t_2b67f698d7b562 8-9,19,21,23-25
+packages/agent-tool-convention/compiler.mjs
+  s_f4202e28c6b5b1::t_35eb6162b6cab6 62,65
+packages/agent-tool-convention/package.json
+  s_f4202e28c6b5b1::t_aba5b47757a2f4 7-8
+packages/agent-tool-convention/plugin.ts
+  s_f4202e28c6b5b1::t_64c8cabe6c3924 1-3
+packages/lenso-agent-tool-sdk/README.md
+  s_f4202e28c6b5b1::t_74ad2280d953e4 6
+packages/lenso-agent-tool-sdk/bun.lock
+  s_f4202e28c6b5b1::t_efa8ab0d5a3c46 1-88
+packages/lenso-agent-tool-sdk/package.json
+  s_f4202e28c6b5b1::t_3958c9b33b7ba3 38,42-45
+packages/lenso-agent-tool-sdk/src/index.ts
+  s_f4202e28c6b5b1::t_253fad311fe788 2
+packages/lenso-agent-tool-sdk/src/lenso-build.ts
+  s_f4202e28c6b5b1::t_13e90d3541e561 170
+packages/lenso-agent-tool-sdk/test/types.ts
+  s_f4202e28c6b5b1::t_0095e410f957d6 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f9159d38ff917de916a987a2cd2411aa54313830",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
