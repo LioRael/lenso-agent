@@ -50,7 +50,7 @@ pub struct CaptureRequest {
     pub scope_id: String,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CaptureResponse {
 
 }

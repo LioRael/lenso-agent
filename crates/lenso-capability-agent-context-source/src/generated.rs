@@ -141,7 +141,7 @@ pub enum RenderPromptError {
     Unknown(UnknownDomainError),
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SnapshotRequest {
 
 }

@@ -10,7 +10,7 @@ root-slot = "agents"
 
 [dependencies]
 futures = "0.3"
-lenso = "0.5.21"
+lenso = "0.5.27"
 lenso-capability-agent = "0.1.0"
 lenso-capability-agent-model = "0.1.0"
 lenso-capability-agent-tools = "0.1.0"

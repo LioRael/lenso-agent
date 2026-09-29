@@ -9,7 +9,7 @@ plugin-id = "example.final-approval"
 root-slot = "tool-hooks"
 
 [dependencies]
-lenso = "0.5.21"
+lenso = "0.5.27"
 lenso-capability-agent-tool-hook = "0.1.0"
 serde = { version = "1", features = ["derive"] }
 

@@ -82,7 +82,7 @@ pub enum HookOutcome {
     RuntimeFailure,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AfterExecuteResponse {
 
 }

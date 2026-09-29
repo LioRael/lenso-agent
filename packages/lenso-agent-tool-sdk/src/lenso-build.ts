@@ -167,7 +167,7 @@ function compileSchema(argument: BuildArgument, root: LoweringInput): CompiledSc
 
 function generatedBinder(tools: ReadonlyArray<LoweredTool>): string {
   const definitions = JSON.stringify(tools);
-  return `import type { CapabilityProviderBinding, InvocationContext, ProviderDispatchOutcome } from "@lenso/bun-plugin";
+  return `import type { CapabilityProviderBinding, InvocationContext, ProviderDispatchOutcome } from "@lenso/bun";
 import { isExecuteResponse, validateToolValue, type ExecuteError, type ToolResult } from "@lenso/agent-tool-sdk";
 import { resolveHandler } from "lenso:build-handlers";
 

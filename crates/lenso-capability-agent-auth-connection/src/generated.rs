@@ -133,7 +133,7 @@ pub enum CancelError {
     Unknown(UnknownDomainError),
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DisconnectRequest {
 
 }
@@ -182,7 +182,7 @@ pub enum PollError {
     Unknown(UnknownDomainError),
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct StatusRequest {
 
 }

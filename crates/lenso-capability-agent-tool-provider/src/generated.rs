@@ -44,7 +44,7 @@ pub const EXECUTE_OPERATION: &str = "execute";
 pub use lenso_contract_runtime::{OptionalValue, RawJson, UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CatalogRequest {
 
 }

@@ -1,4 +1,4 @@
-import { definePlugin } from "@lenso/bun-plugin";
+import { definePlugin } from "@lenso/bun";
 import { tool, tools } from "../src/index.js";
 import * as schema from "../src/schema.js";
 

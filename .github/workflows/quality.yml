@@ -90,6 +90,10 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Test the workspace
         run: cargo test --locked --workspace --all-targets
+      - name: Verify the current Bun Tool SDK cohort
+        run: |
+          (cd packages/lenso-agent-tool-sdk && bun install --frozen-lockfile && bun run build && bun test test)
+          (cd packages/agent-tool-convention && bun install --frozen-lockfile && bun run check)
       - name: Check minimal Console Profile admission
         run: |
           cargo build --locked -p lenso-agent-web --no-default-features --features console-standalone --bin lenso-agent-console-web
@@ -107,7 +111,7 @@ jobs:
           toolchain: nightly-2026-07-10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install the contract generator
-        run: cargo install lenso-contract-codegen --version '=0.9.0' --locked
+        run: cargo install lenso-contract-codegen --version '=0.10.0' --locked
       - name: Check generated contracts
         run: lenso-contract-codegen workspace check --manifest-path Cargo.toml
       - name: Verify independent registry consumer
@@ -146,7 +150,7 @@ jobs:
           toolchain: nightly-2026-07-10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       - name: Install the released fixture authoring CLI
-        run: cargo install lenso-cli --version 0.5.2 --locked
+        run: cargo install lenso-cli --version 0.6.3 --locked
       - name: Pack real Process releases
         run: CARGO=cargo python3 apps/lenso-agent-web/tests/fixtures/marketplace-proof/build-variants.py "$RUNNER_TEMP/marketplace-proof"
       - name: Install, invoke, upgrade, recover, reject and remove through Console tools

@@ -43,7 +43,7 @@ pub const ASSEMBLE_OPERATION: &str = "assemble";
 pub use lenso_contract_runtime::{UnknownDomainError};
 use lenso_contract_runtime::{decode_portable_json, encode_portable_json};
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AssembleRequest {
 
 }
