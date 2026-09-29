@@ -1,0 +1,21 @@
+Cargo.lock
+  s_f4202e28c6b5b1::t_1243fe7e23a510 4971
+Cargo.toml
+  s_f4202e28c6b5b1::t_4ac8b0f267478c 150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b11c26a452aa6d6238ca4ca50616a332f6227b98",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
