@@ -147,7 +147,7 @@ lenso = "0.5.27"
 lenso-contract-authoring = "0.1.1"
 lenso-contract-codegen = "=0.10.0"
 lenso-contract-runtime = "0.2.0"
-lenso-capability-management = { git = "https://github.com/LioRael/lenso-console", rev = "f32c1803e196a87bbb7d0fed52432e1a8b3b3dc4" }
+lenso-capability-management = { git = "https://github.com/LioRael/lenso-console", rev = "20b6c17fd81f2cbd18168b999f5dcafa4efe19da" }
 lenso-guest-sdk = "0.5.1"
 lenso-kernel = "0.3.5"
 lenso-plugin-authoring = "0.2.0"
