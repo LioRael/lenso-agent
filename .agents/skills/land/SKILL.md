@@ -1,3 +1,10 @@
+---
+name: lenso-agent-land
+description: Land reviewed Lenso Agent changes through candidate CI and a normal fast-forward.
+metadata:
+  delta-action: land
+---
+
 # Land Lenso changes
 
 Use this optional agent entry point with [`CONTRIBUTING.md`](../../../CONTRIBUTING.md).
