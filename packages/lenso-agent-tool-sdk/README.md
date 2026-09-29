@@ -3,7 +3,7 @@
 Agent-owned ToolProvider authoring for TypeScript Plugins. The generic Plugin SDK only sees the resulting provider declaration.
 
 ```ts
-import { definePlugin } from "@lenso/bun-plugin";
+import { definePlugin } from "@lenso/bun";
 import { tool, tools } from "@lenso/agent-tool-sdk";
 import * as schema from "@lenso/agent-tool-sdk/schema";
 

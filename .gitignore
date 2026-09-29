@@ -12,3 +12,6 @@ examples/app-tools-rust/dist/
 
 # Dependencies of independently built surface packages
 **/node_modules/
+
+# Generated TypeScript SDK package artifacts
+packages/lenso-agent-tool-sdk/dist/

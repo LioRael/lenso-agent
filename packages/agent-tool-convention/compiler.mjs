@@ -59,10 +59,10 @@ if(!hasTools) {
  ] : [statement]);
  fs.writeFileSync(path.join(output,"tools.ts"),ts.createPrinter().printFile(ts.factory.updateSourceFile(normalized,statements)));
  transformed.dispose();
- fs.writeFileSync(path.join(output,"plugin.ts"),`import {definePlugin} from "@lenso/bun-plugin";\nimport declaration from ${JSON.stringify("./tools.ts")};\nexport default definePlugin({providers:[declaration]});\n`);
+ fs.writeFileSync(path.join(output,"plugin.ts"),`import {definePlugin} from "@lenso/bun";\nimport declaration from ${JSON.stringify("./tools.ts")};\nexport default definePlugin({providers:[declaration]});\n`);
  const dependencies = Object.fromEntries(Object.entries(manifest.dependencies ?? {}).map(([name,version]) => [name,
  typeof version === "string" && /^(file|link):/.test(version) ? `file:${path.resolve(root,version.slice(version.indexOf(":")+1))}` : version]));
- fs.writeFileSync(path.join(output,"package.json"),JSON.stringify({name:request.plugin_id,version:request.release_version,private:true,type:"module",dependencies:{...dependencies,"@lenso/bun-plugin":"0.4.1","@lenso/agent-tool-sdk":"0.1.0"},devDependencies:{typescript:"7.0.2","@types/bun":"1.4.0"},scripts:{check:"tsc --noEmit"},lenso:{pluginId:request.plugin_id,rootSlot:"tool-providers",runtime:"bun",source:"plugin.ts",published_resources:[{path:"lenso-agent-deployment.json",schema:"lenso.agent.deployment@1"}]}},null,2));
+ fs.writeFileSync(path.join(output,"package.json"),JSON.stringify({name:request.plugin_id,version:request.release_version,private:true,type:"module",dependencies:{...dependencies,"@lenso/bun":"0.5.3","@lenso/agent-tool-sdk":"0.1.0"},devDependencies:{typescript:"7.0.2","@types/bun":"1.4.0"},scripts:{check:"tsc --noEmit"},lenso:{pluginId:request.plugin_id,rootSlot:"tool-providers",runtime:"bun",source:"plugin.ts",published_resources:[{path:"lenso-agent-deployment.json",schema:"lenso.agent.deployment@1"}]}},null,2));
  fs.writeFileSync(path.join(output,"tsconfig.json"),JSON.stringify({compilerOptions:{strict:true,noEmit:true,module:"Preserve",moduleResolution:"bundler",allowImportingTsExtensions:true,types:["bun"],paths:{"@lenso/agent-tool-sdk":[path.join(output,"node_modules/@lenso/agent-tool-sdk/dist/index.d.ts")],"@lenso/agent-tool-sdk/schema":[path.join(output,"node_modules/@lenso/agent-tool-sdk/dist/schema.d.ts")]}},include:["plugin.ts"]}));
 }
 process.stdout.write(JSON.stringify({schema:"lenso.convention-compiled.v1"}));

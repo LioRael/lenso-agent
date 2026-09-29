@@ -1,5 +1,5 @@
 import { Ajv, type ValidateFunction } from "ajv";
-import type { ProviderDeclaration } from "@lenso/bun-plugin";
+import type { ProviderDeclaration } from "@lenso/bun";
 import type { InvocationContext } from "@lenso/contract-runtime";
 
 import type { Infer, JsonSchema, Schema } from "./schema.js";

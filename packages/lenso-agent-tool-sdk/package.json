@@ -35,13 +35,14 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/index.ts src/schema.ts src/lenso-build.ts --target=bun --format=esm --outdir=dist --entry-naming='[name].js' --external '@lenso/bun-plugin' --external '@lenso/bun-plugin/*' && tsc -p tsconfig.json",
+    "build": "bun build src/index.ts src/schema.ts src/lenso-build.ts --target=bun --format=esm --outdir=dist --entry-naming='[name].js' --external '@lenso/bun' --external '@lenso/bun/*' --external '@lenso/bun-plugin' --external '@lenso/bun-plugin/*' && tsc -p tsconfig.json",
     "test": "bun test test"
   },
   "dependencies": {
-    "@lenso/bun-plugin": "0.2.1",
-    "@lenso/contract-runtime": "0.3.0",
-    "ajv": "8.17.1"
+    "@lenso/bun-plugin": "0.4.2",
+    "@lenso/contract-runtime": "0.3.1",
+    "ajv": "8.17.1",
+    "@lenso/bun": "0.5.3"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

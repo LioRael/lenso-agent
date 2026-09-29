@@ -9,7 +9,7 @@ plugin-id = "example.state-task-caller"
 root-slot = "state-task-callers"
 
 [dependencies]
-lenso = "0.5.21"
+lenso = "0.5.27"
 lenso-capability-agent-durable-task = "0.1.0"
 lenso-capability-agent-extension-state = "0.1.0"
 

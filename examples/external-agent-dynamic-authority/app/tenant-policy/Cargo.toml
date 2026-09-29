@@ -9,7 +9,7 @@ plugin-id = "example.tenant-policy"
 root-slot = "dynamic-authorities"
 
 [dependencies]
-lenso = "0.5.21"
+lenso = "0.5.27"
 lenso-capability-agent-dynamic-authority = "0.1.0"
 lenso-capability-agent-tool-hook = "0.1.0"
 serde = { version = "1", features = ["derive"] }

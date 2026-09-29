@@ -70,7 +70,7 @@ pub struct InteractionAnswer {
     pub selected_option_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnswerResponse {
 
 }
@@ -147,7 +147,7 @@ pub enum AskError {
     Unknown(UnknownDomainError),
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PendingRequest {
 
 }

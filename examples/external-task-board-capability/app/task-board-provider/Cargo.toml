@@ -10,7 +10,7 @@ root-slot = "task-boards"
 
 [dependencies]
 external-task-board = { package = "external-task-board-contract", path = "../../contracts/external.task-board" }
-lenso = "0.5.21"
+lenso = "0.5.27"
 serde = { version = "1", features = ["derive"] }
 
 [workspace]
