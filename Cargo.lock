@@ -3553,11 +3553,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "lenso-agent-management-connection-plugin"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "lenso",
+ "lenso-agent-artifact-file-plugin",
+ "lenso-agent-context-compaction-plugin",
+ "lenso-agent-host",
+ "lenso-agent-loop-plugin",
+ "lenso-agent-management-tools-plugin",
+ "lenso-agent-memory-sqlite-plugin",
+ "lenso-agent-model-fixture-plugin",
+ "lenso-agent-prompt-plugin",
+ "lenso-agent-prompt-static-plugin",
+ "lenso-agent-session-file-plugin",
+ "lenso-agent-tools-plugin",
+ "lenso-app-plan",
+ "lenso-capability-agent",
+ "lenso-capability-agent-model",
+ "lenso-capability-agent-session",
+ "lenso-capability-management",
+ "lenso-cli",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "lenso-runner",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "lenso-agent-management-tools-plugin"
 version = "0.1.0"
 dependencies = [
  "lenso",
  "lenso-app-plan",
+ "lenso-capability-agent",
  "lenso-capability-agent-tool-provider",
  "lenso-capability-management",
  "lenso-kernel",
@@ -4968,7 +5004,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-management"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-console?rev=20b6c17fd81f2cbd18168b999f5dcafa4efe19da#20b6c17fd81f2cbd18168b999f5dcafa4efe19da"
+source = "git+https://github.com/LioRael/lenso-console?rev=73b53c4d359664851b02d3e7dbac29ffc611d66b#73b53c4d359664851b02d3e7dbac29ffc611d66b"
 dependencies = [
  "futures",
  "lenso-contract-authoring",

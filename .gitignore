@@ -3,6 +3,7 @@
 .lenso/
 *.log
 .DS_Store
+__pycache__/
 
 # Local Engine App authoring examples
 examples/app-tools/.lenso/

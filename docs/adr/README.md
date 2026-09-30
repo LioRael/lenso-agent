@@ -137,3 +137,5 @@ reasons on their own.
 - [0114 — Separate the blank Agent foundation from the legacy Host](0114-separate-blank-agent-foundation-from-the-legacy-host.md)
 - [0115 — Own public Agent turn contracts in Capability crates](0115-public-agent-turn-contract-ownership.md)
 - [0116 — Evaluate Agent outcomes from task evidence](0116-evaluate-agent-outcomes-from-task-evidence.md)
+
+- [0117 — Bind remote Management to an Auth-issued task](0117-bind-remote-management-to-an-auth-issued-task.md)

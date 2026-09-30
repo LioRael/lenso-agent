@@ -328,7 +328,9 @@ const PROVIDERS: [ProviderDefinition; 4] = [
     },
 ];
 
-pub(crate) fn project(
+/// Projects metadata from the immutable Host, its resolved Plan, and the selected provider's live catalog.
+/// The result carries model configuration; it does not issue actor authority.
+pub fn project(
     host: &HostCatalog,
     plan: &ResolvedAppPlan,
     selected_catalog: Option<&model_contract::CatalogResponse>,

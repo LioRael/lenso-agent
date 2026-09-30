@@ -13,6 +13,7 @@ plugin-id = "lenso.agent.management-tools"
 root-slot = "tool-providers"
 
 [dependencies]
+lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso.workspace = true
 lenso-kernel.workspace = true
 lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }

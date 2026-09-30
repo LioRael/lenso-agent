@@ -1,6 +1,7 @@
 //! Opt-in projection of one bound application's accepted management operations.
 
-use lenso::{PluginError, Port};
+use lenso::{CtxExt, PluginError, Port};
+use lenso_capability_agent::AgentTaskBinding;
 use lenso_capability_agent_tool_provider as tools;
 use lenso_capability_management as management;
 use serde::Deserialize;
@@ -9,9 +10,44 @@ use sha2::{Digest as _, Sha256};
 
 const STATUS_TOOL: &str = "management__status";
 
-#[lenso::plugin]
+#[derive(Clone, Debug, Default, Deserialize, lenso::PluginConfig)]
+#[serde(deny_unknown_fields)]
+struct ManagementToolsConfig {
+    task_id: Option<String>,
+    agent_session_id: Option<String>,
+    delegate_caller: Option<String>,
+}
+
+impl ManagementToolsConfig {
+    fn binding(&self) -> Result<Option<AgentTaskBinding>, String> {
+        match (&self.task_id, &self.agent_session_id, &self.delegate_caller) {
+            (None, None, None) => Ok(None),
+            (Some(task_id), Some(agent_session_id), Some(delegate_caller)) => {
+                let binding = AgentTaskBinding {
+                    task_id: task_id.clone(),
+                    agent_session_id: agent_session_id.clone(),
+                    delegate_caller: delegate_caller.clone(),
+                };
+                binding.validate()?;
+                Ok(Some(binding))
+            }
+            _ => Err("management task binding must select all three labels".into()),
+        }
+    }
+}
+
+fn validate_config(config: &ManagementToolsConfig) -> Result<(), lenso::RuntimeFailure> {
+    config
+        .binding()
+        .map(|_| ())
+        .map_err(|detail| lenso::RuntimeFailure::PluginFailure { detail })
+}
+
+#[lenso::plugin(validate = validate_config)]
 #[derive(Clone, Debug)]
 struct ManagementTools {
+    #[config]
+    config: ManagementToolsConfig,
     management: Port<management::ManagementClient>,
 }
 
@@ -31,6 +67,28 @@ struct StatusArguments {
     operation_id: String,
 }
 
+impl ManagementTools {
+    fn catalog_context(
+        &self,
+        context: lenso::Ctx,
+    ) -> lenso::PluginResult<lenso::Ctx, tools::CatalogError> {
+        let selected = self
+            .config
+            .binding()
+            .map_err(|_| PluginError::domain(tools::CatalogError::CatalogInvalid))?;
+        let Some(selected) = selected else {
+            return Ok(context);
+        };
+        match context.typed_extension::<AgentTaskBinding>() {
+            Ok(Some(current)) if current == selected => Ok(context),
+            Ok(None) => selected
+                .attach(context)
+                .map_err(|_| PluginError::domain(tools::CatalogError::CatalogInvalid)),
+            _ => Err(PluginError::domain(tools::CatalogError::CatalogInvalid)),
+        }
+    }
+}
+
 #[lenso::provides(tools::ToolProvider)]
 impl ManagementTools {
     async fn catalog(
@@ -38,6 +96,7 @@ impl ManagementTools {
         context: lenso::Ctx,
         _request: tools::CatalogRequest,
     ) -> lenso::PluginResult<tools::CatalogResponse, tools::CatalogError> {
+        let context = self.catalog_context(context)?;
         let catalog = self
             .management
             .catalog_with_context(context, management::CatalogRequest {})
@@ -71,6 +130,19 @@ impl ManagementTools {
         context: lenso::Ctx,
         request: tools::ExecuteRequest,
     ) -> lenso::PluginResult<tools::ExecuteResponse, tools::ExecuteError> {
+        if let Some(selected) = self
+            .config
+            .binding()
+            .map_err(|_| PluginError::domain(tools::ExecuteError::PermissionDenied))?
+            && context
+                .typed_extension::<AgentTaskBinding>()
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(&selected)
+        {
+            return Err(PluginError::domain(tools::ExecuteError::PermissionDenied));
+        }
         let result = if request.name == STATUS_TOOL {
             let arguments: StatusArguments = serde_json::from_str(request.arguments_json.as_str())
                 .map_err(|_| PluginError::domain(tools::ExecuteError::InvalidArguments))?;
@@ -117,7 +189,7 @@ impl ManagementTools {
             let entry = catalog
                 .entries
                 .iter()
-                .find(|entry| tool_name(&entry.id) == request.name)
+                .find(|entry| tool_name(entry).is_ok_and(|name| name == request.name))
                 .ok_or_else(|| PluginError::domain(tools::ExecuteError::NotFound))?;
             let arguments: Arguments = serde_json::from_str(request.arguments_json.as_str())
                 .map_err(|_| PluginError::domain(tools::ExecuteError::InvalidArguments))?;
@@ -156,8 +228,35 @@ impl ManagementTools {
     }
 }
 
-fn tool_name(entry: &str) -> String {
-    format!("management__{:x}", Sha256::digest(entry.as_bytes()))
+fn tool_name(entry: &management::Entry) -> Result<String, serde_json::Error> {
+    let schema = canonical_schema(serde_json::from_str(entry.input_schema_json.as_str())?);
+    let identity = serde_json::json!([
+        entry.id,
+        entry.version,
+        entry.capability,
+        entry.operation,
+        entry.target_instance,
+        schema,
+        entry.effect,
+        entry.requires_approval,
+    ]);
+    let digest = format!("{:x}", Sha256::digest(identity.to_string().as_bytes()));
+    Ok(format!("management__{}", &digest[..48]))
+}
+
+fn canonical_schema(value: Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .map(|(key, value)| (key, canonical_schema(value)))
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect(),
+        ),
+        Value::Array(values) => Value::Array(values.into_iter().map(canonical_schema).collect()),
+        value => value,
+    }
 }
 
 fn definition(entry: &management::Entry) -> Result<tools::ToolDefinition, serde_json::Error> {
@@ -168,7 +267,7 @@ fn definition(entry: &management::Entry) -> Result<tools::ToolDefinition, serde_
     }
     let schema = serde_json::json!({"type":"object","additionalProperties":false,"properties":{"input":input,"idempotency_key":{"type":"string","minLength":1,"maxLength":128},"expected_revision":{"type":["string","null"],"minLength":1,"maxLength":128}},"required":required});
     Ok(tools::ToolDefinition {
-        name: tool_name(&entry.id),
+        name: tool_name(entry)?,
         description: entry.description.clone(),
         execution: if entry.effect == management::Effect::Read {
             tools::ToolExecutionClass::ParallelSafe

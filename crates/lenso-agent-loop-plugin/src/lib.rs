@@ -645,6 +645,13 @@ async fn run_turn(
     } else {
         request.input
     };
+    if let Some(binding) = context
+        .typed_extension::<agent_capability::AgentTaskBinding>()
+        .map_err(|_| PluginError::domain(RunTurnError::InvalidSession))?
+        && !binding.accepts_session(request.session_id.as_deref())
+    {
+        return Err(PluginError::domain(RunTurnError::InvalidSession));
+    }
     let generation_spec_digest = generation_spec_digest(context)?;
     let agent_behavior = agent_behavior_provenance(context)?;
     let base_turn_profile = resolved_turn_profile(context)?;

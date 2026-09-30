@@ -1,6 +1,9 @@
 //! Portable Agent turn Capability.
 
 mod extensions;
+mod task_binding;
+
+pub use task_binding::{AGENT_TASK_BINDING_EXTENSION, AgentTaskBinding};
 
 pub use extensions::{
     AGENT_BEHAVIOR_PROVENANCE_EXTENSION, AgentBehaviorProvenance, SessionProfile,

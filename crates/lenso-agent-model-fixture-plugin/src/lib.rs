@@ -1,5 +1,7 @@
 //! Deterministic Model Plugin for the headless read-only proof.
 
+mod management;
+
 use std::{
     any::Any,
     cell::{Cell, RefCell},
@@ -234,82 +236,91 @@ impl FixtureModel {
             .iter()
             .filter(|message| message.role == CompleteMessageRole::Tool)
             .collect::<Vec<_>>();
-        if let Some(response) = parallel_fixture_response(current_user, &tool_results) {
-            return response;
+        if let Some(messages) = management::complete(request, current_user, &tool_results) {
+            return Ok(messages);
         }
-        if current_user == "Use a Skill to review Rust." {
-            return skill_response(request, &tool_results);
-        }
-        if current_user == "Use a Skill resource to review Rust." {
-            return resource_skill_response(request, &tool_results);
-        }
-        if current_user == "Navigate the workspace to find the navigation target." {
-            return workspace_navigation_response(request, &tool_results);
-        }
-        if current_user == "Create and edit a workspace note." {
-            return workspace_mutation_response(request, &tool_results);
-        }
-        if current_user == "Create one approved workspace note." {
-            return approved_workspace_mutation_response(request, &tool_results);
-        }
-        if current_user == "Edit and validate the workspace project." {
-            return local_coding_response(request, &tool_results);
-        }
-        if current_user == "Run and observe one background process." {
-            return background_process_response(request, &tool_results);
-        }
-        if current_user == "Cancel one background process." {
-            return cancelled_process_response(request, &tool_results);
-        }
-        if current_user == "Inspect and commit the prepared Git change." {
-            return git_workflow_response(request, &tool_results);
-        }
-        if current_user == "Spawn two isolated mutation workers." {
-            return isolated_workers_root_response(request, &tool_results);
-        }
-        if current_user == "Supervise and integrate two isolated mutation workers." {
-            return supervised_workers_root_response(request, &tool_results);
-        }
-        if current_user == "Create worker-a.txt and commit it." {
-            return isolated_worker_response(request, &tool_results, "worker-a.txt", "worker-a");
-        }
-        if current_user == "Create worker-b.txt and commit it." {
-            return isolated_worker_response(request, &tool_results, "worker-b.txt", "worker-b");
-        }
-        if current_user == "Use the text Plugin to uppercase Lenso plugin." {
-            return text_plugin_response(request, &tool_results);
-        }
-        if current_user == "Use the MCP fixture to ping." {
-            return mcp_plugin_response(request, &tool_results);
-        }
-        if is_context_source_fixture(current_user) {
-            return Ok(context_source_result());
-        }
-        if current_user == "Ask me which mode to use." {
-            return ask_user_response(request, &tool_results);
-        }
-        if current_user == "Inspect before and after asking me which mode to use." {
-            return resumed_ask_user_response(request, &tool_results);
-        }
-        if current_user == "Use the workspace Plugin to read README.md." {
-            return workspace_plugin_response(request, &tool_results);
-        }
-        if let Some(response) = subagent_fixture_response(request, current_user, &tool_results) {
-            return response;
-        }
-        if let Some(response) =
-            steered_subagent_child_response(request, current_user, &tool_results)
-        {
-            return response;
-        }
-        if current_user == "Use Code Mode to compare README.md twice." {
-            return code_mode_response(request, &tool_results);
-        }
-        if current_user == "Summarize README.md for the parent Agent." {
-            return subagent_child_response(request, &tool_results);
-        }
-        default_fixture_response(request, current_user, &tool_results)
+        fixture_tool_response(request, current_user, &tool_results)
     }
+}
+
+fn fixture_tool_response(
+    request: &CompleteOpen,
+    current_user: &str,
+    tool_results: &[&CompleteMessageInput],
+) -> Result<Vec<CompleteMessage>, ModelCompleteInvocationError> {
+    if let Some(response) = parallel_fixture_response(current_user, tool_results) {
+        return response;
+    }
+    if current_user == "Use a Skill to review Rust." {
+        return skill_response(request, tool_results);
+    }
+    if current_user == "Use a Skill resource to review Rust." {
+        return resource_skill_response(request, tool_results);
+    }
+    if current_user == "Navigate the workspace to find the navigation target." {
+        return workspace_navigation_response(request, tool_results);
+    }
+    if current_user == "Create and edit a workspace note." {
+        return workspace_mutation_response(request, tool_results);
+    }
+    if current_user == "Create one approved workspace note." {
+        return approved_workspace_mutation_response(request, tool_results);
+    }
+    if current_user == "Edit and validate the workspace project." {
+        return local_coding_response(request, tool_results);
+    }
+    if current_user == "Run and observe one background process." {
+        return background_process_response(request, tool_results);
+    }
+    if current_user == "Cancel one background process." {
+        return cancelled_process_response(request, tool_results);
+    }
+    if current_user == "Inspect and commit the prepared Git change." {
+        return git_workflow_response(request, tool_results);
+    }
+    if current_user == "Spawn two isolated mutation workers." {
+        return isolated_workers_root_response(request, tool_results);
+    }
+    if current_user == "Supervise and integrate two isolated mutation workers." {
+        return supervised_workers_root_response(request, tool_results);
+    }
+    if current_user == "Create worker-a.txt and commit it." {
+        return isolated_worker_response(request, tool_results, "worker-a.txt", "worker-a");
+    }
+    if current_user == "Create worker-b.txt and commit it." {
+        return isolated_worker_response(request, tool_results, "worker-b.txt", "worker-b");
+    }
+    if current_user == "Use the text Plugin to uppercase Lenso plugin." {
+        return text_plugin_response(request, tool_results);
+    }
+    if current_user == "Use the MCP fixture to ping." {
+        return mcp_plugin_response(request, tool_results);
+    }
+    if is_context_source_fixture(current_user) {
+        return Ok(context_source_result());
+    }
+    if current_user == "Ask me which mode to use." {
+        return ask_user_response(request, tool_results);
+    }
+    if current_user == "Inspect before and after asking me which mode to use." {
+        return resumed_ask_user_response(request, tool_results);
+    }
+    if current_user == "Use the workspace Plugin to read README.md." {
+        return workspace_plugin_response(request, tool_results);
+    }
+    if let Some(response) = subagent_fixture_response(request, current_user, tool_results) {
+        return response;
+    }
+    if let Some(response) = steered_subagent_child_response(request, current_user, tool_results) {
+        return response;
+    }
+    if current_user == "Use Code Mode to compare README.md twice." {
+        return code_mode_response(request, tool_results);
+    }
+    if current_user == "Summarize README.md for the parent Agent." {
+        return subagent_child_response(request, tool_results);
+    }
+    default_fixture_response(request, current_user, tool_results)
 }
 
 fn parallel_fixture_response(

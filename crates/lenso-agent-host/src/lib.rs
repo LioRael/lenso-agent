@@ -45,7 +45,7 @@ pub use provider_catalog::{
     ModelAuthentication, ModelCapabilities, ModelCatalogEntry, ModelInputModality, ModelLimits,
     ModelProviderCatalogEntry, ModelProviderReadiness, ModelProviderReadinessStatus,
     ModelReasoningControl, ModelServiceTierControl, ModelWireProtocol, ProviderModelCatalog,
-    ResolvedTurnProfile,
+    ResolvedTurnProfile, project as project_provider_model_catalog,
 };
 
 /// Loads an exact diagnostic Plan override or derives the App from the current Host and Plugin Root.
