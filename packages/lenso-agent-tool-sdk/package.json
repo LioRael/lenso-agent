@@ -1,6 +1,6 @@
 {
   "name": "@lenso/agent-tool-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Typed Tool Provider authoring for Lenso Agent TypeScript Plugins.",
   "type": "module",
   "license": "MIT",
