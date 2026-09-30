@@ -10,7 +10,7 @@ import tomllib
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-CODEC_VERSION = "0.4.3"
+CODEC_VERSION = "0.4.4"
 manifest = tomllib.loads(
     (ROOT / "crates/lenso-capability-agent-tool-provider/Cargo.toml").read_text()
 )
@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix="lenso-tool-provider-registry-") as temp
     (packaged / "Cargo.lock").unlink(missing_ok=True)
     normalized = tomllib.loads((packaged / "Cargo.toml").read_text())
     codec_requirement = normalized["dependencies"]["lenso-runtime-codec"]["version"]
-    if codec_requirement != f"={CODEC_VERSION}":
+    if codec_requirement != CODEC_VERSION:
         raise SystemExit(f"unexpected registry Codec pin: {codec_requirement}")
 
     run("generate-lockfile", cwd=packaged)
