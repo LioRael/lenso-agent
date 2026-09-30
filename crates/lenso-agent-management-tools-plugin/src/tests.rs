@@ -30,6 +30,7 @@ type CapturedContexts = Rc<RefCell<Vec<(u64, Option<String>)>>>;
 #[derive(Debug, Clone)]
 struct Owner {
     visible: Rc<Cell<bool>>,
+    catalog_error: Rc<RefCell<Option<management::CatalogError>>>,
     entry: Rc<RefCell<management::Entry>>,
     calls: Rc<Cell<u32>>,
     states: Rc<RefCell<management::InvocationState>>,
@@ -54,6 +55,9 @@ impl management::ManagementProvider for Owner {
         _: InvocationContext,
         _: management::CatalogRequest,
     ) -> NativeRequestFuture<management::ManagementCatalog> {
+        if let Some(error) = self.catalog_error.borrow().clone() {
+            return Box::pin(async move { Ok(Err(error)) });
+        }
         let entries = if self.visible.get() {
             vec![self.entry.borrow().clone()]
         } else {
@@ -142,6 +146,7 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
         .run_until(async {
             let owner = Owner {
                 visible: Rc::new(Cell::new(true)),
+                catalog_error: Rc::new(RefCell::new(None)),
                 entry: Rc::new(RefCell::new(entry())),
                 calls: Rc::new(Cell::new(0)),
                 states: Rc::new(RefCell::new(management::InvocationState::PendingApproval)),
@@ -197,6 +202,25 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
                 )
                 .unwrap(),
             };
+            for code in ["unavailable", "owner_future_failure"] {
+                owner.catalog_error.replace(Some(
+                    serde_json::from_value(serde_json::json!(code)).unwrap(),
+                ));
+                assert!(matches!(
+                    provider.catalog(context(), tools::CatalogRequest {}).await,
+                    Err(PluginError::Runtime(RuntimeFailure::Unavailable {
+                        capability: management::CAPABILITY_ID,
+                    }))
+                ));
+            }
+            owner
+                .catalog_error
+                .replace(Some(management::CatalogError::PermissionDenied));
+            assert!(matches!(
+                provider.catalog(context(), tools::CatalogRequest {}).await,
+                Err(PluginError::Domain(tools::CatalogError::CatalogInvalid))
+            ));
+            owner.catalog_error.replace(None);
             let catalog = provider
                 .catalog(context(), tools::CatalogRequest {})
                 .await

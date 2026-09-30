@@ -99,14 +99,7 @@ impl ManagementTools {
             .management
             .catalog_with_context(context, management::CatalogRequest {})
             .await
-            .map_err(|error| match error {
-                management::ManagementCatalogInvocationError::Runtime(error) => {
-                    PluginError::runtime(error)
-                }
-                management::ManagementCatalogInvocationError::Domain(_) => {
-                    PluginError::domain(tools::CatalogError::CatalogInvalid)
-                }
-            })?;
+            .map_err(map_catalog)?;
         let mut definitions = Vec::new();
         for entry in &catalog.entries {
             definitions.push(
@@ -293,6 +286,22 @@ fn map_invoke(
                 management::InvokeError::Cancelled => failure("cancelled"),
                 management::InvokeError::DeadlineExceeded => failure("deadline_exceeded"),
                 _ => failure("unavailable"),
+            })
+        }
+    }
+}
+
+fn map_catalog(
+    error: management::ManagementCatalogInvocationError,
+) -> PluginError<tools::CatalogError> {
+    match error {
+        management::ManagementCatalogInvocationError::Runtime(error) => PluginError::runtime(error),
+        management::ManagementCatalogInvocationError::Domain(
+            management::CatalogError::PermissionDenied,
+        ) => PluginError::domain(tools::CatalogError::CatalogInvalid),
+        management::ManagementCatalogInvocationError::Domain(_) => {
+            PluginError::runtime(lenso::RuntimeFailure::Unavailable {
+                capability: management::CAPABILITY_ID,
             })
         }
     }
