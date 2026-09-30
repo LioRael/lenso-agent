@@ -1,0 +1,22 @@
+crates/lenso-agent-management-tools-plugin/src/tests.rs
+  s_f4202e28c6b5b1::t_2b21c91d586ec8 33,58-60,149,205-223
+crates/lenso-agent-management-tools-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_77983f55d7f581 102,294-304
+  s_f4202e28c6b5b1::t_edd9310bc5a755 305-309
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8d051f36a06ad01ea65698763c76cae16d3c8ad2",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
