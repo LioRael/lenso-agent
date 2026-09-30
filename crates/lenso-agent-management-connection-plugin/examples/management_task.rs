@@ -283,7 +283,7 @@ async fn run_turn(
         .await
         .map_err(|_| "bound task turn could not start")?;
     let mut events = Vec::new();
-    let terminal = loop {
+    let (terminal, terminal_failure) = loop {
         match stream.receive().await.map_err(|_| "task stream failed")? {
             StreamEvent::Message(event) => {
                 if events.len() >= 256 {
@@ -292,8 +292,10 @@ async fn run_turn(
                 events.push(event);
             }
             StreamEvent::PeerHalfClosed => {}
-            StreamEvent::Terminal(Ok(())) => break "succeeded",
-            StreamEvent::Terminal(Err(_)) => break "failed",
+            StreamEvent::Terminal(Ok(())) => break ("succeeded", None),
+            StreamEvent::Terminal(Err(error)) => {
+                break ("failed", Some(terminal_failure_code(&error)));
+            }
         }
     };
     let selected_refs = plan
@@ -309,8 +311,25 @@ async fn run_turn(
         })
         .collect::<Vec<_>>();
     Ok(
-        json!({"schema":"lenso.agent.management-task-proof@1","terminal":terminal,"task_id":binding.task_id,"agent_session_id":binding.agent_session_id,"delegate_caller":binding.delegate_caller,"generation":generation,"target_deployment":deployment,"selected_instances":selected_instances,"selected_agent_instances":selected_refs,"events":events,"model":"fixture","fixture_model_loop":true,"real_model":"not_run","real_remote_child":"unassessed_by_task_host"}),
+        json!({"schema":"lenso.agent.management-task-proof@1","terminal":terminal,"terminal_failure":terminal_failure,"task_id":binding.task_id,"agent_session_id":binding.agent_session_id,"delegate_caller":binding.delegate_caller,"generation":generation,"target_deployment":deployment,"selected_instances":selected_instances,"selected_agent_instances":selected_refs,"events":events,"model":"fixture","fixture_model_loop":true,"real_model":"not_run","real_remote_child":"unassessed_by_task_host"}),
     )
+}
+
+fn terminal_failure_code(error: &agent::RunTurnError) -> &'static str {
+    match error {
+        agent::RunTurnError::ConcurrentTurn => "concurrent_turn",
+        agent::RunTurnError::ContextLimitExceeded => "context_limit_exceeded",
+        agent::RunTurnError::InvalidSession => "invalid_session",
+        agent::RunTurnError::StepLimitExceeded => "step_limit_exceeded",
+        agent::RunTurnError::ToolCallLimitExceeded => "tool_call_limit_exceeded",
+        agent::RunTurnError::ModelFailure { payload }
+            if payload.reason_code == "tool_not_allowed" =>
+        {
+            "tool_not_allowed"
+        }
+        agent::RunTurnError::ModelFailure { .. } => "model_failure",
+        agent::RunTurnError::Unknown(_) => "unknown_domain_error",
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -331,5 +350,39 @@ async fn main() {
     if let Err(error) = result {
         eprintln!("management task unavailable: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_failure_records_scope_rejection_without_provider_data() {
+        let error = agent::RunTurnError::ModelFailure {
+            payload: agent::ModelFailurePayload {
+                reason_code: "tool_not_allowed".into(),
+                message: "private provider payload".into(),
+            },
+        };
+        assert_eq!(terminal_failure_code(&error), "tool_not_allowed");
+        let proof = json!({"terminal_failure": terminal_failure_code(&error)});
+        assert!(!proof.to_string().contains("private"));
+    }
+
+    #[test]
+    fn terminal_failure_does_not_promote_unknown_data_to_denial() {
+        let error = agent::RunTurnError::ModelFailure {
+            payload: agent::ModelFailurePayload {
+                reason_code: "future-secret-code".into(),
+                message: "private provider payload".into(),
+            },
+        };
+        assert_eq!(terminal_failure_code(&error), "model_failure");
+        let future: agent::RunTurnError = serde_json::from_value(json!({
+            "code": "future-denial", "payload": {"detail": "private"}
+        }))
+        .unwrap();
+        assert_eq!(terminal_failure_code(&future), "unknown_domain_error");
     }
 }
