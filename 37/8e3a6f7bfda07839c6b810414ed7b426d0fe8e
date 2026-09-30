@@ -1,0 +1,37 @@
+examples/external-agent-targets/README.md
+  s_f4202e28c6b5b1::t_f1984b96cf6959 12
+examples/external-task-board-capability/verify-registry.py
+  s_f4202e28c6b5b1::t_d3c2e147f32d6e 5,23-25,36-38,51-52
+scripts/verify-tool-provider-registry-package.py
+  s_f4202e28c6b5b1::t_aa68de13982cd9 13,41-42,45,50-51,63
+examples/external-task-board-capability/README.md
+  s_f4202e28c6b5b1::t_f1984b96cf6959 18,20-21,33-43
+examples/external-agent-targets/Cargo.lock
+  s_f4202e28c6b5b1::t_7886958a00a21b 69,71,311,313,365,367,572,574,583,585,611,613,627,629,638,640,646,883,931,933,996,998,1005,1007
+examples/external-agent-targets/tests/fixtures/rust-guest/Cargo.lock
+  s_f4202e28c6b5b1::t_11641c8f55ce04 76,78,185
+examples/external-agent-targets/tests/fixtures/rust-host-import-guest/Cargo.lock
+  s_f4202e28c6b5b1::t_22481575a27aef 76,78,186
+examples/external-agent-targets/tests/fixtures/rust-stream-guest/Cargo.lock
+  s_f4202e28c6b5b1::t_aca978783b14c1 76,78,185
+examples/external-task-board-capability/contracts/external.task-board-audit/src/generated.rs
+  s_f4202e28c6b5b1::t_df9352e6e0fd23 46
+examples/external-task-board-capability/runner/Cargo.lock
+  s_f4202e28c6b5b1::t_f42f8f50ebc0d6 360,362,374,376,407,409,432,434,442,444,452,454,468,470,488,490,501,503
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "378e3a6f7bfda07839c6b810414ed7b426d0fe8e",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
