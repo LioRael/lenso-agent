@@ -6,7 +6,7 @@ use std::{
 };
 
 use lenso_app_plan::{
-    ExecutionClassId, ResolvedAppPlan,
+    ExecutionClassId, ExecutionTargetCapabilities, ExecutionTargetCapability, ResolvedAppPlan,
     authoring::{PluginDescriptor, PluginInstanceId, PluginRootInstance, PluginRootSnapshot},
 };
 use lenso_plugin_bundle::{
@@ -688,15 +688,46 @@ fn implementation_policy() -> ImplementationPolicy {
     ImplementationPolicy {
         host_target: lenso_app_authoring::native_host_target().to_owned(),
         runtimes: [
-            ("lenso.quickjs@1", "lenso.quickjs@1"),
-            ("lenso.process@1", "lenso.process-stdio@2"),
-            ("lenso.bun-process@1", "lenso.bun-authoring@2"),
-            ("lenso.wasm-component@1", "lenso.wasm-component@1"),
+            ("lenso.quickjs@1", "lenso.quickjs@1", None),
+            (
+                "lenso.process@1",
+                "lenso.process-stdio@2",
+                Some(ExecutionTargetCapability::NativeProcess),
+            ),
+            (
+                "lenso.bun-process@1",
+                lenso_bun_adapter::BUN_AUTHORING_RUNTIME_PROFILE,
+                Some(ExecutionTargetCapability::NativeProcess),
+            ),
+            (
+                "lenso.wasm-component@1",
+                "lenso.wasm-component@1",
+                Some(ExecutionTargetCapability::WasmComponent),
+            ),
         ]
         .into_iter()
-        .map(|(execution_class, runtime_profile)| RuntimeAdmission {
-            execution_class: ExecutionClassId::new(execution_class),
-            runtime_profile: runtime_profile.to_owned(),
+        .map(|(execution_class, runtime_profile, mechanism)| {
+            let admission = RuntimeAdmission::new(
+                ExecutionClassId::new(execution_class),
+                runtime_profile,
+                ExecutionTargetCapabilities::new(
+                    [
+                        ExecutionTargetCapability::Request,
+                        ExecutionTargetCapability::Stream,
+                        ExecutionTargetCapability::HostImports,
+                    ]
+                    .into_iter()
+                    .chain(mechanism),
+                ),
+            );
+            if execution_class == "lenso.wasm-component@1"
+                && let Ok(max_bytes) =
+                    u64::try_from(crate::generation::agent_wasm_limits().max_memory_bytes)
+            {
+                admission.with_enforced_wasm_memory_ceiling(max_bytes)
+            } else {
+                admission
+            }
         })
         .collect(),
     }
@@ -794,19 +825,142 @@ mod tests {
     use std::path::Path;
 
     use lenso_app_plan::{
-        CapabilityEndpointPlan, ExecutionClassId, PluginInstancePlan, ResolvedAppPlan,
-        authoring::PluginContract,
+        CapabilityEndpointPlan, ExecutionClassId, ExecutionTargetCapability, PluginInstancePlan,
+        ResolvedAppPlan,
+        authoring::{PluginContract, PluginImplementation},
     };
     use lenso_plugin_bundle::{
-        SourcePluginImplementation, SourcePluginReleaseBuild, build_source_plugin_release_bundle,
+        ExecutionAdmissionRequirementV6, ImplementationRejectionReason, PluginArtifactV2,
+        PluginImplementationV6, PluginManifest, PluginManifestV6, PluginVariantInputV6,
+        PluginVariantV6, SourcePluginImplementation, SourcePluginReleaseBuild,
+        build_source_plugin_release_bundle, explain_implementation, resolve_implementation,
     };
 
     use super::{
         MAX_CONFIGURATION_TOTAL_BYTES, MAX_PLUGIN_ROOT_INSTANCES, MAX_PROBE_DEPTH,
         MAX_PROBE_ENTRIES, MAX_ROOT_RESOURCE_FILES, PluginRootBudget, desired_state_probe,
-        plan_resources, plan_resources_from_snapshot, read_bundle_descriptor, read_entries_bounded,
-        snapshot, snapshot_with_resources,
+        implementation_policy, plan_resources, plan_resources_from_snapshot,
+        read_bundle_descriptor, read_entries_bounded, snapshot, snapshot_with_resources,
     };
+
+    fn wasm_admission_manifest(
+        capability: ExecutionTargetCapability,
+        requirements: Vec<ExecutionAdmissionRequirementV6>,
+    ) -> PluginManifest {
+        let digest = lenso_plugin_control_plane::sha256_digest(b"fixture");
+        PluginManifest::V6(PluginManifestV6 {
+            schema_version: 6,
+            contract: PluginContract::new("example.admission", "1.0.0", "tool-providers")
+                .with_authoring_version(2),
+            implementations: vec![PluginImplementationV6 {
+                id: "portable".to_owned(),
+                variants: vec![PluginVariantV6 {
+                    id: "wasm".to_owned(),
+                    host_targets: vec!["*".to_owned()],
+                    input: PluginVariantInputV6::Artifact {
+                        artifact: PluginArtifactV2 {
+                            path: "implementations/wasm/plugin.wasm".to_owned(),
+                            digest: digest.clone(),
+                            size: 7,
+                            media_type: "application/wasm".to_owned(),
+                            target: "wasm32-wasip2".to_owned(),
+                        },
+                    },
+                    runtime: PluginImplementation::new(
+                        "example.admission",
+                        digest,
+                        "plugin.wasm",
+                        ExecutionClassId::new("lenso.wasm-component@1"),
+                    )
+                    .with_authoring(2, "lenso.wasm-component@1")
+                    .with_required_target_capabilities([capability]),
+                    execution_requirements: requirements,
+                }],
+            }],
+        })
+    }
+
+    #[test]
+    fn runtime_admission_matches_owned_dispatch_and_wasm_limits() {
+        let policy = implementation_policy();
+        for runtime in &policy.runtimes {
+            assert!(runtime.capability_profile().validate().is_ok());
+            for capability in [
+                ExecutionTargetCapability::Request,
+                ExecutionTargetCapability::Stream,
+                ExecutionTargetCapability::HostImports,
+            ] {
+                assert!(runtime.capabilities.supports(capability));
+            }
+            assert!(
+                !runtime
+                    .capabilities
+                    .supports(ExecutionTargetCapability::WebSocket)
+            );
+            assert!(
+                !runtime
+                    .capabilities
+                    .supports(ExecutionTargetCapability::Workers)
+            );
+            if runtime.execution_class.as_str() == "lenso.wasm-component@1" {
+                assert_eq!(
+                    runtime.enforced_wasm_memory_ceiling_bytes,
+                    u64::try_from(crate::generation::agent_wasm_limits().max_memory_bytes).ok()
+                );
+            } else {
+                assert_eq!(runtime.enforced_wasm_memory_ceiling_bytes, None);
+            }
+        }
+        assert!(
+            resolve_implementation(
+                &wasm_admission_manifest(ExecutionTargetCapability::Request, vec![]),
+                &policy
+            )
+            .is_ok()
+        );
+        let unsupported = explain_implementation(
+            &wasm_admission_manifest(ExecutionTargetCapability::WebSocket, vec![]),
+            &policy,
+        )
+        .unwrap();
+        assert!(!unsupported.is_selected());
+        assert!(unsupported.rejected.iter().any(|candidate| matches!(
+            candidate.reason,
+            ImplementationRejectionReason::MissingTargetCapabilities { .. }
+        )));
+    }
+
+    #[test]
+    fn runtime_admission_requires_the_configured_guest_memory_ceiling() {
+        let mut policy = implementation_policy();
+        let memory =
+            u64::try_from(crate::generation::agent_wasm_limits().max_memory_bytes).unwrap();
+        let requirement = |max_bytes| {
+            wasm_admission_manifest(
+                ExecutionTargetCapability::Request,
+                vec![ExecutionAdmissionRequirementV6::MemoryCeiling { max_bytes }],
+            )
+        };
+        assert!(resolve_implementation(&requirement(memory), &policy).is_ok());
+        assert!(resolve_implementation(&requirement(memory / 2), &policy).is_err());
+        policy
+            .runtimes
+            .iter_mut()
+            .find(|runtime| runtime.execution_class.as_str() == "lenso.wasm-component@1")
+            .unwrap()
+            .enforced_wasm_memory_ceiling_bytes = None;
+        assert!(resolve_implementation(&requirement(memory), &policy).is_err());
+        assert!(
+            resolve_implementation(
+                &wasm_admission_manifest(
+                    ExecutionTargetCapability::Request,
+                    vec![ExecutionAdmissionRequirementV6::OsSandbox]
+                ),
+                &implementation_policy()
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn missing_root_is_the_empty_root() {

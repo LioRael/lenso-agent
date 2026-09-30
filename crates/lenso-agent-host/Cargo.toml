@@ -25,6 +25,7 @@ lenso-native-adapter.workspace = true
 lenso-plugin-bundle.workspace = true
 lenso-plugin-control-plane.workspace = true
 lenso-runtime-codec.workspace = true
+lenso-wasm-component-adapter.workspace = true
 lenso-capability-agent = { path = "../lenso-capability-agent" }
 lenso-capability-agent-artifact = { path = "../lenso-capability-agent-artifact" }
 lenso-capability-agent-context-compaction = { path = "../lenso-capability-agent-context-compaction" }

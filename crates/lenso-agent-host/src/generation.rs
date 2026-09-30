@@ -3708,6 +3708,7 @@ fn agent_catalog_factory(
         tool_target: agent_tool_target,
         selection_authority: plugin_selection_authority,
     })
+    .with_wasm_limits(agent_wasm_limits())
     .with_wasm_codec(AgentJsonCodec)
     .with_wasm_codec(ArtifactJsonCodec)
     .with_wasm_codec(ContextCompactionJsonCodec)
@@ -3759,6 +3760,10 @@ fn agent_catalog_factory(
     .with_process_codec(ToolsJsonCodec)
     .with_process_codec(UserInteractionJsonCodec)
     .with_process_codec(WorkspaceReadJsonCodec)
+}
+
+pub(crate) fn agent_wasm_limits() -> lenso_wasm_component_adapter::WasmComponentLimits {
+    lenso_wasm_component_adapter::WasmComponentLimits::default()
 }
 
 fn now_unix_nanos() -> Result<u128, String> {
