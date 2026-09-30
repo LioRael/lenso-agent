@@ -6,12 +6,12 @@ use std::{
 };
 
 use lenso_app_plan::{
-    ExecutionClassId, ExecutionTargetCapabilities, ExecutionTargetCapability, ResolvedAppPlan,
+    ExecutionClassId, ResolvedAppPlan,
     authoring::{PluginDescriptor, PluginInstanceId, PluginRootInstance, PluginRootSnapshot},
 };
 use lenso_plugin_bundle::{
-    ImplementationPolicy, RuntimeAdmission, read_bundle_manifest, resolve_implementation,
-    verify_bundle_directory,
+    ExecutionTargetCapabilities, ExecutionTargetCapability, ImplementationPolicy, RuntimeAdmission,
+    read_bundle_manifest, resolve_implementation, verify_bundle_directory,
 };
 use lenso_plugin_control_plane::{PlanArtifact, sha256_digest};
 use lenso_runtime_codec::{ArtifactHandle, InstanceResourceCatalog, InstanceResources};
@@ -825,15 +825,17 @@ mod tests {
     use std::path::Path;
 
     use lenso_app_plan::{
-        CapabilityEndpointPlan, ExecutionClassId, ExecutionTargetCapability, PluginInstancePlan,
+        CapabilityEndpointPlan, ExecutionClassId,
+        ExecutionTargetCapability as PlanExecutionTargetCapability, PluginInstancePlan,
         ResolvedAppPlan,
         authoring::{PluginContract, PluginImplementation},
     };
     use lenso_plugin_bundle::{
-        ExecutionAdmissionRequirementV6, ImplementationRejectionReason, PluginArtifactV2,
-        PluginImplementationV6, PluginManifest, PluginManifestV6, PluginVariantInputV6,
-        PluginVariantV6, SourcePluginImplementation, SourcePluginReleaseBuild,
-        build_source_plugin_release_bundle, explain_implementation, resolve_implementation,
+        ExecutionAdmissionRequirementV6, ExecutionTargetCapability, ImplementationRejectionReason,
+        PluginArtifactV2, PluginImplementationV6, PluginManifest, PluginManifestV6,
+        PluginVariantInputV6, PluginVariantV6, SourcePluginImplementation,
+        SourcePluginReleaseBuild, build_source_plugin_release_bundle, explain_implementation,
+        resolve_implementation,
     };
 
     use super::{
@@ -844,7 +846,7 @@ mod tests {
     };
 
     fn wasm_admission_manifest(
-        capability: ExecutionTargetCapability,
+        capability: PlanExecutionTargetCapability,
         requirements: Vec<ExecutionAdmissionRequirementV6>,
     ) -> PluginManifest {
         let digest = lenso_plugin_control_plane::sha256_digest(b"fixture");
@@ -872,7 +874,7 @@ mod tests {
                         "plugin.wasm",
                         ExecutionClassId::new("lenso.wasm-component@1"),
                     )
-                    .with_authoring(2, "lenso.wasm-component@1")
+                    .with_runtime_profile("lenso.wasm-component@1")
                     .with_required_target_capabilities([capability]),
                     execution_requirements: requirements,
                 }],
@@ -913,13 +915,13 @@ mod tests {
         }
         assert!(
             resolve_implementation(
-                &wasm_admission_manifest(ExecutionTargetCapability::Request, vec![]),
+                &wasm_admission_manifest(PlanExecutionTargetCapability::Request, vec![]),
                 &policy
             )
             .is_ok()
         );
         let unsupported = explain_implementation(
-            &wasm_admission_manifest(ExecutionTargetCapability::WebSocket, vec![]),
+            &wasm_admission_manifest(PlanExecutionTargetCapability::WebSocket, vec![]),
             &policy,
         )
         .unwrap();
@@ -937,7 +939,7 @@ mod tests {
             u64::try_from(crate::generation::agent_wasm_limits().max_memory_bytes).unwrap();
         let requirement = |max_bytes| {
             wasm_admission_manifest(
-                ExecutionTargetCapability::Request,
+                PlanExecutionTargetCapability::Request,
                 vec![ExecutionAdmissionRequirementV6::MemoryCeiling { max_bytes }],
             )
         };
@@ -953,7 +955,7 @@ mod tests {
         assert!(
             resolve_implementation(
                 &wasm_admission_manifest(
-                    ExecutionTargetCapability::Request,
+                    PlanExecutionTargetCapability::Request,
                     vec![ExecutionAdmissionRequirementV6::OsSandbox]
                 ),
                 &implementation_policy()
@@ -1280,6 +1282,7 @@ mod tests {
                 entrypoint: "plugin.js".to_owned(),
                 execution_class: ExecutionClassId::new("lenso.quickjs@1"),
                 runtime_profile: "lenso.quickjs@1".to_owned(),
+                required_target_capabilities: vec![PlanExecutionTargetCapability::Request],
             }],
             output: bundle.clone(),
         })
