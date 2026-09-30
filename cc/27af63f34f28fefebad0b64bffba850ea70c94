@@ -1,0 +1,42 @@
+Cargo.toml
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 19
+crates/lenso-agent-model-fixture-plugin/src/management.rs
+  s_f4202e28c6b5b1::t_6b8e621fac0b4d 32,59-60,103-108,282-291,294,301,312-313
+  s_f4202e28c6b5b1::t_13e43bcdc77dfb 11-12,42-43,116-122,124-128,130-135,243,250-254,256-260,262-266,269-281,292-293,295-300,302-311
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 9-10,40,46-48,109-115,123,129,136-140,241-242,244-249,255,261,267-268
+  s_f4202e28c6b5b1::t_1a77e5515b3654 314
+crates/lenso-agent-model-fixture-plugin/Cargo.toml
+  s_f4202e28c6b5b1::t_6b8e621fac0b4d 16
+crates/lenso-agent-management-connection-plugin/Cargo.toml
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 27-28
+crates/lenso-agent-management-connection-plugin/examples/third-party-log-plugin/Cargo.toml
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 1-17,19-21
+  s_f4202e28c6b5b1::t_6b8e621fac0b4d 18
+crates/lenso-agent-management-connection-plugin/examples/prepare_task.py
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 31,55
+  s_f4202e28c6b5b1::t_6b8e621fac0b4d 56
+crates/lenso-agent-management-connection-plugin/examples/management_task.rs
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 7,42
+crates/lenso-agent-management-connection-plugin/examples/third-party-log-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_72d9d2c3520b84 1-9,14,21-27,31-47,51-67
+  s_f4202e28c6b5b1::t_6b8e621fac0b4d 10-13,15-20,28-30,48-50
+  s_f4202e28c6b5b1::t_e01a5e7e71d069 68-78
+Cargo.lock
+  s_f4202e28c6b5b1::t_fe4a17f5a6408b 3565,3577,3592-3601,3682
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "cc27af63f34f28fefebad0b64bffba850ea70c94",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
