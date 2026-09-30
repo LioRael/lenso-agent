@@ -28,6 +28,7 @@ def main():
     for flag in ["root", "origin", "deployment", "credential-file", "task-id", "agent-session-id"]:
         parser.add_argument(f"--{flag}", required=True)
     parser.add_argument("--delegated-route-prefix", choices=["", "/agent"], default="")
+    parser.add_argument("--third-party-log", action="store_true")
     args = parser.parse_args()
     root = Path(args.root).resolve()
     if (root / "plugins").exists():
@@ -51,6 +52,8 @@ def main():
         "credential_file": str(credential), "request_timeout_millis": 10000,
     })
     write_config(root, "lenso.agent.management-tools", binding)
+    if args.third_party_log:
+        write_config(root, "fixture.management-task-logs", {"enabled": True})
     write_config(root, "lenso.agent.loop", {
         "model": "fixture/readme-summary-v1", "max_steps": 4, "max_tool_calls": 4,
         "max_user_resumes": 4, "max_total_steps": 16, "max_total_tool_calls": 16,

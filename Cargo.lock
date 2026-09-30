@@ -3562,6 +3562,7 @@ dependencies = [
  "lenso-agent-context-compaction-plugin",
  "lenso-agent-host",
  "lenso-agent-loop-plugin",
+ "lenso-agent-management-log-fixture",
  "lenso-agent-management-tools-plugin",
  "lenso-agent-memory-sqlite-plugin",
  "lenso-agent-model-fixture-plugin",
@@ -3573,6 +3574,7 @@ dependencies = [
  "lenso-capability-agent",
  "lenso-capability-agent-model",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-tool-provider",
  "lenso-capability-management",
  "lenso-cli",
  "lenso-kernel",
@@ -3585,6 +3587,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "lenso-agent-management-log-fixture"
+version = "0.1.0"
+dependencies = [
+ "lenso",
+ "lenso-capability-agent-tool-provider",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3667,6 +3679,7 @@ dependencies = [
  "lenso-native-adapter",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]

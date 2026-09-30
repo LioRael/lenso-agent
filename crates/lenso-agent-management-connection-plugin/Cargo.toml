@@ -24,6 +24,8 @@ tokio.workspace = true
 zeroize = "1"
 
 [dev-dependencies]
+lenso-agent-management-log-fixture = { path = "examples/third-party-log-plugin" }
+lenso-capability-agent-tool-provider = { path = "../lenso-capability-agent-tool-provider" }
 lenso-app-authoring.workspace = true
 lenso-agent-host = { path = "../lenso-agent-host" }
 lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }

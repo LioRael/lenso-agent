@@ -4,6 +4,7 @@ use lenso_agent_artifact_file_plugin as _;
 use lenso_agent_context_compaction_plugin as _;
 use lenso_agent_loop_plugin as _;
 use lenso_agent_management_connection_plugin as _;
+use lenso_agent_management_log_fixture as _;
 use lenso_agent_management_tools_plugin as _;
 use lenso_agent_memory_sqlite_plugin as _;
 use lenso_agent_model_fixture_plugin as _;
@@ -38,6 +39,7 @@ const PLUGINS: &[(&str, &str)] = &[
     ("lenso.agent.prompt.static", "prompt-providers"),
     ("lenso.agent.tools", "tools-runtimes"),
     ("lenso.agent.management-tools", "tool-providers"),
+    ("fixture.management-task-logs", "third-party-logs"),
     (
         "lenso.agent.management-connection",
         "management-connections",

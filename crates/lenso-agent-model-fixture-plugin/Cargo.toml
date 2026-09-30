@@ -13,6 +13,7 @@ plugin-id = "lenso.agent.model.fixture"
 root-slot = "model"
 
 [dependencies]
+uuid.workspace = true
 futures.workspace = true
 lenso.workspace = true
 lenso-capability-agent-model = { path = "../lenso-capability-agent-model" }

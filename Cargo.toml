@@ -16,6 +16,7 @@ members = [
     "crates/lenso-agent-console-app-tools-plugin",
     "crates/lenso-agent-management-tools-plugin",
     "crates/lenso-agent-management-connection-plugin",
+    "crates/lenso-agent-management-connection-plugin/examples/third-party-log-plugin",
     "crates/lenso-agent-console-plugin-tools-plugin",
     "crates/lenso-capability-agent-plugin-configuration",
     "crates/lenso-capability-agent-plugin-management-target",
