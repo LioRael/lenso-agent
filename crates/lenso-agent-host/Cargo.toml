@@ -9,6 +9,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+lenso-dylib-adapter.workspace = true
+lenso-quickjs-adapter.workspace = true
 lenso-auth-sdk = "0.2.3"
 lenso-capability-agent-turn-binding = { path = "../lenso-capability-agent-turn-binding" }
 lenso-capability-agent-auth-connection = { path = "../lenso-capability-agent-auth-connection" }

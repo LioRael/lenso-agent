@@ -3708,7 +3708,11 @@ fn agent_catalog_factory(
         tool_target: agent_tool_target,
         selection_authority: plugin_selection_authority,
     })
-    .with_limits(agent_wasm_limits(), Default::default(), Default::default())
+    .with_limits(
+        agent_wasm_limits(),
+        lenso_quickjs_adapter::QuickJsLimits::default(),
+        lenso_dylib_adapter::DylibLimits::default(),
+    )
     .with_wasm_codec(AgentJsonCodec)
     .with_wasm_codec(ArtifactJsonCodec)
     .with_wasm_codec(ContextCompactionJsonCodec)
