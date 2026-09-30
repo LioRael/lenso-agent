@@ -1,0 +1,21 @@
+apps/lenso-agent-web/src/plugin_control.rs
+  s_f4202e28c6b5b1::t_a3361da6cdea93 3615
+apps/lenso-agent-acp/src/main.rs
+  s_f4202e28c6b5b1::t_59585835af5743 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bec995997fffc4ae04e7b88c31a7156251812d24",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
