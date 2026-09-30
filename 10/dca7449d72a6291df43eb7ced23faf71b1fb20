@@ -1,0 +1,65 @@
+crates/lenso-agent-model-fixture-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_1f3939af62e172 3-4,239-240,242-250,253,256,259,262,265,268,271,274,277,280,283,286,289,292,295,298,301,304,307,310,313,316,319
+  s_f4202e28c6b5b1::t_d2a4eae2e935b2 251-252,254-255,257-258,260-261,263-264,266-267,269-270,272-273,275-276,278-279,281-282,284-285,287-288,290-291,293-294,296-297,299-300,302-303,305-306,308-309,311-312,314-315,317-318,320-321,323
+crates/lenso-agent-management-connection-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_f89a8b32dbbb26 1-83,86-138,148-149,154,156-349
+  s_f4202e28c6b5b1::t_05422b38e6725b 84-85,139-147,150-153,155
+crates/lenso-agent-management-connection-plugin/examples/prepare_task.py
+  s_f4202e28c6b5b1::t_f89a8b32dbbb26 1-85
+crates/lenso-agent-management-tools-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_dfa85ac060c47c 3-4,13-46,49-50,70-91,99,133-145,192,231-259,270
+crates/lenso-agent-management-connection-plugin/README.md
+  s_f4202e28c6b5b1::t_902d0a0575db90 1-62
+crates/lenso-agent-management-connection-plugin/src/tests.rs
+  s_f4202e28c6b5b1::t_f89a8b32dbbb26 1-53,55-69,71-94,96-97,99-162,174-203,205-352
+  s_f4202e28c6b5b1::t_e76f64da0b3b15 54,70,95,98
+  s_f4202e28c6b5b1::t_902d0a0575db90 163-173,204
+Cargo.toml
+  s_f4202e28c6b5b1::t_6cb4922deb4bbf 18,151
+crates/lenso-agent-loop-plugin/src/lib.rs
+  s_f4202e28c6b5b1::t_dfa85ac060c47c 648-654
+crates/lenso-agent-management-connection-plugin/examples/management_task.rs
+  s_f4202e28c6b5b1::t_953577855a4c37 1-335
+crates/lenso-agent-model-fixture-plugin/src/management.rs
+  s_f4202e28c6b5b1::t_de934df8e05658 1-203
+crates/lenso-agent-management-tools-plugin/src/tests.rs
+  s_f4202e28c6b5b1::t_05422b38e6725b 19-27,33,58,134,174,207-214,246-322
+.gitignore
+  s_f4202e28c6b5b1::t_fbd21b8a44062d 6
+Cargo.lock
+  s_f4202e28c6b5b1::t_a1086e39eb3ad7 3555-3589,3596,5007
+crates/lenso-agent-host/src/lib.rs
+  s_f4202e28c6b5b1::t_f6c0df9bf3cd78 48
+crates/lenso-agent-host/src/provider_catalog.rs
+  s_f4202e28c6b5b1::t_cc6617f3fefa96 331-333
+crates/lenso-agent-management-connection-plugin/Cargo.toml
+  s_f4202e28c6b5b1::t_59a9635f029568 1-49
+crates/lenso-agent-management-connection-plugin/examples/verify_task.py
+  s_f4202e28c6b5b1::t_ee7c6be7917aba 1-171
+crates/lenso-agent-management-tools-plugin/Cargo.toml
+  s_f4202e28c6b5b1::t_2e8ce0a77c010c 16
+crates/lenso-capability-agent/src/lib.rs
+  s_f4202e28c6b5b1::t_bb4b41a3fe4666 4-6
+crates/lenso-capability-agent/src/task_binding.rs
+  s_f4202e28c6b5b1::t_4aab9f0d19f823 1-69
+docs/adr/0117-bind-remote-management-to-an-auth-issued-task.md
+  s_f4202e28c6b5b1::t_347fea0b1b2952 1-51
+docs/adr/README.md
+  s_f4202e28c6b5b1::t_d5f7e7a6f91931 140-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10dca7449d72a6291df43eb7ced23faf71b1fb20",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
