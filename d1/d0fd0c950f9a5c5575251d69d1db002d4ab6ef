@@ -1,0 +1,28 @@
+crates/lenso-agent-host/Cargo.toml
+  s_f4202e28c6b5b1::t_b08c1fc484336f 28
+crates/lenso-agent-host/src/plugin_root.rs
+  s_f4202e28c6b5b1::t_568ad72788c7dd 716,718,828-830,833-836,842-843,846-892,898,900,905,907,917,919,929,931,962,964
+  s_f4202e28c6b5b1::t_b08c1fc484336f 9,691-706,709-715
+  s_f4202e28c6b5b1::t_a8492bebbfafc4 717,719-730,893-897,899,901-904,906,908-916,918,920-928,930,932-961,963
+crates/lenso-agent-host/src/generation.rs
+  s_f4202e28c6b5b1::t_b08c1fc484336f 3711,3765-3766
+  s_f4202e28c6b5b1::t_f8919951e304ea 3767-3768
+Cargo.lock
+  s_f4202e28c6b5b1::t_2fc0641a4f1ce1 3453
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d1d0fd0c950f9a5c5575251d69d1db002d4ab6ef",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
