@@ -5004,7 +5004,7 @@ dependencies = [
 [[package]]
 name = "lenso-capability-management"
 version = "0.1.0"
-source = "git+https://github.com/LioRael/lenso-console?rev=73b53c4d359664851b02d3e7dbac29ffc611d66b#73b53c4d359664851b02d3e7dbac29ffc611d66b"
+source = "git+https://github.com/LioRael/lenso-console?rev=08c1cbdef73fd4acb92e6eb830192dd81b1c2fcf#08c1cbdef73fd4acb92e6eb830192dd81b1c2fcf"
 dependencies = [
  "futures",
  "lenso-contract-authoring",
