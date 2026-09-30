@@ -99,7 +99,7 @@ impl ManagementTools {
             .management
             .catalog_with_context(context, management::CatalogRequest {})
             .await
-            .map_err(map_catalog)?;
+            .map_err(|error| map_catalog(error, tools::CatalogError::CatalogInvalid))?;
         let mut definitions = Vec::new();
         for entry in &catalog.entries {
             definitions.push(
@@ -166,17 +166,7 @@ impl ManagementTools {
                 .management
                 .catalog_with_context(context.clone(), management::CatalogRequest {})
                 .await
-                .map_err(|error| match error {
-                    management::ManagementCatalogInvocationError::Runtime(error) => {
-                        PluginError::runtime(error)
-                    }
-                    management::ManagementCatalogInvocationError::Domain(
-                        management::CatalogError::PermissionDenied,
-                    ) => PluginError::domain(tools::ExecuteError::PermissionDenied),
-                    management::ManagementCatalogInvocationError::Domain(_) => {
-                        PluginError::domain(failure("unavailable"))
-                    }
-                })?;
+                .map_err(|error| map_catalog(error, tools::ExecuteError::PermissionDenied))?;
             let entry = catalog
                 .entries
                 .iter()
@@ -291,14 +281,15 @@ fn map_invoke(
     }
 }
 
-fn map_catalog(
+fn map_catalog<E>(
     error: management::ManagementCatalogInvocationError,
-) -> PluginError<tools::CatalogError> {
+    denied: E,
+) -> PluginError<E> {
     match error {
         management::ManagementCatalogInvocationError::Runtime(error) => PluginError::runtime(error),
         management::ManagementCatalogInvocationError::Domain(
             management::CatalogError::PermissionDenied,
-        ) => PluginError::domain(tools::CatalogError::CatalogInvalid),
+        ) => PluginError::domain(denied),
         management::ManagementCatalogInvocationError::Domain(_) => {
             PluginError::runtime(lenso::RuntimeFailure::Unavailable {
                 capability: management::CAPABILITY_ID,

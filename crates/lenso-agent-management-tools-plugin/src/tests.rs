@@ -202,6 +202,10 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
                 )
                 .unwrap(),
             };
+            let blocked_call = || tools::ExecuteRequest {
+                name: "not_invoked".into(),
+                arguments_json: r#"{"input":{"value":99}}"#.parse().unwrap(),
+            };
             for code in ["unavailable", "owner_future_failure"] {
                 owner.catalog_error.replace(Some(
                     serde_json::from_value(serde_json::json!(code)).unwrap(),
@@ -212,6 +216,13 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
                         capability: management::CAPABILITY_ID,
                     }))
                 ));
+                assert!(matches!(
+                    provider.execute(context(), blocked_call()).await,
+                    Err(PluginError::Runtime(RuntimeFailure::Unavailable {
+                        capability: management::CAPABILITY_ID,
+                    }))
+                ));
+                assert_eq!(owner.calls.get(), 0);
             }
             owner
                 .catalog_error
@@ -220,6 +231,11 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
                 provider.catalog(context(), tools::CatalogRequest {}).await,
                 Err(PluginError::Domain(tools::CatalogError::CatalogInvalid))
             ));
+            assert!(matches!(
+                provider.execute(context(), blocked_call()).await,
+                Err(PluginError::Domain(tools::ExecuteError::PermissionDenied))
+            ));
+            assert_eq!(owner.calls.get(), 0);
             owner.catalog_error.replace(None);
             let catalog = provider
                 .catalog(context(), tools::CatalogRequest {})
