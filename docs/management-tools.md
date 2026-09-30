@@ -2,7 +2,7 @@
 
 `lenso-agent-management-tools-plugin` is an optional Tool Provider. It projects one explicitly bound `lenso.management@1` service through the existing `lenso.agent.tool-provider@2` role. Ordinary Agent compositions do not select it or start another model.
 
-Select the package `lenso.agent.management-tools` in the `tool-providers` Slot of a source App, and bind its Management dependency to that application's accepted Management Plugin Instance. The Host must link the package just as it links other native Plugin factories. Source App discovery, package identity, capability matching and startup admission use the normal Lenso build and resolved Plan; selecting an installed package does not grant access to all of its operations.
+Select the package `lenso.agent.management-tools` in the `tool-providers` Slot of a source App, and bind its named `management` dependency to that application's accepted Management Plugin Instance. Its authoring version 2 descriptor supports an exact saved choice when multiple Management providers are installed. The Host must link the package just as it links other native Plugin factories. Source App discovery, package identity, capability matching and startup admission use the normal Lenso build and resolved Plan; selecting an installed package does not grant access to all of its operations.
 
 The dedicated management composition selects a model, required session persistence and instruction providers, and this Tool Provider. Add shell, filesystem or arbitrary network tools only through a separately explicit coding profile. Removing the Management Tool Provider removes its tools without removing business state or Agent-owned sessions. A deployment with no Agent requires no model key or Agent process.
 

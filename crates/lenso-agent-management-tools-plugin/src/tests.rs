@@ -124,6 +124,17 @@ fn context() -> InvocationContext {
     InvocationContext::new(71, None, CancellationToken::new())
 }
 
+#[test]
+fn source_descriptor_exposes_the_selectable_named_management_dependency() {
+    let descriptor: lenso_app_plan::authoring::PluginDescriptor =
+        serde_json::from_str(PLUGIN_DESCRIPTOR_JSON).unwrap();
+    assert_eq!(descriptor.authoring_version(), 2);
+    let requirements = descriptor.required_capabilities();
+    assert_eq!(requirements.len(), 1);
+    assert_eq!(requirements[0].requirement_id(), "management");
+    assert_eq!(requirements[0].capability_id(), management::CAPABILITY_ID);
+}
+
 #[tokio::test(flavor = "current_thread")]
 #[allow(clippy::too_many_lines)]
 async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
@@ -138,12 +149,15 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
             };
             let plan = AppComposition::new(
                 vec![
-                    PluginInstancePlan::new("tools", "test.management.tools").with_requirement(
-                        CapabilityRequirementPlan::one(
-                            management::CAPABILITY_ID,
-                            management::DESCRIPTOR_VERSION,
+                    PluginInstancePlan::new("tools", "test.management.tools")
+                        .with_authoring(2, "lenso.native-authoring@2")
+                        .with_requirement(
+                            CapabilityRequirementPlan::one(
+                                management::CAPABILITY_ID,
+                                management::DESCRIPTOR_VERSION,
+                            )
+                            .with_requirement_id("management"),
                         ),
-                    ),
                     PluginInstancePlan::new("management", "test.management.owner").with_capability(
                         CapabilityEndpointPlan::new(
                             management::CAPABILITY_ID,
@@ -152,12 +166,15 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
                         ),
                     ),
                 ],
-                vec![CapabilityBinding::new(
-                    "tools",
-                    management::CAPABILITY_ID,
-                    management::DESCRIPTOR_VERSION,
-                    "management",
-                )],
+                vec![
+                    CapabilityBinding::new(
+                        "tools",
+                        management::CAPABILITY_ID,
+                        management::DESCRIPTOR_VERSION,
+                        "management",
+                    )
+                    .with_requirement_id("management"),
+                ],
             )
             .resolve()
             .unwrap();
@@ -172,12 +189,14 @@ async fn bound_catalog_is_refreshed_and_pending_unknown_are_preserved() {
             .unwrap();
             let provider = ManagementTools {
                 config: ManagementToolsConfig::default(),
-                management: Port::new(),
+                management: management::ManagementClient::from_dependencies(
+                    &app.dependencies("tools")
+                        .unwrap()
+                        .requirement("management")
+                        .unwrap(),
+                )
+                .unwrap(),
             };
-            provider
-                .management
-                .connect(&app.dependencies("tools").unwrap())
-                .unwrap();
             let catalog = provider
                 .catalog(context(), tools::CatalogRequest {})
                 .await
@@ -253,11 +272,7 @@ fn bootstrap_catalog_binding_is_explicit_and_never_authorizes_execution() {
     config.agent_session_id = Some("session-1".into());
     config.delegate_caller = Some("lenso.agent.management-connection/default".into());
     assert!(validate_config(&config).is_ok());
-    let provider = ManagementTools {
-        config,
-        management: Port::new(),
-    };
-    let selected = provider.catalog_context(context()).unwrap();
+    let selected = config.catalog_context(context()).unwrap();
     assert_eq!(
         selected
             .typed_extension::<AgentTaskBinding>()
@@ -273,7 +288,7 @@ fn bootstrap_catalog_binding_is_explicit_and_never_authorizes_execution() {
     }
     .attach(context())
     .unwrap();
-    assert!(provider.catalog_context(wrong).is_err());
+    assert!(config.catalog_context(wrong).is_err());
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! Opt-in projection of one bound application's accepted management operations.
 
-use lenso::{CtxExt, PluginError, Port};
+use lenso::{CtxExt, PluginError};
 use lenso_capability_agent::AgentTaskBinding;
 use lenso_capability_agent_tool_provider as tools;
 use lenso_capability_management as management;
@@ -34,6 +34,25 @@ impl ManagementToolsConfig {
             _ => Err("management task binding must select all three labels".into()),
         }
     }
+
+    fn catalog_context(
+        &self,
+        context: lenso::Ctx,
+    ) -> lenso::PluginResult<lenso::Ctx, tools::CatalogError> {
+        let selected = self
+            .binding()
+            .map_err(|_| PluginError::domain(tools::CatalogError::CatalogInvalid))?;
+        let Some(selected) = selected else {
+            return Ok(context);
+        };
+        match context.typed_extension::<AgentTaskBinding>() {
+            Ok(Some(current)) if current == selected => Ok(context),
+            Ok(None) => selected
+                .attach(context)
+                .map_err(|_| PluginError::domain(tools::CatalogError::CatalogInvalid)),
+            _ => Err(PluginError::domain(tools::CatalogError::CatalogInvalid)),
+        }
+    }
 }
 
 fn validate_config(config: &ManagementToolsConfig) -> Result<(), lenso::RuntimeFailure> {
@@ -48,7 +67,8 @@ fn validate_config(config: &ManagementToolsConfig) -> Result<(), lenso::RuntimeF
 struct ManagementTools {
     #[config]
     config: ManagementToolsConfig,
-    management: Port<management::ManagementClient>,
+    #[dependency(id = "management")]
+    management: management::ManagementClient,
 }
 
 #[derive(Deserialize)]
@@ -67,28 +87,6 @@ struct StatusArguments {
     operation_id: String,
 }
 
-impl ManagementTools {
-    fn catalog_context(
-        &self,
-        context: lenso::Ctx,
-    ) -> lenso::PluginResult<lenso::Ctx, tools::CatalogError> {
-        let selected = self
-            .config
-            .binding()
-            .map_err(|_| PluginError::domain(tools::CatalogError::CatalogInvalid))?;
-        let Some(selected) = selected else {
-            return Ok(context);
-        };
-        match context.typed_extension::<AgentTaskBinding>() {
-            Ok(Some(current)) if current == selected => Ok(context),
-            Ok(None) => selected
-                .attach(context)
-                .map_err(|_| PluginError::domain(tools::CatalogError::CatalogInvalid)),
-            _ => Err(PluginError::domain(tools::CatalogError::CatalogInvalid)),
-        }
-    }
-}
-
 #[lenso::provides(tools::ToolProvider)]
 impl ManagementTools {
     async fn catalog(
@@ -96,7 +94,7 @@ impl ManagementTools {
         context: lenso::Ctx,
         _request: tools::CatalogRequest,
     ) -> lenso::PluginResult<tools::CatalogResponse, tools::CatalogError> {
-        let context = self.catalog_context(context)?;
+        let context = self.config.catalog_context(context)?;
         let catalog = self
             .management
             .catalog_with_context(context, management::CatalogRequest {})
