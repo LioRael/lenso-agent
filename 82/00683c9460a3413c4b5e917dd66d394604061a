@@ -1,0 +1,19 @@
+crates/lenso-agent-model-fixture-plugin/src/management.rs
+  s_f4202e28c6b5b1::t_9c2cab7cc949fd 7-9,33-34,42,170-192
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "8200683c9460a3413c4b5e917dd66d394604061a",
+  "prompts": {},
+  "sessions": {
+    "s_f4202e28c6b5b1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0ee9e-623b-7d12-a648-d8b462390eec",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
