@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 import shutil
@@ -19,6 +20,9 @@ def run(arguments: list[str], root: Path) -> str:
 
 
 source = Path(__file__).resolve().parent
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--update-locks", action="store_true")
+args = parser.parse_args()
 with tempfile.TemporaryDirectory(prefix="lenso-registry-consumer-") as temporary:
     root = Path(temporary).resolve() / "consumer"
     shutil.copytree(
@@ -29,6 +33,9 @@ with tempfile.TemporaryDirectory(prefix="lenso-registry-consumer-") as temporary
     template = (root / "runner/Cargo.toml.in").read_text()
     assert template.count("# LENSO_LOCAL_PATCHES") == 1
     manifest.write_text(template.replace("# LENSO_LOCAL_PATCHES", ""))
+    if args.update_locks:
+        manifest.with_name("Cargo.lock").unlink(missing_ok=True)
+        run(["cargo", "generate-lockfile", "--manifest-path", str(manifest)], root)
     common = ["--locked", "--manifest-path", str(manifest)]
     metadata = json.loads(run(["cargo", "metadata", *common, "--format-version", "1"], root))
     artifacts = []
@@ -41,6 +48,8 @@ with tempfile.TemporaryDirectory(prefix="lenso-registry-consumer-") as temporary
             assert Path(package["manifest_path"]).resolve().is_relative_to(root), package
     assert artifacts, "no registry framework artifacts were resolved"
     print(run(["cargo", "test", *common, "--test", "foundation"], root))
+    if args.update_locks:
+        shutil.copyfile(manifest.with_name("Cargo.lock"), source / "runner/Cargo.lock")
     print(json.dumps({"target": "trusted-native", "artifacts": artifacts}, indent=2))
     print("PASS: locked public registry dependencies; no sibling or Git patches. "
           "This qualifies the native Task Board consumer, not the new Agent contracts or isolation targets.")

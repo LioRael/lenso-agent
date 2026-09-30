@@ -9,7 +9,7 @@ The verifier copies this consumer outside the repository, checks every Cargo
 dependency comes from crates.io (apart from these fixture crates), and uses
 committed lockfiles. `--update-locks` explicitly refreshes those lockfiles.
 It executes compiled Wasm Components through released
-`lenso-wasm-component-adapter = 0.2.12` and `lenso-guest-sdk = 0.5.0`.
+`lenso-wasm-component-adapter = 0.2.17` and `lenso-guest-sdk = 0.5.1`.
 
 The guest reaches a real bound Host request and event endpoint. Raw forged
 binding IDs, undeclared operations, and unsupported interaction kinds are

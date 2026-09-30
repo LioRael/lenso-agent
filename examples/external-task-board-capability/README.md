@@ -15,28 +15,10 @@ The third contract is authored directly in `contracts/external.task-board-audit/
 Its descriptor, schemas, and Rust projection are synchronized by the Engine; do
 not edit `src/generated.rs` manually.
 
-The fixture proves configuration validation, invalid Host binding rejection,
+The fixture tests configuration validation, invalid Host binding rejection,
 Capability invocation, a preserved domain error, cancellation, and clean
-Plugin deactivation. `verify-foundation.py` copies the fixture outside this
-repository, uses source patches only in that copy, assembles a local Native
-Host, checks its lifecycle, and runs the public-plan test suite.
-
-Build the Engine host first, then run the verifier from this repository:
-
-```sh
-cargo build -p lenso-engine-host --manifest-path ../lenso-engine/Cargo.toml
-python3 examples/external-task-board-capability/verify-foundation.py \
-  --engine-host ../lenso-engine/target/debug/lenso-engine-host
-```
-
-Pass `--framework-root` when the Lenso sibling repositories are not discovered
-from the fixture's ancestors. The source manifests deliberately name released
-crate versions. The verifier replaces those versions with sibling source paths
-only in its temporary copy, so this is **not** evidence that released packages
-or a clean consumer installation have been qualified. That remains the V10
-package-boundary proof for the source-local command above.
-
-For a clean native consumer using published crates.io artifacts, run:
+Plugin deactivation. Run the independent Native consumer using published
+crates.io artifacts:
 
 ```sh
 python3 examples/external-task-board-capability/verify-registry.py
@@ -48,3 +30,14 @@ dependencies, and runs the same Provider/Consumer lifecycle tests. It prints
 the exact package versions and sources. Python 3.9 or later is required.
 This is trusted-native registry qualification; it does not qualify the newly
 added Agent contracts, Host imports in another Adapter, or an isolation target.
+
+To refresh the fixture lock after an intentional dependency update, use
+`--update-locks`. The verifier generates the lock in its isolated copy, retains
+the registry-only admission checks and locked test, and writes the lock back
+only after that test succeeds. Ordinary CI uses the committed lock without
+this flag.
+
+`verify-foundation.py` is the historical source verifier for the retired split
+repository layout. It remains available for that baseline; it is outside the
+current DX and registry-consumer qualification. The current source App workflow
+is exercised by the Examples owner's `fixtures/ops-reference/` guide.

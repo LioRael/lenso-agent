@@ -10,6 +10,7 @@ import tomllib
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+CODEC_VERSION = "0.4.3"
 manifest = tomllib.loads(
     (ROOT / "crates/lenso-capability-agent-tool-provider/Cargo.toml").read_text()
 )
@@ -37,17 +38,17 @@ with tempfile.TemporaryDirectory(prefix="lenso-tool-provider-registry-") as temp
     (packaged / "Cargo.lock").unlink(missing_ok=True)
     normalized = tomllib.loads((packaged / "Cargo.toml").read_text())
     codec_requirement = normalized["dependencies"]["lenso-runtime-codec"]["version"]
-    if codec_requirement != "0.4.1":
-        raise SystemExit(f"unexpected registry Codec minimum: {codec_requirement}")
+    if codec_requirement != f"={CODEC_VERSION}":
+        raise SystemExit(f"unexpected registry Codec pin: {codec_requirement}")
 
     run("generate-lockfile", cwd=packaged)
-    run("update", "-p", "lenso-runtime-codec", "--precise", "0.4.1", cwd=packaged)
+    run("update", "-p", "lenso-runtime-codec", "--precise", CODEC_VERSION, cwd=packaged)
     run("check", "--locked", cwd=packaged)
     lock = tomllib.loads((packaged / "Cargo.lock").read_text())
     packages = lock["package"]
     codec = [entry for entry in packages if entry["name"] == "lenso-runtime-codec"]
-    if len(codec) != 1 or codec[0]["version"] != "0.4.1":
-        raise SystemExit("registry Codec 0.4.1 was not selected exactly")
+    if len(codec) != 1 or codec[0]["version"] != CODEC_VERSION:
+        raise SystemExit(f"registry Codec {CODEC_VERSION} was not selected exactly")
     roots = [
         entry for entry in packages
         if (entry["name"], entry["version"]) == (manifest["package"]["name"], version)
@@ -59,4 +60,4 @@ with tempfile.TemporaryDirectory(prefix="lenso-tool-provider-registry-") as temp
         for entry in packages
     ):
         raise SystemExit("package-only verification resolved a non-registry dependency")
-    print(f"PASS: {package_name} builds with registry-only Codec 0.4.1")
+    print(f"PASS: {package_name} builds with registry-only Codec {CODEC_VERSION}")
