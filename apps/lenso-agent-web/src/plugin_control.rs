@@ -3612,6 +3612,7 @@ mod tests {
                 entrypoint: "plugin.js".into(),
                 execution_class: ExecutionClassId::bun_child_process(),
                 runtime_profile: lenso_app_plan::PLUGIN_AUTHORING_V2_RUNTIME_PROFILE.into(),
+                required_target_capabilities: Vec::new(),
             }],
             output: output.clone(),
         })
