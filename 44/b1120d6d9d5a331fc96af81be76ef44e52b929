@@ -1,0 +1,42 @@
+Cargo.lock
+  h_9d56aba080c170 3409-3410,3412,3457,3785-3804,4773
+Cargo.toml
+  h_9d56aba080c170 4
+apps/lenso-agent-web/src/plugin_ai.rs
+  h_9d56aba080c170 90-97,128-129,189-190,206-207,228,235,263-264,315-316,390-446,588-609,619-628,643-652,654-661,666-748
+crates/lenso-agent-host/Cargo.toml
+  h_9d56aba080c170 12-15
+crates/lenso-agent-host/src/generation.rs
+  h_9d56aba080c170 4,2939
+crates/lenso-agent-host/src/generation/plugin_run.rs
+  h_9d56aba080c170 1-478
+crates/lenso-agent-plugin-run-plugin/Cargo.toml
+  h_9d56aba080c170 1-31
+crates/lenso-agent-plugin-run-plugin/src/lib.rs
+  h_9d56aba080c170 1-626
+crates/lenso-agent-session-sqlite-plugin/src/lib.rs
+  h_9d56aba080c170 1149-1164
+crates/lenso-capability-agent-session/Cargo.toml
+  h_9d56aba080c170 18
+crates/lenso-capability-agent-session/src/lib.rs
+  h_9d56aba080c170 4-6
+crates/lenso-capability-agent-session/src/namespace.rs
+  h_9d56aba080c170 1-23
+docs/adr/0118-expose-host-authorized-session-free-completion.md
+  h_9d56aba080c170 42
+docs/adr/0119-bound-plugin-agent-runs-and-session-writes.md
+  h_9d56aba080c170 1-69
+docs/adr/README.md
+  h_9d56aba080c170 143-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "44b1120d6d9d5a331fc96af81be76ef44e52b929",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
