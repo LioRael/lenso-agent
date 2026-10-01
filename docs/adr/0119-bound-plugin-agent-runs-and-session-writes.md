@@ -89,3 +89,15 @@ Six real Console Kernel / separate Agent process tests cover two-second assertio
 expiry and stop-only scope, cancellation rejection/timeout, process disconnection,
 concurrency-one adapter restart, plus prior completion and scoped Session behavior.
 All calls remain synthetic. Test-only fault injection is excluded from production.
+
+## Native Host scope clarification
+
+A fresh valid Model-complete assertion of the same verified subject, together with
+the existing private Host control token, may cancel that subject's active run.
+Agent cancellation does not independently distinguish Console callers/projects.
+The original expired assertion matches only records admitted with those exact
+bytes; one reused assertion can match multiple admitted run records. Console
+Kernel caller binding, its immutable profile and ledger ownership, and private
+control-token custody enforce the cross-consumer boundary. Native code remains
+trusted. The task Kernel narrows composition/state/forwarding and is not an
+independent hostile-code or filesystem sandbox.
