@@ -88,6 +88,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 mod configuration_service;
 mod configuration_store;
+pub mod plugin_ai;
 mod plugin_control;
 mod plugin_control_api;
 mod remote_configuration_authority;
@@ -174,6 +175,8 @@ impl fmt::Debug for AgentWebAccess {
 /// Host-owned configuration for one embedded Agent Web Surface.
 #[derive(Clone, Debug)]
 pub struct AgentWebConfig {
+    /// Explicit existing Host assertion authority; absent disables Plugin AI ingress.
+    pub plugin_ai: Option<Arc<plugin_ai::BridgeAuthority>>,
     /// Explicit Agent Home used instead of process-global environment discovery.
     pub agent_home: Option<PathBuf>,
     /// App root whose Plugin Root is managed by the Console surface.
@@ -239,6 +242,7 @@ impl AgentWebConfig {
     /// Creates an embedded Surface configuration with an explicit Host Plugin inventory.
     pub fn new(plugins: fn()) -> Self {
         Self {
+            plugin_ai: None,
             access: AgentWebAccess::Disabled,
             agent_home: None,
             managed_app_root: None,
@@ -297,6 +301,7 @@ pub struct AgentWebSurface {
 
 #[derive(Clone, Debug)]
 struct WebRuntime {
+    plugin_ai: Option<Arc<plugin_ai::BridgeAuthority>>,
     workspace: Option<WebWorkspace>,
     access: AgentWebAccessPolicy,
     available_tools: Arc<RwLock<Vec<BootstrapTool>>>,
@@ -381,6 +386,7 @@ impl From<AgentWebControl> for AgentWebControlPolicy {
 
 #[derive(Debug)]
 struct WebRuntimeConfig {
+    plugin_ai: Option<Arc<plugin_ai::BridgeAuthority>>,
     access: AgentWebAccess,
     available_tools: Vec<BootstrapTool>,
     control: AgentWebControl,
@@ -399,6 +405,7 @@ struct WebRuntimeConfig {
     reason = "The bounded runtime channel owns each complete turn request"
 )]
 enum RuntimeCommand {
+    PluginCompletion(plugin_ai::CompletionCommand),
     RefreshToolCatalog {
         reply: oneshot::Sender<Result<Vec<BootstrapTool>, String>>,
     },
@@ -891,6 +898,7 @@ impl AgentWebSurface {
     )]
     pub async fn start(config: AgentWebConfig) -> Result<Self, String> {
         let AgentWebConfig {
+            plugin_ai,
             access,
             agent_home,
             managed_app_root,
@@ -1006,6 +1014,7 @@ impl AgentWebSurface {
         let runtime = WebRuntime::start(
             app,
             WebRuntimeConfig {
+                plugin_ai,
                 access,
                 available_tools,
                 control,
@@ -1297,6 +1306,7 @@ fn router(runtime: WebRuntime) -> Router {
             authorize_data_plane,
         ));
     data_plane
+        .merge(plugin_ai::routes())
         .route(
             "/api/console/v1/agent/control/tool-policy",
             get(read_tool_policy).put(update_tool_policy),
@@ -2199,6 +2209,7 @@ fn agent_tool_failure(
 impl WebRuntime {
     fn start(app: AgentApp, config: WebRuntimeConfig) -> Self {
         let WebRuntimeConfig {
+            plugin_ai,
             access,
             available_tools,
             control,
@@ -2241,6 +2252,7 @@ impl WebRuntime {
             remote_sync,
         ));
         Self {
+            plugin_ai,
             workspace: std::env::current_dir()
                 .ok()
                 .and_then(|path| path.to_str().map(str::to_owned))
@@ -2453,6 +2465,9 @@ async fn runtime_actor(
             },
         };
         match command {
+            RuntimeCommand::PluginCompletion(command) => {
+                plugin_ai::dispatch(&app, command).await;
+            }
             RuntimeCommand::CompactSession { reply, session_id } => {
                 let result = match app.lease_web_turn().await {
                     Ok(turn) => turn.compact_session(session_id).await,
@@ -3007,7 +3022,8 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
                 let _ = events.try_send(Ok(event));
             }
         }
-        RuntimeCommand::ModelCatalog { .. }
+        RuntimeCommand::PluginCompletion(_)
+        | RuntimeCommand::ModelCatalog { .. }
         | RuntimeCommand::ContextSources { .. }
         | RuntimeCommand::AuthConnections { .. }
         | RuntimeCommand::AuthConnectionAction { .. }
@@ -4009,6 +4025,7 @@ mod tests {
     fn runtime_with_access(access: AgentWebAccess) -> WebRuntime {
         let (commands, _receiver) = mpsc::channel(1);
         WebRuntime {
+            plugin_ai: None,
             workspace: None,
             profile_revision: Arc::new(RwLock::new(None)),
             access: access.into(),

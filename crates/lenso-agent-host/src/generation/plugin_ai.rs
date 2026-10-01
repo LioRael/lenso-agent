@@ -19,6 +19,7 @@ pub struct CompletionGeneration {
     handle: NativeStreamHandle<ModelComplete>,
     catalog: CatalogResponse,
     actor: RetainedActor,
+    provider: String,
 }
 
 impl AgentApp {
@@ -38,11 +39,21 @@ impl AgentApp {
             .target()
             .stream_handle::<ModelComplete>(&consumer)
             .map_err(|error| format!("Generation has no Model completion binding: {error:?}"))?;
+        let provider = route
+            .target()
+            .dependencies(&consumer)
+            .map_err(|error| format!("Model binding unavailable: {error:?}"))?
+            .bindings()
+            .iter()
+            .find(|binding| binding.capability_id() == lenso_capability_agent_model::CAPABILITY_ID)
+            .map(|binding| binding.provider_instance().to_owned())
+            .ok_or_else(|| "no exact Model provider binding".to_owned())?;
         Ok(CompletionGeneration {
             route,
             handle,
             catalog,
             actor: RetainedActor(actor),
+            provider,
         })
     }
 }
@@ -50,6 +61,24 @@ impl AgentApp {
 impl CompletionGeneration {
     pub fn generation_digest(&self) -> &str {
         self.route.generation_spec_digest()
+    }
+
+    pub fn provider_instance(&self) -> &str {
+        &self.provider
+    }
+
+    /// Provider-declared hard input ceiling; missing limits cannot be priced.
+    pub fn input_ceiling(&self, model: &str) -> Option<u64> {
+        self.catalog
+            .models
+            .iter()
+            .find(|entry| entry.id == model)?
+            .limits
+            .max_input_tokens
+            .as_ref()?
+            .as_ref()?
+            .parse()
+            .ok()
     }
 
     /// Keep this lease alive until the stream terminates. Cancellation is caller

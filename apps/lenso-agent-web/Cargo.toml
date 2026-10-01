@@ -32,6 +32,11 @@ standalone = ["dep:lenso-agent-default-plugins"]
 console-standalone = ["dep:lenso-agent-console-plugins"]
 
 [dependencies]
+lenso-auth-sdk = "0.2.3"
+lenso-capability-auth = "0.2.0"
+lenso-capability-agent-model = { path = "../../crates/lenso-capability-agent-model" }
+time.workspace = true
+base64 = "0.22"
 rustix = { version = "1.1", features = ["fs"] }
 lenso-plugin-bundle.workspace = true
 ed25519-dalek = "2.2"

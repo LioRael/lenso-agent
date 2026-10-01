@@ -16,6 +16,9 @@ const REMOTE_CONFIGURATION_TOKEN_ENV: &str = "LENSO_PLUGIN_CONFIGURATION_REMOTE_
 #[derive(Debug, Parser)]
 #[command(name = "lenso-agent-web", version, about = "Run Lenso Agent Web API")]
 struct Args {
+    /// Enable Plugin completion with an existing operators issuer/public-key JSON file.
+    #[arg(long, value_name = "ABSOLUTE_PATH")]
+    plugin_ai_authority: Option<PathBuf>,
     /// Address used by the Agent Web API.
     #[arg(long, default_value = "127.0.0.1:8787")]
     listen: SocketAddr,
@@ -95,6 +98,14 @@ async fn run(args: Args, linked_plugins: fn(), console: bool) -> Result<(), Stri
         .filter(|value| !value.trim().is_empty());
     let access = access_for_listener(args.listen, data_plane_token)?;
     let mut config = AgentWebConfig::new(linked_plugins);
+    if let Some(path) = &args.plugin_ai_authority {
+        if !args.listen.ip().is_loopback() {
+            return Err("Plugin AI bridge requires a loopback listener".into());
+        }
+        config.plugin_ai = Some(Arc::new(
+            lenso_agent_web::plugin_ai::BridgeAuthority::from_file(path)?,
+        ));
+    }
     config.plan = args.plan;
     config.profile = args.profile;
     config.allowed_tools = args.allowed_tools;
@@ -156,6 +167,9 @@ async fn run(args: Args, linked_plugins: fn(), console: bool) -> Result<(), Stri
         .ok()
         .filter(|value| !value.trim().is_empty())
         .map_or(AgentWebControl::Disabled, AgentWebControl::Bearer);
+    if config.plugin_ai.is_some() && matches!(config.control, AgentWebControl::Disabled) {
+        return Err("Plugin AI requires the existing Host control authorization seam".into());
+    }
     let surface = AgentWebSurface::start(config).await?;
     let listener = tokio::net::TcpListener::bind(args.listen)
         .await

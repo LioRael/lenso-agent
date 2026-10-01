@@ -139,3 +139,4 @@ reasons on their own.
 - [0116 — Evaluate Agent outcomes from task evidence](0116-evaluate-agent-outcomes-from-task-evidence.md)
 
 - [0117 — Bind remote Management to an Auth-issued task](0117-bind-remote-management-to-an-auth-issued-task.md)
+- [0118 — Expose Host-authorized session-free completion](0118-expose-host-authorized-session-free-completion.md)
