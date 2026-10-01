@@ -1,0 +1,16 @@
+crates/lenso-agent-host/src/generation.rs
+  h_9d56aba080c170 3
+crates/lenso-agent-host/src/generation/plugin_ai.rs
+  h_9d56aba080c170 1-200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "10b988c8ca953a3127f95eb4f2c59b0b606d42ee",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
