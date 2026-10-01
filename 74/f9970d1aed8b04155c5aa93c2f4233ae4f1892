@@ -1,0 +1,20 @@
+Cargo.lock
+  h_9d56aba080c170 4163
+apps/lenso-agent-web/Cargo.toml
+  h_9d56aba080c170 86
+apps/lenso-agent-web/src/lib.rs
+  h_9d56aba080c170 23,480,484,1810-1824,1842,1862,2724,2982,2985,3116,3120-3124,3151,3288-3289,3296,3299,3301,3303,3311-3313,3321-3323,3331-3333,3344-3346,3351-3353,3360,3436,4509-4678
+crates/lenso-agent-host/src/generation.rs
+  h_9d56aba080c170 761-784,1709-1814,3944,3949-3957,3966-3977
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "74f9970d1aed8b04155c5aa93c2f4233ae4f1892",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
