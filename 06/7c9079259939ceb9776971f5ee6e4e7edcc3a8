@@ -1,0 +1,16 @@
+apps/lenso-agent-web/src/plugin_ai.rs
+  h_9d56aba080c170 53,55-70,102-103,309-314,361-372,377-383,386,389,411-412,415,656-658
+docs/adr/0119-bound-plugin-agent-runs-and-session-writes.md
+  h_9d56aba080c170 70-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "067c9079259939ceb9776971f5ee6e4e7edcc3a8",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
