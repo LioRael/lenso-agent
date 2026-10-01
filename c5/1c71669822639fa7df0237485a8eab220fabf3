@@ -1,0 +1,19 @@
+docs/adr/0119-bound-plugin-agent-runs-and-session-writes.md
+  s_50e3beadc1d491::t_93bd9a8f480db7 92-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "c51c71669822639fa7df0237485a8eab220fabf3",
+  "prompts": {},
+  "sessions": {
+    "s_50e3beadc1d491": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f9cb-a005-76d3-8f46-f5efcfd3deb1",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
