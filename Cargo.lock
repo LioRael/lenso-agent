@@ -4160,6 +4160,7 @@ dependencies = [
  "lenso-agent-host",
  "lenso-agent-interactive-approval-hook-plugin",
  "lenso-agent-session-inspection",
+ "lenso-agent-session-sqlite-plugin",
  "lenso-agent-session-terminal-plugin",
  "lenso-agent-skills-filesystem-plugin",
  "lenso-agent-web-plugin",

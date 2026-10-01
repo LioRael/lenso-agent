@@ -758,6 +758,30 @@ impl AgentApp {
         self.lease_turn_for("web").await
     }
 
+    /// Pins read-only history to one Generation without admitting a model Turn.
+    pub async fn lease_web_history(&self) -> Result<SessionHistoryGeneration, String> {
+        self.lease_web_history_with_actor(None).await
+    }
+
+    /// Retains the caller's assertion for the Session Plugin to verify on every read.
+    pub async fn lease_web_history_for_actor(
+        &self,
+        actor: lenso_auth_sdk::ActorAssertion,
+    ) -> Result<SessionHistoryGeneration, String> {
+        self.lease_web_history_with_actor(Some(actor)).await
+    }
+
+    async fn lease_web_history_with_actor(
+        &self,
+        actor: Option<lenso_auth_sdk::ActorAssertion>,
+    ) -> Result<SessionHistoryGeneration, String> {
+        Ok(SessionHistoryGeneration {
+            route: self.host.route().await.map_err(control_error)?,
+            actor: actor.map(RetainedActor),
+            consumer_instance: surface_consumer_instance("web")?.to_owned(),
+        })
+    }
+
     /// Pins CLI command discovery and execution to one immutable App Generation.
     pub async fn lease_cli_terminal(&self) -> Result<TerminalGeneration, String> {
         self.lease_terminal("lenso.terminal.cli/cli").await
@@ -1679,6 +1703,112 @@ struct RetainedActor(lenso_auth_sdk::ActorAssertion);
 impl std::fmt::Debug for RetainedActor {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("<authenticated actor>")
+    }
+}
+
+/// A read-only Session route with immutable Generation and caller identity.
+#[derive(Debug)]
+pub struct SessionHistoryGeneration {
+    actor: Option<RetainedActor>,
+    consumer_instance: String,
+    route: DurableGenerationRoute<NativeApp>,
+}
+
+/// Keeps missing/unauthorized histories distinct from runtime and storage failures.
+#[derive(Debug)]
+pub enum ReadSessionFailure {
+    Domain(lenso_capability_agent_session::ReadError),
+    Runtime(String),
+}
+
+impl From<String> for ReadSessionFailure {
+    fn from(error: String) -> Self {
+        Self::Runtime(error)
+    }
+}
+
+impl SessionHistoryGeneration {
+    fn invocation_context(&self) -> Result<InvocationContext, String> {
+        attach_actor(
+            self.route
+                .target()
+                .invocation_context_after(Duration::from_secs(30), CancellationToken::new()),
+            self.actor.as_ref().map(|actor| &actor.0),
+        )
+    }
+
+    /// Reads bounded Artifact bytes through the Web consumer's declared binding.
+    pub async fn read_attachment(&self, handle: String) -> Result<String, String> {
+        self.route
+            .target()
+            .handle::<lenso_capability_agent_artifact::ArtifactRead>(&self.consumer_instance)
+            .map_err(|e| format!("Artifact route unavailable: {e:?}"))?
+            .invoke_with_context(
+                lenso_capability_agent_artifact::READ_OPERATION,
+                self.invocation_context()?,
+                lenso_capability_agent_artifact::ReadRequest {
+                    handle,
+                    offset: "0".to_owned(),
+                    max_bytes: 2 * 1024 * 1024,
+                },
+            )
+            .await
+            .map_err(|e| format!("Artifact read failed: {e:?}"))?
+            .map_err(|e| format!("Attachment unavailable: {e:?}"))
+            .and_then(|r| {
+                if r.complete {
+                    Ok(r.data_base64)
+                } else {
+                    Err("Attachment exceeds read limit".to_owned())
+                }
+            })
+    }
+
+    /// Reads durable Session events through the selected Session Plugin.
+    pub async fn read_session(
+        &self,
+        session_id: String,
+        after_revision: u64,
+        limit: i64,
+    ) -> Result<ReadSessionResponse, ReadSessionFailure> {
+        let handle = self
+            .route
+            .target()
+            .handle::<SessionRead>(&self.consumer_instance)
+            .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?;
+        handle
+            .invoke_with_context(
+                READ_OPERATION,
+                self.invocation_context()?,
+                ReadSessionRequest {
+                    after_revision: after_revision.to_string(),
+                    limit,
+                    session_id,
+                },
+            )
+            .await
+            .map_err(|error| {
+                ReadSessionFailure::Runtime(format!("Session read failed: {error:?}"))
+            })?
+            .map_err(ReadSessionFailure::Domain)
+    }
+
+    /// Lists durable Sessions through the selected Session Plugin.
+    pub async fn list_sessions(&self, limit: i64) -> Result<ListSessionsResponse, String> {
+        let handle = self
+            .route
+            .target()
+            .handle::<SessionList>(&self.consumer_instance)
+            .map_err(|error| format!("leased Generation has no Session route: {error:?}"))?;
+        handle
+            .invoke_with_context(
+                LIST_OPERATION,
+                self.invocation_context()?,
+                ListSessionsRequest { limit },
+            )
+            .await
+            .map_err(|error| format!("Session list failed: {error:?}"))?
+            .map_err(|error| format!("Session list was rejected: {error:?}"))
     }
 }
 
@@ -3811,11 +3941,20 @@ mod tests {
             let mut app = host.run(crate::Profile::Default).await.unwrap();
             let assertion = |subject: &str| {
                 let now = time::OffsetDateTime::now_utc();
-                issuer.issue(subject, "user", "password", ["open", "read", "rename"].map(|operation| lenso_auth_sdk::audience(lenso_capability_agent_session::CAPABILITY_ID, operation)),
+                issuer.issue(subject, "user", "password", ["open", "read", "rename", "list", "append"].map(|operation| lenso_auth_sdk::audience(lenso_capability_agent_session::CAPABILITY_ID, operation)),
                     lenso_auth_sdk::Validity::new(now - time::Duration::seconds(1), now + time::Duration::minutes(2)).unwrap(), BTreeMap::new())
             };
             let alice = app.lease_web_turn_for_actor(assertion("alice")).await.unwrap();
             let session = alice.open_session().await.unwrap();
+            alice.route.target().handle::<SessionAppend>(&alice.consumer_instance).unwrap()
+                .invoke_with_context(APPEND_OPERATION, alice.invocation_context().unwrap(), AppendSessionRequest {
+                    session_id: session.clone(), expected_revision: "0".into(),
+                    events: vec![AppendSessionRequestEventsItem {
+                        event_id: "created".into(), kind: AppendSessionRequestEventsItemKind::SessionCreated,
+                        occurred_at: "2026-10-01T00:00:00Z".into(), payload_json: "{}".to_owned().try_into().unwrap(), turn_id: None,
+                    }],
+                }).await.unwrap().unwrap();
+
             let bob = app.lease_web_turn_for_actor(assertion("bob")).await.unwrap();
             assert!(bob.read_session(session.clone(), 0, 1).await.is_err());
             assert!(bob.rename_session(session.clone(), "not yours".into(), "0".into()).await.is_err());
@@ -3824,6 +3963,18 @@ mod tests {
             let local = app.lease_web_turn().await.unwrap();
             assert!(local.open_session().await.is_err());
             assert!(alice.read_session(session, 0, 1).await.is_ok());
+            let alice_history = app.lease_web_history_for_actor(assertion("alice")).await.unwrap();
+            let bob_history = app.lease_web_history_for_actor(assertion("bob")).await.unwrap();
+            let local_history = app.lease_web_history().await.unwrap();
+            let session = alice_history.list_sessions(50).await.unwrap().sessions[0].session_id.clone();
+            assert!(alice_history.read_session(session.clone(), 0, 1).await.is_ok());
+            assert!(bob_history.list_sessions(50).await.unwrap().sessions.is_empty());
+            assert!(matches!(bob_history.read_session(session.clone(), 0, 1).await,
+                Err(ReadSessionFailure::Domain(lenso_capability_agent_session::ReadError::NotFound))));
+            assert!(matches!(local_history.read_session(session, 0, 1).await,
+                Err(ReadSessionFailure::Domain(lenso_capability_agent_session::ReadError::PermissionDenied))));
+            assert!(alice_history.list_sessions(50).await.is_ok());
+            drop((alice_history, bob_history, local_history));
             drop((alice, bob, local));
             app.shutdown().await.unwrap();
         })).await;

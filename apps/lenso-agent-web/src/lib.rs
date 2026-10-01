@@ -20,7 +20,7 @@ use axum::{
 use lenso_agent_host::{
     AgentDirectories, AgentHost, AgentToolTarget, ConfiguredAgentHost, PluginManagementTarget,
     Profile, ProviderModelCatalog, WebSurface,
-    generation::{AgentApp, RenameSessionFailure},
+    generation::{AgentApp, ReadSessionFailure, RenameSessionFailure},
 };
 use lenso_agent_session_inspection::{
     InspectedSession, InspectedSessionEvent, Trajectory, project_trajectory,
@@ -477,11 +477,11 @@ enum RuntimeCommand {
         reply: oneshot::Sender<Result<String, String>>,
     },
     ReadSession {
-        reply: oneshot::Sender<Result<ReadSessionResponse, String>>,
+        reply: oneshot::Sender<Result<ReadSessionResponse, ReadSessionFailure>>,
         session_id: String,
     },
     ReadTrajectory {
-        reply: oneshot::Sender<Result<Trajectory, String>>,
+        reply: oneshot::Sender<Result<Trajectory, ReadSessionFailure>>,
         session_id: String,
     },
     RenameSession {
@@ -1807,6 +1807,21 @@ async fn read_attachment(
     Ok(Json(serde_json::json!({ "data_base64": data })))
 }
 
+fn history_problem(error: ReadSessionFailure) -> ApiProblem {
+    match error {
+        ReadSessionFailure::Domain(lenso_capability_agent_session::ReadError::NotFound) => {
+            ApiProblem::not_found("Session was not found")
+        }
+        ReadSessionFailure::Domain(lenso_capability_agent_session::ReadError::PermissionDenied) => {
+            ApiProblem::forbidden("Session access was denied")
+        }
+        ReadSessionFailure::Domain(error) => {
+            ApiProblem::unavailable(format!("Session read was rejected: {error:?}"))
+        }
+        ReadSessionFailure::Runtime(error) => ApiProblem::unavailable(error),
+    }
+}
+
 async fn read_session(
     State(runtime): State<WebRuntime>,
     Path(session_id): Path<String>,
@@ -1824,7 +1839,7 @@ async fn read_session(
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
         .map(Json)
-        .map_err(ApiProblem::unavailable)
+        .map_err(history_problem)
 }
 
 async fn read_trajectory(
@@ -1844,7 +1859,7 @@ async fn read_trajectory(
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime stopped before replying"))?
         .map(Json)
-        .map_err(ApiProblem::unavailable)
+        .map_err(history_problem)
 }
 
 async fn fork_session(
@@ -2706,7 +2721,7 @@ async fn runtime_actor(
             RuntimeCommand::ReadTrajectory { reply, session_id } => {
                 let result = read_session_from_app(&app, session_id)
                     .await
-                    .and_then(|session| project_web_trajectory(&session));
+                    .and_then(|session| project_web_trajectory(&session).map_err(Into::into));
                 let _ = reply.send(result);
             }
             RuntimeCommand::RunTurn {
@@ -2964,10 +2979,10 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
             let _ = reply.send(Err(detail.to_owned()));
         }
         RuntimeCommand::ReadSession { reply, .. } => {
-            let _ = reply.send(Err(detail.to_owned()));
+            let _ = reply.send(Err(detail.to_owned().into()));
         }
         RuntimeCommand::ReadTrajectory { reply, .. } => {
-            let _ = reply.send(Err(detail.to_owned()));
+            let _ = reply.send(Err(detail.to_owned().into()));
         }
         RuntimeCommand::RenameSession { reply, .. } => {
             let _ = reply.send(Err(RenameSessionFailure::Runtime(detail.to_owned())));
@@ -3098,11 +3113,15 @@ async fn read_attachment_from_app(
     session_id: String,
     digest: String,
 ) -> Result<String, String> {
-    let turn = app.lease_web_turn().await?;
+    let turn = app.lease_web_history().await?;
     let session = collect_session_pages(&session_id, |after| {
         turn.read_session(session_id.clone(), after, SESSION_READ_PAGE_LIMIT)
     })
-    .await?;
+    .await
+    .map_err(|error| match error {
+        ReadSessionFailure::Runtime(detail) => detail,
+        ReadSessionFailure::Domain(error) => format!("Session read was rejected: {error:?}"),
+    })?;
     let expected = format!("sha256:{digest}");
     let handle = session
         .events
@@ -3129,7 +3148,7 @@ async fn read_attachment_from_app(
 async fn handle_read_command(
     app: &AgentApp,
     session_id: String,
-    reply: oneshot::Sender<Result<ReadSessionResponse, String>>,
+    reply: oneshot::Sender<Result<ReadSessionResponse, ReadSessionFailure>>,
 ) {
     let _ = reply.send(read_session_from_app(app, session_id).await);
 }
@@ -3266,21 +3285,22 @@ fn policy_response(
 async fn read_session_from_app(
     app: &AgentApp,
     session_id: String,
-) -> Result<ReadSessionResponse, String> {
-    let turn = app.lease_web_turn().await?;
+) -> Result<ReadSessionResponse, ReadSessionFailure> {
+    let turn = app.lease_web_history().await?;
     collect_session_pages(&session_id, |cursor| {
         turn.read_session(session_id.clone(), cursor, SESSION_READ_PAGE_LIMIT)
     })
     .await
 }
 
-async fn collect_session_pages<F, Fut>(
+async fn collect_session_pages<F, Fut, E>(
     session_id: &str,
     mut read: F,
-) -> Result<ReadSessionResponse, String>
+) -> Result<ReadSessionResponse, E>
 where
+    E: From<String>,
     F: FnMut(u64) -> Fut,
-    Fut: std::future::Future<Output = Result<ReadSessionResponse, String>>,
+    Fut: std::future::Future<Output = Result<ReadSessionResponse, E>>,
 {
     let mut cursor = 0_u64;
     let mut complete: Option<ReadSessionResponse> = None;
@@ -3288,7 +3308,9 @@ where
     loop {
         let mut page = read(cursor).await?;
         if page.session_id != session_id {
-            return Err("Session read returned a different Session ID".to_owned());
+            return Err("Session read returned a different Session ID"
+                .to_owned()
+                .into());
         }
         let revision = page
             .revision
@@ -3296,7 +3318,9 @@ where
             .map_err(|_| "Session returned an invalid revision".to_owned())?;
         match expected_revision {
             Some(expected) if revision != expected => {
-                return Err("Session changed while its history was being read".to_owned());
+                return Err("Session changed while its history was being read"
+                    .to_owned()
+                    .into());
             }
             None => expected_revision = Some(revision),
             _ => {}
@@ -3304,7 +3328,9 @@ where
         if let Some(first) = complete.as_ref()
             && (page.title != first.title || page.title_revision != first.title_revision)
         {
-            return Err("Session metadata changed while its history was being read".to_owned());
+            return Err("Session metadata changed while its history was being read"
+                .to_owned()
+                .into());
         }
         for event in &page.events {
             let event_revision = event
@@ -3315,19 +3341,23 @@ where
                 .checked_add(1)
                 .ok_or_else(|| "Session revision overflowed".to_owned())?;
             if event_revision != next || event_revision > revision {
-                return Err("Session read returned non-contiguous events".to_owned());
+                return Err("Session read returned non-contiguous events"
+                    .to_owned()
+                    .into());
             }
             cursor = event_revision;
         }
         if page.events.is_empty() && cursor != revision {
-            return Err("Session read ended before its advertised revision".to_owned());
+            return Err("Session read ended before its advertised revision"
+                .to_owned()
+                .into());
         }
         match complete.as_mut() {
             Some(complete) => complete.events.append(&mut page.events),
             None => complete = Some(page),
         }
         if cursor == revision {
-            return complete.ok_or_else(|| "Session read returned no page".to_owned());
+            return complete.ok_or_else(|| "Session read returned no page".to_owned().into());
         }
     }
 }
@@ -3403,7 +3433,7 @@ fn session_event_kind_name(kind: &ReadSessionResponseEventsItemKind) -> &'static
 }
 
 async fn list_sessions_from_app(app: &AgentApp) -> Result<WebSessionList, String> {
-    let turn = app.lease_web_turn().await?;
+    let turn = app.lease_web_history().await?;
     let listed = turn.list_sessions(50).await?;
     Ok(project_session_list(listed))
 }
@@ -4474,6 +4504,176 @@ mod tests {
             "events": events,
         }))
         .unwrap()
+    }
+
+    async fn history_request(
+        surface: &AgentWebSurface,
+        path: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = surface
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&body).unwrap())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cold_history_without_login_or_model() {
+        use lenso_agent_session_inspection::{SessionArchive, SessionImporter};
+        use lenso_agent_session_sqlite_plugin::SqliteSessionImporter;
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let home = tempfile::tempdir().unwrap();
+                // Pin authentication to an empty isolated store; never inspect developer credentials.
+            let auth = home.path().join("plugins/lenso.agent.auth.openai-codex");
+            std::fs::create_dir_all(&auth).unwrap();
+            std::fs::write(auth.join("auth.toml"), format!(
+                "issuer = \"https://auth.openai.com\"\nprofile = \"default\"\ncredential_file = {}\n",
+                serde_json::to_string(&home.path().join("auth.json")).unwrap(),
+            )).unwrap();
+            let config = || {
+                    let mut config = AgentWebConfig::new(lenso_agent_console_plugins::link);
+                    config.agent_home = Some(home.path().to_path_buf());
+                    config.access = AgentWebAccess::Local;
+                    config
+                };
+                let surface = AgentWebSurface::start(config()).await.unwrap();
+                let (status, body) =
+                    history_request(&surface, "/api/console/v1/agent/sessions").await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                assert_eq!(body["sessions"], serde_json::json!([]));
+                let (status, _) =
+                    history_request(&surface, "/api/console/v1/agent/sessions/qa-nonexistent")
+                        .await;
+                assert_eq!(status, StatusCode::NOT_FOUND);
+                surface.shutdown().await.unwrap();
+
+                let archived = InspectedSession {
+                    session_id: "persisted-history".into(),
+                    revision: 1,
+                    title: Some("Saved conversation".into()),
+                    title_revision: 1,
+                    events: vec![InspectedSessionEvent {
+                        revision: 1,
+                        event_id: "created".into(),
+                        kind: "session_created".into(),
+                        turn_id: None,
+                        occurred_at: "2026-10-01T00:00:00Z".into(),
+                        payload_json: "{}".into(),
+                    }],
+                };
+                SqliteSessionImporter::new(home.path().join("sessions.sqlite3"))
+                    .import(&SessionArchive::new(vec![archived]).unwrap())
+                    .unwrap();
+                let surface = AgentWebSurface::start(config()).await.unwrap();
+                let (status, body) =
+                    history_request(&surface, "/api/console/v1/agent/sessions").await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                assert_eq!(body["sessions"][0]["sessionId"], "persisted-history");
+                let (status, body) =
+                    history_request(&surface, "/api/console/v1/agent/sessions/persisted-history")
+                        .await;
+                assert_eq!(status, StatusCode::OK, "{body}");
+                assert_eq!(body["events"].as_array().unwrap().len(), 1);
+                assert_eq!(body["title"], "Saved conversation");
+                let (status, _) = history_request(
+                    &surface,
+                    "/api/console/v1/agent/sessions/qa-nonexistent/trajectory",
+                )
+                .await;
+                assert_eq!(status, StatusCode::NOT_FOUND);
+
+                let response = surface
+                    .router()
+                    .oneshot(
+                        Request::builder()
+                            .method(Method::POST)
+                            .uri("/api/console/v1/agent/turns")
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(axum::body::Body::from(
+                                r#"{"input":"hello","request_id":"no-model"}"#,
+                            ))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let body = axum::body::to_bytes(response.into_body(), MAX_REQUEST_BYTES)
+                    .await
+                    .unwrap();
+                let events = String::from_utf8(body.to_vec()).unwrap();
+                assert!(events.contains("turn.failed"), "{events}");
+                assert!(events.contains("Model catalog snapshot failed"), "{events}");
+                assert!(!events.contains("turn.completed"), "{events}");
+
+                // A failed durable backend must remain an error rather than becoming empty history.
+                let connection =
+                    rusqlite::Connection::open(home.path().join("sessions.sqlite3")).unwrap();
+                connection.execute("ALTER TABLE events RENAME TO unavailable_events", []).unwrap();
+                let (status, _) = history_request(&surface, "/api/console/v1/agent/sessions").await;
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                let (status, _) =
+                    history_request(&surface, "/api/console/v1/agent/sessions/persisted-history")
+                        .await;
+                assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+                connection.execute("ALTER TABLE unavailable_events RENAME TO events", []).unwrap();
+                surface.shutdown().await.unwrap();
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn history_routes_require_data_plane_authorization() {
+        for path in [
+            "/api/console/v1/agent/sessions",
+            "/api/console/v1/agent/sessions/private",
+        ] {
+            for (access, expected) in [
+                (AgentWebAccess::Disabled, StatusCode::NOT_FOUND),
+                (
+                    AgentWebAccess::Bearer("secret".into()),
+                    StatusCode::FORBIDDEN,
+                ),
+            ] {
+                let response = router(runtime_with_access(access))
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .body(axum::body::Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn history_errors_preserve_permission_and_backend_failures() {
+        use lenso_capability_agent_session::ReadError;
+        assert_eq!(
+            history_problem(ReadSessionFailure::Domain(ReadError::NotFound)).status,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            history_problem(ReadSessionFailure::Domain(ReadError::PermissionDenied)).status,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            history_problem(ReadSessionFailure::Runtime("backend unavailable".into())).status,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

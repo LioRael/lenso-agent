@@ -83,5 +83,6 @@ lenso-terminal-web-plugin = { path = "../../crates/lenso-terminal-web-plugin" }
 workspace = true
 
 [dev-dependencies]
+lenso-agent-session-sqlite-plugin = { path = "../../crates/lenso-agent-session-sqlite-plugin" }
 tokio-tungstenite.workspace = true
 lenso-agent-console-plugins = { path = "../../crates/lenso-agent-console-plugins" }
