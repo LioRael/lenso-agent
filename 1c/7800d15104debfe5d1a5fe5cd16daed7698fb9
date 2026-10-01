@@ -1,0 +1,22 @@
+Cargo.lock
+  h_9d56aba080c170 4184,4187
+apps/lenso-agent-web/Cargo.toml
+  h_9d56aba080c170 91-92
+apps/lenso-agent-web/src/plugin_ai.rs
+  h_9d56aba080c170 54,85,180,205-208,231-236,280-285,290,300,337-372,380-392,425-430,486-500
+apps/lenso-agent-web/src/plugin_ai/cancel_tests.rs
+  h_9d56aba080c170 1-138
+docs/adr/0118-expose-host-authorized-session-free-completion.md
+  h_9d56aba080c170 41-51
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1c7800d15104debfe5d1a5fe5cd16daed7698fb9",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
