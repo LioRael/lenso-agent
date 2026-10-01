@@ -9,6 +9,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+lenso-agent-interactive-approval-hook-plugin = { path = "../lenso-agent-interactive-approval-hook-plugin" }
+lenso-runner.workspace = true
+lenso-agent-plugin-run-plugin = { path = "../lenso-agent-plugin-run-plugin" }
+lenso-agent-loop-plugin = { path = "../lenso-agent-loop-plugin" }
 lenso-dylib-adapter.workspace = true
 lenso-quickjs-adapter.workspace = true
 lenso-auth-sdk = "0.2.3"

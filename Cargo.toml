@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/lenso-agent-plugin-run-plugin",
     "apps/lenso-agent-acp",
     "apps/lenso-agent-cli",
     "apps/lenso-agent-channel",

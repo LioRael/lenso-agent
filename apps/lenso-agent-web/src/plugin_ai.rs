@@ -87,6 +87,14 @@ impl BridgeAuthority {
     }
 
     fn actor(&self, headers: &HeaderMap) -> Result<ActorAssertion, ApiProblem> {
+        self.actor_for(headers, CAPABILITY_ID, COMPLETE_OPERATION)
+    }
+    fn actor_for(
+        &self,
+        headers: &HeaderMap,
+        capability: &str,
+        operation: &str,
+    ) -> Result<ActorAssertion, ApiProblem> {
         let encoded = headers
             .get("x-lenso-actor")
             .and_then(|h| h.to_str().ok())
@@ -117,8 +125,8 @@ impl BridgeAuthority {
         self.verifier
             .project_context::<VerifiedActor>(
                 &context,
-                CAPABILITY_ID,
-                COMPLETE_OPERATION,
+                capability,
+                operation,
                 &lenso_auth_sdk::FixedClock::new(time::OffsetDateTime::now_utc()),
             )
             .map_err(|_| ApiProblem::forbidden("actor authority or audience denied"))?;
@@ -178,6 +186,8 @@ pub(super) struct CompletionCommand {
     cancellation: Signal,
     reply: oneshot::Sender<Result<serde_json::Value, String>>,
     active: ActiveRun,
+    task: Option<RunFields>,
+    session: Option<SessionInput>,
 }
 
 impl std::fmt::Debug for CompletionCommand {
@@ -193,6 +203,8 @@ impl std::fmt::Debug for CompletionCommand {
 
 pub(super) fn routes() -> Router<WebRuntime> {
     Router::new()
+        .route("/api/console/v1/agent/plugin-ai/runs", post(run))
+        .route("/api/console/v1/agent/plugin-ai/session", post(session))
         .route("/api/console/v1/agent/plugin-ai/quote", post(quote))
         .route(
             "/api/console/v1/agent/plugin-ai/completions",
@@ -213,14 +225,14 @@ async fn quote(
     headers: HeaderMap,
     Json(input): Json<Input>,
 ) -> Result<Json<serde_json::Value>, ApiProblem> {
-    invoke(runtime, headers, input, true).await
+    invoke(runtime, headers, input, true, None, None).await
 }
 async fn complete(
     State(runtime): State<WebRuntime>,
     headers: HeaderMap,
     Json(input): Json<Input>,
 ) -> Result<Json<serde_json::Value>, ApiProblem> {
-    invoke(runtime, headers, input, false).await
+    invoke(runtime, headers, input, false, None, None).await
 }
 
 struct ActiveRun {
@@ -248,6 +260,8 @@ async fn invoke(
     headers: HeaderMap,
     input: Input,
     quote_only: bool,
+    task: Option<RunFields>,
+    session: Option<SessionInput>,
 ) -> Result<Json<serde_json::Value>, ApiProblem> {
     runtime.authorize_control(&headers)?;
     let authority = runtime
@@ -298,6 +312,8 @@ async fn invoke(
             cancellation,
             reply,
             active,
+            task,
+            session,
         }))
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime unavailable"))?;
@@ -371,6 +387,63 @@ async fn recover(
 }
 
 pub(super) async fn dispatch(app: &AgentApp, command: CompletionCommand) {
+    if let Some(input) = &command.session {
+        let result = app
+            .plugin_session(
+                command.actor.clone(),
+                input.session_id.clone(),
+                input.namespace.clone(),
+            )
+            .await
+            .map(|id| serde_json::json!({"session_id":id}));
+        let _ = command.reply.send(result);
+        return;
+    }
+    if let Some(task) = &command.task {
+        let cancellation = CancellationToken::new();
+        let admitted=async {
+            let quote=app.lease_plugin_completion(command.actor.clone()).await?;
+            if command.input.generation.as_deref()!=Some(quote.generation_digest())
+                || command.input.input_ceiling!=quote.input_ceiling(&command.input.model) {
+                return Err("quoted task Model binding changed".into());
+            }
+            let binding=serde_json::json!({"model":command.input.model,"provider_instance":quote.provider_instance(),"generation":quote.generation_digest(),"input_ceiling":quote.input_ceiling(&command.input.model)});
+            let policy=lenso_agent_host::generation::plugin_run::RunPolicy {
+                model:command.input.model.clone(),max_calls:task.max_calls,max_output:command.input.max_output,
+                input_ceiling:command.input.input_ceiling.ok_or("missing task ceiling")?,allowed_tools:task.allowed_tools.clone(),
+                workspace:task.workspace.clone(),session_id:task.session_id.clone(),session_namespace:task.session_namespace.clone(),expected_generation:Some(quote.generation_digest().into()),expected_provider:Some(quote.provider_instance().into()),
+            };
+            let run=app.lease_plugin_run(command.actor.clone(),policy,cancellation.clone()).await?;
+            Ok::<_,String>((run,binding))
+        }.await;
+        tokio::task::spawn_local(async move {
+            // Retain active ownership until execution and shutdown settle.
+            let active = command.active;
+            let result = match admitted {
+                Err(e) => Err(e),
+                Ok((run, binding)) => {
+                    let future = run.run(command.input.prompt.clone());
+                    tokio::pin!(future);
+                    let result = tokio::select! { biased;
+                        ()=command.cancellation.cancelled()=>{cancellation.cancel();future.await},
+                        result=&mut future=>result,
+                    };
+                    result.map(|r|serde_json::json!({"text":r.text,"input_tokens":r.usage.input_tokens,"output_tokens":r.usage.output_tokens,"calls":r.usage.calls,"binding":binding,"session_id":r.session_id}))
+                }
+            };
+            if result.is_ok()
+                && let Ok(mut terminal) = active.authority.terminal.lock()
+                && terminal.len() < 1024
+            {
+                terminal.insert(
+                    command.input.run_id.clone(),
+                    command.actor.subject().to_owned(),
+                );
+            }
+            let _ = command.reply.send(result);
+        });
+        return;
+    }
     let lease = app.lease_plugin_completion(command.actor.clone()).await;
     tokio::task::spawn_local(async move {
         let result = match lease {
@@ -512,6 +585,28 @@ mod tests {
         tokio::task::LocalSet::new()
             .run_until(Box::pin(async move {
                 super::super::configure_test_fixture_model(&root);
+                let scoped = std::env::var("LENSO_AI_FIXTURE_SCOPED").is_ok_and(|s| s == "1");
+                let database = root.join("scoped-history.sqlite");
+                if scoped {
+                    let directory = root.join("plugins/lenso.agent.session.sqlite");
+                    std::fs::create_dir_all(&directory).unwrap();
+                    std::fs::write(
+                        directory.join("sessions.toml"),
+                        format!(
+                            "database = {}\n[authentication]\nissuer = {}\nverification_key = {}\n",
+                            serde_json::to_string(&database).unwrap(),
+                            serde_json::to_string(&issuer).unwrap(),
+                            serde_json::to_string(&key).unwrap()
+                        ),
+                    )
+                    .unwrap();
+                    let text = root.join("plugins/lenso.agent.text-tools");
+                    std::fs::create_dir_all(&text).unwrap();
+                    std::fs::write(text.join("default.toml"), "").unwrap();
+                    let hook = root.join("plugins/lenso.agent.interactive-approval-hook");
+                    std::fs::create_dir_all(&hook).unwrap();
+                    std::fs::write(hook.join("default.toml"), "default_decision = \"ask\"\nallow_tools = [\"uppercase\"]\nmax_preview_bytes = 16384\n").unwrap();
+                }
                 let mut config =
                     super::super::AgentWebConfig::new(lenso_agent_default_plugins::link);
                 config.agent_home = Some(root.clone());
@@ -521,14 +616,16 @@ mod tests {
                 config.plugin_ai =
                     Some(Arc::new(BridgeAuthority::operators(&issuer, &key).unwrap()));
                 let surface = super::super::AgentWebSurface::start(config).await.unwrap();
-                let (reply, response) = oneshot::channel();
-                surface
-                    .runtime
-                    .commands
-                    .send(RuntimeCommand::ListSessions { reply })
-                    .await
-                    .unwrap();
-                assert!(response.await.unwrap().unwrap().sessions.is_empty());
+                if !scoped {
+                    let (reply, response) = oneshot::channel();
+                    surface
+                        .runtime
+                        .commands
+                        .send(RuntimeCommand::ListSessions { reply })
+                        .await
+                        .unwrap();
+                    assert!(response.await.unwrap().unwrap().sessions.is_empty());
+                }
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 std::fs::write(
                     root.join("fixture-origin"),
@@ -543,16 +640,109 @@ mod tests {
                     })
                     .await
                     .unwrap();
-                let (reply, response) = oneshot::channel();
-                surface
-                    .runtime
-                    .commands
-                    .send(RuntimeCommand::ListSessions { reply })
-                    .await
-                    .unwrap();
-                assert!(response.await.unwrap().unwrap().sessions.is_empty());
+                if !scoped {
+                    let (reply, response) = oneshot::channel();
+                    surface
+                        .runtime
+                        .commands
+                        .send(RuntimeCommand::ListSessions { reply })
+                        .await
+                        .unwrap();
+                    assert!(response.await.unwrap().unwrap().sessions.is_empty());
+                }
                 surface.shutdown().await.unwrap();
+                if scoped {
+                    let c = rusqlite::Connection::open(database).unwrap();
+                    assert_eq!(
+                        c.query_row::<i64, _, _>("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+                            .unwrap(),
+                        2
+                    );
+                }
             }))
             .await;
     }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunFields {
+    max_calls: u32,
+    allowed_tools: std::collections::BTreeSet<String>,
+    workspace: String,
+    session_id: Option<String>,
+    session_namespace: Option<lenso_capability_agent_session::SessionNamespace>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunInput {
+    completion: Input,
+    policy: RunFields,
+}
+async fn run(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(input): Json<RunInput>,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    runtime
+        .plugin_ai
+        .as_ref()
+        .ok_or_else(|| ApiProblem::not_found("Plugin AI is not enabled"))?
+        .actor_for(
+            &headers,
+            lenso_capability_agent::CAPABILITY_ID,
+            lenso_capability_agent::RUN_TURN_OPERATION,
+        )?;
+    invoke(
+        runtime,
+        headers,
+        input.completion,
+        false,
+        Some(input.policy),
+        None,
+    )
+    .await
+}
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionInput {
+    session_id: Option<String>,
+    namespace: Option<lenso_capability_agent_session::SessionNamespace>,
+}
+async fn session(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Json(input): Json<SessionInput>,
+) -> Result<Json<serde_json::Value>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    runtime
+        .plugin_ai
+        .as_ref()
+        .ok_or_else(|| ApiProblem::not_found("Plugin AI is not enabled"))?
+        .actor_for(
+            &headers,
+            "lenso.agent.session@1",
+            if input.session_id.is_some() {
+                "read"
+            } else {
+                "open"
+            },
+        )?;
+    invoke(
+        runtime,
+        headers,
+        Input {
+            run_id: uuid::Uuid::new_v4().to_string(),
+            model: String::new(),
+            prompt: String::new(),
+            max_output: 1,
+            generation: None,
+            input_ceiling: None,
+        },
+        false,
+        None,
+        Some(input),
+    )
+    .await
 }

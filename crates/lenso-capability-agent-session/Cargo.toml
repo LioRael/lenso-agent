@@ -15,6 +15,7 @@ projection = "rust-runtime"
 output = "src/generated.rs"
 
 [dependencies]
+lenso.workspace = true
 futures.workspace = true
 lenso-contract-runtime.workspace = true
 lenso-guest-sdk.workspace = true

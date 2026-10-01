@@ -140,3 +140,5 @@ reasons on their own.
 
 - [0117 — Bind remote Management to an Auth-issued task](0117-bind-remote-management-to-an-auth-issued-task.md)
 - [0118 — Expose Host-authorized session-free completion](0118-expose-host-authorized-session-free-completion.md)
+
+- [0119 — Bound plugin Agent runs and Session writes](0119-bound-plugin-agent-runs-and-session-writes.md)

@@ -1,6 +1,7 @@
 use lenso::CtxExt;
 pub mod auth_connections;
 pub mod plugin_ai;
+pub mod plugin_run;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_agent_native_support::WorkspaceScope;
 use lenso_app_authoring::{PluginConfigurationAuthority, PluginSelectionAuthority};
@@ -2935,6 +2936,7 @@ fn linked_host_catalog_for_agent_in(
 fn host_catalog_slots() -> Vec<HostSlot> {
     vec![
         HostSlot::many("agents"),
+        HostSlot::optional("run-boundaries"),
         HostSlot::one("artifact").replaceable(),
         HostSlot::optional("auth"),
         HostSlot::optional("console").replaceable(),

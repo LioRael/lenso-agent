@@ -3406,7 +3406,10 @@ dependencies = [
  "lenso",
  "lenso-agent-cli-plugin",
  "lenso-agent-default-plugins",
+ "lenso-agent-interactive-approval-hook-plugin",
+ "lenso-agent-loop-plugin",
  "lenso-agent-native-support",
+ "lenso-agent-plugin-run-plugin",
  "lenso-agent-session-file-plugin",
  "lenso-agent-session-inspection",
  "lenso-agent-session-sqlite-plugin",
@@ -3451,6 +3454,7 @@ dependencies = [
  "lenso-plugin-bundle",
  "lenso-plugin-control-plane",
  "lenso-quickjs-adapter",
+ "lenso-runner",
  "lenso-runtime-codec 0.4.4",
  "lenso-wasm-component-adapter",
  "notify",
@@ -3776,6 +3780,26 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "lenso-agent-plugin-run-plugin"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "lenso",
+ "lenso-agent-native-support",
+ "lenso-capability-agent-artifact",
+ "lenso-capability-agent-context-compaction",
+ "lenso-capability-agent-memory",
+ "lenso-capability-agent-model",
+ "lenso-capability-agent-prompt",
+ "lenso-capability-agent-session",
+ "lenso-capability-agent-tools",
+ "lenso-kernel",
+ "lenso-native-adapter",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4746,6 +4770,7 @@ name = "lenso-capability-agent-session"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "lenso",
  "lenso-contract-codegen 0.10.1",
  "lenso-contract-runtime",
  "lenso-guest-sdk 0.5.1",

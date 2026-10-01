@@ -1146,6 +1146,22 @@ impl SqliteSessionPlugin {
                 &FixedClock::new(time::OffsetDateTime::now_utc()),
             )
             .map_err(|_| store_failure("Session authentication required"))?;
+        if let Some(namespace) = context
+            .typed_extension::<session_contract::SessionNamespace>()
+            .map_err(|_| store_failure("invalid Session namespace"))?
+        {
+            namespace
+                .validate()
+                .map_err(|_| store_failure("invalid Session namespace"))?;
+            let identity: serde_json::Value = serde_json::from_str(&owner.0)
+                .map_err(|_| store_failure("invalid Session owner"))?;
+            if identity[1].as_str() != Some(namespace.user.as_str()) {
+                return Err(store_failure(
+                    "Session namespace user differs from verified owner",
+                ));
+            }
+            return Ok(Some(serde_json::json!([identity, namespace]).to_string()));
+        }
         Ok(Some(owner.0))
     }
 

@@ -39,7 +39,7 @@ model substitution cannot be inferred from this existing Model wire contract;
 the selected trusted Model provider must honor the exact request. Unknown pricing
 or unbounded usage cannot enter the paid path. Live parent-credential revocation
 is enforced by the Console adapter through existing Credential State, including
-pending-work polling and cancellation. Scoped multi-round runs are not provided.
+pending-work polling and cancellation. This completion route remains session-free. ADR 0119 adds a separate bounded multi-round run route with explicit Session authority.
 
 Cancellation while Model open is pending cancels the native token explicitly;
 dropping the waiting Future alone cannot stop Driver-owned Kernel dispatch. The
