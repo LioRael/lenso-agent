@@ -38,7 +38,17 @@ completion and records exact binding/Generation with usage. Actual provider-side
 model substitution cannot be inferred from this existing Model wire contract;
 the selected trusted Model provider must honor the exact request. Unknown pricing
 or unbounded usage cannot enter the paid path. Live parent-credential revocation
-and scoped multi-round runs are not provided by this short-lived assertion bridge.
+is enforced by the Console adapter through existing Credential State, including
+pending-work polling and cancellation. Scoped multi-round runs are not provided.
+
+Cancellation while Model open is pending cancels the native token explicitly;
+dropping the waiting Future alone cannot stop Driver-owned Kernel dispatch. The
+active owner record lives with the worker, independently of the HTTP waiter.
+Explicit owner-scoped `recover` reports success only with a successful provider
+terminal receipt. Bounded process-local receipts contain run IDs and owners only;
+unknown IDs, cancelled/failed execution, lost receipts and process restarts fail
+closed. Worker disappearance is not evidence of execution settlement. Console
+keeps the full charge even when evidence permits concurrency recovery.
 
 Proof: an actual Console Kernel consumer calls a separate local Agent fixture
 process. Foreign issuer/audience and spoofed caller/project attempts are rejected;

@@ -51,6 +51,7 @@ impl Signal {
 pub struct BridgeAuthority {
     verifier: ActorAssertionVerifier,
     active: Arc<Mutex<BTreeMap<String, (String, Signal)>>>,
+    terminal: Arc<Mutex<BTreeMap<String, String>>>,
 }
 
 impl BridgeAuthority {
@@ -81,6 +82,7 @@ impl BridgeAuthority {
             verifier: ActorAssertionVerifier::from_public_key_base64(issuer, public_key)
                 .map_err(|_| "invalid existing operators authority".to_owned())?,
             active: Arc::new(Mutex::new(BTreeMap::new())),
+            terminal: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -175,6 +177,7 @@ pub(super) struct CompletionCommand {
     quote_only: bool,
     cancellation: Signal,
     reply: oneshot::Sender<Result<serde_json::Value, String>>,
+    active: ActiveRun,
 }
 
 impl std::fmt::Debug for CompletionCommand {
@@ -199,6 +202,10 @@ pub(super) fn routes() -> Router<WebRuntime> {
             "/api/console/v1/agent/plugin-ai/completions/{run_id}/cancel",
             post(cancel),
         )
+        .route(
+            "/api/console/v1/agent/plugin-ai/completions/{run_id}/recover",
+            post(recover),
+        )
 }
 
 async fn quote(
@@ -220,6 +227,12 @@ struct ActiveRun {
     authority: Arc<BridgeAuthority>,
     id: String,
     cancellation: Signal,
+}
+struct CancelOnDrop(Signal);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 impl Drop for ActiveRun {
     fn drop(&mut self) {
@@ -264,11 +277,17 @@ async fn invoke(
             (actor.subject().to_owned(), cancellation.clone()),
         );
     }
-    let _active = ActiveRun {
+    authority
+        .terminal
+        .lock()
+        .map_err(|_| ApiProblem::unavailable("completion evidence unavailable"))?
+        .remove(&input.run_id);
+    let active = ActiveRun {
         authority,
         id: input.run_id.clone(),
         cancellation: cancellation.clone(),
     };
+    let _cancel_on_drop = CancelOnDrop(cancellation.clone());
     let (reply, response) = oneshot::channel();
     runtime
         .commands
@@ -278,6 +297,7 @@ async fn invoke(
             quote_only,
             cancellation,
             reply,
+            active,
         }))
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime unavailable"))?;
@@ -314,6 +334,42 @@ async fn cancel(
     Ok(Json(false))
 }
 
+/// Explicit recovery never replays a request or refunds unknown usage. Report
+/// a successful provider terminal receipt. Worker disappearance alone is not
+/// proof: Kernel dispatch may outlive the worker or its waiting Future.
+async fn recover(
+    State(runtime): State<WebRuntime>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<bool>, ApiProblem> {
+    runtime.authorize_control(&headers)?;
+    let authority = runtime
+        .plugin_ai
+        .as_ref()
+        .ok_or_else(|| ApiProblem::not_found("Plugin AI is not enabled"))?;
+    let actor = authority.actor(&headers)?;
+    let active = authority
+        .active
+        .lock()
+        .map_err(|_| ApiProblem::unavailable("completion state unavailable"))?;
+    if let Some((owner, token)) = active.get(&id) {
+        if owner != actor.subject() {
+            return Err(ApiProblem::forbidden("completion owner mismatch"));
+        }
+        token.cancel();
+        return Ok(Json(false));
+    }
+    let terminal = authority
+        .terminal
+        .lock()
+        .map_err(|_| ApiProblem::unavailable("completion evidence unavailable"))?;
+    match terminal.get(&id) {
+        Some(owner) if owner == actor.subject() => Ok(Json(true)),
+        Some(_) => Err(ApiProblem::forbidden("completion owner mismatch")),
+        None => Ok(Json(false)),
+    }
+}
+
 pub(super) async fn dispatch(app: &AgentApp, command: CompletionCommand) {
     let lease = app.lease_plugin_completion(command.actor.clone()).await;
     tokio::task::spawn_local(async move {
@@ -321,6 +377,19 @@ pub(super) async fn dispatch(app: &AgentApp, command: CompletionCommand) {
             Ok(lease) => execute(&lease, &command).await,
             Err(error) => Err(error),
         };
+        if result.is_ok()
+            && !command.quote_only
+            && let Ok(mut terminal) = command.active.authority.terminal.lock()
+        {
+            // Bounded receipts contain only run IDs and verified owners.
+            // Exhaustion loses recovery evidence, never grants admission.
+            if terminal.len() < 1024 {
+                terminal.insert(
+                    command.input.run_id.clone(),
+                    command.actor.subject().to_owned(),
+                );
+            }
+        }
         let _ = command.reply.send(result);
     });
 }
@@ -353,10 +422,12 @@ async fn execute(
     }))
     .map_err(|e| e.to_string())?;
     let native_cancellation = CancellationToken::new();
-    let stream = tokio::select! {
-        () = command.cancellation.cancelled() => { return Err("completion cancelled".into()); }
-        stream = lease.complete(request, native_cancellation.clone()) => stream?,
-    };
+    let stream = cancel_open(
+        &native_cancellation,
+        &command.cancellation,
+        lease.complete(request, native_cancellation.clone()),
+    )
+    .await?;
     let mut text = String::new();
     let mut usage = None;
     loop {
@@ -411,6 +482,21 @@ async fn execute(
     })
     .map_err(|e| e.to_string())
 }
+
+async fn cancel_open<T>(
+    native: &CancellationToken,
+    signal: &Signal,
+    open: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    tokio::select! {
+        biased;
+        () = signal.cancelled() => { native.cancel(); Err("completion cancelled".into()) }
+        result = open => result,
+    }
+}
+
+#[cfg(test)]
+mod cancel_tests;
 
 #[cfg(test)]
 mod tests {
