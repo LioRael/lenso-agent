@@ -1,5 +1,6 @@
 use lenso::CtxExt;
 pub mod auth_connections;
+pub mod plugin_ai;
 use lenso::host::{Host as FrameworkHost, HostBuilder as FrameworkHostBuilder};
 use lenso_agent_native_support::WorkspaceScope;
 use lenso_app_authoring::{PluginConfigurationAuthority, PluginSelectionAuthority};
