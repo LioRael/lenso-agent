@@ -67,3 +67,25 @@ consumer/user/project denial. Coordinated separate-process Console/Agent fixture
 exercise the actual Workspace Service binding, explicit existing-Session grants,
 revocation during a pending run, known-price reservation and existing completion
 recovery. All Models and credentials are synthetic. No publication or paid call.
+
+## Independent-review correction
+
+Console `a716f7a` / Agent `44b1120` review reproduced expiry-blocked cancellation
+and premature concurrency release when reservation Drop recorded unknown cost.
+The active bridge now retains the SHA-256 digest of the exact originally verified
+Actor header. Existing Host control plus that snapshot may stop only that active
+run after expiry/revocation; expired admission, quote, recovery and stopping another
+snapshot's run remain forbidden. It creates no signing key or generic credential.
+
+Execution settlement is independent of retained charge. Console counts every
+non-settled row against concurrency, including `unknown` after cancel failure,
+timeout, disconnection and restart. Only completed usage or authenticated successful
+provider-terminal evidence can settle execution. Recovery writes `settled_unknown`
+and an explicit execution-settled receipt while retaining the full charge. Cancel
+acknowledgement and worker disappearance alone are insufficient. Existing V1
+unknown rows fail closed; no automatic migration or cleanup releases them.
+
+Six real Console Kernel / separate Agent process tests cover two-second assertion
+expiry and stop-only scope, cancellation rejection/timeout, process disconnection,
+concurrency-one adapter restart, plus prior completion and scoped Session behavior.
+All calls remain synthetic. Test-only fault injection is excluded from production.

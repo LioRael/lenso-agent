@@ -50,8 +50,24 @@ impl Signal {
 #[derive(Clone, Debug)]
 pub struct BridgeAuthority {
     verifier: ActorAssertionVerifier,
-    active: Arc<Mutex<BTreeMap<String, (String, Signal)>>>,
+    active: Arc<Mutex<BTreeMap<String, AdmittedRun>>>,
     terminal: Arc<Mutex<BTreeMap<String, String>>>,
+    #[cfg(test)]
+    cancel_fault: Option<std::path::PathBuf>,
+}
+
+/// Stop-only authority is the exact assertion snapshot verified at admission.
+/// Its digest confers no permission to start, recover or inspect another run.
+#[derive(Clone, Debug)]
+struct AdmittedRun {
+    subject: String,
+    stop_assertion: [u8; 32],
+    cancellation: Signal,
+}
+fn assertion_snapshot(headers: &HeaderMap) -> Option<[u8; 32]> {
+    use sha2::{Digest as _, Sha256};
+    let header = headers.get("x-lenso-actor")?.to_str().ok()?;
+    (header.len() <= 16384).then(|| Sha256::digest(header.as_bytes()).into())
 }
 
 impl BridgeAuthority {
@@ -83,6 +99,8 @@ impl BridgeAuthority {
                 .map_err(|_| "invalid existing operators authority".to_owned())?,
             active: Arc::new(Mutex::new(BTreeMap::new())),
             terminal: Arc::new(Mutex::new(BTreeMap::new())),
+            #[cfg(test)]
+            cancel_fault: None,
         })
     }
 
@@ -288,7 +306,12 @@ async fn invoke(
         }
         active.insert(
             input.run_id.clone(),
-            (actor.subject().to_owned(), cancellation.clone()),
+            AdmittedRun {
+                subject: actor.subject().to_owned(),
+                stop_assertion: assertion_snapshot(&headers)
+                    .ok_or_else(|| ApiProblem::forbidden("Host actor required"))?,
+                cancellation: cancellation.clone(),
+            },
         );
     }
     authority
@@ -335,18 +358,35 @@ async fn cancel(
         .plugin_ai
         .as_ref()
         .ok_or_else(|| ApiProblem::not_found("Plugin AI is not enabled"))?;
-    let actor = authority.actor(&headers)?;
+    #[cfg(test)]
+    if let Some(path) = &authority.cancel_fault {
+        let fault = std::fs::read_to_string(path).unwrap_or_default();
+        if !fault.is_empty() {
+            std::fs::write(path.with_extension("entered"), &fault)
+                .map_err(|_| ApiProblem::unavailable("fixture fault trace"))?;
+            if fault == "timeout" {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+            return Err(ApiProblem::unavailable("synthetic cancellation failure"));
+        }
+    }
     let active = authority
         .active
         .lock()
         .map_err(|_| ApiProblem::unavailable("completion state unavailable"))?;
-    if let Some((owner, token)) = active.get(&id) {
-        if owner != actor.subject() {
+    if let Some(run) = active.get(&id) {
+        // Admission already verified these exact bytes. Expiry/revocation must
+        // never prevent stopping that admitted run; all other access still
+        // requires a currently valid assertion and the same verified owner.
+        if assertion_snapshot(&headers) != Some(run.stop_assertion)
+            && run.subject != authority.actor(&headers)?.subject()
+        {
             return Err(ApiProblem::forbidden("completion owner mismatch"));
         }
-        token.cancel();
+        run.cancellation.cancel();
         return Ok(Json(true));
     }
+    authority.actor(&headers)?;
     Ok(Json(false))
 }
 
@@ -368,11 +408,11 @@ async fn recover(
         .active
         .lock()
         .map_err(|_| ApiProblem::unavailable("completion state unavailable"))?;
-    if let Some((owner, token)) = active.get(&id) {
-        if owner != actor.subject() {
+    if let Some(run) = active.get(&id) {
+        if run.subject != actor.subject() {
             return Err(ApiProblem::forbidden("completion owner mismatch"));
         }
-        token.cancel();
+        run.cancellation.cancel();
         return Ok(Json(false));
     }
     let terminal = authority
@@ -613,8 +653,9 @@ mod tests {
                 config.access = super::super::AgentWebAccess::Local;
                 config.control =
                     super::super::AgentWebControl::Bearer("synthetic-existing-host-control".into());
-                config.plugin_ai =
-                    Some(Arc::new(BridgeAuthority::operators(&issuer, &key).unwrap()));
+                let mut authority = BridgeAuthority::operators(&issuer, &key).unwrap();
+                authority.cancel_fault = Some(root.join("fixture-cancel-fault"));
+                config.plugin_ai = Some(Arc::new(authority));
                 let surface = super::super::AgentWebSurface::start(config).await.unwrap();
                 if !scoped {
                     let (reply, response) = oneshot::channel();
