@@ -1,0 +1,19 @@
+crates/lenso-agent-host/src/generation/plugin_ai.rs
+  s_50e3beadc1d491::t_0f6519d9cf891e 95-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9fece8e96316b32899f9fa0e242d8a94bbfc35cf",
+  "prompts": {},
+  "sessions": {
+    "s_50e3beadc1d491": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0f9cb-a005-76d3-8f46-f5efcfd3deb1",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
