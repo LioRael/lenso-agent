@@ -1,0 +1,28 @@
+.github/workflows/quality.yml
+  h_9d56aba080c170 48-49,73-74,87-88,102-103,116-117
+CONTRIBUTING.md
+  h_9d56aba080c170 28-53
+rust-toolchain.toml
+  h_9d56aba080c170 1-4
+scripts/check-console-profile-admission.py
+  h_9d56aba080c170 39,56-60,62,66,97-101,111
+scripts/check-fixture-inputs.py
+  h_9d56aba080c170 1-31
+scripts/check.sh
+  h_9d56aba080c170 1-77
+scripts/test-check-fixture-inputs.py
+  h_9d56aba080c170 1-52
+scripts/test-console-profile-admission.py
+  h_9d56aba080c170 1-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "25b0741657f67b7137aba6bfc2ed6d2ee2086b32",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
