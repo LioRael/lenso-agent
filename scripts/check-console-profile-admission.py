@@ -36,6 +36,7 @@ class CatalogHandler(BaseHTTPRequestHandler):
 
 binary = Path(sys.argv[1]).resolve()
 with tempfile.TemporaryDirectory() as home, socket.socket() as listener:
+    home = str(Path(home).resolve())
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
     listener.close()
@@ -52,12 +53,17 @@ with tempfile.TemporaryDirectory() as home, socket.socket() as listener:
         directory = Path(home) / "plugins" / f"lenso.agent.{plugin}"
         directory.mkdir(parents=True)
         (directory / f"{instance}.toml").write_text(content)
-    environment = dict(os.environ, LENSO_AGENT_HOME=home,
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(("LENSO_AGENT_", "LENSO_CONSOLE_"))}
+    environment.update(HOME=home, XDG_CONFIG_HOME=str(Path(home) / "config"),
+                       XDG_DATA_HOME=str(Path(home) / "data"), CODEX_HOME=str(Path(home) / "codex"),
+                       LENSO_AGENT_HOME=home,
                        LENSO_AGENT_CONTROL_TOKEN="isolated-local-check")
+    stderr = tempfile.TemporaryFile(mode="w+b")
     process = subprocess.Popen([
         str(binary), "--listen", f"127.0.0.1:{port}", "--plugin-control",
         "--plugin-configuration-store", str(Path(home) / "configuration.sqlite3"),
-    ], env=environment, cwd=home, stdout=subprocess.DEVNULL)
+    ], env=environment, cwd=home, stdout=subprocess.DEVNULL, stderr=stderr)
     try:
         url = f"http://127.0.0.1:{port}/api/console/v1/agent/bootstrap"
         for attempt in range(100):
@@ -88,6 +94,11 @@ with tempfile.TemporaryDirectory() as home, socket.socket() as listener:
             assert "Plugin inventory" in error.read().decode()
         assert not (Path(home) / "profiles" / "code.toml").exists()
         print("PASS: minimal Console hides and rejects unsupported coding Profiles")
+    except BaseException:
+        stderr.seek(0)
+        print(f"Console fixture stderr (cwd/home={home}, port={port}):\n"
+              + stderr.read().decode(errors="replace"), file=sys.stderr)
+        raise
     finally:
         catalog.shutdown()
         catalog.server_close()
@@ -97,3 +108,4 @@ with tempfile.TemporaryDirectory() as home, socket.socket() as listener:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+        stderr.close()

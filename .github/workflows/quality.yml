@@ -40,31 +40,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - name: Check product identity
-        run: |
-          former_repository='lenso-agent-''harness'
-          former_product='Lenso Agent ''Harness'
-          if git grep -n -I -E "${former_repository}|${former_product}" -- . \
-            ':!docs/adr/**' \
-            ':!docs/research/**'; then
-            echo "active product files still use the former Lenso Agent identity" >&2
-            exit 1
-          fi
-      - name: Check release scripts
-        run: |
-          bash -n scripts/*.sh
-          release_version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' apps/lenso-agent-tui/Cargo.toml | head -n 1)"
-          ./scripts/check-release-version.sh "${release_version}"
-          ./scripts/test-release-packaging.sh
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # stable
         with:
           toolchain: nightly-2026-07-10
           components: clippy,rustfmt
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-      - name: Lint every target
-        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - name: Run shared static and prepared-input gates
+        run: bash scripts/check.sh static
 
   tests:
     name: Workspace tests
@@ -88,16 +70,8 @@ jobs:
           fi
           bwrap --ro-bind / / --unshare-net /bin/true
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Test the workspace
-        run: cargo test --locked --workspace --all-targets
-      - name: Verify the current Bun Tool SDK cohort
-        run: |
-          (cd packages/lenso-agent-tool-sdk && bun install --frozen-lockfile && bun run build && bun test test)
-          (cd packages/agent-tool-convention && bun install --frozen-lockfile && bun run check)
-      - name: Check minimal Console Profile admission
-        run: |
-          cargo build --locked -p lenso-agent-web --no-default-features --features console-standalone --bin lenso-agent-console-web
-          python3 scripts/check-console-profile-admission.py target/debug/lenso-agent-console-web
+      - name: Run shared workspace and Profile gates
+        run: bash scripts/check.sh tests
 
   contracts:
     name: Generated contracts
@@ -110,16 +84,8 @@ jobs:
         with:
           toolchain: nightly-2026-07-10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Install the contract generator
-        run: cargo install lenso-contract-codegen --version '=0.10.0' --locked
-      - name: Check generated contracts
-        run: lenso-contract-codegen workspace check --manifest-path Cargo.toml
-      - name: Verify independent registry consumer
-        run: python3 examples/external-task-board-capability/verify-registry.py
-      - name: Verify prepared durable SDK artifacts
-        run: |
-          cargo package -p lenso-capability-agent-durable-task -p lenso-capability-agent-extension-state
-          python3 examples/external-agent-durable-state/verify-artifacts.py --artifacts-dir target/package
+      - name: Run shared generated-contract and real artifact gates
+        run: bash scripts/check.sh contracts
 
   foundation-targets:
     name: Foundation execution and binary upgrade
@@ -133,10 +99,8 @@ jobs:
           toolchain: nightly-2026-07-10
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-      - name: Verify released Wasm imports and isolation
-        run: python3 examples/external-agent-targets/verify.py
-      - name: Verify durable recovery across different binaries
-        run: python3 examples/external-agent-durable-state/verify-binary-upgrade.py
+      - name: Run shared Foundation target gates
+        run: bash scripts/check.sh foundation-targets
 
   marketplace-installation:
     name: Console marketplace tool acceptance
@@ -149,13 +113,5 @@ jobs:
         with:
           toolchain: nightly-2026-07-10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
-      - name: Install the released fixture authoring CLI
-        run: cargo install lenso-cli --version 0.6.3 --locked
-      - name: Pack real Process releases
-        run: CARGO=cargo python3 apps/lenso-agent-web/tests/fixtures/marketplace-proof/build-variants.py "$RUNNER_TEMP/marketplace-proof"
-      - name: Install, invoke, upgrade, recover, reject and remove through Console tools
-        env:
-          LENSO_MARKETPLACE_ARCHIVE: ${{ runner.temp }}/marketplace-proof/proof-0.1.0.lenso-plugin
-          LENSO_MARKETPLACE_UPDATE_ARCHIVE: ${{ runner.temp }}/marketplace-proof/proof-0.2.0.lenso-plugin
-          LENSO_MARKETPLACE_FAILURE_ARCHIVE: ${{ runner.temp }}/marketplace-proof/proof-0.3.0.lenso-plugin
-        run: cargo test --locked -p lenso-agent-web --lib console_tools_install_signed_release_and_observe_runtime -- --ignored
+      - name: Run shared real Process release acceptance
+        run: bash scripts/check.sh marketplace-installation

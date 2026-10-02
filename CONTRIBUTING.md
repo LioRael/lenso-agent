@@ -25,6 +25,32 @@ release configuration, and dependency changes as untrusted input: inspect them
 before execution, use least-privilege credentials, and never run commands that
 publish, deploy, or disclose secrets merely to review a contribution.
 
+## Shared validation entrypoint
+
+Run `bash scripts/check.sh` for all five candidate gate phases. CI calls the
+same `static`, `tests`, `contracts`, `foundation-targets`, and
+`marketplace-installation` phases. `bash scripts/check.sh preflight` checks
+identity, release packaging, the existing Tool SDK cohort and prepared fixture
+locks without compiling Rust. Missing dependency caches can require network
+access for locked metadata. Python 3.11+ is required.
+
+The script and `rust-toolchain.toml` select CI's nightly-2026-07-10, including
+for local focused Clippy. Bun tests require 1.4.0. Install Linux coding-profile
+dependencies as specified by `quality.yml`; the script verifies bubblewrap's
+network namespace before tests. macOS results do not prove Linux isolation.
+Every phase logs the source SHA, OS, Rust versions and exact commands.
+
+Dialogue's explicit selected inventory and Foundation's blank composition
+assertions run before workspace tests. The minimal Console fixture owns its
+cwd, Home, Agent Home, database and dynamically allocated ports, clears
+inherited Agent/Console configuration, and prints child stderr on failure.
+Its HTTP bootstrap response is the readiness signal; no new fixed sleep or
+retry-on-failure policy was added. There remains a short port reservation handoff
+because this binary requires a known listen address.
+
+Run focused checks for ordinary edits. A partial phase is not a complete local
+or remote candidate gate. Publication and deployment remain separate.
+
 ## Review and delivery
 
 The normal delivery proof is candidate-first. A maintainer rebases or imports
