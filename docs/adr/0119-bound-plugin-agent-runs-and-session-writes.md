@@ -101,3 +101,17 @@ Kernel caller binding, its immutable profile and ledger ownership, and private
 control-token custody enforce the cross-consumer boundary. Native code remains
 trusted. The task Kernel narrows composition/state/forwarding and is not an
 independent hostile-code or filesystem sandbox.
+
+## Candidate CI compatibility follow-up
+
+The first exact candidate CI exposed a nightly deprecation of atomic
+`fetch_update`. Completion request IDs now use checked compare-exchange allocation
+with unchanged exhaustion and concurrency semantics, compatible with stable and
+the CI-pinned nightly. Strict Host/Web Clippy on nightly-2026-07-10 passes.
+
+Whole-workspace testing also linked the run boundary inventory into the Dialogue
+starter test binary. Its Host Catalog must admit the `run-boundaries` Slot even
+though that composition does not select the Plugin. Dialogue and Foundation now
+accept that optional inventory category without adding defaults. Dialogue
+execution and exact selected-inventory tests (2), bound AI tests (3), and blank
+Foundation tests (4) pass. This does not enable cross-plugin AI in blank Foundation.

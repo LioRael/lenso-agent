@@ -51,6 +51,8 @@ pub fn starter_host_catalog(home: &Path) -> Result<HostCatalog, String> {
 fn starter_host_slots() -> Vec<HostSlot> {
     [
         "agents",
+        // Linked optional run boundaries remain unselected in this composition.
+        "run-boundaries",
         "artifact",
         "context-compactor",
         "memory",

@@ -222,6 +222,7 @@ pub struct FoundationDiagnostic {
 fn foundation_host_slots() -> Vec<HostSlot> {
     [
         "agents",
+        "run-boundaries",
         "artifact",
         "auth",
         "console",

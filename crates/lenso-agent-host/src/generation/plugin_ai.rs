@@ -92,11 +92,21 @@ impl CompletionGeneration {
             &request,
             self.catalog.models.iter().map(|model| model.id.as_str()),
         )?;
-        let request_id = super::NEXT_ROOT_REQUEST_ID
-            .fetch_update(super::Ordering::Relaxed, super::Ordering::Relaxed, |id| {
-                id.checked_add(1)
-            })
-            .map_err(|_| "completion request identity exhausted".to_owned())?;
+        let mut request_id = super::NEXT_ROOT_REQUEST_ID.load(super::Ordering::Relaxed);
+        loop {
+            let next = request_id
+                .checked_add(1)
+                .ok_or_else(|| "completion request identity exhausted".to_owned())?;
+            match super::NEXT_ROOT_REQUEST_ID.compare_exchange_weak(
+                request_id,
+                next,
+                super::Ordering::Relaxed,
+                super::Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(current) => request_id = current,
+            }
+        }
         let context = InvocationContext::new(request_id, None, cancellation)
             .with_extension(
                 super::GENERATION_SPEC_DIGEST_EXTENSION,
