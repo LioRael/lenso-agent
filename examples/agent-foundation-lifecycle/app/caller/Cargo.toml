@@ -1,0 +1,18 @@
+[package]
+name = "foundation-lifecycle-caller"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[package.metadata.lenso]
+plugin-id = "example.foundation-lifecycle-caller"
+root-slot = "fixture-surfaces"
+
+[dependencies]
+lenso = "0.5.28"
+lenso-capability-agent = "0.1.0"
+lenso-capability-agent-model = "0.1.0"
+lenso-capability-agent-session = "0.1.0"
+lenso-capability-agent-tool-provider = "0.3.0"
+
+[workspace]

@@ -40,6 +40,31 @@ dependencies as specified by `quality.yml`; the script verifies bubblewrap's
 network namespace before tests. macOS results do not prove Linux isolation.
 Every phase logs the source SHA, OS, Rust versions and exact commands.
 
+The required `foundation-targets` phase also executes the independent
+`examples/agent-foundation-lifecycle/verify.py` consumer. Its shared wrapper
+reads the exact Core revision from Agent's `Cargo.toml` patches, requires every
+Core package declared by the fixture to use that official source and all Core
+pins to agree, fetches that public SHA into a fresh external directory,
+and checks the Core HEAD, both checkout roots and both clean worktrees before
+running the consumer. In CI the Agent HEAD must also match `GITHUB_SHA` for
+that attempt. Offline wrapper regressions run in `preflight`.
+CI retains its source identities, logs and runtime evidence even when the
+consumer fails; it does not upload the Core checkout or build target directory.
+The existing five-job `quality` aggregate requires this execution to succeed.
+
+For a focused local run, use
+`python3 scripts/check-agent-foundation-lifecycle.py --core-root /path/to/lenso`
+with a clean Core checkout at the exact Agent pin. The wrapper leaves existing
+checkouts unchanged and rejects a reused `--evidence-root`; its default is a
+new external temporary directory whose path is printed and retained. Add
+`--offline` only when the locked dependency closure is cached. Local Cargo
+execution must still follow `AGENTS.md` and its approved wrapper; ensure the
+fixture's `cargo` invocations use that wrapper, or leave execution to the
+authorized CI environment. An environment with Cargo available but without
+the approved local wrapper cannot substitute a run against different source
+or tool identities. This consumer proves source-local native lifecycle
+behavior, not registry availability, SDK publication or release qualification.
+
 Dialogue's explicit selected inventory and Foundation's blank composition
 assertions run before workspace tests. The minimal Console fixture owns its
 cwd, Home, Agent Home, database and dynamically allocated ports, clears

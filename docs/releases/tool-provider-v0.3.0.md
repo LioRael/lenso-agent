@@ -46,6 +46,10 @@ not registry visibility proof.
 
 The `sdk-only` and `sdk-cohort` selections remain available for independently
 authorized SDK publication. They are not part of the Provider-only release.
+Before a CLI adopts these versions as an installable default, run the
+[cross-repository starter prerequisite gate](../tool-starter-release-prerequisites.md).
+Matching source versions and a Provider-only release do not establish that the
+Rust or TypeScript Tool SDK is available to a new registry-only consumer.
 
 The current development workspace still patches Codec to a Git revision, so
 Cargo's automatically included package lock records that source. The

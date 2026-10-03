@@ -1,0 +1,46 @@
+[package]
+name = "agent-foundation-lifecycle-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "foundation-lifecycle-phase"
+path = "src/main.rs"
+
+[dependencies]
+foundation-lifecycle-caller = { path = "../app/caller" }
+foundation-lifecycle-task-tool = { path = "../app/task-tool" }
+lenso = "0.5.28"
+lenso-app-plan = "0.4.6"
+lenso-kernel = "0.3.12"
+lenso-native-adapter = "0.3.19"
+lenso-plugin-control-plane = "0.4.26"
+lenso-runtime-codec = "0.4.4"
+lenso-runner = "0.2.20"
+lenso-capability-agent = "0.1.0"
+lenso-capability-agent-model = "0.1.0"
+lenso-capability-agent-session = "0.1.0"
+lenso-capability-agent-tool-provider = "0.3.0"
+lenso-agent-loop-plugin = "0.1.0"
+lenso-agent-model-fixture-plugin = "0.5.0"
+lenso-agent-tools-plugin = "0.2.0"
+lenso-agent-session-file-plugin = "0.1.0"
+lenso-agent-prompt-plugin = "0.1.0"
+lenso-agent-context-compaction-plugin = "0.1.0"
+lenso-agent-memory-sqlite-plugin = "0.1.0"
+lenso-agent-artifact-file-plugin = "0.1.0"
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt", "time"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[workspace]
+
+# Canonical Host identity hashes the complete executable on each process boot.
+[profile.dev.package.sha2]
+opt-level = 3
+
+# LENSO_LOCAL_PATCHES

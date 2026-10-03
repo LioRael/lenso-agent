@@ -100,7 +100,21 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
       - name: Run shared Foundation target gates
+        env:
+          LENSO_FOUNDATION_LIFECYCLE_ROOT: ${{ runner.temp }}/agent-foundation-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}
         run: bash scripts/check.sh foundation-targets
+      - name: Retain Foundation lifecycle evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agent-foundation-lifecycle-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/agent-foundation-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/lifecycle-gate.json
+            ${{ runner.temp }}/agent-foundation-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/core-fetch.log
+            ${{ runner.temp }}/agent-foundation-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/consumer/source-evidence.json
+            ${{ runner.temp }}/agent-foundation-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/consumer/*.log
+            ${{ runner.temp }}/agent-foundation-lifecycle-${{ github.run_id }}-${{ github.run_attempt }}/consumer/evidence/**
 
   marketplace-installation:
     name: Console marketplace tool acceptance

@@ -26,6 +26,13 @@ preflight() {
   run python3 scripts/check-fixture-inputs.py
   run python3 scripts/test-check-fixture-inputs.py
   run python3 scripts/test-console-profile-admission.py
+  # Pure offline regressions; real cross-repository readiness needs explicit
+  # reviewed checkouts/artifacts via check-version-consistency.py.
+  run python3 scripts/test-tool-starter-prerequisites.py
+  run python3 scripts/test-version-consistency.py
+  run python3 scripts/test-version-manifest-inputs.py
+  run python3 scripts/test-version-doc-entrypoints.py
+  run python3 scripts/test-check-agent-foundation-lifecycle.py
 }
 static() {
   preflight
@@ -57,6 +64,7 @@ contracts() {
 foundation_targets() {
   run python3 examples/external-agent-targets/verify.py
   run python3 examples/external-agent-durable-state/verify-binary-upgrade.py
+  run python3 scripts/check-agent-foundation-lifecycle.py
 }
 marketplace_installation() (
   run cargo install lenso-cli --version 0.6.3 --locked

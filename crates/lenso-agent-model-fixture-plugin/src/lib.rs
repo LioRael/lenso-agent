@@ -100,10 +100,12 @@ impl ModelProvider for FixtureModel {
     ) -> LocalBoxFuture<'static, Result<Box<dyn NativeStreamSession>, ModelCompleteInvocationError>>
     {
         if waits_for_running_input(&request)
-            || request.messages.iter().rev().any(|message| {
-                message.role == CompleteMessageRole::User
-                    && message.content == "Remain pending until cancelled."
-            })
+            || request
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == CompleteMessageRole::User)
+                .is_some_and(|message| message.content == "Remain pending until cancelled.")
         {
             return Box::pin(ready(Ok(
                 Box::new(PendingOutputStream::default()) as Box<dyn NativeStreamSession>
@@ -2424,5 +2426,108 @@ fn response(
             .expect("fixture Tool arguments must be valid JSON"),
         input_tokens: input_tokens.to_owned(),
         output_tokens: output_tokens.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::FutureExt;
+    use lenso_kernel::CancellationToken;
+
+    fn message(role: CompleteMessageRole, content: &str) -> CompleteMessageInput {
+        CompleteMessageInput {
+            arguments_json: None,
+            content: content.to_owned(),
+            images: None,
+            role,
+            tool_call_id: None,
+            tool_name: None,
+        }
+    }
+
+    fn complete(messages: Vec<CompleteMessageInput>) -> Box<dyn NativeStreamSession> {
+        let model = FixtureModel {
+            config: FixtureConfig {
+                model: MODEL_ID.to_owned(),
+                allowed_models: Vec::new(),
+            },
+        };
+        ModelProvider::complete(
+            &model,
+            InvocationContext::new(1, None, CancellationToken::new()),
+            CompleteOpen {
+                continuation_scope: None,
+                max_output_tokens: 128,
+                messages,
+                model: MODEL_ID.to_owned(),
+                reasoning_budget_tokens: None,
+                reasoning_effort: None,
+                reasoning_enabled: None,
+                service_tier: None,
+                temperature: 0.0,
+                tools: Vec::new(),
+            },
+        )
+        .now_or_never()
+        .expect("fixture Model opens synchronously")
+        .expect("fixture Model opens successfully")
+    }
+
+    #[test]
+    fn latest_pending_request_remains_cancellable_after_prior_history() {
+        let stream = complete(vec![
+            message(CompleteMessageRole::User, "Answer directly: previous"),
+            message(CompleteMessageRole::Assistant, "Direct answer."),
+            message(CompleteMessageRole::User, "Remain pending until cancelled."),
+            message(CompleteMessageRole::System, "Continue the current turn."),
+        ]);
+        assert!(stream.receive().now_or_never().is_none());
+        stream.cancel();
+        assert!(matches!(
+            stream.receive().now_or_never(),
+            Some(Err(RuntimeFailure::AdmissionClosed))
+        ));
+    }
+
+    #[test]
+    fn resumed_request_completes_with_cancelled_pending_request_in_history() {
+        let stream = complete(vec![
+            message(CompleteMessageRole::User, "Remain pending until cancelled."),
+            message(
+                CompleteMessageRole::Assistant,
+                "[This previous turn did not complete.]",
+            ),
+            message(CompleteMessageRole::User, "Answer directly: resumed"),
+        ]);
+        let mut text = String::new();
+        let mut usage_seen = false;
+        let mut terminal_seen = false;
+        for _ in 0..8 {
+            match stream
+                .receive()
+                .now_or_never()
+                .expect("resumed request must not inherit a prior turn's pending behavior")
+                .expect("resumed fixture stream succeeds")
+            {
+                NativeStreamItem::Message(value) => {
+                    let message = value.downcast::<CompleteMessage>().unwrap();
+                    match message.kind {
+                        CompleteMessageKind::TextDelta => text.push_str(&message.text),
+                        CompleteMessageKind::Usage => usage_seen = true,
+                        _ => {}
+                    }
+                }
+                NativeStreamItem::PeerHalfClosed => {}
+                NativeStreamItem::Terminal(Ok(())) => {
+                    terminal_seen = true;
+                    break;
+                }
+                NativeStreamItem::Terminal(Err(_)) => panic!("unexpected fixture domain error"),
+            }
+        }
+        assert_eq!(text, "Direct answer.");
+        assert!(usage_seen);
+        assert!(terminal_seen);
     }
 }

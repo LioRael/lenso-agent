@@ -82,6 +82,8 @@ jobs:
                 value.version !== process.env.RELEASE_VERSION || value.private)
               process.exit(1);
           '
+      - name: Test starter prerequisite classifications
+        run: python3 scripts/test-tool-starter-prerequisites.py
       - name: Install package dependencies
         working-directory: packages/lenso-agent-tool-sdk
         run: npm install --ignore-scripts --no-package-lock
