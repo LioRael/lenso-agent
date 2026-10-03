@@ -1056,13 +1056,13 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "requires real Process archives in LENSO_MARKETPLACE_*_ARCHIVE"]
     async fn console_tools_install_signed_release_and_observe_runtime() {
-        console_tools_install_for_authority(false).await;
+        Box::pin(console_tools_install_for_authority(false)).await;
     }
 
     #[tokio::test(flavor = "current_thread")]
     #[ignore = "requires real Process archives in LENSO_MARKETPLACE_*_ARCHIVE"]
     async fn console_tools_install_signed_release_and_observe_runtime_sqlite() {
-        console_tools_install_for_authority(true).await;
+        Box::pin(console_tools_install_for_authority(true)).await;
     }
 
     async fn console_tools_install_for_authority(sqlite: bool) {
@@ -1092,7 +1092,7 @@ mod tests {
             }
             config
         };
-        tokio::task::LocalSet::new().run_until(async {
+        tokio::task::LocalSet::new().run_until(Box::pin(async {
             let surface = crate::AgentWebSurface::start(configuration()).await.unwrap();
             let runtime = surface.runtime.clone();
             let control = runtime.plugin_control().unwrap();
@@ -1161,7 +1161,7 @@ mod tests {
             assert!(previous_version(&control,"lenso.marketplace.proof").unwrap().is_none());
             assert!(control.configuration_authority.inspect().is_ok());
             surface.shutdown().await.unwrap();
-        }).await;
+        })).await;
     }
 
     fn set_source(control: &PluginControl, url: &str) {

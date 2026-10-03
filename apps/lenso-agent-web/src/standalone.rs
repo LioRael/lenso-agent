@@ -105,46 +105,17 @@ async fn run(args: Args, linked_plugins: fn(), console: bool) -> Result<(), Stri
     let data_plane_token = std::env::var(DATA_PLANE_TOKEN_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let access = if let Some(path) = args.assistant_authority {
-        #[derive(serde::Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Authority {
-            issuer: String,
-            public_key: String,
-        }
-        if !path.is_absolute() || std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16384
-        {
-            return Err("bounded absolute assistant authority file required".into());
-        }
-        let authority: Authority =
-            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("invalid assistant authority: {e}"))?;
-        let bearer = data_plane_token
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                format!("{DATA_PLANE_TOKEN_ENV} is required for assistant proxy ingress")
-            })?;
-        AgentWebAccess::AuthenticatedBearer {
-            bearer,
-            issuer: authority.issuer,
-            public_key: authority.public_key,
-        }
-    } else {
-        access_for_listener(args.listen, data_plane_token)?
-    };
+    let access = assistant_access(args.listen, args.assistant_authority, data_plane_token)?;
     let mut config = AgentWebConfig::new(linked_plugins);
     if let Some(path) = args.assistant_providers {
-        let policy = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-            .map_err(|e| format!("invalid assistant providers: {e}"))?;
+        let policy = read_assistant_configuration(path, "providers")?;
         config.assistant_providers = Some(Arc::new(
             lenso_agent_web::assistant_provider::AssistantProviderService::open(policy)
                 .map_err(|e| e.to_string())?,
         ));
     }
     if let Some(path) = args.assistant_scheduling {
-        config.scheduling =
-            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-                .map_err(|e| format!("invalid assistant scheduling: {e}"))?;
+        config.scheduling = read_assistant_configuration(path, "scheduling")?;
     }
     if let Some(path) = &args.plugin_ai_authority {
         if !args.listen.ip().is_loopback() {
@@ -228,6 +199,44 @@ async fn run(args: Args, linked_plugins: fn(), console: bool) -> Result<(), Stri
         .await
         .map_err(|error| format!("Agent Web server failed: {error}"))?;
     surface.shutdown().await
+}
+
+fn read_assistant_configuration<T: serde::de::DeserializeOwned>(
+    path: PathBuf,
+    kind: &str,
+) -> Result<T, String> {
+    serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("invalid assistant {kind}: {e}"))
+}
+
+fn assistant_access(
+    listen: SocketAddr,
+    path: Option<PathBuf>,
+    data_plane_token: Option<String>,
+) -> Result<AgentWebAccess, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Authority {
+        issuer: String,
+        public_key: String,
+    }
+    let Some(path) = path else {
+        return access_for_listener(listen, data_plane_token);
+    };
+    if !path.is_absolute() || std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16384 {
+        return Err("bounded absolute assistant authority file required".into());
+    }
+    let authority: Authority =
+        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid assistant authority: {e}"))?;
+    let bearer = data_plane_token
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("{DATA_PLANE_TOKEN_ENV} is required for assistant proxy ingress"))?;
+    Ok(AgentWebAccess::AuthenticatedBearer {
+        bearer,
+        issuer: authority.issuer,
+        public_key: authority.public_key,
+    })
 }
 
 fn parse_trusted_plugin_bundle(value: &str) -> Result<TrustedPluginBundle, String> {

@@ -1243,6 +1243,9 @@ mod tests {
     }
 
     #[test]
+    // Keep the stateful write/decrypt/rotate/delete/quota scenario together so
+    // each assertion checks the same immutable leases and durable store.
+    #[allow(clippy::too_many_lines)]
     fn byok_encrypts_compatible_secrets_and_revisions_are_immutable() {
         let passphrase = "synthetic-age-passphrase-001";
         let root = tempfile::tempdir().unwrap();
