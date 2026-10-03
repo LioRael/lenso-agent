@@ -662,7 +662,7 @@ mod tests {
                     surface
                         .runtime
                         .commands
-                        .send(RuntimeCommand::ListSessions { reply })
+                        .send(RuntimeCommand::ListSessions { reply, identity: crate::RequestIdentity::default() })
                         .await
                         .unwrap();
                     assert!(response.await.unwrap().unwrap().sessions.is_empty());
@@ -686,7 +686,7 @@ mod tests {
                     surface
                         .runtime
                         .commands
-                        .send(RuntimeCommand::ListSessions { reply })
+                        .send(RuntimeCommand::ListSessions { reply, identity: crate::RequestIdentity::default() })
                         .await
                         .unwrap();
                     assert!(response.await.unwrap().unwrap().sessions.is_empty());

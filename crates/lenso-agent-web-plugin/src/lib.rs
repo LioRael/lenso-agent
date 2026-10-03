@@ -17,6 +17,7 @@ struct AgentWebAnchor {
     context_sources: ManyPort<context_source_capability::ContextSourceClient>,
     interaction: Port<interaction_capability::UserInteractionClient>,
     session: Port<session_capability::SessionClient>,
+    session_control: ManyPort<lenso_capability_agent_session_control::SessionControlClient>,
     task_supervisors: ManyPort<task_supervisor_capability::TaskSupervisorClient>,
 }
 
@@ -56,6 +57,11 @@ mod tests {
                     "capability_id": "lenso.agent.session@1",
                     "descriptor_version": "1.9.0",
                     "cardinality": "one"
+                },
+                {
+                    "capability_id": "lenso.agent.session-control@1",
+                    "descriptor_version": "1.0.0",
+                    "cardinality": "many"
                 },
                 {
                     "capability_id": "lenso.agent.task-supervisor@2",

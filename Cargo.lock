@@ -3534,6 +3534,7 @@ dependencies = [
  "image",
  "lenso",
  "lenso-agent-native-support",
+ "lenso-auth-sdk",
  "lenso-capability-agent",
  "lenso-capability-agent-artifact",
  "lenso-capability-agent-context-compaction",
@@ -3549,6 +3550,7 @@ dependencies = [
  "lenso-capability-agent-turn-binding",
  "lenso-capability-agent-turn-input",
  "lenso-capability-agent-turn-processing",
+ "lenso-capability-auth",
  "lenso-kernel",
  "serde",
  "serde_json",
@@ -4171,6 +4173,7 @@ dependencies = [
 name = "lenso-agent-web"
 version = "0.1.13"
 dependencies = [
+ "age",
  "anyhow",
  "axum",
  "base64",
@@ -4226,6 +4229,7 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tower",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]
@@ -4238,6 +4242,7 @@ dependencies = [
  "lenso-capability-agent-auth-connection",
  "lenso-capability-agent-context-source",
  "lenso-capability-agent-session",
+ "lenso-capability-agent-session-control",
  "lenso-capability-agent-task-supervisor",
  "lenso-capability-agent-user-interaction",
  "serde_json",

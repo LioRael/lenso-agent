@@ -7,10 +7,11 @@ use std::{
     time::Duration,
 };
 
+use futures::FutureExt;
 use lenso::CtxExt;
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, Request, StatusCode, header},
     middleware::{self, Next},
@@ -86,6 +87,12 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio_stream::wrappers::ReceiverStream;
 
+pub mod assistant_provider;
+mod authenticated;
+mod scheduling;
+use authenticated::RequestIdentity;
+pub use scheduling::{AgentWebScheduling, QueuePolicy};
+
 mod configuration_service;
 mod configuration_store;
 pub mod plugin_ai;
@@ -150,6 +157,12 @@ impl fmt::Debug for AgentWebControl {
 /// Selects which Host seam authorizes Agent Web data-plane requests.
 #[derive(Clone, Default)]
 pub enum AgentWebAccess {
+    /// A trusted proxy bearer plus independently verified per-request user assertion.
+    AuthenticatedBearer {
+        bearer: String,
+        issuer: String,
+        public_key: String,
+    },
     #[default]
     /// Data-plane routes are unavailable until the Host selects an authorization seam.
     Disabled,
@@ -166,6 +179,9 @@ impl fmt::Debug for AgentWebAccess {
         match self {
             Self::Disabled => formatter.write_str("Disabled"),
             Self::Local => formatter.write_str("Local"),
+            Self::AuthenticatedBearer { .. } => {
+                formatter.write_str("AuthenticatedBearer([REDACTED])")
+            }
             Self::Bearer(_) => formatter.write_str("Bearer([REDACTED])"),
             Self::HostAuthorized => formatter.write_str("HostAuthorized"),
         }
@@ -175,6 +191,10 @@ impl fmt::Debug for AgentWebAccess {
 /// Host-owned configuration for one embedded Agent Web Surface.
 #[derive(Clone, Debug)]
 pub struct AgentWebConfig {
+    /// Host-owned member provider assignment and optional personal credentials.
+    pub assistant_providers: Option<Arc<assistant_provider::AssistantProviderService>>,
+    /// Bounded multi-session Turn scheduling; defaults preserve single running Turn.
+    pub scheduling: AgentWebScheduling,
     /// Explicit existing Host assertion authority; absent disables Plugin AI ingress.
     pub plugin_ai: Option<Arc<plugin_ai::BridgeAuthority>>,
     /// Explicit Agent Home used instead of process-global environment discovery.
@@ -242,6 +262,8 @@ impl AgentWebConfig {
     /// Creates an embedded Surface configuration with an explicit Host Plugin inventory.
     pub fn new(plugins: fn()) -> Self {
         Self {
+            scheduling: AgentWebScheduling::default(),
+            assistant_providers: None,
             plugin_ai: None,
             access: AgentWebAccess::Disabled,
             agent_home: None,
@@ -301,6 +323,7 @@ pub struct AgentWebSurface {
 
 #[derive(Clone, Debug)]
 struct WebRuntime {
+    assistant_providers: Option<Arc<assistant_provider::AssistantProviderService>>,
     plugin_ai: Option<Arc<plugin_ai::BridgeAuthority>>,
     workspace: Option<WebWorkspace>,
     access: AgentWebAccessPolicy,
@@ -319,6 +342,10 @@ struct WebRuntime {
 
 #[derive(Clone)]
 enum AgentWebAccessPolicy {
+    AuthenticatedBearer {
+        bearer: [u8; 32],
+        authority: Result<Arc<authenticated::Authority>, String>,
+    },
     Disabled,
     Local,
     Bearer([u8; 32]),
@@ -330,6 +357,9 @@ impl fmt::Debug for AgentWebAccessPolicy {
         match self {
             Self::Disabled => formatter.write_str("Disabled"),
             Self::Local => formatter.write_str("Local"),
+            Self::AuthenticatedBearer { .. } => {
+                formatter.write_str("AuthenticatedBearer([REDACTED])")
+            }
             Self::Bearer(_) => formatter.write_str("Bearer([REDACTED])"),
             Self::HostAuthorized => formatter.write_str("HostAuthorized"),
         }
@@ -339,6 +369,14 @@ impl fmt::Debug for AgentWebAccessPolicy {
 impl From<AgentWebAccess> for AgentWebAccessPolicy {
     fn from(access: AgentWebAccess) -> Self {
         match access {
+            AgentWebAccess::AuthenticatedBearer {
+                bearer,
+                issuer,
+                public_key,
+            } => Self::AuthenticatedBearer {
+                bearer: bearer_digest(&bearer),
+                authority: authenticated::Authority::new(&issuer, &public_key).map(Arc::new),
+            },
             AgentWebAccess::Local => Self::Local,
             AgentWebAccess::Bearer(expected) if !expected.trim().is_empty() => {
                 Self::Bearer(bearer_digest(&expected))
@@ -386,6 +424,10 @@ impl From<AgentWebControl> for AgentWebControlPolicy {
 
 #[derive(Debug)]
 struct WebRuntimeConfig {
+    assistant_providers: Option<Arc<assistant_provider::AssistantProviderService>>,
+    provider_apps: BTreeMap<String, std::rc::Rc<AgentApp>>,
+    plugins: fn(),
+    scheduling: AgentWebScheduling,
     plugin_ai: Option<Arc<plugin_ai::BridgeAuthority>>,
     access: AgentWebAccess,
     available_tools: Vec<BootstrapTool>,
@@ -410,6 +452,7 @@ enum RuntimeCommand {
         reply: oneshot::Sender<Result<Vec<BootstrapTool>, String>>,
     },
     ForkSession {
+        identity: RequestIdentity,
         session_id: String,
         request: ForkSessionRequest,
         reply: oneshot::Sender<Result<String, String>>,
@@ -424,6 +467,8 @@ enum RuntimeCommand {
         reply: oneshot::Sender<Result<serde_json::Value, String>>,
     },
     CompactSession {
+        provider_route: Option<assistant_provider::ProviderRoute>,
+        identity: RequestIdentity,
         reply: oneshot::Sender<Result<CompactSessionResponse, String>>,
         session_id: String,
     },
@@ -459,39 +504,48 @@ enum RuntimeCommand {
         detail: String,
     },
     AnswerInteraction {
+        identity: RequestIdentity,
         answers: Vec<InteractionAnswer>,
         interaction_id: String,
         reply: oneshot::Sender<Result<(), RuntimeInteractionError>>,
         request_id: String,
     },
     CancelTurn {
+        identity: RequestIdentity,
         reply: oneshot::Sender<bool>,
         request_id: String,
     },
     ListSessions {
+        identity: RequestIdentity,
         reply: oneshot::Sender<Result<WebSessionList, String>>,
     },
     TaskSnapshot {
+        identity: RequestIdentity,
         reply: oneshot::Sender<Result<TaskSnapshotResponse, String>>,
     },
     PendingInteractions {
+        identity: RequestIdentity,
         reply: oneshot::Sender<Result<Vec<PendingInteraction>, RuntimeInteractionError>>,
         request_id: String,
     },
     ReadAttachment {
+        identity: RequestIdentity,
         session_id: String,
         digest: String,
         reply: oneshot::Sender<Result<String, String>>,
     },
     ReadSession {
+        identity: RequestIdentity,
         reply: oneshot::Sender<Result<ReadSessionResponse, ReadSessionFailure>>,
         session_id: String,
     },
     ReadTrajectory {
+        identity: RequestIdentity,
         reply: oneshot::Sender<Result<Trajectory, ReadSessionFailure>>,
         session_id: String,
     },
     RenameSession {
+        identity: RequestIdentity,
         expected_title_revision: String,
         reply: oneshot::Sender<Result<RenameSessionResponse, RenameSessionFailure>>,
         session_id: String,
@@ -503,8 +557,28 @@ enum RuntimeCommand {
         reply: oneshot::Sender<Result<SelectedProfileResponse, String>>,
     },
     RunTurn {
+        admission: Option<oneshot::Sender<Result<(), String>>>,
         events: mpsc::Sender<Result<Event, Infallible>>,
         request: WebTurnRequest,
+    },
+    StartTurn {
+        events: mpsc::Sender<Result<Event, Infallible>>,
+        request: WebTurnRequest,
+    },
+    StartCompact {
+        key: (String, String),
+        identity: RequestIdentity,
+        session_id: String,
+        provider_route: Option<assistant_provider::ProviderRoute>,
+        reply: oneshot::Sender<Result<CompactSessionResponse, String>>,
+    },
+    BindTurnSession {
+        key: (String, String),
+        session_id: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    TurnFinished {
+        key: (String, String),
     },
     Shutdown {
         reply: oneshot::Sender<Result<(), String>>,
@@ -523,9 +597,21 @@ enum RuntimeInteractionError {
     Rejected(String),
 }
 
+#[derive(Clone, Debug)]
+struct SessionAdmission {
+    key: (String, String),
+    commands: mpsc::Sender<RuntimeCommand>,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WebTurnRequest {
+    #[serde(skip)]
+    session_admission: Option<SessionAdmission>,
+    #[serde(skip)]
+    provider_route: Option<assistant_provider::ProviderRoute>,
+    #[serde(skip)]
+    identity: RequestIdentity,
     #[serde(default)]
     context_references: Vec<WebContextReference>,
     #[serde(skip)]
@@ -842,6 +928,12 @@ struct ApiProblem {
 }
 
 impl ApiProblem {
+    fn capacity(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+            status: StatusCode::TOO_MANY_REQUESTS,
+        }
+    }
     fn bad_request(detail: impl Into<String>) -> Self {
         Self {
             detail: detail.into(),
@@ -898,6 +990,8 @@ impl AgentWebSurface {
     )]
     pub async fn start(config: AgentWebConfig) -> Result<Self, String> {
         let AgentWebConfig {
+            assistant_providers,
+            scheduling,
             plugin_ai,
             access,
             agent_home,
@@ -918,6 +1012,18 @@ impl AgentWebSurface {
             plugin_configuration_remote,
             plugins,
         } = config;
+        scheduling.validate()?;
+        if let AgentWebAccess::AuthenticatedBearer {
+            bearer,
+            issuer,
+            public_key,
+        } = &access
+        {
+            if bearer.trim().is_empty() {
+                return Err("Authenticated Agent ingress requires a proxy bearer".into());
+            }
+            authenticated::Authority::new(issuer, public_key)?;
+        }
         let configured_tools = normalize_allowed_tools(allowed_tools)?;
         let selected_profile = resolve_start_profile(plan.as_deref(), profile.as_deref())?;
         let directories = resolve_agent_directories(agent_home.as_deref())?;
@@ -1011,9 +1117,29 @@ impl AgentWebSurface {
             return Err(format!("a Tool policy requires {CONTROL_TOKEN_ENV}"));
         }
         let policy = load_tool_policy(tool_policy.as_deref(), configured_tools)?;
+        let provider_apps = if let Some(service) = &assistant_providers {
+            service
+                .validate_default_home(directories.home())
+                .map_err(|error| error.to_string())?;
+            if let AgentWebAccess::AuthenticatedBearer {
+                issuer, public_key, ..
+            } = &access
+            {
+                service
+                    .validate_ingress_authority(issuer, public_key)
+                    .map_err(|error| error.to_string())?;
+            }
+            assistant_provider::boot_profiles(service.config(), plugins).await?
+        } else {
+            BTreeMap::new()
+        };
         let runtime = WebRuntime::start(
             app,
             WebRuntimeConfig {
+                assistant_providers,
+                provider_apps,
+                plugins,
+                scheduling,
                 plugin_ai,
                 access,
                 available_tools,
@@ -1246,6 +1372,11 @@ fn validate_plugin_control_configuration(
 
 fn router(runtime: WebRuntime) -> Router {
     let data_plane = Router::new()
+        .route("/api/console/v1/agent/health/ready", get(assistant_ready))
+        .route(
+            "/api/console/v1/agent/assistant/settings",
+            get(assistant_settings).put(update_assistant_settings),
+        )
         .route("/api/console/v1/agent/bootstrap", get(bootstrap))
         .route("/api/console/v1/agent/skills", get(available_skills))
         .route("/api/console/v1/agent/models", get(model_catalog))
@@ -1300,11 +1431,7 @@ fn router(runtime: WebRuntime) -> Router {
         .route(
             "/api/console/v1/agent/sessions/{session_id}/compact",
             post(compact_session),
-        )
-        .route_layer(middleware::from_fn_with_state(
-            runtime.clone(),
-            authorize_data_plane,
-        ));
+        );
     data_plane
         .merge(plugin_ai::routes())
         .route(
@@ -1336,17 +1463,122 @@ fn router(runtime: WebRuntime) -> Router {
             "/api/console/v1/agent/sessions/{session_id}/attachments/{digest}",
             get(read_attachment),
         )
+        .layer(middleware::from_fn_with_state(
+            runtime.clone(),
+            authorize_data_plane,
+        ))
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BYTES))
         .with_state(runtime)
 }
 
 async fn authorize_data_plane(
     State(runtime): State<WebRuntime>,
-    request: Request<axum::body::Body>,
+    mut request: Request<axum::body::Body>,
     next: Next,
 ) -> Result<Response, ApiProblem> {
+    // Plugin AI has its own independently verified ingress and operator control
+    // retains its separate authorization seam for legacy local deployments.
+    let path = request.uri().path();
+    let authenticated = matches!(
+        runtime.access,
+        AgentWebAccessPolicy::AuthenticatedBearer { .. }
+    );
+    if path.contains("/plugin-ai/")
+        || (!authenticated
+            && (path.contains("/control/") || path.contains("/plugins") || path.contains("/auth/")))
+    {
+        request.extensions_mut().insert(RequestIdentity::default());
+        return Ok(next.run(request).await);
+    }
     runtime.authorize_data_plane(request.headers())?;
+    if path.ends_with("/health/ready") {
+        request.extensions_mut().insert(RequestIdentity::default());
+        return Ok(next.run(request).await);
+    }
+    let identity = match &runtime.access {
+        AgentWebAccessPolicy::AuthenticatedBearer { authority, .. } => {
+            // Shared operator state has no member authorization contract.
+            if path.contains("/control/")
+                || path.contains("/terminal/")
+                || path.contains("/plugins")
+                || path.contains("/auth/")
+                || path.ends_with("/context-sources")
+                || path.ends_with("/models")
+                || path.ends_with("/tools/execute")
+                || path.ends_with("/tasks")
+            {
+                return Err(ApiProblem::forbidden(
+                    "This Agent capability is restricted to operators",
+                ));
+            }
+            authority
+                .as_ref()
+                .map_err(|_| ApiProblem::forbidden("Agent assertion authority is invalid"))?
+                .identity(request.headers())?
+        }
+        _ => RequestIdentity::default(),
+    };
+    request.extensions_mut().insert(identity);
     Ok(next.run(request).await)
+}
+
+async fn assistant_ready() -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "status": "ready" }))
+}
+fn provider_settings_problem(error: assistant_provider::ProviderSettingsError) -> ApiProblem {
+    match error {
+        assistant_provider::ProviderSettingsError::PermissionDenied => {
+            ApiProblem::forbidden("Provider access was denied")
+        }
+        assistant_provider::ProviderSettingsError::InvalidSettings => {
+            ApiProblem::bad_request("Provider settings are invalid")
+        }
+        assistant_provider::ProviderSettingsError::CapacityExhausted => {
+            ApiProblem::capacity("Provider settings capacity is exhausted")
+        }
+        assistant_provider::ProviderSettingsError::Unavailable => {
+            ApiProblem::unavailable("Provider settings are unavailable")
+        }
+    }
+}
+async fn assistant_settings(
+    State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
+) -> Result<Json<assistant_provider::AssistantSettings>, ApiProblem> {
+    if identity.actor.is_none() {
+        return Err(ApiProblem::forbidden(
+            "A signed user is required for personal settings",
+        ));
+    }
+    let service = runtime
+        .assistant_providers
+        .ok_or_else(|| ApiProblem::forbidden("Member provider policy is not configured"))?;
+    let owner = identity.owner();
+    tokio::task::spawn_blocking(move || service.settings(&owner))
+        .await
+        .map_err(|_| ApiProblem::unavailable("Provider settings worker stopped"))?
+        .map(Json)
+        .map_err(provider_settings_problem)
+}
+async fn update_assistant_settings(
+    State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
+    Json(update): Json<assistant_provider::AssistantSettingsUpdate>,
+) -> Result<Json<assistant_provider::AssistantSettings>, ApiProblem> {
+    if identity.actor.is_none() {
+        return Err(ApiProblem::forbidden(
+            "A signed user is required for personal settings",
+        ));
+    }
+    let service = runtime
+        .assistant_providers
+        .ok_or_else(|| ApiProblem::forbidden("Member provider policy is not configured"))?;
+    let owner = identity.owner();
+    tokio::task::spawn_blocking(move || service.update(&owner, update))
+        .await
+        .map_err(|_| ApiProblem::unavailable("Provider settings worker stopped"))?
+        .map(Json)
+        .map_err(provider_settings_problem)
 }
 
 async fn model_catalog(
@@ -1367,7 +1599,14 @@ async fn model_catalog(
 
 async fn agent_tool_catalog(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
 ) -> Result<Json<AgentToolCatalogResponse>, ApiProblem> {
+    if identity.actor.is_some() {
+        return Ok(Json(AgentToolCatalogResponse {
+            generation: "assistant".into(),
+            tools: Vec::new(),
+        }));
+    }
     let (reply, response) = oneshot::channel();
     runtime
         .commands
@@ -1518,7 +1757,40 @@ async fn cancel_terminal(
 
 async fn bootstrap(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
 ) -> Result<Json<BootstrapResponse>, ApiProblem> {
+    if identity.actor.is_some() {
+        return Ok(Json(BootstrapResponse {
+            workspace: None,
+            capabilities: [
+                ("cancel", true),
+                ("edit", true),
+                ("sessionList", true),
+                ("sessionRead", true),
+                ("userInteraction", true),
+                ("sessionRename", true),
+                ("sessionCompact", true),
+                ("taskSnapshot", false),
+                ("activity", false),
+                ("contextSources", false),
+                ("terminalCommands", false),
+                ("turnModelSelection", false),
+                ("turnToolSelection", false),
+                ("profileSelection", false),
+                ("profileImport", false),
+                ("profileEditing", false),
+            ]
+            .into_iter()
+            .collect(),
+            mode: "console",
+            profile: "assistant".into(),
+            tools: BootstrapTools {
+                allowed: Vec::new(),
+                available: Vec::new(),
+            },
+            trajectory: Trajectory::SCHEMA,
+        }));
+    }
     runtime.refresh_tool_catalog().await?;
     let policy = runtime.read_tool_policy()?;
     let coding_profiles = runtime.coding_profile_import_enabled().await?;
@@ -1615,8 +1887,12 @@ async fn import_profiles(
     ))
 }
 
-async fn available_skills()
--> Result<Json<Vec<lenso_agent_skills_filesystem_plugin::AvailableSkill>>, ApiProblem> {
+async fn available_skills(
+    Extension(identity): Extension<RequestIdentity>,
+) -> Result<Json<Vec<lenso_agent_skills_filesystem_plugin::AvailableSkill>>, ApiProblem> {
+    if identity.actor.is_some() {
+        return Ok(Json(Vec::new()));
+    }
     tokio::task::spawn_blocking(lenso_agent_skills_filesystem_plugin::common_skill_catalog)
         .await
         .map_err(|error| ApiProblem::unavailable(error.to_string()))?
@@ -1693,22 +1969,104 @@ async fn select_profile(
         .map_err(ApiProblem::conflict)
 }
 
+async fn resolve_member_provider(
+    runtime: &WebRuntime,
+    identity: &RequestIdentity,
+) -> Result<Option<assistant_provider::ProviderRoute>, ApiProblem> {
+    if identity.actor.is_none() {
+        return Ok(None);
+    }
+    let service = runtime
+        .assistant_providers
+        .clone()
+        .ok_or_else(|| ApiProblem::forbidden("Member provider policy is not configured"))?;
+    let owner = identity.owner();
+    tokio::task::spawn_blocking(move || service.resolve(&owner))
+        .await
+        .map_err(|_| ApiProblem::unavailable("Provider settings worker stopped"))?
+        .map(Some)
+        .map_err(provider_settings_problem)
+}
+
 async fn run_turn(
     State(runtime): State<WebRuntime>,
-    Json(request): Json<WebTurnRequest>,
+    Extension(identity): Extension<RequestIdentity>,
+    Json(mut request): Json<WebTurnRequest>,
 ) -> Result<Sse<ReceiverStream<Result<Event, Infallible>>>, ApiProblem> {
+    request.identity = identity;
+    if request.identity.actor.is_some() {
+        let service = runtime
+            .assistant_providers
+            .as_ref()
+            .ok_or_else(|| ApiProblem::forbidden("Member provider policy is not configured"))?;
+        let service = Arc::clone(service);
+        let owner = request.identity.owner();
+        let route = tokio::task::spawn_blocking(move || service.resolve(&owner))
+            .await
+            .map_err(|_| ApiProblem::unavailable("Provider settings worker stopped"))?
+            .map_err(provider_settings_problem)?;
+        if request
+            .model
+            .as_ref()
+            .is_some_and(|model| model != &route.model)
+        {
+            return Err(ApiProblem::forbidden(
+                "Model is outside your selected provider",
+            ));
+        }
+        if route.allowed_tools.iter().any(|tool| tool != "ask_user") {
+            return Err(ApiProblem::forbidden(
+                "The configured member Tool lacks an audited ownership contract",
+            ));
+        }
+        request.model = Some(route.model.clone());
+        let tools = request
+            .allowed_tools
+            .as_ref()
+            .unwrap_or(&route.allowed_tools);
+        if tools.iter().any(|tool| !route.allowed_tools.contains(tool)) {
+            return Err(ApiProblem::forbidden(
+                "Turn Tools exceed your provider grant",
+            ));
+        }
+        request.allowed_tools = Some(tools.clone());
+        request.provider_route = Some(route);
+    }
+    if request.identity.actor.is_some()
+        && (!request.context_references.is_empty() || request.input.starts_with("/mcp-"))
+    {
+        return Err(ApiProblem::forbidden(
+            "Shared Context references require operator access",
+        ));
+    }
     validate_turn_request(&request)?;
     let (events, receiver) = mpsc::channel(32);
+    let (admission, admitted) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::RunTurn { events, request })
+        .try_send(RuntimeCommand::RunTurn {
+            admission: Some(admission),
+            events,
+            request,
+        })
+        .map_err(|error| match error {
+            mpsc::error::TrySendError::Full(_) => {
+                ApiProblem::capacity("Agent command capacity is exhausted")
+            }
+            mpsc::error::TrySendError::Closed(_) => {
+                ApiProblem::unavailable("Agent runtime is not available")
+            }
+        })?;
+    admitted
         .await
-        .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
+        .map_err(|_| ApiProblem::unavailable("Agent runtime stopped during admission"))?
+        .map_err(ApiProblem::capacity)?;
     Ok(Sse::new(ReceiverStream::new(receiver)))
 }
 
 async fn cancel_turn(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(request_id): Path<String>,
 ) -> Result<StatusCode, ApiProblem> {
     if !valid_session_id(&request_id) {
@@ -1717,7 +2075,11 @@ async fn cancel_turn(
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::CancelTurn { reply, request_id })
+        .send(RuntimeCommand::CancelTurn {
+            identity,
+            reply,
+            request_id,
+        })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     if response
@@ -1732,13 +2094,18 @@ async fn cancel_turn(
 
 async fn pending_interactions(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(request_id): Path<String>,
 ) -> Result<Json<WebPendingInteractionsResponse>, ApiProblem> {
     validate_request_id(&request_id)?;
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::PendingInteractions { reply, request_id })
+        .send(RuntimeCommand::PendingInteractions {
+            identity,
+            reply,
+            request_id,
+        })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     let interactions = response
@@ -1755,6 +2122,7 @@ async fn pending_interactions(
 
 async fn answer_interaction(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path((request_id, interaction_id)): Path<(String, String)>,
     Json(request): Json<WebAnswerInteractionRequest>,
 ) -> Result<StatusCode, ApiProblem> {
@@ -1769,6 +2137,7 @@ async fn answer_interaction(
     runtime
         .commands
         .send(RuntimeCommand::AnswerInteraction {
+            identity,
             answers,
             interaction_id,
             reply,
@@ -1792,6 +2161,7 @@ fn interaction_problem(error: RuntimeInteractionError) -> ApiProblem {
 
 async fn read_attachment(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path((session_id, digest)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiProblem> {
     if !valid_session_id(&session_id)
@@ -1804,6 +2174,7 @@ async fn read_attachment(
     runtime
         .commands
         .send(RuntimeCommand::ReadAttachment {
+            identity,
             session_id,
             digest,
             reply,
@@ -1834,6 +2205,7 @@ fn history_problem(error: ReadSessionFailure) -> ApiProblem {
 
 async fn read_session(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(session_id): Path<String>,
 ) -> Result<Json<ReadSessionResponse>, ApiProblem> {
     if !valid_session_id(&session_id) {
@@ -1842,7 +2214,11 @@ async fn read_session(
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::ReadSession { reply, session_id })
+        .send(RuntimeCommand::ReadSession {
+            identity,
+            reply,
+            session_id,
+        })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -1854,6 +2230,7 @@ async fn read_session(
 
 async fn read_trajectory(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(session_id): Path<String>,
 ) -> Result<Json<Trajectory>, ApiProblem> {
     if !valid_session_id(&session_id) {
@@ -1862,7 +2239,11 @@ async fn read_trajectory(
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::ReadTrajectory { reply, session_id })
+        .send(RuntimeCommand::ReadTrajectory {
+            identity,
+            reply,
+            session_id,
+        })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -1874,6 +2255,7 @@ async fn read_trajectory(
 
 async fn fork_session(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(session_id): Path<String>,
     Json(request): Json<ForkSessionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiProblem> {
@@ -1888,6 +2270,7 @@ async fn fork_session(
     runtime
         .commands
         .send(RuntimeCommand::ForkSession {
+            identity,
             session_id,
             request,
             reply,
@@ -1903,15 +2286,22 @@ async fn fork_session(
 
 async fn compact_session(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(session_id): Path<String>,
 ) -> Result<Json<CompactSessionResponse>, ApiProblem> {
     if !valid_session_id(&session_id) {
         return Err(ApiProblem::bad_request("Session ID is invalid"));
     }
+    let provider_route = resolve_member_provider(&runtime, &identity).await?;
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::CompactSession { reply, session_id })
+        .send(RuntimeCommand::CompactSession {
+            provider_route,
+            identity,
+            reply,
+            session_id,
+        })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -1923,11 +2313,12 @@ async fn compact_session(
 
 async fn list_sessions(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
 ) -> Result<Json<WebSessionList>, ApiProblem> {
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::ListSessions { reply })
+        .send(RuntimeCommand::ListSessions { identity, reply })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -1939,11 +2330,12 @@ async fn list_sessions(
 
 async fn task_snapshot(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
 ) -> Result<Json<TaskSnapshotResponse>, ApiProblem> {
     let (reply, response) = oneshot::channel();
     runtime
         .commands
-        .send(RuntimeCommand::TaskSnapshot { reply })
+        .send(RuntimeCommand::TaskSnapshot { identity, reply })
         .await
         .map_err(|_| ApiProblem::unavailable("Agent runtime is not available"))?;
     response
@@ -1955,6 +2347,7 @@ async fn task_snapshot(
 
 async fn rename_session(
     State(runtime): State<WebRuntime>,
+    Extension(identity): Extension<RequestIdentity>,
     Path(session_id): Path<String>,
     Json(request): Json<RenameSessionRequest>,
 ) -> Result<Json<RenameSessionResult>, ApiProblem> {
@@ -1965,6 +2358,7 @@ async fn rename_session(
     runtime
         .commands
         .send(RuntimeCommand::RenameSession {
+            identity,
             expected_title_revision: request.expected_title_revision,
             reply,
             session_id,
@@ -2209,6 +2603,10 @@ fn agent_tool_failure(
 impl WebRuntime {
     fn start(app: AgentApp, config: WebRuntimeConfig) -> Self {
         let WebRuntimeConfig {
+            assistant_providers,
+            provider_apps,
+            plugins,
+            scheduling,
             plugin_ai,
             access,
             available_tools,
@@ -2250,8 +2648,15 @@ impl WebRuntime {
                 available_tools: Arc::clone(&available_tools),
             },
             remote_sync,
+            scheduling,
+            provider_apps,
+            plugins,
+            assistant_providers
+                .as_ref()
+                .map_or(32, |service| service.config().max_cached_provider_hosts),
         ));
         Self {
+            assistant_providers,
             plugin_ai,
             workspace: std::env::current_dir()
                 .ok()
@@ -2306,7 +2711,10 @@ impl WebRuntime {
                 Err(ApiProblem::not_found("Agent data plane is not configured"))
             }
             AgentWebAccessPolicy::Local | AgentWebAccessPolicy::HostAuthorized => Ok(()),
-            AgentWebAccessPolicy::Bearer(expected) => authorize_bearer(headers, expected),
+            AgentWebAccessPolicy::Bearer(expected)
+            | AgentWebAccessPolicy::AuthenticatedBearer {
+                bearer: expected, ..
+            } => authorize_bearer(headers, expected),
         }
     }
 
@@ -2443,21 +2851,47 @@ async fn execute_agent_tool_with_control(
     clippy::too_many_lines,
     reason = "the actor keeps every serialized runtime command in one auditable dispatch loop"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the private runtime actor owns the immutable startup authorities and scheduling state"
+)]
 async fn runtime_actor(
-    mut app: AgentApp,
+    app: AgentApp,
     mut commands: mpsc::Receiver<RuntimeCommand>,
     command_sender: mpsc::Sender<RuntimeCommand>,
     policy: Arc<RwLock<ToolPolicyDocument>>,
     configuration_authority: Option<plugin_control_api::PluginConfigurationAuthorityResponse>,
     profile_state: RuntimeProfileState,
     mut remote_sync: Option<RemoteConfigurationSyncRuntime>,
+    scheduling: AgentWebScheduling,
+    provider_apps: BTreeMap<String, std::rc::Rc<AgentApp>>,
+    plugins: fn(),
+    max_cached_provider_hosts: usize,
 ) {
+    let app = std::rc::Rc::new(app);
+    let mut workers = tokio::task::JoinSet::new();
+    let mut provider_apps = provider_apps
+        .into_iter()
+        .map(|(key, app)| (key, futures::future::ready(Ok(app)).boxed_local().shared()))
+        .collect::<BTreeMap<_, _>>();
     let mut pending = VecDeque::new();
-    let mut pre_cancelled = BTreeSet::new();
+    let mut scheduler = scheduling::Scheduler::new(scheduling);
+    let mut active_turns = BTreeMap::<
+        (String, String),
+        (
+            std::rc::Rc<
+                std::cell::RefCell<
+                    Option<std::rc::Rc<lenso_agent_host::generation::TurnGeneration>>,
+                >,
+            >,
+            CancellationToken,
+        ),
+    >::new();
     let mut active_terminal_commands = BTreeMap::<String, CancellationToken>::new();
     let mut plugin_runtime = PluginRuntimeState::new(&app, configuration_authority);
     loop {
-        let command = match pending.pop_front() {
+        while workers.try_join_next().is_some() {}
+        let command = match scheduler.pop_ready().or_else(|| pending.pop_front()) {
             Some(command) => command,
             None => match commands.recv().await {
                 Some(command) => command,
@@ -2468,12 +2902,68 @@ async fn runtime_actor(
             RuntimeCommand::PluginCompletion(command) => {
                 plugin_ai::dispatch(&app, command).await;
             }
-            RuntimeCommand::CompactSession { reply, session_id } => {
-                let result = match app.lease_web_turn().await {
-                    Ok(turn) => turn.compact_session(session_id).await,
-                    Err(error) => Err(error),
+            RuntimeCommand::CompactSession {
+                identity,
+                reply,
+                session_id,
+                provider_route,
+            } => {
+                let key = identity.key(&format!("compact-{}", uuid::Uuid::new_v4()));
+                let command = RuntimeCommand::StartCompact {
+                    key: key.clone(),
+                    identity,
+                    reply,
+                    session_id: session_id.clone(),
+                    provider_route,
                 };
-                let _ = reply.send(result);
+                if let Err((RuntimeCommand::StartCompact { reply, .. }, detail)) =
+                    scheduler.enqueue(key.0.clone(), key.1.clone(), Some(session_id), command)
+                {
+                    let _ = reply.send(Err(detail.into()));
+                }
+            }
+            RuntimeCommand::StartCompact {
+                key,
+                identity,
+                session_id,
+                provider_route,
+                reply,
+            } => {
+                let selected = match cached_provider(
+                    &mut provider_apps,
+                    &app,
+                    provider_route.as_ref(),
+                    plugins,
+                    max_cached_provider_hosts,
+                ) {
+                    Ok(selected) => selected,
+                    Err(error) => {
+                        scheduler.finish(&key);
+                        let _ = reply.send(Err(error));
+                        continue;
+                    }
+                };
+                let cancellation = CancellationToken::new();
+                active_turns.insert(
+                    key.clone(),
+                    (
+                        std::rc::Rc::new(std::cell::RefCell::new(None)),
+                        cancellation.clone(),
+                    ),
+                );
+                let sender = command_sender.clone();
+                workers.spawn_local(async move {
+                    let running = async {
+                        let selected_app = selected.await?;
+                        lease_turn_for_identity(&selected_app, &identity).await?.compact_session(session_id).await
+                    };
+                    let result = tokio::select! {
+                        result = running => result,
+                        () = cancellation.cancelled() => Err("Session compaction was cancelled".into()),
+                    };
+                    let _ = reply.send(result);
+                    let _ = sender.send(RuntimeCommand::TurnFinished { key }).await;
+                });
             }
             RuntimeCommand::RefreshToolCatalog { reply } => {
                 let _ = reply.send(resolve_tool_policy(&app, &[]).await);
@@ -2514,7 +3004,7 @@ async fn runtime_actor(
                 let _ = reply.send(result);
             }
             RuntimeCommand::RunTerminal { events, request } => {
-                if !active_terminal_commands.is_empty() {
+                if scheduler.is_running() || !active_terminal_commands.is_empty() {
                     send_terminal_event(
                         &events,
                         "terminal.failed",
@@ -2602,7 +3092,7 @@ async fn runtime_actor(
                 let cancellation = CancellationToken::new();
                 active_terminal_commands.insert(request_id.clone(), cancellation.clone());
                 let sender = command_sender.clone();
-                tokio::task::spawn_local(async move {
+                workers.spawn_local(async move {
                     run_terminal_on_lease(terminal, parsed, &events, cancellation).await;
                     let _ = sender
                         .send(RuntimeCommand::TerminalFinished { request_id })
@@ -2625,58 +3115,154 @@ async fn runtime_actor(
             RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
                 app.report_plugin_watch_degraded(detail);
             }
-            RuntimeCommand::AnswerInteraction { reply, .. } => {
-                let _ = reply.send(Err(RuntimeInteractionError::Inactive));
+            RuntimeCommand::AnswerInteraction {
+                identity,
+                request_id,
+                interaction_id,
+                answers,
+                reply,
+            } => {
+                let turn = active_turns
+                    .get(&identity.key(&request_id))
+                    .and_then(|(turn, _)| turn.borrow().clone());
+                workers.spawn_local(async move {
+                    let result = match turn {
+                        Some(turn) => turn
+                            .answer_interaction(interaction_id, answers)
+                            .await
+                            .map_err(RuntimeInteractionError::Rejected),
+                        None => Err(RuntimeInteractionError::Inactive),
+                    };
+                    let _ = reply.send(result);
+                });
             }
-            RuntimeCommand::PendingInteractions { reply, .. } => {
-                let _ = reply.send(Err(RuntimeInteractionError::Inactive));
+            RuntimeCommand::PendingInteractions {
+                identity,
+                request_id,
+                reply,
+            } => {
+                let turn = active_turns
+                    .get(&identity.key(&request_id))
+                    .and_then(|(turn, _)| turn.borrow().clone());
+                workers.spawn_local(async move {
+                    let result = match turn {
+                        Some(turn) => turn
+                            .pending_interactions()
+                            .await
+                            .map_err(RuntimeInteractionError::Rejected),
+                        None => Err(RuntimeInteractionError::Inactive),
+                    };
+                    let _ = reply.send(result);
+                });
             }
-            RuntimeCommand::CancelTurn { reply, .. } => {
-                let _ = reply.send(false);
+            RuntimeCommand::CancelTurn {
+                identity,
+                request_id,
+                reply,
+            } => {
+                let key = identity.key(&request_id);
+                let found = if let Some((_, cancellation)) = active_turns.get(&key) {
+                    cancellation.cancel();
+                    true
+                } else if let Some(RuntimeCommand::StartTurn { events, request }) =
+                    scheduler.cancel(&key)
+                {
+                    if let Some(event) = stream_event(
+                        "turn.cancelled",
+                        None,
+                        &WebStreamEvent::Cancelled {
+                            session_id: request.session_id.as_deref(),
+                        },
+                    ) {
+                        let _ = events.try_send(Ok(event));
+                    }
+                    true
+                } else {
+                    false
+                };
+                let _ = reply.send(found);
             }
-            RuntimeCommand::ListSessions { reply } => {
-                let result = list_sessions_from_app(&app).await;
-                let _ = reply.send(result);
+            RuntimeCommand::ListSessions { identity, reply } => {
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    let result = list_sessions_from_app_with_identity(&app, &identity).await;
+                    let _ = reply.send(result);
+                });
             }
-            RuntimeCommand::TaskSnapshot { reply } => {
-                let _ = reply.send(app.web_task_snapshot().await);
+            RuntimeCommand::TaskSnapshot { identity, reply } => {
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    let _ = reply.send(match lease_turn_for_identity(&app, &identity).await {
+                        Ok(turn) => turn.task_snapshot().await,
+                        Err(e) => Err(e),
+                    });
+                });
             }
             RuntimeCommand::ReadAttachment {
+                identity,
                 reply,
                 session_id,
                 digest,
             } => {
-                let _ = reply.send(read_attachment_from_app(&app, session_id, digest).await);
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    let _ = reply.send(
+                        read_attachment_from_app_with_identity(&app, &identity, session_id, digest)
+                            .await,
+                    );
+                });
             }
             RuntimeCommand::ForkSession {
+                identity,
                 session_id,
                 request,
                 reply,
             } => {
-                let result = match app.lease_web_turn().await {
-                    Ok(turn) => {
-                        turn.fork_session_after_turn(
-                            session_id,
-                            request.turn_id,
-                            request.operation_id,
-                        )
-                        .await
-                    }
-                    Err(error) => Err(error),
-                };
-                let _ = reply.send(result);
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    let result = match lease_turn_for_identity(&app, &identity).await {
+                        Ok(turn) => {
+                            turn.fork_session_after_turn(
+                                session_id,
+                                request.turn_id,
+                                request.operation_id,
+                            )
+                            .await
+                        }
+                        Err(error) => Err(error),
+                    };
+                    let _ = reply.send(result);
+                });
             }
-            RuntimeCommand::ReadSession { reply, session_id } => {
-                handle_read_command(&app, session_id, reply).await;
+            RuntimeCommand::ReadSession {
+                identity,
+                reply,
+                session_id,
+            } => {
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    handle_read_command(&app, &identity, session_id, reply).await;
+                });
             }
             RuntimeCommand::RenameSession {
+                identity,
                 expected_title_revision,
                 reply,
                 session_id,
                 title,
             } => {
-                handle_rename_command(&app, session_id, title, expected_title_revision, reply)
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    handle_rename_command(
+                        &app,
+                        &identity,
+                        session_id,
+                        title,
+                        expected_title_revision,
+                        reply,
+                    )
                     .await;
+                });
             }
             RuntimeCommand::SelectProfile {
                 profile,
@@ -2733,232 +3319,206 @@ async fn runtime_actor(
                 };
                 let _ = reply.send(result);
             }
-            RuntimeCommand::ReadTrajectory { reply, session_id } => {
-                let result = read_session_from_app(&app, session_id)
-                    .await
-                    .and_then(|session| project_web_trajectory(&session).map_err(Into::into));
-                let _ = reply.send(result);
+            RuntimeCommand::ReadTrajectory {
+                identity,
+                reply,
+                session_id,
+            } => {
+                let app = app.clone();
+                workers.spawn_local(async move {
+                    let result = read_session_from_app_with_identity(&app, &identity, session_id)
+                        .await
+                        .and_then(|session| project_web_trajectory(&session).map_err(Into::into));
+                    let _ = reply.send(result);
+                });
             }
             RuntimeCommand::RunTurn {
+                admission,
+                events,
+                request,
+            } => {
+                let identity = request.identity.clone();
+                let result = scheduler.enqueue(
+                    identity.owner(),
+                    request.request_id.clone(),
+                    request.session_id.clone(),
+                    RuntimeCommand::StartTurn { events, request },
+                );
+                let admitted = match result {
+                    Ok(()) => Ok(()),
+                    Err((RuntimeCommand::StartTurn { events, .. }, detail)) => {
+                        fail_turn_immediately(&events, detail);
+                        Err(detail.to_owned())
+                    }
+                    Err(_) => unreachable!("Turn admission queued another command"),
+                };
+                if let Some(admission) = admission {
+                    let _ = admission.send(admitted);
+                }
+            }
+            RuntimeCommand::StartTurn {
                 events,
                 mut request,
             } => {
+                let key = request.identity.key(&request.request_id);
                 if !active_terminal_commands.is_empty() {
-                    send_stream_event(
-                        &events,
-                        "turn.failed",
-                        None,
-                        &WebStreamEvent::Failed {
-                            detail: "A Terminal command is active",
-                        },
-                    )
-                    .await;
+                    scheduler.finish(&key);
+                    fail_turn_immediately(&events, "A Terminal command is active");
                     continue;
                 }
-                let allowed_tools = match policy.read() {
-                    Ok(policy) => policy.allowed.clone(),
-                    Err(_) => {
-                        send_stream_event(
-                            &events,
-                            "turn.failed",
-                            None,
-                            &WebStreamEvent::Failed {
-                                detail: "Agent Tool policy lock is poisoned",
-                            },
-                        )
-                        .await;
+                let selected = match cached_provider(
+                    &mut provider_apps,
+                    &app,
+                    request.provider_route.as_ref(),
+                    plugins,
+                    max_cached_provider_hosts,
+                ) {
+                    Ok(selected) => selected,
+                    Err(error) => {
+                        scheduler.finish(&key);
+                        fail_turn_immediately(&events, &error);
                         continue;
                     }
                 };
-                let request_id = request.request_id.clone();
+                let allowed_tools = policy.read().map(|p| p.allowed.clone()).unwrap_or_default();
                 let cancellation = CancellationToken::new();
-                if pre_cancelled.remove(&request_id) {
-                    cancellation.cancel();
-                }
-                request.approval_user_request = Some(request.input.clone());
-                request.input = match compose_references(&app, &request).await {
-                    Ok(input) => input,
-                    Err(error) => {
-                        send_stream_event(
-                            &events,
-                            "turn.failed",
-                            None,
-                            &WebStreamEvent::Failed { detail: &error },
-                        )
-                        .await;
-                        continue;
-                    }
-                };
-                let turn = match app.lease_web_turn().await {
-                    Ok(turn) => turn,
-                    Err(error) => {
-                        send_stream_event(
-                            &events,
-                            "turn.failed",
-                            None,
-                            &WebStreamEvent::Failed { detail: &error },
-                        )
-                        .await;
-                        continue;
-                    }
-                };
-                let shutdown = {
-                    let running = run_turn_on_lease(
-                        &turn,
-                        request,
-                        &events,
-                        cancellation.clone(),
-                        &allowed_tools,
-                    );
-                    tokio::pin!(running);
-                    let mut shutdown = None;
-                    loop {
-                        tokio::select! {
-                            () = &mut running => break,
-                            command = commands.recv() => {
-                                let Some(command) = command else {
-                                    cancellation.cancel();
-                                    break;
-                                };
-                                match command {
-                                    RuntimeCommand::RefreshToolCatalog { reply } => {
-                                        let _ = reply.send(resolve_tool_policy(&app, &[]).await);
-                                    }
-                                    RuntimeCommand::ModelCatalog { reply } => {
-                                        let _ = reply.send(app.provider_model_catalog().await);
-                                    }
-                                    RuntimeCommand::ContextSources { reply } => {
-                                        let _ = reply.send(app.web_context_sources().await);
-                                    }
-                                    RuntimeCommand::AuthConnections { reply } => {
-                                        let _ = reply.send(app.web_auth_connections().await);
-                                    }
-                                    RuntimeCommand::AuthConnectionAction { request, reply } => {
-                                        let _ = reply.send(app.web_auth_connection_action(request).await);
-                                    }
-                                    RuntimeCommand::ToolCatalog { reply } => {
-                                        let result = agent_tool_catalog_on_app(&app, &policy).await;
-                                        let _ = reply.send(result);
-                                    }
-                                    RuntimeCommand::ExecuteTool { reply, request } => {
-                                        let result = execute_agent_tool_with_control(&app, &policy, request, &mut commands, &mut pending, &mut plugin_runtime).await;
-                                        let _ = reply.send(result);
-                                    }
-                                    RuntimeCommand::TerminalCatalog { reply } => {
-                                        let result = match app.lease_web_terminal().await {
-                                            Ok(terminal) => terminal.catalog().await,
-                                            Err(error) => Err(error),
-                                        };
-                                        let _ = reply.send(result);
-                                    }
-                                    RuntimeCommand::CancelTerminal { reply, request_id } => {
-                                        let found = active_terminal_commands
-                                            .get(&request_id)
-                                            .is_some_and(|cancellation| {
-                                                cancellation.cancel();
-                                                true
-                                            });
-                                        let _ = reply.send(found);
-                                    }
-                                    RuntimeCommand::TerminalFinished { request_id } => {
-                                        active_terminal_commands.remove(&request_id);
-                                    }
-                                    RuntimeCommand::RunTerminal { events, .. } => {
-                                        send_terminal_event(
-                                            &events,
-                                            "terminal.failed",
-                                            &WebTerminalEvent::Failed {
-                                                detail: "An Agent Turn is active",
-                                            },
-                                        )
-                                        .await;
-                                    }
-                                    RuntimeCommand::Plugin(command) => {
-                                        plugin_runtime.dispatch(&app, command);
-                                    }
-                                    RuntimeCommand::RemoteConfigurationWatchDegraded { detail } => {
-                                        app.report_plugin_watch_degraded(detail);
-                                    }
-                                    RuntimeCommand::ForkSession { session_id, request, reply } => {
-                                        let _ = reply.send(turn.fork_session_after_turn(session_id, request.turn_id, request.operation_id).await);
-                                    }
-                                    RuntimeCommand::TaskSnapshot { reply } => {
-                                        let _ = reply.send(turn.task_snapshot().await);
-                                    }
-                                    RuntimeCommand::PendingInteractions { reply, request_id: target_id } => {
-                                        let result = if target_id == request_id {
-                                            turn.pending_interactions()
-                                                .await
-                                                .map_err(RuntimeInteractionError::Rejected)
-                                        } else {
-                                            Err(RuntimeInteractionError::Inactive)
-                                        };
-                                        let _ = reply.send(result);
-                                    }
-                                    RuntimeCommand::AnswerInteraction {
-                                        answers,
-                                        interaction_id,
-                                        reply,
-                                        request_id: target_id,
-                                    } => {
-                                        let result = if target_id == request_id {
-                                            turn.answer_interaction(interaction_id, answers)
-                                                .await
-                                                .map_err(RuntimeInteractionError::Rejected)
-                                        } else {
-                                            Err(RuntimeInteractionError::Inactive)
-                                        };
-                                        let _ = reply.send(result);
-                                    }
-                                    RuntimeCommand::CancelTurn { reply, request_id: cancelled_id } => {
-                                        let found = cancel_active_or_deferred_turn(
-                                            &request_id,
-                                            &cancelled_id,
-                                            &pending,
-                                            &mut pre_cancelled,
-                                            &cancellation,
-                                        );
-                                        let _ = reply.send(found);
-                                    }
-                                    RuntimeCommand::Shutdown { reply } => {
-                                        cancellation.cancel();
-                                        for cancellation in active_terminal_commands.values() {
-                                            cancellation.cancel();
-                                        }
-                                        shutdown = Some(reply);
-                                    }
-                                    command => defer_runtime_command(&mut pending, command),
-                                }
-                            }
+                let active = std::rc::Rc::new(std::cell::RefCell::new(None));
+                active_turns.insert(key.clone(), (active.clone(), cancellation.clone()));
+                let sender = command_sender.clone();
+                request.session_admission = Some(SessionAdmission {
+                    key: key.clone(),
+                    commands: sender.clone(),
+                });
+                workers.spawn_local(async move {
+                    let session_id = request.session_id.clone();
+                    let running = async {
+                        let selected_app = selected.await?;
+                        let turn = std::rc::Rc::new(lease_turn_for_identity(&selected_app, &request.identity).await?);
+                        request.approval_user_request = Some(request.input.clone());
+                        if request.identity.actor.is_none() {
+                            request.input = compose_references(&selected_app, &request).await?;
                         }
+                        *active.borrow_mut() = Some(turn.clone());
+                        run_turn_on_lease(&turn, request, &events, cancellation.clone(), &allowed_tools).await;
+                        Ok::<(), String>(())
+                    };
+                    tokio::select! {
+                        result = running => { if let Err(error) = result { fail_turn_immediately(&events, &error); } },
+                        () = cancellation.cancelled() => {
+                            if let Some(event) = stream_event("turn.cancelled", None,
+                                &WebStreamEvent::Cancelled { session_id: session_id.as_deref() }) {
+                                let _ = events.try_send(Ok(event));
+                            }
+                        },
+                        () = events.closed() => { cancellation.cancel(); },
                     }
-                    shutdown
-                };
-                if let Some(reply) = shutdown {
-                    let sync = stop_remote_configuration_sync(&mut remote_sync).await;
-                    let app = app.shutdown().await;
-                    let _ = reply.send(sync.and(app));
-                    return;
-                }
+                    let _ = sender.send(RuntimeCommand::TurnFinished { key }).await;
+                });
+            }
+            RuntimeCommand::BindTurnSession {
+                key,
+                session_id,
+                reply,
+            } => {
+                let _ = reply.send(scheduler.bind_session(&key, session_id));
+            }
+            RuntimeCommand::TurnFinished { key } => {
+                active_turns.remove(&key);
+                scheduler.finish(&key);
             }
             RuntimeCommand::Shutdown { reply } => {
+                for (_, cancellation) in active_turns.values() {
+                    cancellation.cancel();
+                }
                 for cancellation in active_terminal_commands.values() {
                     cancellation.cancel();
                 }
+                workers.shutdown().await;
+                active_turns.clear();
                 let sync = stop_remote_configuration_sync(&mut remote_sync).await;
-                let app = app.shutdown().await;
-                let _ = reply.send(sync.and(app));
+                let stopped = shutdown_runtime_apps(app, provider_apps).await;
+                let _ = reply.send(sync.and(stopped));
                 return;
             }
         }
     }
+    for (_, cancellation) in active_turns.values() {
+        cancellation.cancel();
+    }
     for cancellation in active_terminal_commands.values() {
         cancellation.cancel();
     }
+    workers.shutdown().await;
+    active_turns.clear();
     let _ = stop_remote_configuration_sync(&mut remote_sync).await;
-    let _ = app.shutdown().await;
+    let _ = shutdown_runtime_apps(app, provider_apps).await;
 }
 
+type CachedProviderBoot = futures::future::Shared<
+    futures::future::LocalBoxFuture<'static, Result<std::rc::Rc<AgentApp>, String>>,
+>;
+fn cached_provider(
+    providers: &mut BTreeMap<String, CachedProviderBoot>,
+    app: &std::rc::Rc<AgentApp>,
+    route: Option<&assistant_provider::ProviderRoute>,
+    plugins: fn(),
+    capacity: usize,
+) -> Result<CachedProviderBoot, String> {
+    let Some(route) = route else {
+        return Ok(futures::future::ready(Ok(app.clone()))
+            .boxed_local()
+            .shared());
+    };
+    if let Some(selected) = providers.get(&route.lease_key) {
+        return Ok(selected.clone());
+    }
+    if providers.len() >= capacity {
+        return Err("Provider Host capacity is exhausted".into());
+    }
+    let route = route.clone();
+    let key = route.lease_key.clone();
+    let boot = async move { assistant_provider::boot_route(&route, plugins).await }
+        .boxed_local()
+        .shared();
+    providers.insert(key, boot.clone());
+    Ok(boot)
+}
+
+async fn shutdown_runtime_apps(
+    app: std::rc::Rc<AgentApp>,
+    providers: BTreeMap<String, CachedProviderBoot>,
+) -> Result<(), String> {
+    let mut result = Ok(());
+    for boot in providers.into_values() {
+        let selected = boot
+            .peek()
+            .and_then(|outcome| outcome.as_ref().ok())
+            .cloned();
+        drop(boot);
+        if let Some(selected) = selected {
+            match std::rc::Rc::try_unwrap(selected) {
+                Ok(mut app) => {
+                    if let Err(error) = app.shutdown().await {
+                        result = Err(error);
+                    }
+                }
+                Err(_) => result = Err("Provider leases remain active during shutdown".into()),
+            }
+        }
+    }
+    match std::rc::Rc::try_unwrap(app) {
+        Ok(mut app) => app.shutdown().await.and(result),
+        Err(_) => Err("Agent leases remain active during shutdown".into()),
+    }
+}
+
+fn fail_turn_immediately(events: &mpsc::Sender<Result<Event, Infallible>>, detail: &str) {
+    if let Some(event) = stream_event("turn.failed", None, &WebStreamEvent::Failed { detail }) {
+        let _ = events.try_send(Ok(event));
+    }
+}
+
+#[cfg(test)]
 fn cancel_active_or_deferred_turn(
     active_request_id: &str,
     cancelled_request_id: &str,
@@ -2979,6 +3539,7 @@ fn cancel_active_or_deferred_turn(
     false
 }
 
+#[cfg(test)]
 fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: RuntimeCommand) {
     if pending.len() < MAX_DEFERRED_RUNTIME_COMMANDS {
         pending.push_back(command);
@@ -2986,7 +3547,7 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
     }
     let detail = "Agent runtime deferred-command capacity is exhausted";
     match command {
-        RuntimeCommand::ListSessions { reply } => {
+        RuntimeCommand::ListSessions { reply, .. } => {
             let _ = reply.send(Err(detail.to_owned()));
         }
         RuntimeCommand::ReadAttachment { reply, .. }
@@ -3022,7 +3583,11 @@ fn defer_runtime_command(pending: &mut VecDeque<RuntimeCommand>, command: Runtim
                 let _ = events.try_send(Ok(event));
             }
         }
-        RuntimeCommand::PluginCompletion(_)
+        RuntimeCommand::StartTurn { .. }
+        | RuntimeCommand::StartCompact { .. }
+        | RuntimeCommand::BindTurnSession { .. }
+        | RuntimeCommand::TurnFinished { .. }
+        | RuntimeCommand::PluginCompletion(_)
         | RuntimeCommand::ModelCatalog { .. }
         | RuntimeCommand::ContextSources { .. }
         | RuntimeCommand::AuthConnections { .. }
@@ -3124,12 +3689,13 @@ async fn stop_remote_configuration_sync(
         .map_err(|error| format!("remote configuration synchronizer failed: {error}"))
 }
 
-async fn read_attachment_from_app(
+async fn read_attachment_from_app_with_identity(
     app: &AgentApp,
+    identity: &RequestIdentity,
     session_id: String,
     digest: String,
 ) -> Result<String, String> {
-    let turn = app.lease_web_history().await?;
+    let turn = lease_history_for_identity(app, identity).await?;
     let session = collect_session_pages(&session_id, |after| {
         turn.read_session(session_id.clone(), after, SESSION_READ_PAGE_LIMIT)
     })
@@ -3163,20 +3729,29 @@ async fn read_attachment_from_app(
 
 async fn handle_read_command(
     app: &AgentApp,
+    identity: &RequestIdentity,
     session_id: String,
     reply: oneshot::Sender<Result<ReadSessionResponse, ReadSessionFailure>>,
 ) {
-    let _ = reply.send(read_session_from_app(app, session_id).await);
+    let _ = reply.send(read_session_from_app_with_identity(app, identity, session_id).await);
 }
 
 async fn handle_rename_command(
     app: &AgentApp,
+    identity: &RequestIdentity,
     session_id: String,
     title: String,
     expected_title_revision: String,
     reply: oneshot::Sender<Result<RenameSessionResponse, RenameSessionFailure>>,
 ) {
-    let result = rename_session_from_app(app, session_id, title, expected_title_revision).await;
+    let result = rename_session_from_app_with_identity(
+        app,
+        identity,
+        session_id,
+        title,
+        expected_title_revision,
+    )
+    .await;
     let _ = reply.send(result);
 }
 
@@ -3298,11 +3873,31 @@ fn policy_response(
     }
 }
 
-async fn read_session_from_app(
+async fn lease_turn_for_identity(
     app: &AgentApp,
+    identity: &RequestIdentity,
+) -> Result<lenso_agent_host::generation::TurnGeneration, String> {
+    match &identity.actor {
+        Some(actor) => app.lease_web_turn_for_actor(actor.clone()).await,
+        None => app.lease_web_turn().await,
+    }
+}
+async fn lease_history_for_identity(
+    app: &AgentApp,
+    identity: &RequestIdentity,
+) -> Result<lenso_agent_host::generation::SessionHistoryGeneration, String> {
+    match &identity.actor {
+        Some(actor) => app.lease_web_history_for_actor(actor.clone()).await,
+        None => app.lease_web_history().await,
+    }
+}
+
+async fn read_session_from_app_with_identity(
+    app: &AgentApp,
+    identity: &RequestIdentity,
     session_id: String,
 ) -> Result<ReadSessionResponse, ReadSessionFailure> {
-    let turn = app.lease_web_history().await?;
+    let turn = lease_history_for_identity(app, identity).await?;
     collect_session_pages(&session_id, |cursor| {
         turn.read_session(session_id.clone(), cursor, SESSION_READ_PAGE_LIMIT)
     })
@@ -3448,20 +4043,23 @@ fn session_event_kind_name(kind: &ReadSessionResponseEventsItemKind) -> &'static
     }
 }
 
-async fn list_sessions_from_app(app: &AgentApp) -> Result<WebSessionList, String> {
-    let turn = app.lease_web_history().await?;
+async fn list_sessions_from_app_with_identity(
+    app: &AgentApp,
+    identity: &RequestIdentity,
+) -> Result<WebSessionList, String> {
+    let turn = lease_history_for_identity(app, identity).await?;
     let listed = turn.list_sessions(50).await?;
     Ok(project_session_list(listed))
 }
 
-async fn rename_session_from_app(
+async fn rename_session_from_app_with_identity(
     app: &AgentApp,
+    identity: &RequestIdentity,
     session_id: String,
     title: String,
     expected_title_revision: String,
 ) -> Result<RenameSessionResponse, RenameSessionFailure> {
-    let turn = app
-        .lease_web_turn()
+    let turn = lease_turn_for_identity(app, identity)
         .await
         .map_err(RenameSessionFailure::Runtime)?;
     turn.rename_session(session_id, title, expected_title_revision)
@@ -3693,6 +4291,21 @@ async fn invoke_turn(
         (None, None) => turn.open_session().await?,
         (None, Some(_)) => return Err("Editing a message requires its source Session".to_owned()),
     };
+    if let Some(admission) = request.session_admission {
+        let (reply, bound) = oneshot::channel();
+        admission
+            .commands
+            .send(RuntimeCommand::BindTurnSession {
+                key: admission.key,
+                session_id: requested_session_id.clone(),
+                reply,
+            })
+            .await
+            .map_err(|_| "Agent scheduler is unavailable".to_owned())?;
+        bound
+            .await
+            .map_err(|_| "Agent scheduler stopped during Session admission".to_owned())??;
+    }
     let stream = turn
         .handle()
         .open_with_context(
@@ -4025,6 +4638,7 @@ mod tests {
     fn runtime_with_access(access: AgentWebAccess) -> WebRuntime {
         let (commands, _receiver) = mpsc::channel(1);
         WebRuntime {
+            assistant_providers: None,
             plugin_ai: None,
             workspace: None,
             profile_revision: Arc::new(RwLock::new(None)),
@@ -4292,8 +4906,12 @@ mod tests {
             defer_runtime_command(
                 &mut pending,
                 RuntimeCommand::RunTurn {
+                    admission: None,
                     events,
                     request: WebTurnRequest {
+                        session_admission: None,
+                        provider_route: None,
+                        identity: RequestIdentity::default(),
                         context_references: vec![],
                         approval_user_request: None,
                         approval_mode: None,
@@ -4317,8 +4935,12 @@ mod tests {
         defer_runtime_command(
             &mut pending,
             RuntimeCommand::RunTurn {
+                admission: None,
                 events,
                 request: WebTurnRequest {
+                    session_admission: None,
+                    provider_route: None,
+                    identity: RequestIdentity::default(),
                     context_references: vec![],
                     approval_user_request: None,
                     approval_mode: None,
@@ -4347,8 +4969,12 @@ mod tests {
             .map(|index| {
                 let (events, _receiver) = mpsc::channel(1);
                 RuntimeCommand::RunTurn {
+                    admission: None,
                     events,
                     request: WebTurnRequest {
+                        session_admission: None,
+                        provider_route: None,
+                        identity: RequestIdentity::default(),
                         context_references: vec![],
                         approval_user_request: None,
                         approval_mode: None,
@@ -4373,8 +4999,12 @@ mod tests {
         defer_runtime_command(
             &mut pending,
             RuntimeCommand::RunTurn {
+                admission: None,
                 events,
                 request: WebTurnRequest {
+                    session_admission: None,
+                    provider_route: None,
+                    identity: RequestIdentity::default(),
                     context_references: vec![],
                     approval_user_request: None,
                     approval_mode: None,
@@ -4405,8 +5035,12 @@ mod tests {
             defer_runtime_command(
                 &mut pending,
                 RuntimeCommand::RunTurn {
+                    admission: None,
                     events,
                     request: WebTurnRequest {
+                        session_admission: None,
+                        provider_route: None,
+                        identity: RequestIdentity::default(),
                         context_references: vec![],
                         approval_user_request: None,
                         approval_mode: None,
@@ -4442,8 +5076,12 @@ mod tests {
         for request_id in ["queued-a", "queued-b"] {
             let (events, _receiver) = mpsc::channel(1);
             pending.push_back(RuntimeCommand::RunTurn {
+                admission: None,
                 events,
                 request: WebTurnRequest {
+                    session_admission: None,
+                    provider_route: None,
+                    identity: RequestIdentity::default(),
                     context_references: vec![],
                     approval_user_request: None,
                     approval_mode: None,
@@ -5166,6 +5804,9 @@ mod tests {
     fn rejects_empty_and_oversized_turns() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                session_admission: None,
+                provider_route: None,
+                identity: RequestIdentity::default(),
                 context_references: vec![],
                 approval_user_request: None,
                 approval_mode: None,
@@ -5185,6 +5826,9 @@ mod tests {
         );
         assert!(
             validate_turn_request(&WebTurnRequest {
+                session_admission: None,
+                provider_route: None,
+                identity: RequestIdentity::default(),
                 context_references: vec![],
                 approval_user_request: None,
                 approval_mode: None,
@@ -5222,6 +5866,9 @@ mod tests {
     fn rejects_ambiguous_reasoning_controls() {
         assert!(
             validate_turn_request(&WebTurnRequest {
+                session_admission: None,
+                provider_route: None,
+                identity: RequestIdentity::default(),
                 context_references: vec![],
                 approval_user_request: None,
                 approval_mode: None,

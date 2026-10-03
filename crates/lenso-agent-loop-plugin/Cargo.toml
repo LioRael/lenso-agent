@@ -13,6 +13,8 @@ plugin-id = "lenso.agent.loop"
 root-slot = "agents"
 
 [dependencies]
+lenso-auth-sdk = "0.2.3"
+lenso-capability-auth = "0.2.0"
 lenso-capability-agent-turn-binding = { path = "../lenso-capability-agent-turn-binding" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 base64.workspace = true

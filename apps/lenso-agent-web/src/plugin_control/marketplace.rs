@@ -1200,9 +1200,12 @@ mod tests {
             .unwrap();
         }
         eprintln!("tool proof: {name} policy ready");
-        let Json(tools) = crate::agent_tool_catalog(State(runtime.clone()))
-            .await
-            .unwrap();
+        let Json(tools) = crate::agent_tool_catalog(
+            State(runtime.clone()),
+            axum::Extension(crate::RequestIdentity::default()),
+        )
+        .await
+        .unwrap();
         eprintln!("tool proof: {name} executing {arguments}");
         let Json(result) = crate::execute_agent_tool(
             State(runtime.clone()),

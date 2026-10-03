@@ -3524,6 +3524,10 @@ fn host_plugin_configuration(
     HostPluginConfiguration::new(plugin_id, "default", configuration)
 }
 
+/// Internal Web route ceiling; the Web scheduler enforces configurable lower limits.
+/// Keep this ceiling aligned with `AgentWebScheduling` validation.
+pub const WEB_TURN_CONCURRENCY_CEILING: usize = 1024;
+
 #[allow(
     clippy::too_many_lines,
     reason = "one Host Catalog function keeps immutable Agent and Tool authority wiring auditable together"
@@ -3634,11 +3638,57 @@ fn host_catalog_bindings(
     .into_iter()
     .filter(|surface| available.contains(surface.plugin_id()))
     {
-        bindings.push(HostBinding::to_instance(
-            surface,
-            "lenso.agent@3",
+        let binding =
+            HostBinding::to_instance(surface.clone(), "lenso.agent@3", selected_agent.clone());
+        bindings.push(if surface.plugin_id() == "lenso.agent.web" {
+            // Turn admission, per-owner fairness and Session sequencing live
+            // above Kernel. This is an immutable supported-capacity ceiling.
+            binding.with_admission(RequestAdmissionPlan::new(0, WEB_TURN_CONCURRENCY_CEILING))
+        } else {
+            binding
+        });
+    }
+    if available.contains("lenso.agent.web") && selected_agent.plugin_id() == "lenso.agent.loop" {
+        bindings.push(
+            HostBinding::to_instance(
+                PluginInstanceId::new("lenso.agent.web", "web"),
+                "lenso.agent.session-control@1",
+                selected_agent.clone(),
+            )
+            .with_admission(RequestAdmissionPlan::new(0, WEB_TURN_CONCURRENCY_CEILING)),
+        );
+        // Independent Sessions share the selected Model Port. Do not serialize
+        // their upstream streams behind its contract's default single permit.
+        bindings.push(
+            HostBinding::new(
+                selected_agent.clone(),
+                lenso_capability_agent_model::CAPABILITY_ID,
+                "model",
+            )
+            .with_admission(RequestAdmissionPlan::new(
+                WEB_TURN_CONCURRENCY_CEILING,
+                WEB_TURN_CONCURRENCY_CEILING,
+            )),
+        );
+        bindings.push(
+            HostBinding::new(
+                selected_agent.clone(),
+                "lenso.agent.context-compaction@1",
+                "context-compactor",
+            )
+            .with_admission(RequestAdmissionPlan::new(WEB_TURN_CONCURRENCY_CEILING, 1)),
+        );
+        // SQLite remains serialized; the bounded mailbox admits independent
+        // callers without turning an overlapping append into ResourceExhausted.
+        for consumer in [
             selected_agent.clone(),
-        ));
+            PluginInstanceId::new("lenso.agent.web", "web"),
+        ] {
+            bindings.push(
+                HostBinding::new(consumer, "lenso.agent.session@1", "session")
+                    .with_admission(RequestAdmissionPlan::new(WEB_TURN_CONCURRENCY_CEILING, 1)),
+            );
+        }
     }
     if available.contains("lenso.agent.tui") {
         bindings.push(HostBinding::to_instance(
@@ -4789,6 +4839,67 @@ mod tests {
             assert_eq!(value["admission"]["queue_capacity"], 32);
             assert_eq!(value["admission"]["max_concurrency"], 1);
         }
+    }
+
+    #[test]
+    fn web_turn_bindings_admit_parallel_sessions_without_changing_other_surfaces() {
+        let available = ["lenso.agent.web", "lenso.agent.tui"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let selected_agent = PluginInstanceId::new("lenso.agent.loop", "agent");
+        let bindings = host_catalog_bindings(&selected_agent, &available);
+        for (consumer, capability, queue, concurrent) in [
+            (
+                "lenso.agent.web/web",
+                "lenso.agent@3",
+                0,
+                WEB_TURN_CONCURRENCY_CEILING,
+            ),
+            (
+                "lenso.agent.web/web",
+                "lenso.agent.session-control@1",
+                0,
+                WEB_TURN_CONCURRENCY_CEILING,
+            ),
+            (
+                "lenso.agent.loop/agent",
+                lenso_capability_agent_model::CAPABILITY_ID,
+                WEB_TURN_CONCURRENCY_CEILING,
+                WEB_TURN_CONCURRENCY_CEILING,
+            ),
+            (
+                "lenso.agent.loop/agent",
+                "lenso.agent.session@1",
+                WEB_TURN_CONCURRENCY_CEILING,
+                1,
+            ),
+            (
+                "lenso.agent.web/web",
+                "lenso.agent.session@1",
+                WEB_TURN_CONCURRENCY_CEILING,
+                1,
+            ),
+        ] {
+            let binding = bindings
+                .iter()
+                .find(|binding| {
+                    binding.consumer().to_string() == consumer
+                        && binding.capability_id() == capability
+                })
+                .expect("the Web admission binding must exist");
+            let binding = serde_json::to_value(binding).unwrap();
+            assert_eq!(binding["admission"]["queue_capacity"], queue);
+            assert_eq!(binding["admission"]["max_concurrency"], concurrent);
+        }
+        let tui = bindings
+            .iter()
+            .find(|binding| {
+                binding.consumer().to_string() == "lenso.agent.tui/tui"
+                    && binding.capability_id() == "lenso.agent@3"
+            })
+            .unwrap();
+        assert!(serde_json::to_value(tui).unwrap()["admission"].is_null());
     }
 
     #[test]

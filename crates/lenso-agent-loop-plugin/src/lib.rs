@@ -277,6 +277,7 @@ struct AgentLoop {
     #[tasks]
     tasks: ManagedTasks,
     active: Rc<RefCell<Option<ActiveTurnState>>>,
+    turns: ActiveTurnRegistry,
 }
 
 fn validate_agent_config(config: &AgentConfig) -> Result<(), RuntimeFailure> {
@@ -351,24 +352,35 @@ impl AgentLoop {
             return Err(PluginError::domain(RunTurnError::ContextLimitExceeded));
         }
         let active_id = uuid::Uuid::new_v4();
-        let mut active = self.active.borrow_mut();
-        if active.is_some() {
+        let owner = turn_owner(&context).map_err(PluginError::runtime)?;
+        if request.session_id.as_ref().is_some_and(|session| {
+            self.turns.borrow().values().any(|active| {
+                active.borrow().as_ref().is_some_and(|state| {
+                    state.owner == owner && state.session_id.as_ref() == Some(session)
+                })
+            })
+        }) {
             return Err(PluginError::domain(RunTurnError::ConcurrentTurn));
         }
-        *active = Some(ActiveTurnState {
+        // Each Turn owns its continuation queue. The registry only locates an
+        // existing Turn; it does not supply mutable state to unrelated Turns.
+        let active = Rc::new(RefCell::new(Some(ActiveTurnState {
             id: active_id,
+            owner,
             accepting: true,
             pending: VecDeque::new(),
             session_id: request.session_id.clone(),
             waiters: Vec::new(),
-        });
-        drop(active);
-        let active = self.active.clone();
+        })));
+        self.turns.borrow_mut().insert(active_id, active.clone());
         let (stream, channel) = ProviderStream::channel(&context, 1);
-        let plugin = self.clone();
+        let mut plugin = self.clone();
+        plugin.active = active.clone();
+        let turns = self.turns.clone();
         let task = self.tasks.spawn_local(async move {
             let _turn = ActiveTurn {
                 active,
+                turns,
                 id: active_id,
             };
             produce_turn(plugin, context, request, channel, active_id).await;
@@ -376,7 +388,9 @@ impl AgentLoop {
         match task {
             Ok(_) => Ok(stream),
             Err(error) => {
-                close_active_turn(&self.active, active_id);
+                if let Some(active) = self.turns.borrow_mut().remove(&active_id) {
+                    close_active_turn(&active, active_id);
+                }
                 Err(PluginError::runtime(RuntimeFailure::PluginFailure {
                     detail: format!("Agent turn task failed to start: {error:?}"),
                 }))
@@ -386,16 +400,43 @@ impl AgentLoop {
 
     async fn submit(
         &self,
-        _context: Ctx,
+        context: Ctx,
         request: SubmitRequest,
     ) -> PluginResult<SubmitResponse, SubmitError> {
         if request.input.trim().is_empty() {
             return Err(PluginError::domain(SubmitError::InvalidInput));
         }
+        // The Session provider independently verifies the continuation caller
+        // before its identity can locate a pending Turn.
+        self.session
+            .read_with_context(
+                context.clone(),
+                ReadSessionRequest {
+                    session_id: request.session_id.clone(),
+                    after_revision: "0".into(),
+                    limit: 1,
+                },
+            )
+            .await
+            .map_err(|_| PluginError::domain(SubmitError::TurnNotActive))?;
+        let owner =
+            turn_owner(&context).map_err(|_| PluginError::domain(SubmitError::TurnNotActive))?;
+        let active = self
+            .turns
+            .borrow()
+            .values()
+            .find(|active| {
+                active.borrow().as_ref().is_some_and(|state| {
+                    state.owner == owner
+                        && state.session_id.as_deref() == Some(request.session_id.as_str())
+                })
+            })
+            .cloned()
+            .ok_or_else(|| PluginError::domain(SubmitError::TurnNotActive))?;
         let id = uuid::Uuid::new_v4();
         let (sender, receiver) = oneshot::channel();
         {
-            let mut active = self.active.borrow_mut();
+            let mut active = active.borrow_mut();
             let Some(active) = active.as_mut() else {
                 return Err(PluginError::domain(SubmitError::TurnNotActive));
             };
@@ -421,7 +462,7 @@ impl AgentLoop {
             }
         }
         let guard = PendingTurnInputGuard {
-            active: self.active.clone(),
+            active: active.clone(),
             id,
         };
         let accepted_revision = receiver
@@ -443,7 +484,14 @@ impl AgentLoop {
         if request.session_id.is_empty() {
             return Err(PluginError::domain(CompactSessionError::InvalidSession));
         }
-        if self.active.borrow().is_some() {
+        let owner = turn_owner(&context)
+            .map_err(|_| PluginError::domain(CompactSessionError::InvalidSession))?;
+        if self.turns.borrow().values().any(|active| {
+            active.borrow().as_ref().is_some_and(|state| {
+                state.owner == owner
+                    && state.session_id.as_deref() == Some(request.session_id.as_str())
+            })
+        }) {
             return Err(PluginError::domain(CompactSessionError::ActiveTurn));
         }
         let opened = self
@@ -541,24 +589,52 @@ struct PendingTurnInput {
     response: oneshot::Sender<Result<String, SubmitError>>,
 }
 
+// Session operations verify the assertion independently. This projection is
+// only a lookup key and never authorizes creation, reading or continuation.
+fn turn_owner(context: &InvocationContext) -> Result<Option<String>, RuntimeFailure> {
+    let Some(extension) = context.sealed_extension(lenso_auth_sdk::ACTOR_ASSERTION_EXTENSION)
+    else {
+        return Ok(None);
+    };
+    let wire = serde_json::from_slice(extension.value())
+        .map_err(|_| invalid_plan("invalid Turn actor"))?;
+    let lenso_auth_sdk::AuthOutcome::Authenticated(actor) =
+        lenso_auth_sdk::decode_auth_response(lenso_capability_auth::AuthResponse {
+            kind: lenso_capability_auth::AuthResponseKind::Authenticated,
+            assertion: Some(wire),
+        })
+        .map_err(|_| invalid_plan("invalid Turn actor"))?
+    else {
+        return Err(invalid_plan("invalid Turn actor"));
+    };
+    Ok(Some(
+        serde_json::json!([actor.issuer(), actor.subject()]).to_string(),
+    ))
+}
+
 #[derive(Debug)]
 struct ActiveTurnState {
     id: uuid::Uuid,
+    owner: Option<String>,
     accepting: bool,
     pending: VecDeque<PendingTurnInput>,
     session_id: Option<String>,
     waiters: Vec<Waker>,
 }
 
+type ActiveTurnRegistry = Rc<RefCell<BTreeMap<uuid::Uuid, Rc<RefCell<Option<ActiveTurnState>>>>>>;
+
 #[derive(Debug)]
 struct ActiveTurn {
     active: Rc<RefCell<Option<ActiveTurnState>>>,
+    turns: ActiveTurnRegistry,
     id: uuid::Uuid,
 }
 
 impl Drop for ActiveTurn {
     fn drop(&mut self) {
         close_active_turn(&self.active, self.id);
+        self.turns.borrow_mut().remove(&self.id);
     }
 }
 
@@ -1081,6 +1157,11 @@ async fn recall_memory(
     query: &str,
     revision: &mut String,
 ) -> Result<Vec<MemoryItem>, TurnFailure> {
+    // Existing Memory providers have no authenticated owner contract. Signed
+    // member Turns must not recall another user's shared conversation content.
+    if turn_owner(context).map_err(PluginError::runtime)?.is_some() {
+        return Ok(Vec::new());
+    }
     let outcome = clients
         .memory
         .recall_with_context(
@@ -1189,6 +1270,13 @@ async fn memory_observation_event(
     input: &str,
     output: &str,
 ) -> Result<AppendSessionRequestEventsItem, TurnFailure> {
+    if turn_owner(context).map_err(PluginError::runtime)?.is_some() {
+        return session_event(
+            AppendSessionRequestEventsItemKind::MemoryCommitFailed,
+            Some(turn_id),
+            &serde_json::json!({"error": "member_memory_not_configured"}),
+        );
+    }
     let outcome = clients
         .memory
         .observe_with_context(

@@ -19,6 +19,15 @@ struct Args {
     /// Enable Plugin completion with an existing operators issuer/public-key JSON file.
     #[arg(long, value_name = "ABSOLUTE_PATH")]
     plugin_ai_authority: Option<PathBuf>,
+    /// Require signed Console identities using an issuer/public-key JSON verification file.
+    #[arg(long, value_name = "ABSOLUTE_PATH")]
+    assistant_authority: Option<PathBuf>,
+    /// JSON scheduling limits; omitted preserves the original single-user capacity.
+    #[arg(long, value_name = "PATH")]
+    assistant_scheduling: Option<PathBuf>,
+    /// Host-owned platform/member provider assignment and optional BYOK policy JSON.
+    #[arg(long, value_name = "PATH")]
+    assistant_providers: Option<PathBuf>,
     /// Address used by the Agent Web API.
     #[arg(long, default_value = "127.0.0.1:8787")]
     listen: SocketAddr,
@@ -96,8 +105,47 @@ async fn run(args: Args, linked_plugins: fn(), console: bool) -> Result<(), Stri
     let data_plane_token = std::env::var(DATA_PLANE_TOKEN_ENV)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let access = access_for_listener(args.listen, data_plane_token)?;
+    let access = if let Some(path) = args.assistant_authority {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Authority {
+            issuer: String,
+            public_key: String,
+        }
+        if !path.is_absolute() || std::fs::metadata(&path).map_err(|e| e.to_string())?.len() > 16384
+        {
+            return Err("bounded absolute assistant authority file required".into());
+        }
+        let authority: Authority =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("invalid assistant authority: {e}"))?;
+        let bearer = data_plane_token
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                format!("{DATA_PLANE_TOKEN_ENV} is required for assistant proxy ingress")
+            })?;
+        AgentWebAccess::AuthenticatedBearer {
+            bearer,
+            issuer: authority.issuer,
+            public_key: authority.public_key,
+        }
+    } else {
+        access_for_listener(args.listen, data_plane_token)?
+    };
     let mut config = AgentWebConfig::new(linked_plugins);
+    if let Some(path) = args.assistant_providers {
+        let policy = serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("invalid assistant providers: {e}"))?;
+        config.assistant_providers = Some(Arc::new(
+            lenso_agent_web::assistant_provider::AssistantProviderService::open(policy)
+                .map_err(|e| e.to_string())?,
+        ));
+    }
+    if let Some(path) = args.assistant_scheduling {
+        config.scheduling =
+            serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("invalid assistant scheduling: {e}"))?;
+    }
     if let Some(path) = &args.plugin_ai_authority {
         if !args.listen.ip().is_loopback() {
             return Err("Plugin AI bridge requires a loopback listener".into());
