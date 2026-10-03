@@ -1483,6 +1483,11 @@ async fn authorize_data_plane(
         runtime.access,
         AgentWebAccessPolicy::AuthenticatedBearer { .. }
     );
+    if !authenticated && request.headers().contains_key("x-lenso-actor-assertion") {
+        return Err(ApiProblem::forbidden(
+            "Signed Console identities require configured Agent assertion authority",
+        ));
+    }
     if path.contains("/plugin-ai/")
         || (!authenticated
             && (path.contains("/control/") || path.contains("/plugins") || path.contains("/auth/")))
@@ -1522,8 +1527,17 @@ async fn authorize_data_plane(
     Ok(next.run(request).await)
 }
 
-async fn assistant_ready() -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "status": "ready" }))
+async fn assistant_ready(State(runtime): State<WebRuntime>) -> Json<serde_json::Value> {
+    let authenticated_assistant = matches!(
+        &runtime.access,
+        AgentWebAccessPolicy::AuthenticatedBearer {
+            authority: Ok(_),
+            ..
+        }
+    );
+    Json(
+        serde_json::json!({ "status": "ready", "authenticated_assistant": authenticated_assistant }),
+    )
 }
 fn provider_settings_problem(error: assistant_provider::ProviderSettingsError) -> ApiProblem {
     match error {
@@ -4743,6 +4757,104 @@ mod tests {
     fn embedded_web_config_disables_the_data_plane_by_default() {
         let config = AgentWebConfig::new(lenso_agent_console_plugins::link);
         assert!(matches!(config.access, AgentWebAccess::Disabled));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn assistant_ingress_rejects_assertions_without_authority_before_route_bypasses() {
+        for access in [
+            AgentWebAccess::Disabled,
+            AgentWebAccess::Local,
+            AgentWebAccess::HostAuthorized,
+            AgentWebAccess::Bearer("secret".into()),
+        ] {
+            for (method, path) in [
+                (Method::GET, "/api/console/v1/agent/health/ready"),
+                (Method::GET, "/api/console/v1/agent/bootstrap"),
+                (Method::GET, "/api/console/v1/agent/control/tool-policy"),
+                (Method::GET, "/api/console/v1/agent/auth/connections"),
+                (Method::POST, "/api/console/v1/agent/plugin-ai/runs"),
+            ] {
+                for assertion in ["opaque-signed-identity", ""] {
+                    let response = router(runtime_with_access(access.clone()))
+                        .oneshot(
+                            Request::builder()
+                                .method(method.clone())
+                                .uri(path)
+                                .header(header::AUTHORIZATION, "Bearer secret")
+                                .header("x-lenso-actor-assertion", assertion)
+                                .body(axum::body::Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap();
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::FORBIDDEN,
+                        "{access:?}: {path}"
+                    );
+                    let body = axum::body::to_bytes(response.into_body(), 4096)
+                        .await
+                        .unwrap();
+                    assert!(
+                        String::from_utf8_lossy(&body)
+                            .contains("configured Agent assertion authority")
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn assistant_ingress_readiness_distinguishes_legacy_invalid_and_verified_modes() {
+        let issuer = lenso_auth_sdk::ActorAssertionIssuer::from_signing_key("fixture", [41; 32]);
+        for (access, status, authenticated) in [
+            (AgentWebAccess::Disabled, StatusCode::NOT_FOUND, false),
+            (AgentWebAccess::Local, StatusCode::OK, false),
+            (AgentWebAccess::HostAuthorized, StatusCode::OK, false),
+            (
+                AgentWebAccess::Bearer("secret".into()),
+                StatusCode::OK,
+                false,
+            ),
+            (
+                AgentWebAccess::AuthenticatedBearer {
+                    bearer: "secret".into(),
+                    issuer: "fixture".into(),
+                    public_key: issuer.public_key_base64(),
+                },
+                StatusCode::OK,
+                true,
+            ),
+            (
+                AgentWebAccess::AuthenticatedBearer {
+                    bearer: "secret".into(),
+                    issuer: "fixture".into(),
+                    public_key: "invalid".into(),
+                },
+                StatusCode::OK,
+                false,
+            ),
+        ] {
+            let response = router(runtime_with_access(access))
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/console/v1/agent/health/ready")
+                        .header(header::AUTHORIZATION, "Bearer secret")
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), status);
+            if status == StatusCode::OK {
+                let body = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                assert_eq!(body["status"], "ready");
+                assert_eq!(body["authenticated_assistant"], authenticated);
+            }
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]

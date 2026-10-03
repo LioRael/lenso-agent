@@ -84,7 +84,9 @@ pub struct AssistantProviderDefinition {
     /// Separately prepared Host Home. Session Plugin must point at the shared,
     /// authenticated database; each Home owns its separate runtime ledger.
     pub agent_home: PathBuf,
-    #[serde(default)]
+    /// Member Hosts use the complete prepared Plugin Root. Named Profiles can
+    /// replace its verified durable providers and are unsupported in this policy.
+    #[serde(default, deserialize_with = "deserialize_member_profile")]
     pub profile: Option<String>,
     pub model: String,
     /// Per-provider member Tool ceiling; this slice accepts only `ask_user`,
@@ -93,6 +95,17 @@ pub struct AssistantProviderDefinition {
     pub allowed_tools: Vec<String>,
     #[serde(default)]
     pub byok: Option<ByokTemplate>,
+}
+
+fn deserialize_member_profile<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    if Option::<String>::deserialize(deserializer)?.is_some() {
+        return Err(serde::de::Error::custom(
+            "named profiles are unsupported for member assistant providers; configure a separate Agent Home",
+        ));
+    }
+    Ok(None)
 }
 
 /// BYOK copies only this trusted provider's Plugin Root into a new immutable Home.
@@ -686,6 +699,7 @@ fn validate_config(config: &AssistantProviderConfig) -> Result<(), ProviderSetti
             || provider.label.len() > 256
             || provider.model.is_empty()
             || !provider.agent_home.is_absolute()
+            || provider.profile.is_some()
             || provider.allowed_tools.iter().any(|tool| tool != "ask_user")
             || provider.allowed_tools.len() > 1
         {
@@ -1038,6 +1052,32 @@ mod tests {
 
     const ALICE: &str = "[\"fixture.auth\",\"alice\"]";
     const BOB: &str = "[\"fixture.auth\",\"bob\"]";
+
+    #[test]
+    fn member_named_profiles_fail_closed_before_settings_storage() {
+        let root = tempfile::tempdir().unwrap();
+        let mut config = policy(root.path());
+        // Platform providers are rejected as well as BYOK providers: a Profile
+        // can filter out or replace any of the verified durable instances.
+        config.providers[0].byok = None;
+        config.providers[0].profile = Some("alternate-boundaries".into());
+        let wire = serde_json::to_value(&config).unwrap();
+        let error = serde_json::from_value::<AssistantProviderConfig>(wire).unwrap_err();
+        assert!(error.to_string().contains("named profiles are unsupported"));
+        assert!(matches!(
+            AssistantProviderService::open(config.clone()),
+            Err(ProviderSettingsError::InvalidSettings)
+        ));
+        assert!(!config.settings_database.exists());
+        config.providers[0].profile = None;
+        assert!(
+            serde_json::from_value::<AssistantProviderConfig>(
+                serde_json::to_value(&config).unwrap()
+            )
+            .is_ok()
+        );
+        AssistantProviderService::open(config).unwrap();
+    }
 
     #[test]
     fn provider_assignments_are_owner_scoped_and_persist_without_secret_fields() {

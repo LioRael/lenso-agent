@@ -9,9 +9,13 @@ group membership can grant provider choices. Group membership is platform
 configuration; a request cannot invent its own subject or groups. Removing a
 grant invalidates saved preferences immediately.
 
-Each configured provider runs in a separately prepared Host Home with an
-immutable startup Profile. Turns select already prepared Hosts rather than
-switching the active Profile on a shared Host. Every provider Home explicitly
+Each configured provider runs in a separately prepared Host Home using its
+complete Plugin Root. Member provider policies reject named Profiles: their
+Instance selection can exclude or replace the durable providers checked below.
+Platform administrators configure each provider's Model Instance in its own
+Home. Existing local operator named Profiles remain supported. Turns select
+already prepared Hosts rather than switching a shared Host's active Profile.
+Every provider Home explicitly
 configures the same authenticated Session Plugin database and verification
 authority. Artifact providers share the same absolute storage directory and
 verification authority. Interaction providers use that authority as well.
