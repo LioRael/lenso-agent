@@ -150,11 +150,122 @@ describe("admission, identity, and draining", () => {
     for (const key of ["subject", "scope", "application", "target"] as const) {
       const wrong = { ...identity, [key]: "different" };
       await expect(f.service.readSession(wrong, session.id)).rejects.toThrow("not-found");
+      await expect(f.service.readMessages(wrong, session.id)).rejects.toThrow("not-found");
       await expect(f.service.getRun(wrong, handle.run.id)).rejects.toThrow("not-found");
       await expect(f.service.events(wrong, handle.run.id)).rejects.toThrow("not-found");
+      await expect(f.service.watchRun(wrong, handle.run.id)).rejects.toThrow("not-found");
       await expect(f.service.cancelRun(wrong, handle.run.id)).rejects.toThrow("not-found");
       await expect(f.service.startRun(wrong, session.id, "Hello")).rejects.toThrow("not-found");
     }
+    await f.service.close();
+  });
+
+  test("UI message pages hold an insertion watermark and never replace complete model history", async () => {
+    const f = fixture();
+    f.core.setResponses([fauxAssistantMessage("First answer"), context => {
+      expect(JSON.stringify(context.messages)).toContain("First answer");
+      expect(JSON.stringify(context.messages)).toContain("First question");
+      return fauxAssistantMessage("Second answer");
+    }]);
+    const session = await f.service.createSession(identity, "default");
+    await (await f.service.startRun(identity, session.id, "First question")).done;
+    const first = await f.service.readMessages(identity, session.id, { limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.hasMore).toBe(true);
+    await (await f.service.startRun(identity, session.id, "Second question")).done;
+    const rest = await f.service.readMessages(identity, session.id, {
+      after: first.cursor, through: first.through, limit: 100,
+    });
+    expect(rest.items.map(item => item.value.role)).toEqual(["assistant"]);
+    expect(rest.hasMore).toBe(false);
+    expect((await f.service.readMessages(identity, session.id)).items).toHaveLength(4);
+    await f.service.close();
+  });
+
+  test("message pages expose scoped record IDs, never global insertion counts", async () => {
+    const f = fixture();
+    const session = await f.service.createSession(identity, "default");
+    const foreignOwner = { ...identity, scope: "foreign-scope" };
+    const foreign = await f.service.createSession(foreignOwner, "default");
+    const insert = (id: string, sessionId: string) => f.store.transaction(tx => tx.put("messages", {
+      id, sessionId, runId: "old", createdAt: 1,
+      value: { role: "user", content: id, timestamp: 1 },
+    }));
+    insert("first", session.id);
+    insert("last", session.id);
+    insert("foreign", foreign.id);
+    const page = await f.service.readMessages(identity, session.id, { limit: 1 });
+    expect(page.cursor).toBe("first");
+    expect(page.through).toBe("last");
+    insert("foreign-later", foreign.id);
+    expect((await f.service.readMessages(identity, session.id, { limit: 1 })).through).toBe(page.through);
+    for (const id of ["foreign", "absent"]) {
+      await expect(f.service.readMessages(identity, session.id, { after: id })).rejects.toThrow("invalid-input");
+      await expect(f.service.readMessages(identity, session.id, { through: id })).rejects.toThrow("invalid-input");
+    }
+    await expect(f.service.readMessages(foreignOwner, session.id, { after: page.cursor })).rejects.toThrow("not-found");
+    await f.service.close();
+  });
+
+  test("watchRun joins a running snapshot to terminal live delivery and detaches without cancelling", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const f = fixture({}, { hooks: [{
+      async beforeRun() { entered.resolve(); await release.promise; },
+    }] });
+    f.core.setResponses([fauxAssistantMessage("Authoritative final")]);
+    const session = await f.service.createSession(identity, "default");
+    const handle = await f.service.startRun(identity, session.id, "Question");
+    await entered.promise;
+    const detached = await f.service.watchRun(identity, handle.run.id);
+    const watch = await f.service.watchRun(identity, handle.run.id);
+    expect(watch.run.status).toBe("running");
+    expect(watch.sequence).toBeGreaterThan(0);
+    await detached.close();
+    expect((await f.service.getRun(identity, handle.run.id)).status).toBe("running");
+    const events = (async () => {
+      const result: AgentEvent[] = [];
+      try { for await (const event of watch.events) result.push(event); }
+      catch (error) { expect((error as Error).message).toContain("resnapshot-required"); }
+      return result;
+    })();
+    release.resolve();
+    expect((await handle.done).status).toBe("completed");
+    const live = await events;
+    expect(live.map(event => event.kind)).toContain("run_completed");
+    expect(live.every(event => event.sequence > watch.sequence)).toBe(true);
+    const settled = await f.service.watchRun(identity, handle.run.id);
+    expect(settled.run.status).toBe("completed");
+    expect(JSON.stringify(settled.snapshot.messages)).toContain("Authoritative final");
+    expect(await collect(settled.events)).toEqual([]);
+    await watch.close();
+    await settled.close();
+    await f.service.close();
+  });
+
+  test("oversized snapshots and histories fail before materializing session records", async () => {
+    const backing = createMemoryStore();
+    let listCalls = 0;
+    const store: AgentStore = {
+      transaction: work => backing.transaction(tx => work({
+        ...tx,
+        list(table, sessionId) {
+          if (table === "messages") listCalls++;
+          return tx.list(table, sessionId);
+        },
+      })),
+      close: () => backing.close(),
+    };
+    const f = fixture({ store, limits: { maxSnapshotBytes: 512, maxHistoryBytes: 512 } });
+    const session = await f.service.createSession(identity, "default");
+    backing.transaction(tx => tx.put("messages", {
+      id: "large-message", sessionId: session.id, runId: "old-run", createdAt: 0,
+      value: { role: "user", content: "x".repeat(4096), timestamp: 0 },
+    }));
+    await expect(f.service.readSession(identity, session.id)).rejects.toThrow("snapshot-budget");
+    await expect(f.service.startRun(identity, session.id, "New question")).rejects.toThrow("history-budget");
+    expect(listCalls).toBe(0);
+    expect(backing.transaction(tx => tx.count("runs", { sessionId: session.id }))).toBe(0);
     await f.service.close();
   });
 

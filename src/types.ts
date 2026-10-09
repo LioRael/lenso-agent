@@ -23,6 +23,7 @@ export interface Message {
   runId: string;
   createdAt: number;
   value: AgentMessage;
+  source?: { kind: "action-outcome"; actionId: string; callId: string };
 }
 export interface Usage {
   model: string;
@@ -89,9 +90,40 @@ export interface Tables {
   calls: ToolCall;
   actions: PendingAction;
 }
+export interface StoreFilter {
+  sessionId?: string;
+  status?: string;
+}
+export interface StorePageOptions {
+  sessionId: string;
+  after?: number;
+  through?: number;
+  afterId?: string;
+  throughId?: string;
+  limit: number;
+  maxBytes: number;
+}
+export interface StorePage<T> {
+  items: T[];
+  cursor: number;
+  through: number;
+  throughId: string;
+  hasMore: boolean;
+}
+export interface MessagePage {
+  items: Message[];
+  cursor: string;
+  through: string;
+  hasMore: boolean;
+}
 export interface StoreTransaction {
   get<K extends keyof Tables>(table: K, id: string): Tables[K] | undefined;
   list<K extends keyof Tables>(table: K, sessionId?: string): Tables[K][];
+  count<K extends keyof Tables>(table: K, filter?: StoreFilter): number;
+  /** UTF-8 JSON array size, or message value array size when messageValues is true. */
+  bytes<K extends keyof Tables>(table: K, sessionId: string, messageValues?: boolean): number;
+  /** Insertion watermark excludes later inserts; updates remain current on each page read. */
+  page<K extends keyof Tables>(table: K, options: StorePageOptions): StorePage<Tables[K]>;
   put<K extends keyof Tables>(table: K, record: Tables[K]): void;
 }
 /** Work must be synchronous; implementations commit atomically or roll back. */
@@ -146,6 +178,20 @@ export interface RunHandle {
   events: AsyncIterable<AgentEvent>;
   done: Promise<Run>;
 }
+export interface SessionSnapshot {
+  session: Session;
+  messages: Message[];
+  runs: Run[];
+  actions: PendingAction[];
+  calls: ToolCall[];
+}
+export interface RunWatch {
+  snapshot: SessionSnapshot;
+  run: Run;
+  sequence: number;
+  events: AsyncIterable<AgentEvent>;
+  close(): Promise<void>;
+}
 export interface AgentOptions<C> {
   store: AgentStore;
   identity: (context: C) => Promise<Identity>;
@@ -159,10 +205,13 @@ export interface AgentOptions<C> {
 }
 export interface AgentService<C> {
   createSession(context: C, profile: string): Promise<Session>;
-  readSession(context: C, sessionId: string): Promise<{ session: Session; messages: Message[]; runs: Run[]; actions: PendingAction[]; calls: ToolCall[] }>;
+  readSession(context: C, sessionId: string): Promise<SessionSnapshot>;
+  readMessages(context: C, sessionId: string, options?: { after?: string; through?: string; limit?: number }): Promise<MessagePage>;
   startRun(context: C, sessionId: string, text: string): Promise<RunHandle>;
   getRun(context: C, runId: string): Promise<Run>;
   events(context: C, runId: string): Promise<AsyncIterable<AgentEvent>>;
+  /** Register bounded live delivery before taking the authoritative snapshot. Not persisted replay. */
+  watchRun(context: C, runId: string, options?: { signal?: AbortSignal }): Promise<RunWatch>;
   cancelRun(context: C, runId: string): Promise<Run>;
   confirmAction(context: C, actionId: string, digest: string): Promise<PendingAction>;
   cancelAction(context: C, actionId: string): Promise<PendingAction>;

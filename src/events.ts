@@ -38,7 +38,7 @@ export class SafeText {
 
 /** A bounded live fan-out. Detaching a consumer never touches execution. */
 export class RunEvents {
-  private sequence = 0;
+  private currentSequence = 0;
   private closed = false;
   private readonly subscribers = new Set<Subscriber>();
 
@@ -47,10 +47,12 @@ export class RunEvents {
     private readonly capacity: number, private readonly maxBytes = 1024 * 1024,
   ) {}
 
+  get sequence(): number { return this.currentSequence; }
+
   emit = (kind: EventKind, details: Details = {}): void => {
     if (this.closed) return;
     const event: AgentEvent = {
-      ...details, id: crypto.randomUUID(), sequence: ++this.sequence,
+      ...details, id: crypto.randomUUID(), sequence: ++this.currentSequence,
       timestamp: Date.now(), sessionId: this.sessionId, runId: this.runId, kind,
     };
     for (const subscriber of this.subscribers) {
@@ -85,7 +87,10 @@ export class RunEvents {
         const value = subscriber.queue.shift();
         if (value) return Promise.resolve({ done: false, value });
         if (subscriber.ended) return Promise.resolve({ done: true, value: undefined });
-        if (subscriber.waiting) return Promise.reject(new AgentError("concurrent-event-read"));
+        if (subscriber.waiting) {
+          detach();
+          return Promise.reject(new AgentError("concurrent-event-read"));
+        }
         return new Promise(resolve => { subscriber.waiting = resolve; });
       },
       return: async () => { detach(); return { done: true, value: undefined }; },

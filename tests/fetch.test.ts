@@ -6,6 +6,8 @@ import { createMemoryStore } from "../src/store";
 import type { AgentService, AgentEvent } from "../src/types";
 import { createNotesHost } from "../examples/notes";
 import { consoleNotesProfile } from "../examples/console-profile";
+import { RunEvents } from "../src/events";
+import { watchRunEvents } from "../src/reconnect";
 
 // No earlier coverage exists for transport admission. These cases prevent a
 // denied host request from consuming a body or smuggling authority through JSON.
@@ -208,5 +210,132 @@ test("host-verified actors and exact pending digest guard real Manage writes thr
     expect(host.db.query<{ version: number }, []>("SELECT version FROM notes WHERE id = 'welcome'").get()!.version).toBe(2);
   } finally {
     try { await agent.close(); } finally { await host.close(); }
+  }
+});
+
+function watchCheckpoint(sequence = 0) {
+  const run = { id: "run", sessionId: "session", status: "running" as const, createdAt: 1 };
+  return {
+    snapshot: {
+      session: { id: "session", identity: { subject: "alice", scope: "personal", application: "test", target: "local" }, profile: "read", createdAt: 1 },
+      messages: [], runs: [run], actions: [], calls: [],
+    },
+    run, sequence,
+  };
+}
+
+test("watch SSE authenticates each connection, sends snapshot first and ignores Last-Event-ID as replay", async () => {
+  const source = new RunEvents("session", "run", 4);
+  let authentications = 0;
+  let calls = 0;
+  let suppliedSignal: AbortSignal | undefined;
+  const agent = {
+    async watchRun(context: { subject: string }, id: string, options?: { signal?: AbortSignal }) {
+      calls++;
+      expect(context.subject).toBe("alice");
+      expect(id).toBe("run");
+      suppliedSignal = options?.signal;
+      return watchRunEvents(source, () => watchCheckpoint(source.sequence), options);
+    },
+  } as unknown as AgentService<{ subject: string }>;
+  const handler = createAgentFetchHandler({
+    agent,
+    async authenticate(request) {
+      authentications++;
+      if (request.headers.get("x-subject") !== "alice") throw new Error("private-auth-token");
+      return { subject: "alice" };
+    },
+  });
+  const connection = new AbortController();
+  const response = await handler(new Request("http://host/agent/runs/run/watch", {
+    headers: { "x-subject": "alice", "last-event-id": "9999" }, signal: connection.signal,
+  }));
+  expect(response!.status).toBe(200);
+  expect(suppliedSignal).toBeDefined();
+  source.emit("run_completed");
+  const reader = response!.body!.getReader();
+  const snapshot = new TextDecoder().decode((await reader.read()).value);
+  expect(snapshot).toContain("event: snapshot\n");
+  expect(snapshot).toContain('"sequence":0');
+  expect(snapshot).toContain('"status":"running"');
+  const terminal = new TextDecoder().decode((await reader.read()).value);
+  expect(terminal).toContain("id: 1\nevent: run_completed\n");
+  expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: resnapshot_required\n");
+  expect((await reader.read()).done).toBe(true);
+  const denied = await handler(new Request("http://host/agent/runs/run/watch", { headers: { "x-subject": "bob" } }));
+  expect(denied!.status).toBe(401);
+  expect(await denied!.text()).not.toContain("private-auth-token");
+  expect(authentications).toBe(2);
+  expect(calls).toBe(1);
+});
+
+test("watch SSE never pumps live events before consumption and disconnect only detaches", async () => {
+  let nexts = 0;
+  let returns = 0;
+  let closes = 0;
+  let cancellations = 0;
+  let finish!: (result: IteratorResult<AgentEvent>) => void;
+  const agent = {
+    async watchRun() {
+      return {
+        ...watchCheckpoint(),
+        events: {
+          [Symbol.asyncIterator]() {
+            return {
+              next() { nexts++; return new Promise<IteratorResult<AgentEvent>>(resolve => { finish = resolve; }); },
+              async return() { returns++; finish?.({ done: true, value: undefined }); return { done: true as const, value: undefined }; },
+            };
+          },
+        },
+        async close() { closes++; },
+      };
+    },
+    async cancelRun() { cancellations++; throw new Error("must-not-cancel"); },
+  } as unknown as AgentService<{}>;
+  const handler = createAgentFetchHandler({ agent, authenticate: async () => ({}) });
+  const connection = new AbortController();
+  const response = await handler(new Request("http://host/agent/runs/run/watch", { signal: connection.signal }));
+  expect(nexts).toBe(0);
+  const reader = response!.body!.getReader();
+  expect(new TextDecoder().decode((await reader.read()).value)).toContain("event: snapshot");
+  expect(nexts).toBe(0);
+  const pending = reader.read();
+  await Promise.resolve();
+  expect(nexts).toBe(1);
+  connection.abort();
+  expect((await pending).done).toBe(true);
+  await Promise.resolve();
+  expect(returns).toBe(1);
+  expect(closes).toBe(1);
+  expect(cancellations).toBe(0);
+
+  const second = await handler(new Request("http://host/agent/runs/run/watch"));
+  await second!.body!.cancel();
+  expect(returns).toBe(2);
+  expect(closes).toBe(2);
+  expect(nexts).toBe(1);
+  expect(cancellations).toBe(0);
+});
+
+test("watch SSE overflow and empty running streams emit explicit safe resnapshot frame", async () => {
+  for (const mode of ["overflow", "empty", "failure"]) {
+    const source = new RunEvents("session", "run", 1);
+    const agent = {
+      async watchRun() {
+        if (mode === "overflow") return watchRunEvents(source, () => watchCheckpoint());
+        return {
+          ...watchCheckpoint(),
+          events: { async *[Symbol.asyncIterator]() { if (mode === "failure") throw new Error("private-tool-result"); } },
+          async close() {},
+        };
+      },
+    } as unknown as AgentService<{}>;
+    const handler = createAgentFetchHandler({ agent, authenticate: async () => ({}) });
+    const response = await handler(new Request("http://host/agent/runs/run/watch"));
+    if (mode === "overflow") { source.emit("text_delta"); source.emit("text_delta"); }
+    const text = await response!.text();
+    expect(text.indexOf("event: snapshot")).toBeLessThan(text.indexOf("event: resnapshot_required"));
+    expect(text).toContain('data: {"code":"resnapshot-required"}');
+    expect(text).not.toContain("private-tool-result");
   }
 });

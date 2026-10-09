@@ -2,6 +2,8 @@ import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@earend
 import { lazyStream, type AssistantMessage, type Message as LlmMessage } from "@earendil-works/pi-ai";
 import { createExecutionGateway } from "./gateway";
 import { RunEvents, SafeText } from "./events";
+import { ensureActionOutcomes, persistActionOutcome } from "./outcomes";
+import { watchRunEvents } from "./reconnect";
 import type { PiExtensions } from "./pi";
 import { AgentError, assertSafeInput, jsonCopy, safeCode, safeValue, sameIdentity } from "./safety";
 import type { AgentOptions, AgentService, Identity, Run, RunLimits, Session, StoreTransaction, Usage } from "./types";
@@ -85,6 +87,20 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
   };
   const recordBytes = Math.max(16_384, limits.maxInputBytes + limits.maxContextBytes + limits.maxOutputBytes);
   const publicCopy = <T>(value: T): T => jsonCopy(safeValue(value, secrets()), recordBytes);
+
+  function readSnapshot(tx: StoreTransaction, identity: Identity, sessionId: string) {
+    const session = ownedSession(tx, identity, sessionId);
+    ensureActionOutcomes(tx, sessionId, secrets(), limits.maxOutputBytes, limits.maxSnapshotBytes,
+      action => sameIdentity(action.identity, identity));
+    const empty = { session, messages: [], runs: [], actions: [], calls: [] };
+    const bytes = size(empty) + (["messages", "runs", "actions", "calls"] as const)
+      .reduce((total, table) => total + tx.bytes(table, sessionId) - 2, 0);
+    if (bytes > limits.maxSnapshotBytes) throw new AgentError("snapshot-budget");
+    return bounded(safeValue({
+      session, messages: tx.list("messages", sessionId), runs: tx.list("runs", sessionId),
+      actions: tx.list("actions", sessionId), calls: tx.list("calls", sessionId),
+    }, secrets()), limits.maxSnapshotBytes, "snapshot-budget");
+  }
 
   async function execute(context: C, session: Session, initial: Run, text: string, task: ActiveRun): Promise<Run> {
     const started = performance.now();
@@ -199,7 +215,16 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
       ].join("\n\n"), runSecrets());
       bounded({ systemPrompt, tools: tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })) },
         limits.maxContextBytes, "context-budget");
-      const history = options.store.transaction(tx => tx.list("messages", session.id).filter(item => item.runId !== initial.id));
+      const currentIdentity = await authenticate(context);
+      check();
+      const history = options.store.transaction(tx => {
+        ownedSession(tx, currentIdentity, session.id);
+        ensureActionOutcomes(tx, session.id, secrets(), limits.maxOutputBytes, limits.maxSnapshotBytes,
+          action => sameIdentity(action.identity, currentIdentity));
+        if (tx.bytes("messages", session.id, true) > limits.maxHistoryBytes)
+          throw new AgentError("history-budget");
+        return tx.list("messages", session.id).filter(item => item.runId !== initial.id);
+      });
       bounded(history.map(item => item.value), limits.maxHistoryBytes, "history-budget");
       // Executable call arguments live in the gateway ledger, not the replay transcript.
       const messages = history.flatMap<AgentMessage>(item => {
@@ -354,10 +379,21 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
     },
     async readSession(context, sessionId) {
       const identity = await authenticate(context);
-      return options.store.transaction(tx => bounded(safeValue({
-        session: ownedSession(tx, identity, sessionId), messages: tx.list("messages", sessionId),
-        runs: tx.list("runs", sessionId), actions: tx.list("actions", sessionId), calls: tx.list("calls", sessionId),
-      }, secrets()), limits.maxSnapshotBytes, "snapshot-budget"));
+      return options.store.transaction(tx => readSnapshot(tx, identity, sessionId));
+    },
+    async readMessages(context, sessionId, input = {}) {
+      const identity = await authenticate(context);
+      return options.store.transaction(tx => {
+        ownedSession(tx, identity, sessionId);
+        const page = tx.page("messages", {
+          sessionId, afterId: input.after, throughId: input.through, limit: input.limit ?? 100,
+          maxBytes: limits.maxSnapshotBytes,
+        });
+        return bounded(safeValue({
+          items: page.items, cursor: page.items.at(-1)?.id ?? input.after ?? "",
+          through: page.throughId, hasMore: page.hasMore,
+        }, secrets()), limits.maxSnapshotBytes, "snapshot-budget");
+      });
     },
     async startRun(context, sessionId, text) {
       const identity = await authenticate(context);
@@ -366,20 +402,23 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
       assertSafeInput(text, secrets(), limits.maxInputBytes);
       const { session, run } = options.store.transaction(tx => {
         const session = ownedSession(tx, identity, sessionId);
-        const history = tx.list("messages", sessionId);
-        bounded([...history.map(message => message.value), { role: "user", content: text }],
-          limits.maxHistoryBytes, "history-budget");
-        const running = tx.list("runs").filter(run => run.status === "running");
-        if (running.some(run => run.sessionId === sessionId) || tx.list("calls", sessionId).some(call => call.status === "executing"))
+        ensureActionOutcomes(tx, sessionId, secrets(), limits.maxOutputBytes, limits.maxSnapshotBytes,
+          action => sameIdentity(action.identity, identity));
+        const run: Run = { id: crypto.randomUUID(), sessionId, status: "running", createdAt: Date.now() };
+        const value: AgentMessage = { role: "user", content: text, timestamp: run.createdAt };
+        const historyBytes = tx.bytes("messages", sessionId, true);
+        if (historyBytes + size(value) + (historyBytes > 2 ? 1 : 0) > limits.maxHistoryBytes)
+          throw new AgentError("history-budget");
+        const running = tx.count("runs", { status: "running" });
+        if (tx.count("runs", { sessionId, status: "running" }) || tx.count("calls", { sessionId, status: "executing" }))
           throw new AgentError("session-busy");
         if (active.size + confirmations.size >= limits.maxConcurrentRuns ||
-          running.length + tx.list("actions").filter(action => action.status === "executing").length >= limits.maxConcurrentRuns)
+          running + tx.count("actions", { status: "executing" }) >= limits.maxConcurrentRuns)
           throw new AgentError("concurrency-budget");
-        const run: Run = { id: crypto.randomUUID(), sessionId, status: "running", createdAt: Date.now() };
         tx.put("runs", run);
         tx.put("messages", {
           id: crypto.randomUUID(), sessionId, runId: run.id, createdAt: run.createdAt,
-          value: { role: "user", content: text, timestamp: run.createdAt },
+          value,
         });
         return { session: jsonCopy(session), run };
       });
@@ -412,6 +451,17 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
       const identity = await authenticate(context);
       options.store.transaction(tx => ownedRun(tx, identity, runId));
       return active.get(runId)?.events.subscribe() ?? { async *[Symbol.asyncIterator]() {} };
+    },
+    async watchRun(context, runId, input = {}) {
+      const identity = await authenticate(context);
+      const run = options.store.transaction(tx => ownedRun(tx, identity, runId));
+      const source = active.get(runId)?.events;
+      return watchRunEvents(source, () => options.store.transaction(tx => {
+        const snapshot = readSnapshot(tx, identity, run.sessionId);
+        const current = snapshot.runs.find(item => item.id === runId);
+        if (!current) throw new AgentError("not-found");
+        return { snapshot, run: current, sequence: source?.sequence ?? 0 };
+      }), input);
     },
     async cancelRun(context, runId) {
       const identity = await authenticate(context);
@@ -456,8 +506,11 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
           tx.put("runs", { ...run, status: "interrupted", finishedAt: Date.now(), error: "executor-interrupted" });
         for (const call of tx.list("calls")) if (call.status === "executing")
           tx.put("calls", { ...call, status: "outcome_unknown", error: "executor-interrupted" });
-        for (const action of tx.list("actions")) if (action.status === "executing")
-          tx.put("actions", { ...action, status: "outcome_unknown", error: "executor-interrupted" });
+        for (const action of tx.list("actions")) if (action.status === "executing") {
+          const unknown = { ...action, status: "outcome_unknown" as const, error: "executor-interrupted" };
+          tx.put("actions", unknown);
+          persistActionOutcome(tx, unknown, secrets(), limits.maxOutputBytes);
+        }
       });
     },
     close() {

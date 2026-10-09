@@ -15,6 +15,8 @@ bun run typecheck
 bun test
 bun run example
 bun run check:consumer
+bun run check:consumer:ordinary
+bun run check:consumer:ordinary --npm
 bun run pack
 ```
 
@@ -45,8 +47,9 @@ npm publication. Package publication and deployment need separate authorization.
 | `@lenso/agent/plugin` | Thin Lenso dependency/lifecycle wiring |
 | `@lenso/agent/fetch` | A handler for the host's existing Fetch listener |
 
-The service exposes `createSession`, `readSession`, `startRun`, `getRun`, `events`,
-`cancelRun`, `confirmAction`, `cancelAction`, `recoverInterrupted`, and `close`.
+The service exposes `createSession`, `readSession`, `readMessages`, `startRun`,
+`getRun`, `events`, `watchRun`, `cancelRun`, `confirmAction`, `cancelAction`,
+`recoverInterrupted`, and `close`.
 `startRun` returns `{run, events, done}`; it does not wait for the model to finish.
 `readSession` returns the current history, runs, tool calls, and actions.
 `pack` leaves a reproducible local candidate in `artifacts/`.
@@ -95,6 +98,28 @@ An action proposed during a run can be confirmed after that run settles; another
 active operation in its session returns `session-busy`. Confirmation never
 suspends a long-lived model Promise waiting for a UI button.
 
+Terminal action outcomes are also source-labelled conversation facts, committed
+in the same transaction as the action and call receipt. The deterministic
+`action-outcome:<actionId>` message ID prevents duplicate projection across
+confirmation, reads, and restart. Facts use existing `completed`, `rejected`,
+`outcome_unknown`, `cancelled`, and `expired` states; an invocation failure with
+uncertain effects remains unknown, not a fabricated failed/successful receipt.
+Cancellation of a pending action is not rollback of an already-entered effect.
+
+The next **user-started** run reads these safe facts as ordinary reference data,
+not executable tool calls or system instructions. Confirmation does not start
+another model request. Facts contain correlation and bounded, redacted receipts,
+not original executable arguments. Existing terminal actions without a fact are
+backfilled on `readSession` and before run admission/context assembly,
+deterministically inside an authorized, bounded session transaction.
+Outcome correlation metadata has its own 32 KiB ceiling; optional receipts retain
+`maxOutputBytes`. Oversized tool/model labels are explicitly omitted, so a small
+receipt budget cannot prevent cancellation or interrupted recovery.
+Reads and context loading revalidate current host identity against the exact
+subject/scope/application/instance binding. The host identity resolver remains
+responsible for current session read permission; this package does not invent a
+separate business-result authorization policy.
+
 ## Storage, events, and recovery
 
 ```ts
@@ -106,7 +131,7 @@ migrateAgentDatabase(db); // explicit host-controlled installation step
 const store = createSqliteStore(db); // borrowed; close does not close db
 ```
 
-Migration 001 uses `lenso_agent_*` tables and its own schema version. It does not
+Migrations use `lenso_agent_*` tables and their own schema version. They do not
 change host `user_version`, busy timeout, or other pragmas. Transaction callbacks
 are synchronous and atomic. Separate SQLite handles use `BEGIN IMMEDIATE`;
 `SQLITE_BUSY` propagates without hidden retry. The host owns database connection
@@ -116,7 +141,7 @@ and busy-timeout policy. Default construction does not create tables.
 | --- | --- |
 | History | Accepted user messages persist atomically with run admission, including context-loading failures. Safe finalized outputs, run/call states, actions, and results persist. |
 | Live events | Ordered IDs, sequence, timestamps, run/session/call/action correlation. Bounded subscriber buffers. No persisted delta log or historical event replay. |
-| Reconnect | Fetch a state/history snapshot, then subscribe to **new** live events. A completed run's output remains in the snapshot. |
+| Reconnect | `watchRun` registers bounded live delivery **before** reading the authoritative snapshot and its sequence watermark. This is snapshot + live, not a recoverable delta log. |
 | Same-session concurrency | Explicit conflict; no interleaved model histories. Independent sessions share a bounded admission budget. |
 | Cancellation | Cooperative signal and drain of actual work. Disconnect or stopping event reads detaches, not cancels. Cancel is not rollback. |
 | Restart | Reopen and inspect history/actions. No automatic Pi continuation or business replay. |
@@ -137,7 +162,66 @@ tools/providers can delay shutdown; the runtime cannot safely kill them.
 The host owns retention/backups and any pruning of stored history; this version
 does not silently expire history or promise indefinite replay.
 `maxSnapshotBytes` bounds aggregate session snapshots (default 16 MiB); oversized snapshots
-return `snapshot-budget`. History and run/context/output budgets are separate.
+return `snapshot-budget`. Stored UTF-8 byte metadata is checked in the authorized
+transaction **before** materializing aggregate records; redacted output is checked
+again. History and run/context/output budgets are separate.
+
+```ts
+const watch = await agent.watchRun(context, runId, { signal });
+renderSnapshot(watch.snapshot);
+try {
+  for await (const event of watch.events) {
+    // Already deduplicated and newer than watch.sequence, for this exact run.
+    applyLiveEvent(event);
+  }
+} catch (error) {
+  // resnapshot-required is also emitted after every live terminal notification.
+  // Replace the transcript from the final persisted facts, not streamed fragments.
+  renderSnapshot(await agent.readSession(context, watch.run.sessionId));
+  // If still running, attach a new watch with fresh authentication.
+} finally {
+  await watch.close(); // detaches only, never cancels the server run
+}
+```
+
+Run event sequences are local to one run's in-memory event source, not persisted
+database revisions. The snapshot and watermark are captured synchronously after
+subscription; buffered events at or below the watermark are discarded. This does
+not replay transient text or preserve an in-flight prefix: only finalized
+messages are durable. Duplicate events are ignored, and a terminal snapshot
+cannot regress to `running`. A sequence gap, overflow, wrong correlation, or
+live stream closure requires a fresh snapshot. Every live terminal notification
+is followed by `resnapshot-required`; fetch the authoritative final snapshot and
+**replace** the transcript, rather than appending it to incomplete streamed text.
+`run_interrupted` can mean its receipt is unavailable and storage still says
+`running`; offline exclusive recovery, not retry, is then required. An
+already-terminal initial snapshot needs no live stream. Another executor's
+running marker without a local live source cannot promise continuity.
+
+`readMessages(context, sessionId, {limit, after, through})` provides bounded UI
+pages in stable insertion order (`limit` 1..1000, default 100). Continue using the
+returned `cursor` as `after` and the original `through` watermark. Later inserts
+are excluded; an updated record retains its insertion position and each page
+sees its currently committed value. Pages are not a multi-request MVCC snapshot.
+Public cursors are session-scoped message IDs, not global insertion counters;
+`""` represents an empty bound. A foreign or missing bound is rejected alike.
+This API pages already-recorded messages without loading the action ledger.
+For a legacy session, perform its bounded `readSession` backfill before paging
+the newly projected facts. New confirmations already commit their facts directly.
+Authorization precedes range reads, including when reusing a cursor. UI pagination
+does **not** truncate model context: admission and context assembly still require
+the complete necessary history, including outcome facts, within `maxHistoryBytes`.
+Over-budget history is rejected explicitly rather than dropping dialogue or
+inventing partial tool protocol pairs.
+
+Custom stores must implement `count`, `bytes`, and `page` alongside `get/list/put`;
+all methods see writes within the same synchronous transaction. Memory storage
+uses a rollback-safe write set and detached read/write values. SQLite v2 adds
+query and byte metadata; explicitly run the complete `migrateAgentDatabase` on an
+existing v1 database before opening it with this version. The 002 SQL file alone
+is only its DDL component, not a complete upgrade. Agent tables must be written
+through `StoreTransaction.put`, not direct host SQL that bypasses byte metadata.
+No migration runs on construction.
 
 ## Pi and extensions
 
@@ -206,6 +290,13 @@ POST `actions/:id/confirm` with `{digest}`, and POST `actions/:id/cancel`.
 Expired actions return 410; consumed/unknown/conflicting confirmations return
 409 with a safe code. No request can replace an action's target or arguments.
 
+GET `runs/:id/watch` streams an initial SSE `snapshot` frame containing
+`{snapshot, run, sequence}`, then newer live events. A `resnapshot_required`
+frame means the client must reconnect and replace state from a fresh snapshot.
+`Last-Event-ID` does not provide persisted replay, on either stream endpoint.
+The older `/events` route is live-only and must not be used with a separate
+snapshot-first request as a gap-free reconnect protocol.
+
 Optional `audit` receives only correlated security facts and is checked before
 effects. It can delegate to host Audit; an in-memory Audit receipt is not the
 Agent's persisted execution receipt. Host Limits, logger/OTel, and Tasks remain
@@ -213,17 +304,66 @@ their existing owners. No global SDK, production credentials, or quota is create
 
 ## Local artifacts and checks
 
-The attached Lenso main source currently has newer Core/Engine/Manage contracts
-than its npm artifacts. `vendor/source.json` records the exact source revision,
-build order, and SHA-256 values of the local tarballs. They are reproducible
-integration snapshots, **not claims of published versions**. Root overrides
-ensure transitive dependencies use those same snapshots. There are no deep
-source imports or personal-machine absolute paths in the package manifest.
+Framework dependencies use real registry versions: Core `0.3.0`, Engine `0.4.0`,
+Manage `0.4.0`, and development/example Auth `0.3.1`. On 2026-10-09 their npm
+tarballs were verified byte-for-byte against the retained vendor artifacts.
+`vendor/source.json` remains their build provenance and checksum record, not a
+claim that they are still unpublished. The package manifest has no source paths,
+vendor file dependencies, or author overrides. Engine remains a runtime dependency
+because both safety/diagnostics and the gateway use it; `/manage` and `/plugin`
+are separate imports, not a promise of an Engine-free installation.
 
-`check:consumer` packs the built package and installs it into a separate consumer
-with explicit snapshot overrides. Consumers must use the same verified framework
-artifacts until corresponding registry releases are available. Do not publish
-this private candidate as if those dependencies already existed on npm.
+`check:consumer` deliberately installs copied framework artifacts with explicit
+overrides for **special framework integration**. `check:consumer:ordinary` instead
+packs the unchanged candidate, installs only its registry dependency graph in an
+independent Bun consumer, and never copies vendor artifacts or adds overrides.
+Pass `--npm` for an independent npm install and `npm ci` check. Both modes import
+all public entries, typecheck, and run the offline Pi/Auth/Manage workflow against
+the packed entries rather than author source. Auth/Pi and checking tools are
+explicit fixture dependencies, not hidden replacements for Agent dependencies.
+Ordinary checks first install a minimal consumer with **only** the candidate
+dependency and import all entries, before adding the explicit offline fixture.
+Consumer TypeScript uses the baseline `skipLibCheck: true`; add
+`--check-dependency-types` to inspect dependencies too. That stricter check was
+attempted and failed on published dependency declarations: `@google/genai`
+references its absent optional MCP SDK, and `gaxios`' fetch declaration conflicts
+with Bun's required `fetch.preconnect`. No overrides, fake versions, or extra
+provider dependencies were injected to conceal those errors. Normal candidate
+installation, public-API typechecking, and the offline workflow passed; full
+dependency-declaration compatibility remains an upstream follow-up.
+The errors were reproduced again after the naming decision. Pi `1.1.0` is still
+its latest published version: its public Google type declarations pull in
+`api/google-shared`, then `@google/genai`, the optional MCP declaration, and
+`google-auth-library`/gaxios. A corrected Pi public-type boundary or corrected
+upstream declarations must be available before this gate can pass. This package
+does not patch installed dependencies, copy Pi's contracts, invent a release
+version, or require consumer overrides as a workaround.
+
+**The embedded library will retain `@lenso/agent`.** The owner confirmed this
+name; no separate library name is planned. npm currently assigns
+`@lenso/agent@latest` (`1.20.0`) to Console's native launcher with `lenso-agent`
+Web/CLI/ACP commands, not this embedded library's API. The npm owner is `liorael`;
+this is not publishing authorization. `@lenso/agent@0.1.0` is not published.
+Ordinary local candidate checks use a supplied tarball; running
+`npm install @lenso/agent` today does not install this library. Release versioning,
+launcher compatibility/migration, and a future `latest` transition need separate
+approval before publication. The naming decision does not authorize renaming or
+deprecating the old launcher, adding a replacement CLI, or publishing either
+product. This task changes no versions or dist-tags and retains `private`.
+
+Read-only Console audit also found its native release cohort still points to
+`LioRael/lenso-agent` for `v0.1.13`, whose download URLs return 404. The matching
+release and pinned asset hashes exist in `LioRael/lenso-agent-rust`. Fixing that
+Console-owned download wiring is a separate follow-up; it does not establish
+whether already-published native binaries work. No Console, Relay, CLI, ACP, or
+production files were changed here.
+The follow-up audit checked all ten old URLs (404), all ten canonical URLs (200),
+and all pinned hashes against both release digests and `SHA256SUMS`. The minimal
+Console change is only `tooling/distribution/agent-release.json`'s repository
+from `LioRael/lenso-agent` to `LioRael/lenso-agent-rust`, preserving the exact
+`v0.1.13` tag and hashes. Do not substitute `releases/latest`. Console must be
+attached before editing; its nine launcher/optional-runtime fixture tests passed,
+but no downloaded native executable, production Console, or ACP session was run.
 
 The tests target concrete failures: schema/identity/instance isolation,
 permission withdrawal, action tampering/version/expiration/consumption,
@@ -231,3 +371,53 @@ session/concurrency budgets, stream detachment, actual cancellation/shutdown,
 SQLite restart, unknown effects, and secret-safe output. Live paid providers,
 production Console integration, multi-host durable execution, and deployment are
 not validated by the offline suite.
+
+### Provider transport validation boundary
+
+`bun test tests/provider-transport.test.ts` exercises the real Pi loop and its
+published OpenAI Completions adapter with OpenAI SDK `7.19.0`, against a temporary
+HTTP/SSE server bound to `127.0.0.1`. It uses only a fixed fake credential, rejects
+non-loopback fetch targets, and does not substitute a second execution loop.
+Checks cover a parsed tool proposal, human confirmation without another HTTP
+request, the receipt in the next user-started request, actual stream abort/drain,
+and safe handling of a provider HTTP error.
+
+This fills the local adapter/SDK transport gap, not live-provider acceptance:
+responses are deterministic fixtures, not model-generated output. Paid or public
+providers, production credentials/data, Console integration, native Web/CLI/ACP,
+other provider protocols, and multi-process fencing remain separate checks.
+
+## Measured storage boundary
+
+Reproduce locally with `bun scripts/storage-benchmark.ts --legacy` and
+`bun scripts/storage-benchmark.ts`. The legacy mode preserves the old algorithms,
+not a historical checkout. The original implementation was also measured before
+editing. Environment: Bun 1.4.2, macOS arm64, Apple M2 Pro; SQLite `:memory:`.
+Data: 0/1k/10k unrelated sessions, five records each (0/5k/50k rows), with the
+target fixed at 82 records. Each operation has three warm-ups, a forced GC, then
+30 measured iterations. Results below are milliseconds/operation, old → new,
+from a same-machine comparison during this task:
+
+| Store operation | 0 unrelated sessions | 1k | 10k |
+| --- | --- | --- | --- |
+| Memory single run | 0.1370 → 0.0032 | 6.1273 → 0.0017 | 52.6334 → 0.0011 |
+| Memory atomic admission | 0.1061 → 0.0072 | 5.6974 → 0.0032 | 51.0443 → 0.0043 |
+| Memory snapshot | 0.2294 → 0.0681 | 5.8992 → 0.0584 | 49.8927 → 0.0648 |
+| SQLite single run | 0.0055 → 0.0052 | 0.0034 → 0.0028 | 0.0039 → 0.0040 |
+| SQLite atomic admission | 0.0185 → 0.0286 | 0.2728 → 0.0136 | 2.6177 → 0.0161 |
+| SQLite snapshot | 0.1275 → 0.1030 | 0.1051 → 0.1012 | 0.1272 → 0.0989 |
+
+At 10k unrelated sessions, memory JSON parses per operation changed from
+50,083 → 1 for a run read, 60,108 → 2 for admission, and 50,165 → 82 for a
+snapshot. SQLite admission parses changed from 10,025 → 2, with six SQL
+statement calls in both versions. Its already-local single-run read stayed at
+one parse/three statements. Snapshot still parses 82 required records; budget
+prechecks increase its statements from seven to twelve. SQLite byte sums scan
+only the requested session's metadata.
+
+This is a store-boundary microbenchmark, not `startRun`/`readSession` latency,
+disk durability, multi-process contention, retained-memory measurement, provider
+cost, or online throughput. Instrumentation and a short sample affect timing;
+sub-millisecond differences, especially at zero history, are not reliable
+performance claims. The evidence supports removing unrelated-history work,
+not extrapolating production gains.

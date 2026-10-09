@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "description": "Embedded business agents for Lenso applications on Bun",
-  "files": ["dist", "migrations", "README.md", "vendor"],
+  "files": ["dist", "migrations", "README.md"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
     "./pi": { "types": "./dist/pi.d.ts", "import": "./dist/pi.js" },
@@ -20,27 +20,22 @@
     "test": "bun test tests",
     "example": "bun examples/offline.ts",
     "check:consumer": "bun scripts/packed-consumer.ts",
+    "check:consumer:ordinary": "bun scripts/packed-consumer.ts --ordinary",
     "pack": "bun run build && mkdir -p artifacts && bun pm pack --destination artifacts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-agent-core": "1.1.0",
-    "@lenso/core": "file:vendor/lenso-core-0.3.0.tgz",
-    "@lenso/engine": "file:vendor/lenso-engine-0.4.0.tgz",
-    "@lenso/manage": "file:vendor/lenso-manage-0.4.0.tgz"
+    "@lenso/core": "0.3.0",
+    "@lenso/engine": "0.4.0",
+    "@lenso/manage": "0.4.0"
   },
   "devDependencies": {
-    "@lenso/auth": "file:vendor/lenso-auth-0.3.1.tgz",
+    "@lenso/auth": "0.3.1",
     "@types/bun": "1.4.2",
     "typescript": "7.0.2",
     "zod": "4.6.5"
   },
   "engines": { "bun": ">=1.4.2" },
-  "packageManager": "bun@1.4.2",
-  "overrides": {
-    "@lenso/core": "file:vendor/lenso-core-0.3.0.tgz",
-    "@lenso/engine": "file:vendor/lenso-engine-0.4.0.tgz",
-    "@lenso/manage": "file:vendor/lenso-manage-0.4.0.tgz",
-    "@lenso/auth": "file:vendor/lenso-auth-0.3.1.tgz"
-  }
+  "packageManager": "bun@1.4.2"
 }

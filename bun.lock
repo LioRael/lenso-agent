@@ -7,23 +7,17 @@
       "dependencies": {
         "@earendil-works/pi-agent-core": "1.1.0",
         "@earendil-works/pi-ai": "1.1.0",
-        "@lenso/core": "file:vendor/lenso-core-0.3.0.tgz",
-        "@lenso/engine": "file:vendor/lenso-engine-0.4.0.tgz",
-        "@lenso/manage": "file:vendor/lenso-manage-0.4.0.tgz",
+        "@lenso/core": "0.3.0",
+        "@lenso/engine": "0.4.0",
+        "@lenso/manage": "0.4.0",
       },
       "devDependencies": {
-        "@lenso/auth": "file:vendor/lenso-auth-0.3.1.tgz",
+        "@lenso/auth": "0.3.1",
         "@types/bun": "1.4.2",
         "typescript": "7.0.2",
         "zod": "4.6.5",
       },
     },
-  },
-  "overrides": {
-    "@lenso/auth": "file:vendor/lenso-auth-0.3.1.tgz",
-    "@lenso/core": "file:vendor/lenso-core-0.3.0.tgz",
-    "@lenso/engine": "file:vendor/lenso-engine-0.4.0.tgz",
-    "@lenso/manage": "file:vendor/lenso-manage-0.4.0.tgz",
   },
   "packages": {
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.129.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-MH7LB20kNpGLUpPTe2OG5XvL/KhX8HUO9XyBaFjgFk6TLS4Xjt0VPIuMKywe7POKKPslX+QxSlVok9e+8kG5Nw=="],
@@ -76,13 +70,13 @@
 
     "@google/genai": ["@google/genai@2.21.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q=="],
 
-    "@lenso/auth": ["@lenso/auth@vendor/lenso-auth-0.3.1.tgz", { "peerDependencies": { "@lenso/core": "^0.3.0", "@orpc/server": "2.0.0-beta.42", "drizzle-orm": "^0.45.3" }, "optionalPeers": ["@lenso/core", "@orpc/server", "drizzle-orm"] }, "sha512-Sac00igjz5uoRzDSBmi/6eujiru4/zg1dRQtVHnc+IdHEJzxRvOn2Oekhb51cYE03Ah84ScPSzu5+JqwkG8dgA=="],
+    "@lenso/auth": ["@lenso/auth@0.3.1", "", { "peerDependencies": { "@lenso/core": "^0.3.0", "@orpc/server": "2.0.0-beta.42", "drizzle-orm": "^0.45.3" }, "optionalPeers": ["@lenso/core", "@orpc/server", "drizzle-orm"] }, "sha512-Sac00igjz5uoRzDSBmi/6eujiru4/zg1dRQtVHnc+IdHEJzxRvOn2Oekhb51cYE03Ah84ScPSzu5+JqwkG8dgA=="],
 
-    "@lenso/core": ["@lenso/core@vendor/lenso-core-0.3.0.tgz", { "dependencies": { "@opentelemetry/api": "1.9.1", "@standard-schema/spec": "1.1.0" } }, "sha512-JIca5eR0BgqBZ8f6rFD1NBM2gGDcnpVMsc5fe5V5tuxA3RnKQ0ccOePfZggOdaD+itlFGWOogzHINBpUsKgGpg=="],
+    "@lenso/core": ["@lenso/core@0.3.0", "", { "dependencies": { "@opentelemetry/api": "1.9.1", "@standard-schema/spec": "1.1.0" } }, "sha512-JIca5eR0BgqBZ8f6rFD1NBM2gGDcnpVMsc5fe5V5tuxA3RnKQ0ccOePfZggOdaD+itlFGWOogzHINBpUsKgGpg=="],
 
-    "@lenso/engine": ["@lenso/engine@vendor/lenso-engine-0.4.0.tgz", { "dependencies": { "@lenso/core": "^0.3.0", "@opentelemetry/api": "1.9.1", "@standard-schema/spec": "1.1.0" } }, "sha512-/5GzmOxWsCTgVk70Gn97TJFj5kobBDltYeXLv6E+MGU6qCOL049+1v1V2y/cFtXEGquRIyKPXC9L0gyyj93OHg=="],
+    "@lenso/engine": ["@lenso/engine@0.4.0", "", { "dependencies": { "@lenso/core": "^0.3.0", "@opentelemetry/api": "1.9.1", "@standard-schema/spec": "1.1.0" } }, "sha512-/5GzmOxWsCTgVk70Gn97TJFj5kobBDltYeXLv6E+MGU6qCOL049+1v1V2y/cFtXEGquRIyKPXC9L0gyyj93OHg=="],
 
-    "@lenso/manage": ["@lenso/manage@vendor/lenso-manage-0.4.0.tgz", { "dependencies": { "@lenso/core": "^0.3.0", "@lenso/engine": "^0.4.0", "@standard-schema/spec": "1.1.0" }, "peerDependencies": { "@lenso/auth": "^0.3.1", "@orpc/server": "2.0.0-beta.42" }, "optionalPeers": ["@lenso/auth", "@orpc/server"] }, "sha512-/GaIjqlSuva5o2Y3iSeO8mOd8yyYZNdau7cjgVBTby2YLiUwEh6hFBoCc88LtMhP09yzUHZlWcdr9r/FLbL9+A=="],
+    "@lenso/manage": ["@lenso/manage@0.4.0", "", { "dependencies": { "@lenso/core": "^0.3.0", "@lenso/engine": "^0.4.0", "@standard-schema/spec": "1.1.0" }, "peerDependencies": { "@lenso/auth": "^0.3.1", "@orpc/server": "2.0.0-beta.42" }, "optionalPeers": ["@lenso/auth", "@orpc/server"] }, "sha512-/GaIjqlSuva5o2Y3iSeO8mOd8yyYZNdau7cjgVBTby2YLiUwEh6hFBoCc88LtMhP09yzUHZlWcdr9r/FLbL9+A=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.1", "", {}, "sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q=="],
 

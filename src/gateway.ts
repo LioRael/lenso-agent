@@ -3,6 +3,7 @@ import { stableJson } from "@lenso/engine/diagnostics";
 import {
   AgentError, assertSafeInput, jsonCopy, sameIdentity, safeCode, safeValue,
 } from "./safety";
+import { persistActionOutcome } from "./outcomes";
 import type {
   AgentOptions, EventKind, Identity, PendingAction, PreparedTool,
   Run, RunLimits, Session, StoreTransaction, ToolCall,
@@ -93,7 +94,9 @@ export function createExecutionGateway<C>(options: AgentOptions<C>, limits: RunL
         if (action) {
           const pending = tx.get("actions", action.id);
           if (!pending || pending.status !== "executing") throw new AgentError("execution-state-conflict");
-          tx.put("actions", { ...pending, status: "completed", result });
+          const completed: PendingAction = { ...pending, status: "completed", result };
+          tx.put("actions", completed);
+          persistActionOutcome(tx, completed, secrets(), limits.maxOutputBytes);
         }
       });
       emit("tool_result", { callId: call.id, actionId: action?.id, data: result });
@@ -112,12 +115,15 @@ export function createExecutionGateway<C>(options: AgentOptions<C>, limits: RunL
             });
           if (action) {
             const pending = tx.get("actions", action.id);
-            if (pending?.status === "executing")
-              tx.put("actions", {
+            if (pending?.status === "executing") {
+              const failed: PendingAction = {
                 ...pending,
                 status: enteredInvocation ? "outcome_unknown" : "rejected",
                 error: code,
-              });
+              };
+              tx.put("actions", failed);
+              persistActionOutcome(tx, failed, secrets(), limits.maxOutputBytes);
+            }
           }
         });
       } catch {
@@ -198,9 +204,11 @@ export function createExecutionGateway<C>(options: AgentOptions<C>, limits: RunL
         persist((tx) => {
           const current = tx.get("actions", actionId);
           if (current?.status === "pending") {
-            tx.put("actions", { ...current, status: "expired" });
+            const expired: PendingAction = { ...current, status: "expired" };
+            tx.put("actions", expired);
             const call = tx.get("calls", current.callId);
             if (call) tx.put("calls", { ...call, status: "rejected", error: "action-expired" });
+            persistActionOutcome(tx, expired, secrets(), limits.maxOutputBytes);
           }
         });
         throw new AgentError("action-expired");
@@ -221,11 +229,11 @@ export function createExecutionGateway<C>(options: AgentOptions<C>, limits: RunL
         if (pending.digest !== digest || stableJson(pending) !== stableJson(action))
           throw new AgentError("confirmation-mismatch");
         if (pending.expiresAt <= Date.now()) throw new AgentError("action-expired");
-        if (tx.list("runs", session.id).some((item) => item.status === "running") ||
-          tx.list("calls", session.id).some((item) => item.status === "executing"))
+        if (tx.count("runs", { sessionId: session.id, status: "running" }) ||
+          tx.count("calls", { sessionId: session.id, status: "executing" }))
           throw new AgentError("session-busy");
-        const active = tx.list("runs").filter((item) => item.status === "running").length +
-          tx.list("actions").filter((item) => item.status === "executing").length;
+        const active = tx.count("runs", { status: "running" }) +
+          tx.count("actions", { status: "executing" });
         if (active >= limits.maxConcurrentRuns) throw new AgentError("concurrency-budget");
         const storedCall = tx.get("calls", pending.callId);
         if (!storedCall || storedCall.status !== "awaiting_confirmation")
@@ -260,6 +268,7 @@ export function createExecutionGateway<C>(options: AgentOptions<C>, limits: RunL
         tx.put("actions", cancelled);
         const call = tx.get("calls", current.callId);
         if (call) tx.put("calls", { ...call, status: "rejected", error: "action-cancelled" });
+        persistActionOutcome(tx, cancelled, secrets(), limits.maxOutputBytes);
         return cancelled;
       });
     },

@@ -11,6 +11,9 @@ export function missingReceiptStore(borrowed: AgentStore) {
         const fault: StoreTransaction = {
           get: tx.get.bind(tx),
           list: tx.list.bind(tx),
+          count: tx.count.bind(tx),
+          bytes: tx.bytes.bind(tx),
+          page: tx.page.bind(tx),
           put(table, record) {
             const terminal = table === "actions"
               ? (record as PendingAction).id === blockedAction && !["pending", "executing"].includes((record as PendingAction).status)

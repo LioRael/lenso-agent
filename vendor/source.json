@@ -3,7 +3,7 @@
   "revision": "17a92d134b6af15b4be35a8d2dfda8eb08d5fbe5",
   "dirtySource": false,
   "bun": "1.4.2",
-  "reason": "The current published Manage 0.3.0 lacks the signal and OperationRuntime contracts used here. These are local main-source packages, not registry releases.",
+  "reason": "Framework snapshots retained for explicit integration checks. Registry Core 0.3.0, Engine 0.4.0, Manage 0.4.0 and Auth 0.3.1 were checked on 2026-10-09 and their complete tarballs match these SHA-256 values.",
   "buildOrder": ["packages/lenso", "packages/engine", "packages/web", "packages/auth", "packages/manage"],
   "packCommand": "bun pm pack --ignore-scripts --filename <destination> (from each package directory)",
   "sha256": {

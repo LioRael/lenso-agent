@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryStore } from "../src/store";
 import { createSqliteStore, migrateAgentDatabase } from "../src/sqlite";
+import { AgentError } from "../src/safety";
 import type { AgentStore, Session, StoreTransaction, Tables } from "../src/types";
 
 const identity = { subject: "user", scope: "team", application: "app", target: "local" };
@@ -152,6 +153,9 @@ for (const [name, factory] of Object.entries(factories)) {
       expect(() => tx.put("sessions", session())).toThrow("ended");
       expect(() => tx.get("sessions", "session")).toThrow("ended");
       expect(() => tx.list("sessions")).toThrow("ended");
+      expect(() => tx.count("sessions")).toThrow("ended");
+      expect(() => tx.bytes("sessions", "session")).toThrow("ended");
+      expect(() => tx.page("sessions", { sessionId: "session", limit: 1, maxBytes: 1000 })).toThrow("ended");
       store.close();
       store.close();
       expect(() => store.transaction(tx => tx.get("sessions", "session"))).toThrow("closed");
@@ -170,10 +174,332 @@ for (const [name, factory] of Object.entries(factories)) {
         store.close();
       }
     });
+
+    test("metadata includes pending writes, replacements, moves, and exact UTF8 array sizes", () => {
+      const store = factory();
+      const values = records();
+      values.messages.value = { role: "user", content: "中🙂\n\"\\", timestamp: 1 };
+      try {
+        const verify = (tx: StoreTransaction) => {
+          for (const table of tableKeys) {
+            expect(tx.count(table)).toBe(tx.list(table).length);
+            for (const sessionId of ["session", "other", "missing"]) {
+              const rows = tx.list(table, sessionId);
+              expect(tx.count(table, { sessionId })).toBe(rows.length);
+              expect(tx.bytes(table, sessionId)).toBe(Buffer.byteLength(JSON.stringify(rows)));
+              expect(tx.bytes(table, sessionId, true)).toBe(Buffer.byteLength(JSON.stringify(
+                table === "messages" ? (rows as Tables["messages"][]).map(row => row.value) : rows,
+              )));
+              for (const status of ["running", "completed", "pending", "missing"])
+                expect(tx.count(table, { sessionId, status })).toBe(rows.filter(row => "status" in row && row.status === status).length);
+            }
+          }
+        };
+        store.transaction(tx => {
+          putRecords(tx, values);
+          verify(tx);
+          tx.put("messages", { ...values.messages, id: "second" });
+          tx.put("runs", { ...values.runs, status: "completed" });
+          tx.put("runs", { ...values.runs, sessionId: "other" });
+          expect(tx.count("runs", { status: "running" })).toBe(1);
+          expect(tx.count("runs", { sessionId: "session", status: "running" })).toBe(0);
+          verify(tx);
+        });
+        store.transaction(verify);
+        expect(() => store.transaction(tx => {
+          tx.put("runs", { ...values.runs, id: "new" });
+          tx.put("messages", { ...values.messages, value: { role: "user", content: "changed", timestamp: 1 } });
+          verify(tx);
+          throw new Error("rollback metadata");
+        })).toThrow("rollback metadata");
+        store.transaction(tx => {
+          verify(tx);
+          expect(tx.count("runs")).toBe(1);
+          expect(tx.get("messages", "message")).toEqual(values.messages);
+        });
+      } finally { store.close(); }
+    });
+
+    test("pages bound records before copying, keep a stable insertion watermark, and see current updates", () => {
+      const store = factory();
+      const message = records().messages;
+      const options = { sessionId: "session", limit: 1, maxBytes: 10_000 };
+      try {
+        store.transaction(tx => {
+          tx.put("messages", { ...message, id: "z" });
+          tx.put("messages", { ...message, id: "unrelated", sessionId: "other" });
+          tx.put("messages", { ...message, id: "a" });
+          tx.put("messages", { ...message, id: "b" });
+        });
+        const first = store.transaction(tx => tx.page("messages", options));
+        expect(first.items.map(row => row.id)).toEqual(["z"]);
+        expect(first.hasMore).toBe(true);
+        first.items[0].value = { role: "user", content: "reference mutation", timestamp: 1 };
+        store.transaction(tx => {
+          tx.put("messages", { ...message, id: "late" });
+          tx.put("messages", { ...message, id: "a", value: { role: "user", content: "current", timestamp: 1 } });
+        });
+        const second = store.transaction(tx => tx.page("messages", { ...options, after: first.cursor, through: first.through }));
+        expect(second.items.map(row => row.id)).toEqual(["a"]);
+        expect(second.items[0].value).toEqual({ role: "user", content: "current", timestamp: 1 });
+        expect(second.through).toBe(first.through);
+        const third = store.transaction(tx => tx.page("messages", { ...options, after: second.cursor, through: first.through }));
+        expect(third.items.map(row => row.id)).toEqual(["b"]);
+        expect(third.hasMore).toBe(false);
+        const end = store.transaction(tx => tx.page("messages", { ...options, after: third.cursor, through: first.through }));
+        expect(end.items).toEqual([]);
+        expect(end.cursor).toBe(third.cursor);
+        expect(end.hasMore).toBe(false);
+        expect(store.transaction(tx => tx.get("messages", "z"))).toEqual({ ...message, id: "z" });
+        expect(store.transaction(tx => tx.page("messages", { ...options, limit: 1000 })).items.map(row => row.id)).toEqual(["z", "a", "b", "late"]);
+        expect(store.transaction(tx => tx.page("messages", { ...options, sessionId: "missing" })).items).toEqual([]);
+      } finally { store.close(); }
+    });
+
+    test("record-ID cursors resolve only inside the requested session", () => {
+      const store = factory();
+      const message = records().messages;
+      const options = { sessionId: "session", limit: 1, maxBytes: 10_000 };
+      try {
+        store.transaction(tx => {
+          tx.put("messages", { ...message, id: "first" });
+          tx.put("messages", { ...message, id: "last" });
+          tx.put("messages", { ...message, id: "foreign", sessionId: "other" });
+        });
+        const first = store.transaction(tx => tx.page("messages", options));
+        expect(first.throughId).toBe("last");
+        const second = store.transaction(tx => tx.page("messages", { ...options, afterId: "first", throughId: first.throughId }));
+        expect(second.items.map(item => item.id)).toEqual(["last"]);
+        for (const id of ["foreign", "missing"]) {
+          expect(() => store.transaction(tx => tx.page("messages", { ...options, afterId: id }))).toThrow("invalid-input");
+          expect(() => store.transaction(tx => tx.page("messages", { ...options, throughId: id }))).toThrow("invalid-input");
+        }
+        expect(() => store.transaction(tx => tx.page("messages", { ...options, afterId: "last", throughId: "first" }))).toThrow("invalid-input");
+        const empty = store.transaction(tx => tx.page("messages", { ...options, throughId: "" }));
+        expect(empty.items).toEqual([]);
+        expect(empty.throughId).toBe("");
+      } finally { store.close(); }
+    });
+
+    test("page ranges merge pending inserts, updates, and session moves in sequence order", () => {
+      const store = factory();
+      const message = records().messages;
+      const options = { sessionId: "session", limit: 1000, maxBytes: 100_000 };
+      try {
+        store.transaction(tx => {
+          tx.put("messages", { ...message, id: "early", sessionId: "other" });
+          tx.put("messages", { ...message, id: "middle" });
+          tx.put("messages", { ...message, id: "moved-out" });
+        });
+        store.transaction(tx => {
+          tx.put("messages", { ...message, id: "late" });
+          tx.put("messages", { ...message, id: "middle", value: { role: "user", content: "updated", timestamp: 1 } });
+          tx.put("messages", { ...message, id: "early" });
+          tx.put("messages", { ...message, id: "moved-out", sessionId: "other" });
+          const page = tx.page("messages", options);
+          expect(page.items.map(row => row.id)).toEqual(["early", "middle", "late"]);
+          expect(page.items).toEqual(tx.list("messages", "session"));
+          expect(tx.page("messages", { ...options, after: page.cursor, through: page.through }).items).toEqual([]);
+        });
+        expect(store.transaction(tx => tx.page("messages", options)).items.map(row => row.id)).toEqual(["early", "middle", "late"]);
+      } finally { store.close(); }
+    });
+
+    test("page UTF8 budget includes brackets and commas and rejects oversized rows before any parse", () => {
+      const store = factory();
+      const values = records();
+      values.messages.value = { role: "user", content: "🙂中\n", timestamp: 1 };
+      try {
+        store.transaction(tx => {
+          putRecords(tx, values);
+          for (const table of tableKeys) tx.put(table, { ...values[table], id: values[table].id.toUpperCase() });
+        });
+        for (const table of tableKeys.filter(table => table !== "sessions")) {
+          const rows = store.transaction(tx => tx.list(table, "session"));
+          const one = Buffer.byteLength(JSON.stringify([rows[0]]));
+          const all = Buffer.byteLength(JSON.stringify(rows));
+          const partial = store.transaction(tx => tx.page(table, { sessionId: "session", limit: 1000, maxBytes: one }));
+          expect(partial.items).toEqual([rows[0]]);
+          expect(partial.hasMore).toBe(true);
+          const full = store.transaction(tx => tx.page(table, { sessionId: "session", limit: 1000, maxBytes: all }));
+          expect(full.items).toEqual(rows);
+          expect(full.hasMore).toBe(false);
+          let parses = 0;
+          const original = JSON.parse;
+          JSON.parse = ((...args: Parameters<typeof JSON.parse>) => { parses++; return original(...args); }) as typeof JSON.parse;
+          try {
+            expect(() => store.transaction(tx => tx.page(table, { sessionId: "session", limit: 1000, maxBytes: one - 1 }))).toThrow(AgentError);
+            expect(() => store.transaction(tx => tx.page(table, { sessionId: "session", limit: 1000, maxBytes: one - 1 }))).toThrow("snapshot-budget");
+            expect(parses).toBe(0);
+          } finally { JSON.parse = original; }
+        }
+      } finally { store.close(); }
+    });
+
+    test("invalid page bounds fail closed, including unsafe cursors and unbounded limits", () => {
+      const store = factory();
+      try {
+        const options = { sessionId: "session", limit: 1, maxBytes: 1000 };
+        for (const invalid of [
+          { limit: 0 }, { limit: -1 }, { limit: 1001 }, { limit: 1.5 }, { limit: Infinity },
+          { maxBytes: 1 }, { maxBytes: NaN }, { after: -1 }, { through: -1 },
+          { after: Number.MAX_SAFE_INTEGER + 1 }, { after: 2, through: 1 },
+        ])
+          expect(() => store.transaction(tx => tx.page("messages", { ...options, ...invalid }))).toThrow("invalid-input");
+        const empty = store.transaction(tx => tx.page("messages", { ...options, maxBytes: 2 }));
+        expect(empty).toEqual({ items: [], cursor: 0, through: 0, throughId: "", hasMore: false });
+      } finally { store.close(); }
+    });
+
+    test("point reads, count, bytes, and bounded pages never parse unrelated history", () => {
+      const store = factory();
+      try {
+        store.transaction(tx => {
+          const values = records();
+          for (let i = 0; i < 1000; i++) {
+            tx.put("messages", { ...values.messages, id: `history-${i}`, sessionId: `other-${i}` });
+            tx.put("runs", { ...values.runs, id: `history-${i}`, sessionId: `other-${i}`, status: "completed" });
+          }
+          putRecords(tx, values);
+          tx.put("messages", { ...values.messages, id: "second" });
+        });
+        let parses = 0;
+        const original = JSON.parse;
+        JSON.parse = ((...args: Parameters<typeof JSON.parse>) => { parses++; return original(...args); }) as typeof JSON.parse;
+        try {
+          store.transaction(tx => {
+            expect(tx.count("runs", { status: "running" })).toBe(1);
+            expect(tx.count("runs", { sessionId: "session", status: "running" })).toBe(1);
+            expect(tx.bytes("messages", "missing")).toBe(2);
+            expect(tx.bytes("messages", "session")).toBeGreaterThan(2);
+            expect(parses).toBe(0);
+            expect(tx.get("runs", "run")!.status).toBe("running");
+            expect(parses).toBe(1);
+            expect(tx.page("messages", { sessionId: "session", limit: 1, maxBytes: 10_000 }).items).toHaveLength(1);
+            expect(parses).toBe(2);
+          });
+        } finally { JSON.parse = original; }
+      } finally { store.close(); }
+    });
   });
 }
 
 describe("SQLite database integration", () => {
+  test("explicit v1 migration preserves records and sequences while backfilling canonical byte metadata", () => {
+    const db = new Database(":memory:");
+    const values = records();
+    values.messages.value = { role: "user", content: "中🙂", timestamp: 1 };
+    try {
+      db.exec(readFileSync(new URL("../migrations/001-agent.sql", import.meta.url), "utf8"));
+      for (const table of tableKeys) {
+        const row = values[table];
+        db.query(`INSERT INTO lenso_agent_${table}(sequence,id,session_id,value) VALUES (?,?,?,?)`)
+          .run(9, row.id, "session", JSON.stringify(row, null, 2));
+      }
+      db.query("INSERT INTO lenso_agent_messages(sequence,id,session_id,value) VALUES (?,?,?,?)")
+        .run(27, "second", "session", JSON.stringify({ ...values.messages, id: "second" }));
+      expect(() => createSqliteStore(db)).toThrow("schema version");
+      migrateAgentDatabase(db);
+      const store = createSqliteStore(db);
+      store.transaction(tx => {
+        for (const table of tableKeys) {
+          const rows = tx.list(table, "session");
+          expect(tx.get(table, values[table].id)).toEqual(values[table]);
+          expect(tx.bytes(table, "session")).toBe(Buffer.byteLength(JSON.stringify(rows)));
+        }
+        expect(tx.bytes("messages", "session", true)).toBe(Buffer.byteLength(JSON.stringify(tx.list("messages", "session").map(row => row.value))));
+        expect(tx.count("runs", { status: "running" })).toBe(1);
+        const page = tx.page("messages", { sessionId: "session", limit: 1, maxBytes: 10_000 });
+        expect(page.cursor).toBe(9);
+        expect(page.through).toBe(27);
+        tx.put("messages", { ...values.messages, id: "late" });
+        expect(tx.page("messages", { sessionId: "session", after: page.cursor, through: page.through, limit: 1000, maxBytes: 10_000 }).items.map(row => row.id)).toEqual(["second"]);
+      });
+      expect(db.query("SELECT sequence FROM lenso_agent_messages ORDER BY sequence").all()).toEqual([
+        { sequence: 9 }, { sequence: 27 }, { sequence: 28 },
+      ]);
+      store.close();
+    } finally { db.close(); }
+  });
+
+  test("v1 upgrades validate constraints, indexes, triggers and record identities before adopting data", () => {
+    const original = readFileSync(new URL("../migrations/001-agent.sql", import.meta.url), "utf8");
+    for (const schema of [
+      original.replace("CHECK (json_valid(value))", ""),
+      original.replace("AUTOINCREMENT", ""),
+      original + "\nCREATE TRIGGER unrelated_name AFTER INSERT ON lenso_agent_messages BEGIN SELECT 1; END;",
+      original + "\nDROP INDEX lenso_agent_runs_session_id;",
+      original,
+    ]) {
+      const db = new Database(":memory:");
+      try {
+        db.exec(schema);
+        if (schema === original)
+          db.query("INSERT INTO lenso_agent_messages(id,session_id,value) VALUES (?,?,?)")
+            .run("wrong-id", "session", JSON.stringify(records().messages));
+        const before = db.query("SELECT name,sql FROM sqlite_master ORDER BY name").all();
+        expect(() => migrateAgentDatabase(db)).toThrow();
+        expect(db.query("SELECT name,sql FROM sqlite_master ORDER BY name").all()).toEqual(before);
+        expect(db.query("SELECT version FROM lenso_agent_schema").get()).toEqual({ version: 1 });
+        expect(db.inTransaction).toBe(false);
+      } finally { db.close(); }
+    }
+  });
+
+  test("v1 backfill processes bounded batches and rolls all of them back on a late invalid record", () => {
+    const db = new Database(":memory:");
+    try {
+      db.exec(readFileSync(new URL("../migrations/001-agent.sql", import.meta.url), "utf8"));
+      const insert = db.query("INSERT INTO lenso_agent_messages(id,session_id,value) VALUES (?,?,?)");
+      const message = records().messages;
+      for (let i = 0; i < 1001; i++)
+        insert.run(`message-${i}`, "session", JSON.stringify({ ...message, id: i === 1000 ? "wrong" : `message-${i}` }, null, 2));
+      const first = db.query("SELECT value FROM lenso_agent_messages WHERE sequence = 1").get();
+      expect(() => migrateAgentDatabase(db)).toThrow("Invalid agent database record");
+      expect(db.query("SELECT version FROM lenso_agent_schema").get()).toEqual({ version: 1 });
+      expect(db.query("SELECT value FROM lenso_agent_messages WHERE sequence = 1").get()).toEqual(first);
+      expect(db.query<{ name: string }, []>("PRAGMA table_info(lenso_agent_messages)").all().map(row => row.name)).not.toContain("bytes");
+      db.query("UPDATE lenso_agent_messages SET value = ? WHERE id = 'message-1000'")
+        .run(JSON.stringify({ ...message, id: "message-1000" }));
+      migrateAgentDatabase(db);
+      const store = createSqliteStore(db);
+      store.transaction(tx => {
+        expect(tx.count("messages", { sessionId: "session" })).toBe(1001);
+        expect(tx.bytes("messages", "session")).toBe(Buffer.byteLength(JSON.stringify(tx.list("messages", "session"))));
+      });
+      store.close();
+    } finally { db.close(); }
+  });
+
+  test("SQLite uses status/session range indexes and never fetches JSON for a rejected page", () => {
+    const db = new Database(":memory:");
+    try {
+      migrateAgentDatabase(db);
+      const store = createSqliteStore(db);
+      store.transaction(tx => tx.put("messages", {
+        ...records().messages, value: { role: "user", content: "x".repeat(10_000), timestamp: 1 },
+      }));
+      for (const sql of [
+        "SELECT COUNT(*) FROM lenso_agent_runs WHERE status = 'running'",
+        "SELECT COUNT(*) FROM lenso_agent_runs WHERE session_id = 'session' AND status = 'running'",
+        "SELECT sequence,bytes FROM lenso_agent_messages WHERE session_id = 'session' AND sequence > 0 AND sequence <= 100 ORDER BY sequence LIMIT 11",
+      ]) {
+        const plan = db.query<{ detail: string }, []>(`EXPLAIN QUERY PLAN ${sql}`).all().map(row => row.detail).join("\n");
+        expect(plan).toContain(sql.includes("runs") ? "status_session" : "session_sequence");
+        expect(plan).not.toContain("TEMP B-TREE");
+      }
+      const query = db.query.bind(db);
+      const seen: string[] = [];
+      db.query = ((sql: string) => { seen.push(sql); return query(sql); }) as typeof db.query;
+      try {
+        expect(() => store.transaction(tx => tx.page("messages", { sessionId: "session", limit: 10, maxBytes: 100 }))).toThrow("snapshot-budget");
+        expect(seen.some(sql => /\bSELECT\s+value\b/i.test(sql))).toBe(false);
+        expect(seen.some(sql => sql.includes("SELECT sequence, bytes"))).toBe(true);
+      } finally { db.query = query; }
+      store.close();
+    } finally { db.close(); }
+  });
+
   test("construction cannot create tables; explicit idempotent migration preserves host tables and configuration", () => {
     const db = new Database(":memory:");
     try {
@@ -198,7 +524,7 @@ describe("SQLite database integration", () => {
   });
 
   test("unsupported or missing schema versions fail closed instead of adopting an incompatible database", () => {
-    for (const version of [0, 2]) {
+    for (const version of [0, 3]) {
       const db = new Database(":memory:");
       try {
         migrateAgentDatabase(db);
@@ -227,6 +553,10 @@ describe("SQLite database integration", () => {
       "DROP TABLE lenso_agent_messages",
       "ALTER TABLE lenso_agent_calls RENAME COLUMN value TO wrong",
       "DROP INDEX lenso_agent_actions_session_id",
+      "DROP INDEX lenso_agent_runs_status_session",
+      "DROP INDEX lenso_agent_messages_session_sequence",
+      "ALTER TABLE lenso_agent_messages RENAME COLUMN message_value_bytes TO wrong_bytes",
+      "CREATE TRIGGER host_agent_trigger AFTER INSERT ON lenso_agent_runs BEGIN SELECT 1; END",
       "DROP INDEX lenso_agent_actions_session_id; CREATE INDEX lenso_agent_actions_session_id ON lenso_agent_actions(session_id) WHERE id <> ''",
       `DROP TABLE lenso_agent_actions;
        CREATE TABLE lenso_agent_actions (sequence INTEGER PRIMARY KEY, id TEXT NOT NULL, session_id TEXT NOT NULL, value TEXT NOT NULL);
@@ -330,12 +660,12 @@ describe("SQLite database integration", () => {
       const second = createSqliteStore(db2);
       let competingCallbackEntered = false;
       first.transaction(tx => {
-        expect(tx.list("runs", "session")).toEqual([]);
+        expect(tx.count("runs", { sessionId: "session", status: "running" })).toBe(0);
         let failure: unknown;
         try {
           second.transaction(other => {
             competingCallbackEntered = true;
-            if (other.list("runs", "session").length === 0)
+            if (other.count("runs", { sessionId: "session", status: "running" }) === 0)
               other.put("runs", { ...records().runs, id: "competing" });
           });
         } catch (error) {
@@ -347,7 +677,7 @@ describe("SQLite database integration", () => {
         tx.put("runs", records().runs);
       });
       const admitted = second.transaction(tx => {
-        if (tx.list("runs", "session").some(run => run.status === "running")) return false;
+        if (tx.count("runs", { sessionId: "session", status: "running" }) !== 0) return false;
         tx.put("runs", { ...records().runs, id: "competing" });
         return true;
       });

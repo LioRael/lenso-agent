@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentService } from "./types";
+import type { AgentEvent, AgentService, RunWatch } from "./types";
 import { AgentError } from "./safety";
 
 export interface AgentFetchOptions<C> {
@@ -83,16 +83,19 @@ function serviceError(error: unknown): Response {
     : json({ error: "request-rejected" }, 400);
 }
 
-function eventStream(events: AsyncIterable<AgentEvent>, signal: AbortSignal): Response {
+function eventStream(events: AsyncIterable<AgentEvent>, signal: AbortSignal, watch?: RunWatch): Response {
   const iterator = events[Symbol.asyncIterator]();
   const encoder = new TextEncoder();
+  let snapshotPending = Boolean(watch);
+  const converged = watch?.run.status !== "running";
   let detached = false;
   let controller: ReadableStreamDefaultController<Uint8Array>;
   const detach = async () => {
     if (detached) return;
     detached = true;
     signal.removeEventListener("abort", aborted);
-    await iterator.return?.();
+    try { await iterator.return?.(); }
+    finally { await watch?.close(); }
   };
   const aborted = () => {
     if (!detached) controller.close();
@@ -107,13 +110,30 @@ function eventStream(events: AsyncIterable<AgentEvent>, signal: AbortSignal): Re
     async pull(value) {
       if (detached) return;
       try {
+        if (snapshotPending && watch) {
+          snapshotPending = false;
+          value.enqueue(encoder.encode(`event: snapshot\ndata: ${JSON.stringify({
+            snapshot: watch.snapshot, run: watch.run, sequence: watch.sequence,
+          })}\n\n`));
+          return;
+        }
         const next = await iterator.next();
         if (detached) return;
-        if (next.done) { value.close(); await detach(); return; }
+        if (next.done) {
+          if (watch && !converged) throw new AgentError("resnapshot-required");
+          value.close();
+          await detach().catch(() => {});
+          return;
+        }
         value.enqueue(encoder.encode(`id: ${next.value.sequence}\nevent: ${next.value.kind}\ndata: ${JSON.stringify(next.value)}\n\n`));
       } catch {
-        if (!detached) value.error(new Error("event-stream-failed"));
-        await detach();
+        if (!detached) {
+          if (watch) {
+            value.enqueue(encoder.encode('event: resnapshot_required\ndata: {"code":"resnapshot-required"}\n\n'));
+            value.close();
+          } else value.error(new Error("event-stream-failed"));
+        }
+        await detach().catch(() => {});
       }
     },
     cancel: detach,
@@ -143,6 +163,7 @@ export function createAgentFetchHandler<C>(options: AgentFetchOptions<C>): (requ
       id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 3 && parts[0] === "sessions" && parts[2] === "runs" ? "start" :
       id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 2 && parts[0] === "runs" ? "run" :
       id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 3 && parts[0] === "runs" && parts[2] === "events" ? "events" :
+      id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 3 && parts[0] === "runs" && parts[2] === "watch" ? "watch" :
       id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 3 && parts[0] === "runs" && parts[2] === "cancel" ? "cancel-run" :
       id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 3 && parts[0] === "actions" && parts[2] === "confirm" ? "confirm" :
       id && /^[A-Za-z0-9_-]+$/.test(id) && parts.length === 3 && parts[0] === "actions" && parts[2] === "cancel" ? "cancel-action" : undefined;
@@ -150,7 +171,7 @@ export function createAgentFetchHandler<C>(options: AgentFetchOptions<C>): (requ
     let context: C;
     try { context = await options.authenticate(request); }
     catch { return json({ error: "unauthenticated" }, 401); }
-    const method = ["snapshot", "run", "events"].includes(route) ? "GET" : "POST";
+    const method = ["snapshot", "run", "events", "watch"].includes(route) ? "GET" : "POST";
     if (request.method !== method) return new Response(null, { status: 405, headers: { allow: method } });
     try {
       switch (route) {
@@ -163,6 +184,10 @@ export function createAgentFetchHandler<C>(options: AgentFetchOptions<C>): (requ
         }
         case "run": return json(await options.agent.getRun(context, id));
         case "events": return eventStream(await options.agent.events(context, id), request.signal);
+        case "watch": {
+          const watch = await options.agent.watchRun(context, id, { signal: request.signal });
+          return eventStream(watch.events, request.signal, watch);
+        }
         case "confirm": return json(await options.agent.confirmAction(context, id, (await body(request, maxBytes, ["digest"])).digest));
         case "cancel-run": await body(request, maxBytes, []); return json(await options.agent.cancelRun(context, id));
         case "cancel-action": await body(request, maxBytes, []); return json(await options.agent.cancelAction(context, id));
