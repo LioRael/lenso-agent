@@ -1,0 +1,46 @@
+{
+  "name": "@lenso/agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "description": "Embedded business agents for Lenso applications on Bun",
+  "files": ["dist", "migrations", "README.md", "vendor"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./pi": { "types": "./dist/pi.d.ts", "import": "./dist/pi.js" },
+    "./sqlite": { "types": "./dist/sqlite.d.ts", "import": "./dist/sqlite.js" },
+    "./manage": { "types": "./dist/manage.d.ts", "import": "./dist/manage.js" },
+    "./plugin": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" },
+    "./fetch": { "types": "./dist/fetch.d.ts", "import": "./dist/fetch.js" }
+  },
+  "scripts": {
+    "build": "bun -e \"await import('node:fs/promises').then(({rm}) => rm('dist', {recursive: true, force: true}))\" && bun build src/index.ts src/pi.ts src/sqlite.ts src/manage.ts src/plugin.ts src/fetch.ts --outdir dist --target bun --packages external --splitting && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test tests",
+    "example": "bun examples/offline.ts",
+    "check:consumer": "bun scripts/packed-consumer.ts",
+    "pack": "bun run build && mkdir -p artifacts && bun pm pack --destination artifacts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@lenso/core": "file:vendor/lenso-core-0.3.0.tgz",
+    "@lenso/engine": "file:vendor/lenso-engine-0.4.0.tgz",
+    "@lenso/manage": "file:vendor/lenso-manage-0.4.0.tgz"
+  },
+  "devDependencies": {
+    "@lenso/auth": "file:vendor/lenso-auth-0.3.1.tgz",
+    "@types/bun": "1.4.2",
+    "typescript": "7.0.2",
+    "zod": "4.6.5"
+  },
+  "engines": { "bun": ">=1.4.2" },
+  "packageManager": "bun@1.4.2",
+  "overrides": {
+    "@lenso/core": "file:vendor/lenso-core-0.3.0.tgz",
+    "@lenso/engine": "file:vendor/lenso-engine-0.4.0.tgz",
+    "@lenso/manage": "file:vendor/lenso-manage-0.4.0.tgz",
+    "@lenso/auth": "file:vendor/lenso-auth-0.3.1.tgz"
+  }
+}

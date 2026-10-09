@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/LioRael/lenso.git",
+  "revision": "17a92d134b6af15b4be35a8d2dfda8eb08d5fbe5",
+  "dirtySource": false,
+  "bun": "1.4.2",
+  "reason": "The current published Manage 0.3.0 lacks the signal and OperationRuntime contracts used here. These are local main-source packages, not registry releases.",
+  "buildOrder": ["packages/lenso", "packages/engine", "packages/web", "packages/auth", "packages/manage"],
+  "packCommand": "bun pm pack --ignore-scripts --filename <destination> (from each package directory)",
+  "sha256": {
+    "lenso-core-0.3.0.tgz": "962de6932c24374f1a8a6b8d92231a9a4f171c2e67b6f9bfde5c99e3e7dcad99",
+    "lenso-engine-0.4.0.tgz": "849e72d43782ff4b17aa72b2e427165a56823171f7179c6e572eaa452a72c690",
+    "lenso-manage-0.4.0.tgz": "4afa753cd1c4c880efffff0c3ffd564ce9c537bdf3692fa001f3225e0517ef0d",
+    "lenso-auth-0.3.1.tgz": "36a0e56c234070691775d0ca226f96051215fe7adb7e288ee5dfdf3f7e224a4c"
+  }
+}
