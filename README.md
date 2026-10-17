@@ -183,14 +183,22 @@ requires fresh preparation. Results retain `content`, `structuredContent` and
 error is a completed protocol result with `isError: true`; transport loss or
 cancellation after dispatch is `outcome-unknown`, with no automatic replay.
 Cancellation sends `notifications/cancelled`; it does not promise rollback.
+Client/source `close()` and transport disconnect terminate the owned process.
+On POSIX, the peer runs in a private process group: cleanup sends SIGTERM, then
+SIGKILL after a 250 ms grace period, including when the launcher already exited
+or a worker closed its pipes. Close waits for that cleanup and releases stdio.
+Workers that deliberately leave the group are outside this ownership boundary;
+Windows retains direct-child termination only. Per-call cancellation/timeouts
+leave the shared connection available for other calls.
 The next discovery reconnects after disconnect. Defaults: 30-second request
 timeout, 1 MiB frame/aggregate catalog, 1,024 tools, 100 pages, 128 pending requests.
 Only PATH is inherited; explicitly supply any required non-secret environment.
 This entry implements stdio tools for protocol revisions 2024-11-05 through
 2025-11-25; it does not advertise sampling, elicitation, roots or tasks.
 
-`bun test tests/mcp.test.ts` launches real local stdio peers, including crash and
-cancellation cases. For the existing credential-free Rust demo, run
+`bun test tests/mcp.test.ts tests/mcp-lifecycle.test.ts` launches real local stdio
+peers, including crash, cancellation, late-result and worker cleanup cases.
+For the existing credential-free Rust demo, run
 `bun scripts/mcp-rust-smoke.ts /absolute/path/lenso-mcp-demo`; this never edits or
 builds Rust and verifies structured echo and cancellation on the same connection.
 

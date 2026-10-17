@@ -55,6 +55,7 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
   let closed = false, revision = 0, nextId = 0;
   let active: Connection | undefined;
   let connecting: Promise<Connection> | undefined;
+  const processGroup = process.platform !== "win32";
   const children = new Set<Connection>();
   type Pending = { finish(error: AgentError | null, result?: unknown): void; invocation: boolean };
   type Connection = {
@@ -62,6 +63,7 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
     pending: Map<number, Pending>;
     dead: boolean;
     stopped: Promise<void>;
+    stop(): void;
   };
 
   function send(connection: Connection, message: unknown): void {
@@ -76,10 +78,7 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
     if (active === connection) { active = undefined; revision++; }
     for (const pending of connection.pending.values())
       pending.finish(new AgentError(pending.invocation ? "outcome-unknown" : "mcp-disconnected"));
-    connection.child.kill("SIGTERM");
-    const timer = setTimeout(() => connection.child.kill("SIGKILL"), 250);
-    timer.unref();
-    void connection.stopped.then(() => clearTimeout(timer));
+    connection.stop();
   }
   function request(connection: Connection, method: string, params: unknown, signal: AbortSignal): Promise<unknown> {
     check(signal);
@@ -113,10 +112,35 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
     });
   }
   function start(): Connection {
-    const child = spawn(command, args, { cwd, env, shell: false, stdio: "pipe" });
+    // A private POSIX process group lets shutdown reach workers even if their
+    // launcher exits first. Never signal the host's inherited process group.
+    const child = spawn(command, args, { cwd, env, shell: false, stdio: "pipe", detached: processGroup });
+    const closed = new Promise<void>(resolve => child.once("close", () => resolve()));
+    let finishStop!: () => void;
     const connection: Connection = {
       child, pending: new Map(), dead: false,
-      stopped: new Promise<void>(resolve => child.once("close", () => resolve())),
+      stopped: new Promise<void>(resolve => { finishStop = resolve; }),
+      stop() {
+        const kill = (signal: NodeJS.Signals) => {
+          if (processGroup && child.pid !== undefined) {
+            try { process.kill(-child.pid, signal); }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill(signal);
+            }
+          } else child.kill(signal);
+        };
+        kill("SIGTERM");
+        // Keep this timer alive, including after the leader's close event: a
+        // worker can ignore TERM and can also close its inherited stdio early.
+        const timer = setTimeout(() => {
+          kill("SIGKILL");
+          child.stdin.destroy();
+          child.stdout.destroy();
+          child.stderr.destroy();
+          void closed.then(finishStop);
+        }, 250);
+        if (!processGroup) void closed.then(() => { clearTimeout(timer); finishStop(); });
+      },
     };
     children.add(connection);
     void connection.stopped.then(() => children.delete(connection));
