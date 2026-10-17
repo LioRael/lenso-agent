@@ -5,9 +5,10 @@
   "type": "module",
   "license": "MIT",
   "description": "Embedded business agents for Lenso applications on Bun",
-  "files": ["dist", "migrations", "README.md"],
+  "files": ["dist", "migrations", "README.md", "docs/chatgpt-provider.md", "docs/studio-provider.patch"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./chatgpt": { "types": "./dist/chatgpt.d.ts", "import": "./dist/chatgpt.js" },
     "./pi": { "types": "./dist/pi.d.ts", "import": "./dist/pi.js" },
     "./sqlite": { "types": "./dist/sqlite.d.ts", "import": "./dist/sqlite.js" },
     "./manage": { "types": "./dist/manage.d.ts", "import": "./dist/manage.js" },
@@ -15,7 +16,7 @@
     "./fetch": { "types": "./dist/fetch.d.ts", "import": "./dist/fetch.js" }
   },
   "scripts": {
-    "build": "bun -e \"await import('node:fs/promises').then(({rm}) => rm('dist', {recursive: true, force: true}))\" && bun build src/index.ts src/pi.ts src/sqlite.ts src/manage.ts src/plugin.ts src/fetch.ts --outdir dist --target bun --packages external --splitting && tsc -p tsconfig.build.json",
+    "build": "bun -e \"await import('node:fs/promises').then(({rm}) => rm('dist', {recursive: true, force: true}))\" && bun build src/index.ts src/chatgpt.ts src/pi.ts src/sqlite.ts src/manage.ts src/plugin.ts src/fetch.ts --outdir dist --target bun --packages external --splitting && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
     "example": "bun examples/offline.ts",

@@ -42,6 +42,10 @@ export interface Run {
   finishedAt?: number;
   error?: string;
   usage?: Usage;
+  /** Durable intent; running remains true until actual work drains. */
+  cancelRequestedAt?: number;
+  /** Fingerprint for an explicitly idempotent admission; never executable input. */
+  inputDigest?: string;
 }
 export interface ToolDefinition {
   name: string;
@@ -207,12 +211,14 @@ export interface AgentService<C> {
   createSession(context: C, profile: string): Promise<Session>;
   readSession(context: C, sessionId: string): Promise<SessionSnapshot>;
   readMessages(context: C, sessionId: string, options?: { after?: string; through?: string; limit?: number }): Promise<MessagePage>;
-  startRun(context: C, sessionId: string, text: string): Promise<RunHandle>;
+  startRun(context: C, sessionId: string, text: string, options?: { requestId?: string }): Promise<RunHandle>;
   getRun(context: C, runId: string): Promise<Run>;
   events(context: C, runId: string): Promise<AsyncIterable<AgentEvent>>;
   /** Register bounded live delivery before taking the authoritative snapshot. Not persisted replay. */
   watchRun(context: C, runId: string, options?: { signal?: AbortSignal }): Promise<RunWatch>;
   cancelRun(context: C, runId: string): Promise<Run>;
+  /** Persist cancellation and signal the local executor without waiting for drain. */
+  requestCancelRun(context: C, runId: string): Promise<Run>;
   confirmAction(context: C, actionId: string, digest: string): Promise<PendingAction>;
   cancelAction(context: C, actionId: string): Promise<PendingAction>;
   /** Explicit exclusive maintenance, only after the previous executor has stopped. */

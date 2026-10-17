@@ -1,4 +1,5 @@
 import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
+import { createHash } from "node:crypto";
 import { lazyStream, type AssistantMessage, type Message as LlmMessage } from "@earendil-works/pi-ai";
 import { createExecutionGateway } from "./gateway";
 import { toolFailure, type ToolFailure } from "./tools";
@@ -101,6 +102,20 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
       session, messages: tx.list("messages", sessionId), runs: tx.list("runs", sessionId),
       actions: tx.list("actions", sessionId), calls: tx.list("calls", sessionId),
     }, secrets()), limits.maxSnapshotBytes, "snapshot-budget");
+  }
+
+  function requestCancellation(identity: Identity, runId: string): Run {
+    const task = active.get(runId);
+    const run = options.store.transaction(tx => {
+      const current = ownedRun(tx, identity, runId);
+      if (current.status !== "running") return current;
+      if (!task) throw new AgentError("run-executor-unavailable");
+      const requested = { ...current, cancelRequestedAt: current.cancelRequestedAt ?? Date.now() };
+      tx.put("runs", requested);
+      return requested;
+    });
+    if (run.status === "running") task!.cancel();
+    return publicCopy(run);
   }
 
   async function execute(context: C, session: Session, initial: Run, text: string, task: ActiveRun): Promise<Run> {
@@ -356,7 +371,11 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
       ...initial, status: task.cancelled ? "cancelled" : error ? "failed" : "completed",
       finishedAt: Date.now(), usage, ...(error ? { error } : {}),
     };
-    options.store.transaction(tx => tx.put("runs", run));
+    options.store.transaction(tx => {
+      const current = tx.get("runs", run.id);
+      if (current?.cancelRequestedAt !== undefined) run.cancelRequestedAt = current.cancelRequestedAt;
+      tx.put("runs", run);
+    });
     // Terminal outcome is immutable; close may still abort and drain observer hooks.
     task.cancel = () => { task.controller.abort(); };
     for (const hook of hooks) {
@@ -399,16 +418,28 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
         }, secrets()), limits.maxSnapshotBytes, "snapshot-budget");
       });
     },
-    async startRun(context, sessionId, text) {
+    async startRun(context, sessionId, text, input = {}) {
       const identity = await authenticate(context);
       if (typeof text !== "string" || !text.trim()) throw new AgentError("invalid-input");
       bounded(text, limits.maxInputBytes, "input-budget");
       assertSafeInput(text, secrets(), limits.maxInputBytes);
-      const { session, run } = options.store.transaction(tx => {
+      if (input.requestId !== undefined && (typeof input.requestId !== "string" ||
+        !/^[A-Za-z0-9_-]{1,128}$/.test(input.requestId))) throw new AgentError("invalid-request-id");
+      const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+      const runId = input.requestId === undefined ? crypto.randomUUID() : hash([sessionId, input.requestId]);
+      const inputDigest = input.requestId === undefined ? undefined : hash(text);
+      const { session, run, existing } = options.store.transaction(tx => {
         const session = ownedSession(tx, identity, sessionId);
+        const previous = tx.get("runs", runId);
+        if (previous) {
+          if (previous.sessionId !== sessionId || previous.inputDigest !== inputDigest)
+            throw new AgentError("request-id-conflict");
+          return { session, run: previous, existing: true };
+        }
         ensureActionOutcomes(tx, sessionId, secrets(), limits.maxOutputBytes, limits.maxSnapshotBytes,
           action => sameIdentity(action.identity, identity));
-        const run: Run = { id: crypto.randomUUID(), sessionId, status: "running", createdAt: Date.now() };
+        const run: Run = { id: runId, sessionId, status: "running", createdAt: Date.now(),
+          ...(inputDigest === undefined ? {} : { inputDigest }) };
         const value: AgentMessage = { role: "user", content: text, timestamp: run.createdAt };
         const historyBytes = tx.bytes("messages", sessionId, true);
         if (historyBytes + size(value) + (historyBytes > 2 ? 1 : 0) > limits.maxHistoryBytes)
@@ -424,8 +455,14 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
           id: crypto.randomUUID(), sessionId, runId: run.id, createdAt: run.createdAt,
           value,
         });
-        return { session: jsonCopy(session), run };
+        return { session: jsonCopy(session), run, existing: false };
       });
+      if (existing) {
+        const task = active.get(run.id);
+        if (run.status === "running" && !task) throw new AgentError("run-executor-unavailable");
+        return { run: publicCopy(run), events: task?.events.subscribe() ?? { async *[Symbol.asyncIterator]() {} },
+          done: task?.done ?? Promise.resolve(publicCopy(run)) };
+      }
       const events = new RunEvents(session.id, run.id, limits.eventBuffer, limits.maxOutputBytes + 4096);
       const subscription = events.subscribe();
       const task: ActiveRun = {
@@ -469,11 +506,12 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
     },
     async cancelRun(context, runId) {
       const identity = await authenticate(context);
-      const run = options.store.transaction(tx => publicCopy(ownedRun(tx, identity, runId)));
+      const run = requestCancellation(identity, runId);
       const task = active.get(runId);
-      if (!task) return run;
-      task.cancel();
-      return task.done;
+      return run.status === "running" && task ? task.done : run;
+    },
+    async requestCancelRun(context, runId) {
+      return requestCancellation(await authenticate(context), runId);
     },
     async confirmAction(context, actionId, digest) {
       const identity = await authenticate(context);
@@ -520,11 +558,25 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
     close() {
       if (closing) return closing;
       closed = true;
-      for (const task of active.values()) task.cancel();
+      let cancellationReceiptFailed = false;
+      for (const [runId, task] of active) {
+        try {
+          options.store.transaction(tx => {
+            const run = tx.get("runs", runId);
+            if (run?.status === "running") tx.put("runs", {
+              ...run, cancelRequestedAt: run.cancelRequestedAt ?? Date.now(),
+            });
+          });
+        } catch { cancellationReceiptFailed = true; }
+        task.cancel();
+      }
       for (const controller of confirmations.keys()) controller.abort();
       closing = Promise.allSettled([
         ...[...active.values()].map(task => task.done), ...confirmations.values(),
-      ]).then(() => { providerSecrets.clear(); });
+      ]).then(() => {
+        providerSecrets.clear();
+        if (cancellationReceiptFailed) throw new AgentError("cancel-receipt-unavailable");
+      });
       return closing;
     },
   };

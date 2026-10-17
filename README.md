@@ -42,15 +42,30 @@ npm publication. Package publication and deployment need separate authorization.
 | --- | --- |
 | `@lenso/agent` | `createAgentService`, `createMemoryStore`, domain types, safe errors |
 | `@lenso/agent/pi` | Explicit Pi configuration, without replacing tool execution |
+| `@lenso/agent/chatgpt` | Optional SIWC Responses provider and host authentication adapter contract |
 | `@lenso/agent/manage` | Exact-instance, explicitly selected Manage tools |
 | `@lenso/agent/sqlite` | Borrowed/owned Bun SQLite store and explicit migration |
 | `@lenso/agent/plugin` | Thin Lenso dependency/lifecycle wiring |
 | `@lenso/agent/fetch` | A handler for the host's existing Fetch listener |
 
 The service exposes `createSession`, `readSession`, `readMessages`, `startRun`,
-`getRun`, `events`, `watchRun`, `cancelRun`, `confirmAction`, `cancelAction`,
+`getRun`, `events`, `watchRun`, `requestCancelRun`, `cancelRun`, `confirmAction`, `cancelAction`,
 `recoverInterrupted`, and `close`.
 `startRun` returns `{run, events, done}`; it does not wait for the model to finish.
+For retried submissions, use `startRun(context, sessionId, text, {requestId})`.
+Keep the same request ID and exact text for one user submission. IDs contain
+1–128 ASCII letters, digits, `_` or `-` and are scoped to the authenticated
+session. Reuse returns the original run and local completion promise, or its
+persisted terminal result after restart; different text returns
+`request-id-conflict`. The admission transaction stores one user message and
+one run, with a hashed key and input fingerprint. Omit the ID to deliberately
+start a new run. This deduplicates admission, not external business effects.
+Retain run records for as long as their request IDs must remain deduplicated.
+Live events on a retry contain only future events; use `watchRun` for a snapshot.
+An orphaned or remotely owned running record returns `run-executor-unavailable`
+without resubmission. Inspect the session and perform exclusive offline recovery
+only after its executor has stopped; a recovered interrupted run remains the
+result for its original request ID. A new user request needs a new ID.
 `readSession` returns the current history, runs, tool calls, and actions.
 `pack` leaves a reproducible local candidate in `artifacts/`.
 
@@ -191,6 +206,16 @@ retry/resume path and no cross-resource exactly-once claim.
 `close()` stops admission, requests cancellation, and drains owned work before
 resolving. It does not close borrowed storage, DBs, or a RunningApp. Uncooperative
 tools/providers can delay shutdown; the runtime cannot safely kill them.
+`requestCancelRun` durably records `cancelRequestedAt` before signalling the
+local executor, then returns immediately. Status stays `running` and admission
+stays blocked until actual work drains. `cancelRun` records the same intent and
+waits for settlement. Repeated cancellation retains the first timestamp; a
+terminal run is returned unchanged. Both reject `run-executor-unavailable` for
+a running marker without a local executor. They do not silently claim to cancel
+another process. Offline recovery preserves the timestamp while classifying the
+run as interrupted and entered effects as unknown. Shutdown records cancellation
+too; a storage failure still aborts/drains work, then rejects close with
+`cancel-receipt-unavailable`. Existing JSON records need no schema migration.
 The host owns retention/backups and any pruning of stored history; this version
 does not silently expire history or promise indefinite replay.
 `maxSnapshotBytes` bounds aggregate session snapshots (default 16 MiB); oversized snapshots
@@ -273,6 +298,7 @@ Advanced Pi options are explicit; there is no mutable Agent or arbitrary tool
 replacement exposed to plugins. Extensions cannot satisfy a confirmation or
 change the execution gateway. Context/results/model output cannot enlarge the
 host-selected catalog or service authorization.
+
 `beforeRun` hooks run in declaration order and fail closed before model/tools.
 `afterRun` hooks observe the persisted terminal state in order; their failures
 emit safe errors without changing that outcome. Both receive only safe facts
@@ -292,6 +318,51 @@ There is no `pi-coding-agent`, `pi-durable`, second runtime, queue, RAG, coding
 tools, SQL console, unbounded URL fetch, terminal, filesystem, or Git tool.
 Pi Durable and Cloudflare harnesses are separate execution models; a successful
 Bun run does not establish Workers recovery semantics.
+
+### Personal ChatGPT plan provider
+
+`@lenso/agent/chatgpt` exports `createChatGPTProvider`, `chatGPTPayload`, and
+the `ChatGPTAuthAdapter`/`ChatGPTAccess`/provider types. Importing or constructing
+it performs no I/O. Pass its `model`, `secrets` and `pi` to `createAgentService`:
+
+```ts
+import { createChatGPTProvider } from "@lenso/agent/chatgpt";
+
+const provider = createChatGPTProvider({
+  owner: verifiedOwner,
+  registrationId: selectedRegistration.id,
+  modelId: selectedRegistration.modelId,
+  toolNamespace: "my_app",
+  getAccess: (owner, input) => connections.getAccess(owner, input),
+});
+// createAgentService({ ...hostOptions, model: provider.model, secrets: provider.secrets }, provider.pi)
+```
+
+The trusted host supplies `getAccess(owner, { registrationId })`, returning
+`{ accessToken, registrationId, modelId }` only for a currently authorized,
+explicitly selected account and model. It verifies SIWC identity, consent,
+scopes and expiry and performs any serialized refresh before returning.
+Mismatched registration/model or missing tokens fail closed. This interface
+does not implement OAuth or verify an arbitrary bearer token. Never adapt
+browser cookies, Codex credentials or an environment API key to this callback.
+
+The host owns sign-in, model discovery, private credential storage, account UI,
+refresh/revocation and stopping old executors on account/model changes. The
+provider requests access on each Pi model turn; switching during a request
+requires the host to cancel and drain that executor. No network retry, fallback
+provider or automatic authorization is supplied. `secrets()` returns a detached
+snapshot of verified access tokens collected by this provider, including rotated
+values, for Agent redaction. The private Set is never serialized. Keep it
+server-side and discard the provider after its executor has drained. Only `response.completed`
+completes inference. Keep provisional stream text separate from accepted output.
+
+This is a text-only adapter extracted from Studio; its model context/token
+numbers are inherited local defaults, not account limits. Zero cost entries
+are Pi-required placeholders, not a claim of free/unlimited usage. Host limits
+bound execution; they do not enforce a monetary or subscription cap.
+`toolNamespace` defaults to `agent`; tool permissions still belong to the host
+and Agent gateway. See [the migration and protocol review](docs/chatgpt-provider.md)
+for the tested baseline and Studio integration steps.
 
 ## Console owner: minimal wiring
 
@@ -319,6 +390,10 @@ Operations; Agent does not implement another job queue.
 Fetch defaults to `/agent`: POST `sessions`, GET `sessions/:id`, POST
 `sessions/:id/runs`, GET `runs/:id` and `runs/:id/events`, POST `runs/:id/cancel`,
 POST `actions/:id/confirm` with `{digest}`, and POST `actions/:id/cancel`.
+POST `sessions/:id/runs` accepts an optional `Idempotency-Key` header with the
+same request-ID rules. POST `runs/:id/cancel` returns 202 with the durable
+cancellation request while work drains, or 200 for an already-terminal run.
+Poll `getRun` or reconnect with `watchRun` to observe the final state.
 Expired actions return 410; consumed/unknown/conflicting confirmations return
 409 with a safe code. No request can replace an action's target or arguments.
 
