@@ -1,0 +1,14 @@
+docs/studio-provider.patch
+  h_9d56aba080c170 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "38a5a7c04953376840f404430a496faea355fc09",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
