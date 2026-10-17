@@ -61,6 +61,9 @@ function serviceError(error: unknown): Response {
     "forbidden": 403,
     "forbidden-operation": 403,
     "session-busy": 409,
+    "request-id-conflict": 409,
+    "run-executor-unavailable": 409,
+    "invalid-request-id": 400,
     "confirmation-mismatch": 409,
     "precondition-conflict": 409,
     "action-executing": 409,
@@ -178,7 +181,8 @@ export function createAgentFetchHandler<C>(options: AgentFetchOptions<C>): (requ
         case "session": return json(await options.agent.createSession(context, (await body(request, maxBytes, ["profile"])).profile), 201);
         case "snapshot": return json(await options.agent.readSession(context, id));
         case "start": {
-          const handle = await options.agent.startRun(context, id, (await body(request, maxBytes, ["text"])).text);
+          const requestId = request.headers.get("idempotency-key") ?? undefined;
+          const handle = await options.agent.startRun(context, id, (await body(request, maxBytes, ["text"])).text, { requestId });
           await handle.events[Symbol.asyncIterator]().return?.();
           return json(handle.run, 202);
         }
@@ -189,7 +193,11 @@ export function createAgentFetchHandler<C>(options: AgentFetchOptions<C>): (requ
           return eventStream(watch.events, request.signal, watch);
         }
         case "confirm": return json(await options.agent.confirmAction(context, id, (await body(request, maxBytes, ["digest"])).digest));
-        case "cancel-run": await body(request, maxBytes, []); return json(await options.agent.cancelRun(context, id));
+        case "cancel-run": {
+          await body(request, maxBytes, []);
+          const run = await options.agent.requestCancelRun(context, id);
+          return json(run, run.status === "running" ? 202 : 200);
+        }
         case "cancel-action": await body(request, maxBytes, []); return json(await options.agent.cancelAction(context, id));
       }
     } catch (error) {
