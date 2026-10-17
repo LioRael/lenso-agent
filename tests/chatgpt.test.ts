@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { chatGPTPayload, createChatGPTProvider } from "../src/chatgpt";
-import { createAgentService, createMemoryStore, type ToolDefinition } from "../src/index";
+import { combineToolSources, createAgentService, createMemoryStore, type ToolDefinition } from "../src/index";
 
 // No OAuth or network: actual Pi/OpenAI transport consumes injected SSE fixture bytes.
 const token = "siwc-fixture-not-a-credential";
@@ -98,7 +98,7 @@ test("redaction remembers verified rotated access only, stays private and return
   expect(JSON.stringify(p)).not.toContain("synthetic-access");
 });
 
-test("two owners use isolated credentials and namespaced tools through the real Agent gateway", async () => {
+test("two owners use isolated credentials, composed tools and idempotent runs through the real Agent gateway", async () => {
   await Promise.all(["alice", "bob"].map(async owner => {
     let requests = 0, invoked = 0, accessReads = 0;
     const identity = { subject: owner, scope: owner, application: "fixture", target: "local" };
@@ -124,13 +124,18 @@ test("two owners use isolated credentials and namespaced tools through the real 
     });
     const agent = createAgentService({ model: p.model, secrets: p.secrets, store: createMemoryStore(), identity: async () => identity,
       profiles: [{ id: "read", instructions: "Read the fixture", tools: ["lookup"] }],
-      tools: { catalog: async () => [definition], prepare: async (_name, input) => ({ definition, input, precondition: null }),
-        invoke: async () => { invoked++; return `${owner}-result`; } },
+      tools: combineToolSources([{ tools: ["lookup"], source: {
+        catalog: async () => [definition], prepare: async (_name, input) => ({ definition, input, precondition: null }),
+        invoke: async () => { invoked++; return `${owner}-result`; },
+      } }]),
     }, p.pi);
     try {
       const session = await agent.createSession({}, "read");
-      const run = await agent.startRun({}, session.id, "Read fixture");
+      const run = await agent.startRun({}, session.id, "Read fixture", { requestId: "same-click" });
       expect((await run.done).status).toBe("completed");
+      const replay = await agent.startRun({}, session.id, "Read fixture", { requestId: "same-click" });
+      expect(replay.run.id).toBe(run.run.id);
+      expect((await replay.done).status).toBe("completed");
       expect(requests).toBe(2); expect(invoked).toBe(1); expect(accessReads).toBe(2);
       const saved = await agent.readSession({}, session.id);
       expect(saved.calls[0].status).toBe("completed");

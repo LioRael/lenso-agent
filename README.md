@@ -40,7 +40,7 @@ npm publication. Package publication and deployment need separate authorization.
 
 | Entry | Responsibility |
 | --- | --- |
-| `@lenso/agent` | `createAgentService`, `createMemoryStore`, domain types, safe errors |
+| `@lenso/agent` | `createAgentService`, `createMemoryStore`, `combineToolSources`, domain types, safe errors |
 | `@lenso/agent/pi` | Explicit Pi configuration, without replacing tool execution |
 | `@lenso/agent/chatgpt` | Optional SIWC Responses provider and host authentication adapter contract |
 | `@lenso/agent/manage` | Exact-instance, explicitly selected Manage tools |
@@ -52,6 +52,11 @@ The service exposes `createSession`, `readSession`, `readMessages`, `startRun`,
 `getRun`, `events`, `watchRun`, `requestCancelRun`, `cancelRun`, `confirmAction`, `cancelAction`,
 `recoverInterrupted`, and `close`.
 `startRun` returns `{run, events, done}`; it does not wait for the model to finish.
+Existing three-argument calls and the optional ChatGPT provider contract remain
+compatible. Custom `AgentService` implementations/mocks must implement the new
+`requestCancelRun` method. HTTP clients must treat cancellation's 202 as accepted
+intent and observe the final run state; `cancelRun` still waits for drain.
+No database migration is required for these optional run metadata fields.
 For retried submissions, use `startRun(context, sessionId, text, {requestId})`.
 Keep the same request ID and exact text for one user submission. IDs contain
 1–128 ASCII letters, digits, `_` or `-` and are scoped to the authenticated
