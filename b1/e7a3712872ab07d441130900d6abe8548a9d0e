@@ -1,0 +1,28 @@
+README.md
+  h_9d56aba080c170 181-188,596-597
+scripts/packed-consumer.ts
+  h_9d56aba080c170 150,166-178
+src/mcp-client.ts
+  h_9d56aba080c170 2-3,29,70,169-172,249-259
+src/mcp.ts
+  h_9d56aba080c170 66-68,76-78
+tests/fixtures/mcp-discovery-tree.ts
+  h_9d56aba080c170 1-12
+tests/fixtures/mcp-server.ts
+  h_9d56aba080c170 6-7,9,13-23,29,39-41,45-47,49,54,56
+tests/mcp-discovery.test.ts
+  h_9d56aba080c170 1-151
+tests/mcp-integration.test.ts
+  h_9d56aba080c170 1-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b1e7a3712872ab07d441130900d6abe8548a9d0e",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
