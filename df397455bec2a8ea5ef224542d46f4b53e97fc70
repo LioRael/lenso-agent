@@ -1,0 +1,78 @@
+.gitignore
+  h_9d56aba080c170 1-6
+LICENSE
+  h_9d56aba080c170 1-21
+README.md
+  h_9d56aba080c170 1-233
+bun.lock
+  h_9d56aba080c170 1-261
+examples/console-profile.ts
+  h_9d56aba080c170 1-17
+examples/missing-receipt.ts
+  h_9d56aba080c170 1-30
+examples/notes.ts
+  h_9d56aba080c170 1-170
+examples/offline.ts
+  h_9d56aba080c170 1-151
+examples/provider-config.ts
+  h_9d56aba080c170 1-18
+migrations/001-agent.sql
+  h_9d56aba080c170 1-46
+package.json
+  h_9d56aba080c170 1-46
+scripts/packed-consumer.ts
+  h_9d56aba080c170 1-122
+src/events.ts
+  h_9d56aba080c170 1-106
+src/fetch.ts
+  h_9d56aba080c170 1-176
+src/gateway.ts
+  h_9d56aba080c170 1-267
+src/index.ts
+  h_9d56aba080c170 1-9
+src/manage.ts
+  h_9d56aba080c170 1-189
+src/pi.ts
+  h_9d56aba080c170 1-14
+src/plugin.ts
+  h_9d56aba080c170 1-23
+src/runtime.ts
+  h_9d56aba080c170 1-474
+src/safety.ts
+  h_9d56aba080c170 1-47
+src/sqlite.ts
+  h_9d56aba080c170 1-137
+src/store.ts
+  h_9d56aba080c170 1-82
+src/types.ts
+  h_9d56aba080c170 1-173
+tests/fetch.test.ts
+  h_9d56aba080c170 1-212
+tests/gateway.test.ts
+  h_9d56aba080c170 1-255
+tests/manage.test.ts
+  h_9d56aba080c170 1-287
+tests/plugin.test.ts
+  h_9d56aba080c170 1-87
+tests/runtime.test.ts
+  h_9d56aba080c170 1-639
+tests/storage.test.ts
+  h_9d56aba080c170 1-364
+tsconfig.build.json
+  h_9d56aba080c170 1-11
+tsconfig.json
+  h_9d56aba080c170 1-12
+vendor/source.json
+  h_9d56aba080c170 1-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "df397455bec2a8ea5ef224542d46f4b53e97fc70",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
