@@ -13,10 +13,11 @@
     "./sqlite": { "types": "./dist/sqlite.d.ts", "import": "./dist/sqlite.js" },
     "./manage": { "types": "./dist/manage.d.ts", "import": "./dist/manage.js" },
     "./plugin": { "types": "./dist/plugin.d.ts", "import": "./dist/plugin.js" },
-    "./fetch": { "types": "./dist/fetch.d.ts", "import": "./dist/fetch.js" }
+    "./fetch": { "types": "./dist/fetch.d.ts", "import": "./dist/fetch.js" },
+    "./mcp": { "types": "./dist/mcp.d.ts", "import": "./dist/mcp.js" }
   },
   "scripts": {
-    "build": "bun -e \"await import('node:fs/promises').then(({rm}) => rm('dist', {recursive: true, force: true}))\" && bun build src/index.ts src/chatgpt.ts src/pi.ts src/sqlite.ts src/manage.ts src/plugin.ts src/fetch.ts --outdir dist --target bun --packages external --splitting && tsc -p tsconfig.build.json",
+    "build": "bun -e \"await import('node:fs/promises').then(({rm}) => rm('dist', {recursive: true, force: true}))\" && bun build src/index.ts src/chatgpt.ts src/pi.ts src/sqlite.ts src/manage.ts src/plugin.ts src/fetch.ts src/mcp.ts --outdir dist --target bun --packages external --splitting && tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
     "example": "bun examples/offline.ts",

@@ -105,6 +105,47 @@ Duplicate aliases fail at registration, even when currently hidden by policy.
 Catalogs remain caller-specific; prepare/invoke still pass through the owning
 source's authorization, schema checks, and confirmation boundary.
 
+For a local MCP process, import `createMcpToolSource`, `createMcpToolPlugin` or
+the lower-level `createMcpStdioClient` from the optional `@lenso/agent/mcp` entry:
+
+```ts
+const source = createMcpToolSource({
+  application: "studio", instance: running.instanceId, sourceId: "local-notes-mcp",
+  server: { command: "/absolute/path/to/server", args: [], timeoutMs: 30_000 },
+  selections: [{ name: "notes_echo", tool: remoteEchoName, effect: "read" }],
+  authorize: async (_selection, _input, context, identity) => canUseNotes(context, identity),
+  validateInput: (input, currentSchema) => validateNotesInput(input, currentSchema),
+});
+const tools = combineToolSources([{ source, tools: source.tools }]);
+// After Agent has drained, await source.close(). With createMcpToolPlugin,
+// declare the MCP plugin in the Agent plugin's requires so cleanup is ordered.
+```
+
+The host owns aliases, access policy and input schema validation. Validation must
+reject invalid raw JSON against the current schema; its return value is ignored.
+Server annotations cannot grant read access or suppress confirmation. Non-read
+selections always require confirmation. Unknown/new remote tools remain hidden
+until explicitly selected; hidden aliases stay reserved. Each source owns a
+separate process/session and must have a unique `sourceId` in its host.
+
+Discovery follows bounded pages and refreshes on every admission. List-change
+notifications invalidate prepared tools; reconnect or source recreation also
+requires fresh preparation. Results retain `content`, `structuredContent` and
+`isError` as a JSON envelope in Agent receipts/model context. A returned MCP tool
+error is a completed protocol result with `isError: true`; transport loss or
+cancellation after dispatch is `outcome-unknown`, with no automatic replay.
+Cancellation sends `notifications/cancelled`; it does not promise rollback.
+The next discovery reconnects after disconnect. Defaults: 30-second request
+timeout, 1 MiB frame/aggregate catalog, 1,024 tools, 100 pages, 128 pending requests.
+Only PATH is inherited; explicitly supply any required non-secret environment.
+This entry implements stdio tools for protocol revisions 2024-11-05 through
+2025-11-25; it does not advertise sampling, elicitation, roots or tasks.
+
+`bun test tests/mcp.test.ts` launches real local stdio peers, including crash and
+cancellation cases. For the existing credential-free Rust demo, run
+`bun scripts/mcp-rust-smoke.ts /absolute/path/lenso-mcp-demo`; this never edits or
+builds Rust and verifies structured echo and cancellation on the same connection.
+
 A Manage selection can supply `projectResult: raw => ({ items, nextCursor })`
 to validate and project a structured result before it reaches the gateway's
 receipt and model budget. The projection replaces the stored result; retain
