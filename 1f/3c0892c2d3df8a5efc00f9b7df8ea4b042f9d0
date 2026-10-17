@@ -1,0 +1,30 @@
+README.md
+  h_9d56aba080c170 39-84,90-91,167
+examples/mcp-assistant.ts
+  h_9d56aba080c170 1-90
+package.json
+  h_9d56aba080c170 25
+scripts/packed-consumer.ts
+  h_9d56aba080c170 149-150,152,164-165
+src/index.ts
+  h_9d56aba080c170 5
+src/plugin.ts
+  h_9d56aba080c170 10-11,19-21
+src/tools.ts
+  h_9d56aba080c170 10-12,14,16-18,21
+tests/plugin.test.ts
+  h_9d56aba080c170 6,89-112
+tests/tools.test.ts
+  h_9d56aba080c170 82-96
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1f3c0892c2d3df8a5efc00f9b7df8ea4b042f9d0",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
