@@ -42,6 +42,7 @@ npm publication. Package publication and deployment need separate authorization.
 | --- | --- |
 | `@lenso/agent` | `createAgentService`, `createMemoryStore`, domain types, safe errors |
 | `@lenso/agent/pi` | Explicit Pi configuration, without replacing tool execution |
+| `@lenso/agent/chatgpt` | Optional SIWC Responses provider and host authentication adapter contract |
 | `@lenso/agent/manage` | Exact-instance, explicitly selected Manage tools |
 | `@lenso/agent/sqlite` | Borrowed/owned Bun SQLite store and explicit migration |
 | `@lenso/agent/plugin` | Thin Lenso dependency/lifecycle wiring |
@@ -241,6 +242,7 @@ Advanced Pi options are explicit; there is no mutable Agent or arbitrary tool
 replacement exposed to plugins. Extensions cannot satisfy a confirmation or
 change the execution gateway. Context/results/model output cannot enlarge the
 host-selected catalog or service authorization.
+
 `beforeRun` hooks run in declaration order and fail closed before model/tools.
 `afterRun` hooks observe the persisted terminal state in order; their failures
 emit safe errors without changing that outcome. Both receive only safe facts
@@ -260,6 +262,51 @@ There is no `pi-coding-agent`, `pi-durable`, second runtime, queue, RAG, coding
 tools, SQL console, unbounded URL fetch, terminal, filesystem, or Git tool.
 Pi Durable and Cloudflare harnesses are separate execution models; a successful
 Bun run does not establish Workers recovery semantics.
+
+### Personal ChatGPT plan provider
+
+`@lenso/agent/chatgpt` exports `createChatGPTProvider`, `chatGPTPayload`, and
+the `ChatGPTAuthAdapter`/`ChatGPTAccess`/provider types. Importing or constructing
+it performs no I/O. Pass its `model`, `secrets` and `pi` to `createAgentService`:
+
+```ts
+import { createChatGPTProvider } from "@lenso/agent/chatgpt";
+
+const provider = createChatGPTProvider({
+  owner: verifiedOwner,
+  registrationId: selectedRegistration.id,
+  modelId: selectedRegistration.modelId,
+  toolNamespace: "my_app",
+  getAccess: (owner, input) => connections.getAccess(owner, input),
+});
+// createAgentService({ ...hostOptions, model: provider.model, secrets: provider.secrets }, provider.pi)
+```
+
+The trusted host supplies `getAccess(owner, { registrationId })`, returning
+`{ accessToken, registrationId, modelId }` only for a currently authorized,
+explicitly selected account and model. It verifies SIWC identity, consent,
+scopes and expiry and performs any serialized refresh before returning.
+Mismatched registration/model or missing tokens fail closed. This interface
+does not implement OAuth or verify an arbitrary bearer token. Never adapt
+browser cookies, Codex credentials or an environment API key to this callback.
+
+The host owns sign-in, model discovery, private credential storage, account UI,
+refresh/revocation and stopping old executors on account/model changes. The
+provider requests access on each Pi model turn; switching during a request
+requires the host to cancel and drain that executor. No network retry, fallback
+provider or automatic authorization is supplied. `secrets()` returns a detached
+snapshot of verified access tokens collected by this provider, including rotated
+values, for Agent redaction. The private Set is never serialized. Keep it
+server-side and discard the provider after its executor has drained. Only `response.completed`
+completes inference. Keep provisional stream text separate from accepted output.
+
+This is a text-only adapter extracted from Studio; its model context/token
+numbers are inherited local defaults, not account limits. Zero cost entries
+are Pi-required placeholders, not a claim of free/unlimited usage. Host limits
+bound execution; they do not enforce a monetary or subscription cap.
+`toolNamespace` defaults to `agent`; tool permissions still belong to the host
+and Agent gateway. See [the migration and protocol review](docs/chatgpt-provider.md)
+for the tested baseline and Studio integration steps.
 
 ## Console owner: minimal wiring
 

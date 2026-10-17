@@ -1,0 +1,65 @@
+--- a/src/chatgpt-provider.ts
++++ b/src/chatgpt-provider.ts
+@@ -1,54 +1,11 @@
+-import { streamSimple } from "@earendil-works/pi-ai/api/openai-responses";
+-import type { Model } from "@earendil-works/pi-ai";
++import { createChatGPTProvider as createAgentChatGPTProvider, chatGPTPayload as agentChatGPTPayload,
++  type ChatGPTProviderOptions } from "@lenso/agent/chatgpt";
+ import type { AssistantProvider } from "./assistant";
++export type { ChatGPTAccess } from "@lenso/agent/chatgpt";
+ 
+-const unsupported = ["background", "conversation", "max_output_tokens", "max_tool_calls", "metadata", "moderation", "multi_agent", "prompt", "prompt_cache_retention", "prompt_cache_options", "safety_identifier", "temperature", "top_logprobs", "top_p", "truncation", "user", "previous_response_id"];
+-/** Official SIWC preview uses the public Responses endpoint, not the legacy Codex backend. */
+-export function chatGPTPayload(value: unknown) {
+-  const payload = structuredClone(value) as Record<string, any>;
+-  if (!payload || typeof payload !== "object" || !Array.isArray(payload.input)) throw new Error("Invalid Responses request");
+-  for (const key of unsupported) delete payload[key];
+-  payload.store = false; payload.stream = true;
+-  payload.input = payload.input.map((item: any) => item.role === "system" ? { ...item, role: "developer" } : item);
+-  if (payload.tools?.length) {
+-    if (!payload.tools.every((tool: any) => ["function", "custom"].includes(tool.type))) throw new Error("Unsupported ChatGPT plan tool");
+-    payload.tools = [{ type: "namespace", name: "studio", description: "Studio author-selected read tools", tools: payload.tools }];
+-  }
+-  return payload;
++export function chatGPTPayload(value: unknown) { return agentChatGPTPayload(value, "studio"); }
++
++export function createChatGPTProvider(options: Omit<ChatGPTProviderOptions, "toolNamespace">): AssistantProvider {
++  return { ...createAgentChatGPTProvider({ ...options, toolNamespace: "studio" }),
++    label: `ChatGPT plan · ${options.modelId}`, testOnly: false };
+ }
+-export type ChatGPTAccess = { accessToken: string; registrationId: string; modelId?: string | null };
+-export function createChatGPTProvider(options: { owner: string; registrationId: string; modelId: string;
+-  getAccess(owner: string, input: { registrationId: string }): Promise<ChatGPTAccess>;
+-  fetch?: typeof globalThis.fetch;
+-}): AssistantProvider {
+-  const secrets = new Set<string>();
+-  const model: Model<"openai-responses"> = { id: options.modelId, name: options.modelId, api: "openai-responses", provider: "openai", baseUrl: "https://api.openai.com/v1",
+-    input: ["text"], reasoning: false, contextWindow: 32768, maxTokens: 4096,
+-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, compat: { supportsMaxOutputTokens: false } };
+-  return { model, label: `ChatGPT plan · ${options.modelId}`, testOnly: false, secrets: () => [...secrets], pi: {
+-    async getApiKey(provider) {
+-      if (provider !== "openai") throw new Error("Provider mismatch");
+-      const access = await options.getAccess(options.owner, { registrationId: options.registrationId });
+-      if (!access.accessToken || access.registrationId !== options.registrationId || access.modelId !== options.modelId) throw new Error("Connection changed; select the account and model again");
+-      secrets.add(access.accessToken);
+-      return access.accessToken;
+-    },
+-    streamFn(current, context, input) {
+-      if (!input?.apiKey || current.id !== options.modelId || current.baseUrl !== model.baseUrl) throw new Error("Explicit selected ChatGPT credential required");
+-      const guardedFetch = (async (url: any, init?: RequestInit) => {
+-        const destination = new URL(url instanceof Request ? url.url : String(url));
+-        if (destination.origin !== "https://api.openai.com" || destination.pathname !== "/v1/responses" || destination.search || destination.username || destination.password) throw new Error("Unexpected ChatGPT transport destination");
+-        const headers = new Headers(init?.headers ?? (url instanceof Request ? url.headers : undefined));
+-        if (headers.get("authorization") !== `Bearer ${input.apiKey}`) throw new Error("Unexpected ChatGPT credential");
+-        headers.delete("openai-organization"); headers.delete("openai-project");
+-        return (options.fetch ?? globalThis.fetch)(url, { ...init, headers, redirect: "error" });
+-      }) as typeof globalThis.fetch;
+-      return streamSimple(model, context, { ...input, fetch: guardedFetch, headers: { "OpenAI-Organization": null, "OpenAI-Project": null }, maxRetries: 0, transport: "sse", cacheRetention: "none", timeoutMs: 90000,
+-        onPayload: chatGPTPayload,
+-        onProviderStreamEvent(event: any) {
+-          if (event?.type === "response.incomplete") throw new Error("ChatGPT response was incomplete; no draft was accepted");
+-        },
+-      });
+-    },
+-  } };
+-}

@@ -105,6 +105,7 @@ try {
   await writeFile(join(consumer, "consumer.ts"), `
 import { createAgentService, createMemoryStore, type AgentOptions, type AgentService } from "@lenso/agent";
 import { type PiExtensions } from "@lenso/agent/pi";
+import { createChatGPTProvider, type ChatGPTAuthAdapter } from "@lenso/agent/chatgpt";
 import { createSqliteStore, migrateAgentDatabase } from "@lenso/agent/sqlite";
 import { createManageToolSource } from "@lenso/agent/manage";
 import { createAgentPlugin } from "@lenso/agent/plugin";
@@ -112,6 +113,12 @@ import { createAgentFetchHandler } from "@lenso/agent/fetch";
 import { createFauxCore } from "@earendil-works/pi-ai/providers/faux";
 const core = createFauxCore({ provider: "consumer-types" });
 const pi: PiExtensions = { streamFn: core.streamSimple };
+const auth: ChatGPTAuthAdapter = { getAccess: async () => { throw new Error("No authorization in packed consumer"); } };
+const chatgpt = createChatGPTProvider({ ...auth, owner: "fixture", registrationId: "fixture", modelId: "fixture" });
+const chatgptPi: PiExtensions = chatgpt.pi;
+const chatgptSecrets: () => readonly string[] = chatgpt.secrets;
+void chatgptPi; // Construction must not invoke auth or HTTP.
+void chatgptSecrets;
 const options: AgentOptions<{}> = {
   store: createMemoryStore(), model: core.models[0],
   identity: async () => ({ subject: "alice", scope: "owner:alice", application: "consumer", target: "fixture" }),
