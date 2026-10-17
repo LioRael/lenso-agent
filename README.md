@@ -317,6 +317,62 @@ the complete necessary history, including outcome facts, within `maxHistoryBytes
 Over-budget history is rejected explicitly rather than dropping dialogue or
 inventing partial tool protocol pairs.
 
+For a smaller **model request** window, `@lenso/agent/context` provides an opt-in,
+non-destructive projection through the existing Pi extension:
+
+```ts
+import { createContextTransform } from "@lenso/agent/context";
+
+const transformContext = createContextTransform({
+  mode: "summarize", // or explicit "trim" without a summarizer
+  budget: {
+    maxTokens: 32_000,
+    reserveTokens: 8_000, // host accounts for system prompt, tools and output
+    maxBytes: 96_000,
+    estimateTokens: hostTokenEstimator, // include framing and image costs
+  },
+  keepRecentMessages: 8,
+  maxSummaryBytes: 4_096,
+  summaryTimeoutMs: 5_000,
+  summarize: async ({ messages, sourceIndices, maxBytes, signal }) =>
+    hostSummarizer({ messages, sourceIndices, maxBytes, signal }),
+}, report => recordContextReport(report));
+// Pass alongside your existing Pi extensions to createAgentService(options, pi).
+const pi = { ...existingPiExtensions, transformContext };
+```
+
+`projectContext(messages, options, signal)` returns the projected messages plus
+the same report: retained/removed input indices, before/after bytes and estimated
+tokens (including reserve), mode and optional summary. No model, tokenizer,
+provider, network access or storage mutation is supplied by this module. The
+host owns estimator accuracy and summary quality. Reports can contain summary
+text, so handle them as conversation data. The adapter is stateless across calls
+and sessions; pass a report callback scoped to the correct host context. It
+replaces `transformContext`; do not silently overwrite an existing transform.
+
+All user, system and unknown custom messages remain verbatim. Aborted/deferred
+assistant output, recent messages and optional `protectedIndices` remain too.
+Tool calls and their matching results form indivisible contiguous groups;
+protection of any member protects the entire group. Pending exchanges and results
+with incomplete nested-call records are preserved; orphan, duplicate or mismatched results fail with
+`invalid-context-tool-pair`. Trim removes the oldest eligible groups only until
+the request fits. Summary mode summarizes all eligible older groups once and
+inserts labelled reference data at the first removed position. It cannot replace
+user constraints, generate tool protocol entries, or remove incomplete calls.
+
+If protected content or the complete summary envelope cannot fit, projection
+throws `context-budget`, with no partial output or fallback to silent trimming.
+Invalid/oversized summaries, callback failures, timeout and cancellation also
+fail explicitly. Timeout/cancellation stop waiting and signal the callback;
+the host must honor that signal to stop its own work. `maxSummaryBytes` measures
+the UTF-8 JSON string, including quotes/escaping. Configure `maxBytes` within the
+runtime transcript limit. This hook runs **after** admission: `maxHistoryBytes`
+still caps durable history and must accommodate the full stored transcript.
+It does not enable indefinite sessions or prune the database. Existing runtime
+replay converts historical tool results to user reference messages, which this
+module conservatively preserves. Use a fresh session or explicit host retention
+policy when protected/durable history reaches its limit.
+
 Custom stores must implement `count`, `bytes`, and `page` alongside `get/list/put`;
 all methods see writes within the same synchronous transaction. Memory storage
 uses a rollback-safe write set and detached read/write values. SQLite v2 adds
