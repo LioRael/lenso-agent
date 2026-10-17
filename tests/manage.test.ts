@@ -285,3 +285,38 @@ test("invalid and oversized JSON and raw business failures expose codes only", a
   const scalar = f.source({ selections: [{ name: "scalar_read", operation: { ...f.read, input: z.string() } }] });
   await expectCode(scalar.catalog(context, f.identity, signal()), "operation-failed");
 });
+
+test("trusted result projection preserves structured JSON and cannot dispatch before confirmation", async () => {
+  const f = await fixture();
+  let projections = 0;
+  const source = f.source({ selections: [{
+    name: "change_ledger", operation: f.change,
+    projectResult: async raw => {
+      projections++;
+      const result = z.object({ amount: z.number(), actor: z.string() }).parse(raw);
+      return { receipt: result, nextCursor: null };
+    },
+  }] });
+  const prepared = await source.prepare("change_ledger", { amount: "12" }, context, f.identity, signal());
+  await expectCode(source.invoke(prepared, context, f.identity, signal(), false), "confirmation-required");
+  expect(projections).toBe(0);
+  expect(await source.invoke(prepared, context, f.identity, signal(), true)).toEqual({
+    receipt: { amount: 12, actor: "alice" }, nextCursor: null,
+  });
+  expect(f.state.calls).toBe(1);
+  expect(projections).toBe(1);
+});
+
+test("projection failures remain safe, JSON bounded, and never repeat the business effect", async () => {
+  const f = await fixture();
+  for (const projectResult of [
+    () => { throw new Error("private-result-payload"); },
+    () => ({ amount: Infinity }),
+    () => ({ body: "x".repeat(1024 * 1024) }),
+  ]) {
+    const source = f.source({ selections: [{ name: "change_ledger", operation: f.change, projectResult }] });
+    const prepared = await source.prepare("change_ledger", { amount: "12" }, context, f.identity, signal());
+    await expectCode(source.invoke(prepared, context, f.identity, signal(), true), "operation-failed");
+  }
+  expect(f.state.calls).toBe(3);
+});

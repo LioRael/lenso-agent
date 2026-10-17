@@ -16,6 +16,10 @@ export interface ManageToolSelection {
   readonly name: string;
   readonly operation: Operation;
   readonly confirmation?: boolean;
+  /** Trusted projection after Manage's bounded JSON result; return JSON (e.g. a page with nextCursor).
+   * This replaces the result in receipts and model context. Never repeats the business invocation.
+   */
+  readonly projectResult?: (result: unknown) => unknown | Promise<unknown>;
 }
 
 export interface ManageToolSourceOptions<C> {
@@ -50,7 +54,8 @@ export function createManageToolSource<C>(options: ManageToolSourceOptions<C>): 
   for (const entry of selection) {
     if (!/^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(entry.name) ||
         /^operation_[0-9]+$/.test(entry.name) || names.has(entry.name) ||
-        (entry.confirmation !== undefined && typeof entry.confirmation !== "boolean"))
+        (entry.confirmation !== undefined && typeof entry.confirmation !== "boolean") ||
+        (entry.projectResult !== undefined && typeof entry.projectResult !== "function"))
       throw new AgentError("invalid-tool-source");
     names.add(entry.name);
   }
@@ -183,7 +188,9 @@ export function createManageToolSource<C>(options: ManageToolSourceOptions<C>): 
       });
       if (boundedJson(selected.definition) !== boundedJson(current.definition))
         throw new AgentError("tool-conflict");
-      return selected.tool.invoke(current.input);
+      const result = await selected.tool.invoke(current.input);
+      if (signal.aborted) throw new AgentError("cancelled");
+      return entry.projectResult ? jsonCopy(await entry.projectResult(result)) : result;
     }),
   };
 }

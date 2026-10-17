@@ -6,6 +6,7 @@ import {
 import { createAgentService } from "../src/runtime";
 import { createMemoryStore } from "../src/store";
 import { RunEvents, SafeText } from "../src/events";
+import { AgentError } from "../src/safety";
 import type { AgentEvent, AgentOptions, AgentStore, Identity, ToolDefinition, ToolSource } from "../src/types";
 import type { PiExtensions } from "../src/pi";
 
@@ -53,6 +54,56 @@ const callRead = () => fauxAssistantMessage(fauxToolCall("lookup", { id: "1" }))
 const callWrite = () => fauxAssistantMessage(fauxToolCall("update", { id: "1" }));
 
 describe("real Pi execution", () => {
+  test("safe input recovery reaches the next model turn and the saved transcript without executing invalid input", async () => {
+    const f = fixture();
+    const prepare = f.tools.prepare;
+    f.tools.prepare = async (...args) => {
+      if ((args[1] as { id: string }).id === "bad") throw new AgentError("invalid-input");
+      return prepare(...args);
+    };
+    const failure = { error: { code: "invalid-input", recovery: "correct-input" } };
+    f.core.setResponses([
+      fauxAssistantMessage(fauxToolCall("lookup", { id: "bad" })),
+      context => {
+        const result = context.messages.findLast(message => message.role === "toolResult");
+        expect(result?.role === "toolResult" && result.isError).toBe(true);
+        expect(result?.role === "toolResult" && result.content).toEqual([{ type: "text", text: JSON.stringify(failure) }]);
+        return callRead();
+      },
+      fauxAssistantMessage("Corrected and read."),
+    ]);
+    const session = await f.service.createSession(identity, "default");
+    const handle = await f.service.startRun(identity, session.id, "Read an item.");
+    expect((await handle.done).status).toBe("completed");
+    const saved = await f.service.readSession(identity, session.id);
+    expect(f.invoked).toHaveLength(1);
+    expect(saved.calls).toHaveLength(1);
+    const result = saved.messages.find(message => message.value.role === "toolResult")!.value;
+    expect(result.role === "toolResult" && result.content).toEqual([{ type: "text", text: JSON.stringify(failure) }]);
+    await f.service.close();
+  });
+
+  test("an invoked tool failure reports inspect-outcome without leaking or automatically repeating the call", async () => {
+    const f = fixture();
+    let attempts = 0;
+    f.tools.invoke = async () => { attempts++; throw new Error("private-service-payload"); };
+    f.core.setResponses([callRead(), context => {
+      const result = context.messages.findLast(message => message.role === "toolResult");
+      expect(result?.role === "toolResult" && result.content).toEqual([{
+        type: "text", text: JSON.stringify({ error: { code: "outcome-unknown", recovery: "inspect-outcome" } }),
+      }]);
+      return fauxAssistantMessage("Inspect the receipt.");
+    }]);
+    const session = await f.service.createSession(identity, "default");
+    const handle = await f.service.startRun(identity, session.id, "Read an item.");
+    expect((await handle.done).status).toBe("completed");
+    const saved = await f.service.readSession(identity, session.id);
+    expect(saved.calls[0]?.status).toBe("outcome_unknown");
+    expect(JSON.stringify(saved)).not.toContain("private-service-payload");
+    expect(attempts).toBe(1);
+    await f.service.close();
+  });
+
   test("read tools traverse durable gateway and continue with real tool results", async () => {
     const f = fixture();
     f.core.setResponses([callRead(), context => {

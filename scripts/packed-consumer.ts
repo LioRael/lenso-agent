@@ -135,11 +135,12 @@ await agent.close();
   // Reuse the actual real-Pi/Auth/Manage fixture against packed public entry
   // points. Only imports in temporary copies change; no source path escapes.
   const replacements: Record<string, string> = {
+    "../src/index": "@lenso/agent",
     "../src/runtime": "@lenso/agent", "../src/types": "@lenso/agent",
     "../src/sqlite": "@lenso/agent/sqlite", "../src/manage": "@lenso/agent/manage",
     "../src/pi": "@lenso/agent/pi",
   };
-  for (const file of ["notes.ts", "console-profile.ts", "missing-receipt.ts", "offline.ts", "provider-config.ts"]) {
+  for (const file of ["notes.ts", "console-profile.ts", "missing-receipt.ts", "offline.ts", "provider-config.ts", "tool-plugins.ts"]) {
     let contents = await readFile(join(root, "examples", file), "utf8");
     for (const [from, to] of Object.entries(replacements))
       contents = contents.replaceAll(`"${from}"`, `"${to}"`);
@@ -150,6 +151,7 @@ await agent.close();
   await run(["bun", "x", "--no-install", "tsc", "--noEmit"], consumer);
   await run(["bun", "run", "consumer.ts"], consumer);
   await run(["bun", "run", "examples/offline.ts"], consumer);
+  await run(["bun", "run", "examples/tool-plugins.ts"], consumer);
   console.log(`${ordinary ? `Ordinary ${npm ? "npm" : "Bun"} consumer (no overrides)` : "Framework snapshot integration (explicit overrides)"}: frozen reinstall, all exports, TypeScript and real offline Pi/Auth/Manage workflow passed.`);
 } finally {
   await rm(directory, { recursive: true, force: true });

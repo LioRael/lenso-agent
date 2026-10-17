@@ -1,6 +1,7 @@
 import { Agent, type AgentMessage, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
 import { lazyStream, type AssistantMessage, type Message as LlmMessage } from "@earendil-works/pi-ai";
 import { createExecutionGateway } from "./gateway";
+import { toolFailure, type ToolFailure } from "./tools";
 import { RunEvents, SafeText } from "./events";
 import { ensureActionOutcomes, persistActionOutcome } from "./outcomes";
 import { watchRunEvents } from "./reconnect";
@@ -149,6 +150,7 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
         id: crypto.randomUUID(), sessionId: session.id, runId: initial.id, createdAt: Date.now(), value: safeCopy(value),
       }));
     };
+    const toolFailures = new Map<string, ToolFailure>();
     const projection = (message: AgentMessage): AgentMessage | undefined => {
       if (message.role === "user") return { role: "user", content: message.content, timestamp: message.timestamp };
       if (message.role === "assistant") {
@@ -162,7 +164,7 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
       }
       if (message.role === "toolResult") return {
         role: "toolResult", toolCallId: message.toolCallId, toolName: message.toolName,
-        content: message.isError ? [{ type: "text", text: "operation-failed" }] :
+        content: message.isError ? [{ type: "text", text: JSON.stringify(toolFailures.get(message.toolCallId) ?? toolFailure(undefined)) }] :
           message.content.filter(block => block.type === "text").map(block => ({ type: "text", text: block.text })),
         isError: message.isError, timestamp: message.timestamp,
       };
@@ -200,7 +202,9 @@ export function createAgentService<C>(options: AgentOptions<C>, pi?: PiExtension
             } catch (cause) {
               const code = safeCode(cause);
               if (code === "output-budget") stop(code);
-              return { content: [{ type: "text", text: code }], details: undefined, isError: true };
+              const failure = toolFailure(cause);
+              toolFailures.set(id, failure);
+              return { content: [{ type: "text", text: JSON.stringify(failure) }], details: failure, isError: true };
             }
           },
         });

@@ -19,6 +19,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
     "example": "bun examples/offline.ts",
+    "example:tools": "bun examples/tool-plugins.ts",
     "check:consumer": "bun scripts/packed-consumer.ts",
     "check:consumer:ordinary": "bun scripts/packed-consumer.ts --ordinary",
     "pack": "bun run build && mkdir -p artifacts && bun pm pack --destination artifacts"

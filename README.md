@@ -71,6 +71,38 @@ schemas, and `createManageAdapter` invocation. Explicit aliases name selected
 Operation declarations, not unstable `operation_N` catalog indexes. Binding
 preserves the exact Plugin object and service `this`.
 
+For a host with separate Studio and Relay sources, import `combineToolSources`
+from `@lenso/agent` and register explicit ownership:
+
+```ts
+const tools = combineToolSources([
+  { source: studioTools, tools: ["studio_list"] },
+  { source: relayTools, tools: ["relay_checksum"] },
+]);
+```
+
+Duplicate aliases fail at registration, even when currently hidden by policy.
+Catalogs remain caller-specific; prepare/invoke still pass through the owning
+source's authorization, schema checks, and confirmation boundary.
+
+A Manage selection can supply `projectResult: raw => ({ items, nextCursor })`
+to validate and project a structured result before it reaches the gateway's
+receipt and model budget. The projection replaces the stored result; retain
+receipt IDs or cursors needed for later reads. It runs once after a successful
+business invocation, within Manage's existing bounded JSON output contract
+(default 1 MiB). For larger datasets, implement pagination in the operation.
+Invalid projection output fails safely; it never causes an automatic retry.
+
+Gateway tool failures now return JSON `{ error: { code, recovery } }` with a
+fixed vocabulary, retained in the saved transcript. `correct-input` permits a
+new corrected proposal; `inspect-outcome` means inspect the existing receipt,
+not repeat a potentially completed effect. Raw exception messages are omitted.
+No recovery hint grants authorization or performs an automatic retry.
+
+Run `bun run example:tools` for a zero-cost local filesystem workflow: correct
+invalid input, page through a large projected result, then compute a real file
+checksum through the second plugin. Only the model responses are scripted.
+
 Catalog authorization is not execution authorization. The host must provide
 current policy checks and trusted operation bindings; real services must still
 check their Auth audience, owner/resource policy, and current evidence. Actors,
