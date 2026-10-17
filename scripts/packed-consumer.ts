@@ -147,6 +147,7 @@ await agent.close();
     "../src/sqlite": "@lenso/agent/sqlite", "../src/manage": "@lenso/agent/manage",
     "../src/pi": "@lenso/agent/pi",
     "../src/plugin": "@lenso/agent/plugin", "../src/mcp": "@lenso/agent/mcp",
+    "../src/mcp-client": "@lenso/agent/mcp",
     "../src/context": "@lenso/agent/context",
   };
   for (const file of ["notes.ts", "console-profile.ts", "missing-receipt.ts", "offline.ts", "provider-config.ts", "tool-plugins.ts", "mcp-assistant.ts"]) {
@@ -162,7 +163,19 @@ await agent.close();
   await run(["bun", "run", "examples/offline.ts"], consumer);
   await run(["bun", "run", "examples/tool-plugins.ts"], consumer);
   await run(["bun", "run", "examples/mcp-assistant.ts"], consumer);
-  console.log(`${ordinary ? `Ordinary ${npm ? "npm" : "Bun"} consumer (no overrides)` : "Framework snapshot integration (explicit overrides)"}: frozen reinstall, all exports, TypeScript and real offline Pi/Auth/Manage/MCP workflows passed.`);
+  // Exercise both MCP fixes through the packed public entry, with real local
+  // stdio peers and no import back into the author's checkout.
+  await mkdir(join(consumer, "tests", "fixtures"), { recursive: true });
+  for (const file of ["mcp-discovery.test.ts", "mcp-lifecycle.test.ts", "mcp-integration.test.ts"]) {
+    let contents = await readFile(join(root, "tests", file), "utf8");
+    for (const [from, to] of Object.entries(replacements)) contents = contents.replaceAll(`"${from}"`, `"${to}"`);
+    assert(!contents.includes("../src/"), `Non-public import in ${file}`);
+    await writeFile(join(consumer, "tests", file), contents);
+  }
+  for (const file of ["mcp-server.ts", "mcp-process-tree.ts", "mcp-discovery-tree.ts"])
+    await copyFile(join(root, "tests", "fixtures", file), join(consumer, "tests", "fixtures", file));
+  await run(["bun", "test", "./tests"], consumer);
+  console.log(`${ordinary ? `Ordinary ${npm ? "npm" : "Bun"} consumer (no overrides)` : "Framework snapshot integration (explicit overrides)"}: frozen reinstall, all exports, TypeScript, offline workflows and MCP discovery/lifecycle regressions passed.`);
 } finally {
   await rm(directory, { recursive: true, force: true });
 }

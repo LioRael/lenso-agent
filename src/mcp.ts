@@ -63,15 +63,19 @@ export function createMcpToolSource<C>(options: McpToolSourceOptions<C>): McpToo
     check(identity, signal);
     const entry = byName.get(name);
     if (!entry) throw new AgentError("unknown-operation");
-    if (await authorize(entry, undefined, context, identity) !== true) throw new AgentError("forbidden-operation");
+    const visible = await authorize(entry, undefined, context, identity);
+    check(identity, signal);
+    if (visible !== true) throw new AgentError("forbidden-operation");
     const catalog = await client.listTools(signal), tool = catalog.tools.find(tool => tool.name === entry.tool);
     if (!tool) throw new AgentError("unknown-operation");
     const raw = jsonCopy(input);
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new AgentError("invalid-input");
     try { await validateInput(jsonCopy(raw) as Record<string, unknown>, jsonCopy(tool.inputSchema)); }
     catch { check(identity, signal); throw new AgentError("invalid-input"); }
-    if (await authorize(entry, jsonCopy(raw), context, identity) !== true) throw new AgentError("forbidden-operation");
     check(identity, signal);
+    const allowed = await authorize(entry, jsonCopy(raw), context, identity);
+    check(identity, signal);
+    if (allowed !== true) throw new AgentError("forbidden-operation");
     const projected = definition(entry, tool);
     const precondition = createHash("sha256").update(stableJson({
       incarnation, revision: catalog.revision, definition: projected, outputSchema: tool.outputSchema ?? null,

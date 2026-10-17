@@ -178,7 +178,14 @@ separate process/session and must have a unique `sourceId` in its host.
 
 Discovery follows bounded pages and refreshes on every admission. List-change
 notifications invalidate prepared tools; reconnect or source recreation also
-requires fresh preparation. Results retain `content`, `structuredContent` and
+requires fresh preparation. Complete discovery snapshots are fingerprinted so
+observed tool/schema changes also invalidate old client revisions when a server
+does not send notifications. Page order alone does not invalidate a revision;
+the fingerprint never replaces fresh discovery or caches partial pages. A silent
+change is observable only after discovery, not immediately when the server changes.
+Cancellation is checked after asynchronous authorization and input validation
+before admission continues; host callbacks already running must still settle.
+Results retain `content`, `structuredContent` and
 `isError` as a JSON envelope in Agent receipts/model context. A returned MCP tool
 error is a completed protocol result with `isError: true`; transport loss or
 cancellation after dispatch is `outcome-unknown`, with no automatic replay.
@@ -586,6 +593,8 @@ Pass `--npm` for an independent npm install and `npm ci` check. Both modes impor
 all public entries, typecheck, and run the offline Pi/Auth/Manage workflow against
 the packed entries rather than author source. Auth/Pi and checking tools are
 explicit fixture dependencies, not hidden replacements for Agent dependencies.
+Consumer checks also run MCP discovery, lifecycle and combined regressions through
+the packed public entry with isolated local stdio peers and synthetic data.
 Ordinary checks first install a minimal consumer with **only** the candidate
 dependency and import all entries, before adding the explicit offline fixture.
 Consumer TypeScript uses the baseline `skipLibCheck: true`; add
