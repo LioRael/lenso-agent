@@ -1,0 +1,20 @@
+README.md
+  h_9d56aba080c170 186-192,199-201
+src/mcp-client.ts
+  h_9d56aba080c170 58,66,81,115-119,122-143
+tests/fixtures/mcp-process-tree.ts
+  h_9d56aba080c170 1-31
+tests/mcp-lifecycle.test.ts
+  h_9d56aba080c170 1-66
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "5d646caaa96ee0d584d025383001c5503ee9fa88",
+  "prompts": {},
+  "humans": {
+    "h_9d56aba080c170": {
+      "author": "LioRael <leo@lenso.dev>"
+    }
+  }
+}
