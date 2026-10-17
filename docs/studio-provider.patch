@@ -7,7 +7,7 @@
 +  type ChatGPTProviderOptions } from "@lenso/agent/chatgpt";
  import type { AssistantProvider } from "./assistant";
 +export type { ChatGPTAccess } from "@lenso/agent/chatgpt";
- 
+
 -const unsupported = ["background", "conversation", "max_output_tokens", "max_tool_calls", "metadata", "moderation", "multi_agent", "prompt", "prompt_cache_retention", "prompt_cache_options", "safety_identifier", "temperature", "top_logprobs", "top_p", "truncation", "user", "previous_response_id"];
 -/** Official SIWC preview uses the public Responses endpoint, not the legacy Codex backend. */
 -export function chatGPTPayload(value: unknown) {
