@@ -2,7 +2,7 @@ export { createAgentService } from "./runtime";
 export { createMemoryStore } from "./store";
 export { AgentError } from "./safety";
 export { combineToolSources } from "./tools";
-export type { ToolSourceRegistration, ToolFailure } from "./tools";
+export type { ToolSourceRegistration, NamedToolSource, ToolFailure } from "./tools";
 export type {
   Identity, Session, Message, Run, RunStatus, Usage, ToolCall, CallStatus,
   PendingAction, ActionStatus, ToolDefinition, PreparedTool, ToolSource,

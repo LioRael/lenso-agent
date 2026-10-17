@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test tests",
     "example": "bun examples/offline.ts",
+    "example:mcp": "bun examples/mcp-assistant.ts",
     "example:tools": "bun examples/tool-plugins.ts",
     "check:consumer": "bun scripts/packed-consumer.ts",
     "check:consumer:ordinary": "bun scripts/packed-consumer.ts --ordinary",

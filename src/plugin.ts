@@ -7,7 +7,8 @@ export interface AgentPluginOptions<C> {
   id: string;
   requires: readonly Plugin<unknown>[];
   options(context: PluginContext): AgentOptions<C> | Promise<AgentOptions<C>>;
-  pi?: PiExtensions;
+  /** Resolve provider/context hooks from declared dependencies during setup. */
+  pi?: PiExtensions | ((context: PluginContext) => PiExtensions | Promise<PiExtensions>);
 }
 
 export function createAgentPlugin<C>(options: AgentPluginOptions<C>): Plugin<AgentService<C>> {
@@ -15,7 +16,9 @@ export function createAgentPlugin<C>(options: AgentPluginOptions<C>): Plugin<Age
     id: options.id,
     requires: options.requires,
     async setup(context) {
-      const agent = createAgentService(await options.options(context), options.pi);
+      const config = await options.options(context);
+      const pi = typeof options.pi === "function" ? await options.pi(context) : options.pi;
+      const agent = createAgentService(config, pi);
       context.onCleanup(() => agent.close());
       return agent;
     },

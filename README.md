@@ -36,11 +36,59 @@ repository, separate from the read-only Rust reference repository
 `LioRael/lenso-agent-rust`. The package remains `private` to prevent accidental
 npm publication. Package publication and deployment need separate authorization.
 
+## Minimal local MCP assistant
+
+Run `bun run example:mcp` for a complete one-file application in
+[`examples/mcp-assistant.ts`](examples/mcp-assistant.ts): a scripted provider,
+real stdio MCP process, explicit authorization and validation, context projection,
+session/run completion, and dependency-ordered shutdown. It deliberately rejects
+an empty input and verifies the model repairs it using `correct-input` feedback.
+No model requests or credentials are used.
+
+Previously, a provider created inside a dependency's `setup` required an outer
+mutable handle to populate the Agent plugin's static `pi` option. Resolve both
+model and transport from the same declared dependency instead:
+
+```ts
+const assistant = createAgentPlugin({
+  id: "assistant", requires: [provider, storage, mcp],
+  options: context => ({
+    ...hostOptions,
+    store: context.get(storage), model: context.get(provider).getModel(),
+    tools: combineToolSources([context.get(mcp)]),
+  }),
+  pi: async context => ({
+    streamFn: context.get(provider).streamSimple,
+    transformContext: createContextTransform(contextOptions),
+  }),
+});
+```
+
+The optional `pi` factory runs once after `options` resolves, before the Agent is
+created. A failure unwinds already-started dependencies through Lenso. Static
+`pi` objects remain supported. Sources exposing `tools` can now be passed directly
+to `combineToolSources`; explicit `{ source, tools }` registrations still support
+custom sources and narrower alias selections. Neither form owns source cleanup
+or grants authorization. Keep MCP/store plugins in `requires` and call `app.stop()`.
+
+The example uses a fixed schema and a host domain rule; production integrations
+need a validator for their advertised schemas and authenticated host identities.
+Pi may normalize/coerce model arguments before Agent callbacks (for example,
+`42` to `"42"` for a string schema); `validateInput` checks the JSON received by
+Agent, not the original model bytes. Direct source calls still validate their
+supplied JSON. No general schema validator or default allow policy is installed.
+
+This example is supported on Bun with local child processes. It does not establish
+Workers compatibility (stdio requires process spawning), a Native SDK, durable
+restart recovery (the store is in-memory), or a production provider integration.
+
 ## Public entries
 
 | Entry | Responsibility |
 | --- | --- |
 | `@lenso/agent` | `createAgentService`, `createMemoryStore`, `combineToolSources`, domain types, safe errors |
+| `@lenso/agent/mcp` | Optional local stdio tools and dependency-owned process cleanup |
+| `@lenso/agent/context` | Bounded, non-destructive transcript projection |
 | `@lenso/agent/pi` | Explicit Pi configuration, without replacing tool execution |
 | `@lenso/agent/chatgpt` | Optional SIWC Responses provider and host authentication adapter contract |
 | `@lenso/agent/manage` | Exact-instance, explicitly selected Manage tools |
@@ -116,7 +164,7 @@ const source = createMcpToolSource({
   authorize: async (_selection, _input, context, identity) => canUseNotes(context, identity),
   validateInput: (input, currentSchema) => validateNotesInput(input, currentSchema),
 });
-const tools = combineToolSources([{ source, tools: source.tools }]);
+const tools = combineToolSources([source]);
 // After Agent has drained, await source.close(). With createMcpToolPlugin,
 // declare the MCP plugin in the Agent plugin's requires so cleanup is ordered.
 ```

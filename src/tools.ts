@@ -7,12 +7,18 @@ export interface ToolSourceRegistration<C> {
   readonly tools: readonly string[];
 }
 
+/** Sources such as MCP already declare their reserved public aliases. */
+export type NamedToolSource<C> = ToolSource<C> & { readonly tools: readonly string[] };
+
 /** Compose plugin sources without caching a caller's catalog or weakening admission. */
-export function combineToolSources<C>(registrations: readonly ToolSourceRegistration<C>[]): ToolSource<C> {
+export function combineToolSources<C>(registrations: readonly (ToolSourceRegistration<C> | NamedToolSource<C>)[]): ToolSource<C> {
   const owners = new Map<string, ToolSource<C>>();
-  const entries = registrations.map(({ source, tools }) => {
+  const entries = registrations.map(registration => {
+    const source = "source" in registration ? registration.source : registration;
+    const tools = registration.tools;
     if (!source || [source.catalog, source.prepare, source.invoke].some(value => typeof value !== "function"))
       throw new AgentError("invalid-tool-source");
+    if (!Array.isArray(tools)) throw new AgentError("invalid-tool-source");
     const names = new Set<string>();
     for (const name of tools) {
       if (!/^[A-Za-z][A-Za-z0-9_-]{0,127}$/.test(name)) throw new AgentError("invalid-tool-source");

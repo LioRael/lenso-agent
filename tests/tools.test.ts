@@ -79,3 +79,18 @@ test("recovery feedback never promotes arbitrary messages, payloads or codes to 
   for (const error of [new Error("private-secret"), new AgentError("private-secret"), { code: "__proto__" }])
     expect(toolFailure(error)).toEqual({ error: { code: "operation-failed", recovery: "stop" } });
 });
+
+test("named sources compose with explicit registrations without losing hidden alias reservations", async () => {
+  const f = fixture("read"), other = fixture("other");
+  const names = ["read"];
+  const named = { ...f.source, tools: names };
+  const combined = combineToolSources([named, { source: other.source, tools: ["other"] }]);
+  names.push("later");
+  expect((await combined.catalog(identity, identity, signal)).map(tool => tool.name)).toEqual(["read", "other"]);
+  const prepared = await combined.prepare("read", {}, identity, identity, signal);
+  expect(await combined.invoke(prepared, identity, identity, signal, false)).toEqual({ plugin: "read" });
+  await expect(combined.prepare("later", {}, identity, identity, signal)).rejects.toThrow("unknown-operation");
+  f.hide();
+  expect(() => combineToolSources([named, { source: other.source, tools: ["read"] }])).toThrow("duplicate-tool");
+  expect(await combined.catalog(identity, identity, signal)).toHaveLength(1);
+});

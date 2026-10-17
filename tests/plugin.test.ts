@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { definePlugin, startApp } from "@lenso/core";
 import { createFauxCore, fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createAgentPlugin } from "../src/plugin";
+import { createMemoryStore } from "../src/store";
 import { createSqliteStore, migrateAgentDatabase } from "../src/sqlite";
 import type { AgentService } from "../src/types";
 
@@ -84,4 +85,28 @@ test("failed downstream setup closes Agent while borrowed DB remains usable", as
     await expect(agent!.startRun({}, sessionId, "No run after cleanup.")).rejects.toThrow();
     expect(db.query<{ value: number }, []>("SELECT 1 AS value").get()!.value).toBe(1);
   } finally { db.close(); }
+});
+
+test("Pi factory resolves initialized dependencies and setup failure unwinds them", async () => {
+  const cleanup: string[] = [];
+  const provider = definePlugin({ id: "provider", setup(context) {
+    context.onCleanup(() => { cleanup.push("provider"); });
+    return createFauxCore({ tokensPerSecond: Infinity });
+  } });
+  const store = createMemoryStore();
+  const plugin = createAgentPlugin<{}>({
+    id: "agent", requires: [provider],
+    options: context => ({ store, model: context.get(provider).getModel(),
+      identity: async () => ({ subject: "alice", scope: "test", application: "test", target: "local" }),
+      profiles: [], tools: { catalog: async () => [], prepare: async () => { throw Error(); }, invoke: async () => {} },
+    }),
+    pi: async context => {
+      expect(context.get(provider).streamSimple).toBeFunction();
+      throw new Error("provider-setup-failed");
+    },
+  });
+  try {
+    await expect(startApp({ plugins: [provider, plugin] })).rejects.toThrow("provider-setup-failed");
+    expect(cleanup).toEqual(["provider"]);
+  } finally { store.close(); }
 });
