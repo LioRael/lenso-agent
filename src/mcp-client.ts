@@ -1,4 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
+import { stableJson } from "@lenso/engine/diagnostics";
 import { AgentError, jsonCopy } from "./safety";
 
 export interface McpTool {
@@ -24,6 +26,7 @@ export interface McpStdioOptions {
   maxTools?: number;
   maxPages?: number;
 }
+/** A revision is invalidated by reconnect, list notifications or observed catalog changes. */
 export interface McpCatalog { tools: McpTool[]; revision: number }
 export interface McpStdioClient {
   listTools(signal: AbortSignal): Promise<McpCatalog>;
@@ -62,6 +65,7 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
     pending: Map<number, Pending>;
     dead: boolean;
     stopped: Promise<void>;
+    catalogFingerprint?: string;
   };
 
   function send(connection: Connection, message: unknown): void {
@@ -138,7 +142,10 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
               send(connection, message.method === "ping"
                 ? { jsonrpc: "2.0", id: message.id, result: {} }
                 : { jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not supported" } });
-            } else if (message.method === "notifications/tools/list_changed") revision++;
+            } else if (message.method === "notifications/tools/list_changed") {
+              revision++;
+              connection.catalogFingerprint = undefined;
+            }
           } else if (typeof message.id === "number") {
             const pending = connection.pending.get(message.id);
             if (!pending) continue; // Late responses after timeout/cancellation.
@@ -215,7 +222,17 @@ export function createMcpStdioClient(options: McpStdioOptions): McpStdioClient {
             tools.push(jsonCopy(tool) as McpTool);
             if (tools.length > maxTools) throw new AgentError("output-budget");
           }
-          if (result.nextCursor === undefined) return { tools, revision: startRevision };
+          if (result.nextCursor === undefined) {
+            // Servers need not advertise listChanged. Cache only a fingerprint of a
+            // complete snapshot, never mutable schemas or partial pagination results.
+            // Order changes across pages do not change the tools' admission contract.
+            const fingerprint = createHash("sha256").update(stableJson(
+              tools.toSorted((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0),
+            )).digest("hex");
+            if (connection.catalogFingerprint !== undefined && connection.catalogFingerprint !== fingerprint) revision++;
+            connection.catalogFingerprint = fingerprint;
+            return { tools, revision };
+          }
           if (typeof result.nextCursor !== "string" || cursors.has(result.nextCursor)) throw new AgentError("mcp-protocol");
           cursor = result.nextCursor;
           cursors.add(cursor!);

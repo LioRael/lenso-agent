@@ -178,7 +178,14 @@ separate process/session and must have a unique `sourceId` in its host.
 
 Discovery follows bounded pages and refreshes on every admission. List-change
 notifications invalidate prepared tools; reconnect or source recreation also
-requires fresh preparation. Results retain `content`, `structuredContent` and
+requires fresh preparation. Complete discovery snapshots are fingerprinted so
+observed tool/schema changes also invalidate old client revisions when a server
+does not send notifications. Page order alone does not invalidate a revision;
+the fingerprint never replaces fresh discovery or caches partial pages. A silent
+change is observable only after discovery, not immediately when the server changes.
+Cancellation is checked after asynchronous authorization and input validation
+before admission continues; host callbacks already running must still settle.
+Results retain `content`, `structuredContent` and
 `isError` as a JSON envelope in Agent receipts/model context. A returned MCP tool
 error is a completed protocol result with `isError: true`; transport loss or
 cancellation after dispatch is `outcome-unknown`, with no automatic replay.
