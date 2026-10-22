@@ -24,8 +24,8 @@ for pair in curl:curl unzip:unzip; do
     command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"
 done
 if [ -n "$missing" ]; then apt update; apt install -y --no-install-recommends ca-certificates $missing; fi
-if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != 1.4.2 ]; then
-    fetch https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-baseline.zip "$work/bun.zip"
+if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != 1.4.4 ]; then
+    fetch https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-baseline.zip "$work/bun.zip"
     unzip -q "$work/bun.zip" -d "$work/bun"
     mkdir -p .agents/state/tools/bun/bin
     install -m 755 "$work/bun/bun-linux-x64-baseline/bun" .agents/state/tools/bun/bin/bun

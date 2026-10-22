@@ -6,7 +6,7 @@ depend on Console, install a User table, or own the host's database.
 
 ## Run locally
 
-Requires Bun 1.4.2 or newer. No Rust, paid provider, or credentials are needed:
+Requires Bun 1.4.4. No Rust, paid provider, or credentials are needed:
 
 ```sh
 bun install --frozen-lockfile

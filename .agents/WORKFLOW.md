@@ -1,6 +1,6 @@
 # Delta checkout workflow
 
-Tools: bun 1.4.2.
+Tools: bun 1.4.4.
 
 
 Delta invokes executable `prepare` at checkout root when mounting a new managed
