@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+[ "$#" -eq 0 ] || { echo "This script takes no arguments" >&2; exit 64; }
+# Cloud-only slow path. The platform snapshots the machine after this succeeds.
+case $(uname -s)/$(uname -m) in
+    Linux/x86_64) ;;
+    Darwin/*) echo 'macOS: setup installs nothing. Use existing tools and run .agents/dependencies.'; exit 0 ;;
+    *) echo 'setup supports Delta Debian Bookworm Linux x86-64 only' >&2; exit 78 ;;
+esac
+.agents/prepare
+.agents/install-tools
+exec .agents/dependencies

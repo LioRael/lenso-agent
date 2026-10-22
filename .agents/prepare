@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+[ "$#" -eq 0 ] || { echo "This script takes no arguments" >&2; exit 64; }
+# Delta runs this fast step in every newly mounted managed checkout, before setup.
+# Adopted/reused checkouts may skip it. No tools, dependencies or secrets assumed.
+[ -d .agents ] && [ -f .agents/dependencies ] || exit 78
+umask 077
+mkdir -p .agents/state
+printf '%s\n' 'Checkout prepared. Dependencies: .agents/dependencies (existing tools); Linux bootstrap: .agents/setup.'

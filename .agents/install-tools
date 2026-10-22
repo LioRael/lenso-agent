@@ -1,0 +1,32 @@
+#!/bin/sh
+# Invoked only by setup after its Linux/x86-64 guard.
+set -eu
+. .agents/env
+[ "$(uname -s)/$(uname -m)" = Linux/x86_64 ] || exit 78
+mkdir -p .agents/state/tools
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT HUP INT TERM
+fetch() { curl --proto '=https' --tlsv1.2 --fail --location --retry 2 --connect-timeout 15 --max-time 180 "$1" -o "$2"; }
+apt() {
+    command -v apt-get >/dev/null 2>&1 || { echo "Debian apt-get required for missing prerequisites" >&2; exit 78; }
+    if [ "$(id -u)" -eq 0 ]; then
+        DEBIAN_FRONTEND=noninteractive apt-get "$@"
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+        sudo -n env DEBIAN_FRONTEND=noninteractive apt-get "$@"
+    else
+        echo "Missing system prerequisites; install the packages listed in .agents/install-tools on the Linux runner" >&2
+        exit 78
+    fi
+}
+# Bookworm packages only; never run on macOS. Install only missing prerequisites.
+missing=''
+for pair in curl:curl unzip:unzip; do
+    command -v "${pair%%:*}" >/dev/null 2>&1 || missing="$missing ${pair#*:}"
+done
+if [ -n "$missing" ]; then apt update; apt install -y --no-install-recommends ca-certificates $missing; fi
+if ! command -v bun >/dev/null 2>&1 || [ "$(bun --version)" != 1.4.2 ]; then
+    fetch https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64-baseline.zip "$work/bun.zip"
+    unzip -q "$work/bun.zip" -d "$work/bun"
+    mkdir -p .agents/state/tools/bun/bin
+    install -m 755 "$work/bun/bun-linux-x64-baseline/bun" .agents/state/tools/bun/bin/bun
+fi

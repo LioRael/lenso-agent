@@ -1,0 +1,9 @@
+# Source from the repository root. Tools remain checkout-local; no login profiles.
+ROOT=$(pwd -P)
+PATH="$ROOT/.agents/state/tools/bun/bin:$ROOT/.agents/state/tools/node/bin:$ROOT/.agents/state/tools/cargo/bin:$ROOT/.agents/state/tools/go/bin:$PATH"
+export PATH
+if [ -d "$ROOT/.agents/state/tools/rustup" ]; then
+    CARGO_HOME="$ROOT/.agents/state/tools/cargo"
+    RUSTUP_HOME="$ROOT/.agents/state/tools/rustup"
+    export CARGO_HOME RUSTUP_HOME
+fi
